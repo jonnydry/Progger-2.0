@@ -1,0 +1,87 @@
+:root {
+  color-scheme: dark;
+  --pond-art: url('/progger-arcade-pond.webp');
+  --water-art: url('/progger-underwater.webp');
+  view-transition-name: none;
+}
+html[data-theme='day'] {
+  color-scheme: light;
+  --pond-art: url('/progger-day-pond.webp');
+  --water-art: url('/progger-day-water-v2.webp');
+}
+.pond-scene {
+  background-image: var(--pond-art);
+  background-size: cover;
+  background-position: center 65%;
+}
+.site-header {
+  view-transition-name: pond;
+}
+html[data-theme='day'] .pond-scene {
+  mask-image: linear-gradient(black 78%, rgb(0 0 0 / 0.75) 88%, transparent);
+}
+@media (min-width: 641px) {
+  .night-swim .site-header {
+    height: clamp(210px, calc(90px + 100vw / 3), 430px);
+  }
+  html[data-theme='day'] .pond-scene {
+    background-position: center 20%;
+  }
+}
+.underwater-scene {
+  background-image: var(--water-art);
+  background-size: cover;
+  background-position: center;
+}
+.chord-entry .underwater-scene {
+  background-position: right top;
+}
+::view-transition {
+  pointer-events: none;
+}
+::view-transition-group(pond) {
+  animation-duration: 400ms;
+  animation-timing-function: ease-out;
+}
+::view-transition-old(pond),
+::view-transition-new(pond) {
+  animation-duration: 400ms;
+  mix-blend-mode: normal;
+}
+@media (max-width: 600px) {
+  html:not([data-theme='day']) {
+    --water-art: url('/progger-underwater-mobile.webp');
+  }
+}
+@media (max-width: 500px) {
+  .pond-scene {
+    background-position: right center;
+  }
+  html[data-theme='day'] .pond-scene {
+    mask-image: linear-gradient(transparent, black 16%, black 78%, transparent);
+  }
+}
+@media (min-width: 501px) and (max-width: 900px) {
+  .night-swim .site-header {
+    height: calc(90px + 100vw / 3);
+  }
+  .pond-scene {
+    top: 90px;
+    height: calc(100% - 90px);
+    mask-image: linear-gradient(transparent, black 10%, black 65%, transparent);
+  }
+  html[data-theme='day'] .pond-scene {
+    background-position: center;
+    mask-image: linear-gradient(transparent, black 10%, black 78%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .site-header {
+    view-transition-name: none;
+  }
+  ::view-transition-group(pond),
+  ::view-transition-old(pond),
+  ::view-transition-new(pond) {
+    animation: none;
+  }
+}

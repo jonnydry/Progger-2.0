@@ -3,6 +3,9 @@ import { Silkscreen } from 'next/font/google';
 import { SkipLink } from '@/components/skip-link';
 import './globals.css';
 import './night-swim.css';
+import './day-swim.css';
+import './theme-transition.css';
+import { themeBootstrap } from '@/lib/theme';
 
 const arcade = Silkscreen({
   variable: '--font-arcade',
@@ -24,8 +27,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
         <link
           rel="preload"
           href="/fonts/maple-mono/MapleMono-Regular.ttf.woff2"

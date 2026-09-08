@@ -16,7 +16,7 @@ Verified in the browser: fret 7 selects A Dorian frets 7–12; keyboard arrows m
 
 # Current project verification
 
-The [7 September 2026 project audit](audit-2026-09-07/report.md) is the current verification report, with fixed issues, production-browser checks, performance measurements, and remaining limits. The original release verification below is historical and is also preserved in `verification-initial.md`.
+The [8 September 2026 system audit](audit-2026-09-08/report.md) is the current verification report, with fixed issues, production-browser checks, performance measurements, and remaining limits. The original release verification below is historical and is also preserved in `verification-initial.md`.
 
 # Initial release verification (historical)
 

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {SCALES,ROOTS,spell,patterns,pitchClass,mod,TUNING} from '../lib/music.ts';
-import {QUALITIES,parseChord,parseProgression,matchScales,perChordChoices,diatonicChords,voicings} from '../lib/harmony.ts';
+import {QUALITIES,parseChord,parseProgression,matchScales,perChordChoices,diatonicChords,voicings,colorChoices} from '../lib/harmony.ts';
 
 const fixtures:Record<string,{names:string;pcs:number[]}>= {
  'dorian-b2':{names:'C Db Eb F G A Bb',pcs:[0,1,3,5,7,9,10]},
@@ -134,4 +134,38 @@ void test('exact coverage never disguises altered-scale omissions or slash bass 
    assert.equal(sorted(candidate.notes.map(note=>note.pc)).join(','),group.key);
   }
  }
+});
+
+void test('repeating unchanged harmony retains its reviewed scale ordering and exact coverage',()=>{
+ for(const [symbol,expected] of [
+  ['Cdim7','whole-half-diminished'],['Eb7b13','mixolydian-b6'],
+  ['F#m7b5','locrian-natural2'],['Baug','whole-tone'],['G7#9','half-whole-diminished'],
+ ]){
+  const single=matchScales([parseChord(symbol)]);
+  assert.equal(single[0].candidates[0].scale.id,expected);
+  for(const count of [2,4]){
+   const repeated=parseProgression(Array(count).fill(symbol).join(' ')).chords;
+   assert.deepEqual(matchScales(repeated),single,`${symbol}: ${count} unchanged bars`);
+  }
+ }
+ assert.deepEqual(matchScales(parseProgression('C°7 Cdim7').chords),matchScales([parseChord('Cdim7')]));
+ const changedBass=parseProgression('Cdim7 Cdim7/Db').chords;
+ assert.ok(!matchScales(changedBass).flatMap(group=>group.candidates).some(candidate=>candidate.root==='C'&&candidate.scale.id==='whole-half-diminished'));
+ const cadence=matchScales(parseProgression('G13 Cmaj7').chords).flatMap(group=>group.candidates).find(candidate=>candidate.root==='C'&&candidate.scale.id==='major')!;
+ assert.equal(cadence.score,18);assert.ok(cadence.reason.includes('suggests C'));
+});
+
+void test('plain dominant thirteenths retain the established blues color without claiming exact coverage',()=>{
+ for(const input of ['A13 D13 E13','A7 D13 E7','A9 D7 E13']){
+  const chords=parseProgression(input).chords,original=chords.map(chord=>[...chord.pcs]);
+  const color=colorChoices(chords,'A').find(choice=>choice.candidate.scale.id==='minor-blues');
+  assert.ok(color,input);assert.equal(color.candidate.root,'A');assert.equal(color.candidate.reason,'Blues color');
+  assert.deepEqual(color.candidate.notes.map(note=>note.name),['A','C','D','Eb','E','G']);
+  assert.deepEqual(chords.map(chord=>chord.pcs),original,'Stylistic color must not change chord membership');
+  assert.ok(chords[0].notes.some(note=>note.name==='C#'&&!color.candidate.notes.some(scaleNote=>scaleNote.pc===note.pc)),'The major third remains outside the blues palette');
+  for(const group of matchScales(chords))for(const candidate of group.candidates)
+   assert.ok(chords.every(chord=>chord.pcs.every(pc=>candidate.notes.some(note=>note.pc===pc))));
+ }
+ for(const input of ['Amaj13 D13 E13','Am13 D13 E13','A7#9 D7 E7','A13 Db13 E13'])
+  assert.ok(!colorChoices(parseProgression(input).chords,'A').some(choice=>choice.candidate.scale.id==='minor-blues'),input);
 });

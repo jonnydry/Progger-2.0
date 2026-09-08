@@ -1,0 +1,543 @@
+/* Golden hour: the same instrument, warmed by cream, emerald, and amber. */
+html[data-theme='day'] {
+  color-scheme: light;
+  --background: #fff5df;
+  --foreground: #12362f;
+  --ink: #fff5df;
+  --card: #fff8e9;
+  --card-foreground: #12362f;
+  --popover: #fff8e9;
+  --popover-foreground: #12362f;
+  --primary: #226347;
+  --primary-foreground: #fff5df;
+  --green: #226347;
+  --amber: #89540d;
+  --quiet: #546357;
+  --muted-foreground: #546357;
+  --secondary: #e7eedc;
+  --secondary-foreground: #12362f;
+  --muted: #eee8d5;
+  --border: #c5c3a9;
+  --input: #789077;
+  --ring: #226347;
+  --accent: #e7eedc;
+  --accent-foreground: #12362f;
+  --destructive: #a03423;
+  --day-surface: #fff8e9;
+  --day-hover: #e7eedc;
+  --day-divider: #c5c3a9;
+  --day-string: #879075;
+}
+
+html[data-theme='day'] ::selection {
+  color: var(--primary-foreground);
+  background: var(--green);
+}
+
+html[data-theme='day'] select option,
+html[data-theme='day'] select optgroup {
+  color: var(--foreground);
+  background: var(--day-surface);
+}
+
+html[data-theme='day'] .night-swim .brand,
+html[data-theme='day'] .night-swim .selection-bar .music-select-trigger {
+  color: var(--foreground);
+}
+
+html[data-theme='day'] .night-swim .site-header nav a {
+  color: var(--foreground);
+}
+
+html[data-theme='day'] .night-swim .site-header nav a[aria-current='page'] {
+  color: var(--green);
+}
+
+html[data-theme='day'] .reference-water {
+  border-color: var(--day-divider);
+  --water-overlap: 112px;
+  --quiet: #405348;
+}
+
+html[data-theme='day'] .underwater-scene {
+  opacity: 0.76;
+  background-position: center top;
+  mask-image: linear-gradient(transparent, black 60px, black 72%, transparent);
+}
+
+html[data-theme='day'] .chord-entry .underwater-scene {
+  opacity: 0.76;
+  background-position: center top;
+}
+
+html[data-theme='day'] .night-swim .palette-note > span {
+  color: var(--foreground);
+}
+
+html[data-theme='day'] .night-swim .palette-note small,
+html[data-theme='day'] .night-swim .position-hint,
+html[data-theme='day'] .night-swim .formula-label,
+html[data-theme='day'] .night-swim .voicing-explanation,
+html[data-theme='day'] .night-swim .theory-content p,
+html[data-theme='day'] .night-swim .voicing-section p,
+html[data-theme='day'] .voicing-filter-label,
+html[data-theme='day'] .voicing-current > span,
+html[data-theme='day'] .voicing-current small,
+html[data-theme='day'] .voicing-list button span:last-child {
+  color: var(--quiet);
+}
+
+/* Root and chord-tone identities survive the palette change. */
+html[data-theme='day'] .night-swim .root-palette > span,
+html[data-theme='day'] .night-swim .root-palette small {
+  color: var(--amber);
+}
+
+html[data-theme='day'] .night-swim .string-labels span,
+html[data-theme='day'] .night-swim .fret-number.inlaid {
+  color: var(--foreground);
+}
+
+html[data-theme='day'] .night-swim .fret-number,
+html[data-theme='day'] .night-swim .inlay {
+  color: var(--quiet);
+}
+
+html[data-theme='day'] .night-swim .string-cell {
+  border-right-color: var(--day-string);
+}
+
+html[data-theme='day'] .night-swim .string-line {
+  background: var(--day-string);
+}
+
+html[data-theme='day'] .night-swim .open-string .string-cell {
+  border-right-color: var(--green);
+  background: #e8edd7;
+}
+
+html[data-theme='day'] .night-swim .left-handed-neck .open-string .string-cell {
+  border-left-color: var(--green);
+}
+
+html[data-theme='day'] .night-swim .note-dot {
+  color: var(--primary-foreground);
+  background: var(--green);
+  border-color: var(--green);
+}
+
+html[data-theme='day'] .night-swim .note-dot.is-root {
+  color: var(--primary-foreground);
+  background: var(--amber);
+  border-color: var(--amber);
+  outline: 1px solid var(--amber);
+  outline-offset: 2px;
+}
+
+html[data-theme='day'] .night-swim .note-dot.is-target {
+  outline: 2px solid var(--foreground);
+  outline-offset: 3px;
+}
+
+html[data-theme='day'] .night-swim .note-dot.is-target.is-root {
+  outline: 1px solid var(--amber);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 4px var(--background),
+    0 0 0 6px var(--foreground);
+}
+
+html[data-theme='day'] .night-swim .instrument-dock,
+html[data-theme='day'] .night-swim .display-menu[open] > div {
+  color: var(--foreground);
+  border-color: var(--input);
+  background: var(--day-surface);
+}
+
+html[data-theme='day'] .night-swim .display-menu[open] > div {
+  box-shadow: 0 10px 28px #12362f1a;
+}
+
+html[data-theme='day'] .night-swim .segmented {
+  border-color: var(--input);
+}
+
+html[data-theme='day'] .night-swim .segmented button {
+  color: var(--foreground);
+}
+
+html[data-theme='day']
+  .night-swim
+  .segmented
+  button:hover:not([aria-pressed='true']) {
+  color: var(--foreground);
+  background: var(--day-hover);
+}
+
+html[data-theme='day'] .night-swim .segmented button[aria-pressed='true'] {
+  color: var(--primary-foreground);
+  background: var(--green);
+}
+
+html[data-theme='day'] .night-swim .segmented button:focus-visible {
+  outline-color: var(--foreground);
+}
+
+html[data-theme='day']
+  .night-swim
+  .segmented
+  button[aria-pressed='true']:focus-visible,
+html[data-theme='day']
+  .night-swim
+  .pattern-fret[aria-pressed='true']:focus-visible {
+  outline-color: var(--primary-foreground);
+}
+
+html[data-theme='day'] .night-swim .neck-navigation,
+html[data-theme='day'] .night-swim .theory-details,
+html[data-theme='day'] .night-swim .voicing-section,
+html[data-theme='day'] .voicing-browser,
+html[data-theme='day'] .night-swim .chord-entry,
+html[data-theme='day'] .night-swim .match-card,
+html[data-theme='day'] .night-swim .result-empty,
+html[data-theme='day'] .night-swim .per-chord-section,
+html[data-theme='day'] .night-swim .color-options article,
+html[data-theme='day'] .night-swim footer {
+  border-color: var(--day-divider);
+}
+
+html[data-theme='day'] .neck-slider input::-webkit-slider-runnable-track {
+  background: var(--day-string);
+}
+
+html[data-theme='day'] .neck-slider input::-moz-range-track {
+  background: var(--day-string);
+}
+
+html[data-theme='day'] .neck-slider input::-webkit-slider-thumb {
+  border-color: var(--green);
+}
+
+html[data-theme='day'] .neck-slider input::-moz-range-thumb {
+  border-color: var(--green);
+}
+
+html[data-theme='day'] .night-swim .icon-button {
+  color: var(--green);
+  border-color: var(--input);
+}
+
+html[data-theme='day'] .night-swim .icon-button:hover:not(:disabled),
+html[data-theme='day'] .night-swim .harmony-row button:hover,
+html[data-theme='day'] .night-swim .pattern-fret:hover,
+html[data-theme='day'] .voicing-bass-row button:hover,
+html[data-theme='day'] .voicing-list button:hover {
+  color: var(--green);
+  background: var(--day-hover);
+}
+
+html[data-theme='day'] .night-swim .icon-button:disabled {
+  background: transparent;
+  border-color: var(--input);
+}
+
+html[data-theme='day'] .night-swim .pattern-fret[aria-pressed='true'] {
+  color: var(--primary-foreground);
+  background: var(--green);
+}
+
+html[data-theme='day'] .night-swim .pattern-fret:not([aria-pressed='true']) {
+  color: var(--green);
+}
+
+html[data-theme='day'] .night-swim .harmony-row button,
+html[data-theme='day'] .night-swim .chord-targets > button,
+html[data-theme='day'] .night-swim .chord-token,
+html[data-theme='day'] .night-swim .examples button,
+html[data-theme='day'] .night-swim .alternate-modes button,
+html[data-theme='day'] .night-swim .per-chord button {
+  color: var(--green);
+  border-color: var(--day-divider);
+}
+
+html[data-theme='day']
+  .night-swim
+  .chord-targets
+  > button[aria-pressed='true'] {
+  border-color: var(--green);
+}
+
+html[data-theme='day'] .night-swim .target-description,
+html[data-theme='day'] .night-swim .result-count,
+html[data-theme='day'] .voicing-current strong span,
+html[data-theme='day'] .voicing-catalog summary {
+  color: var(--foreground);
+}
+
+html[data-theme='day'] .night-swim footer {
+  color: var(--quiet);
+}
+
+html[data-theme='day'] .voicing-bass-row button,
+html[data-theme='day'] .voicing-list button {
+  color: var(--foreground);
+  border-color: var(--input);
+}
+
+html[data-theme='day'] .voicing-bass-row button[aria-pressed='true'],
+html[data-theme='day'] .voicing-list button[aria-pressed='true'] {
+  color: var(--green);
+  border-color: var(--green);
+  background: var(--day-hover);
+}
+
+html[data-theme='day'] .voicing-badge,
+html[data-theme='day'] .voicing-current .voicing-badge {
+  color: var(--foreground);
+  border-color: var(--input);
+  background: var(--day-surface);
+}
+
+html[data-theme='day'] .voicing-current .voicing-omissions,
+html[data-theme='day'] .voicing-list button .voicing-list-omissions:last-child {
+  color: var(--amber);
+}
+
+html[data-theme='day'] .night-swim .chord-entry textarea {
+  color: var(--foreground);
+  border-color: var(--input);
+  background: var(--day-surface);
+  box-shadow: none;
+}
+
+html[data-theme='day'] .night-swim .chord-entry textarea::placeholder {
+  color: var(--quiet);
+  opacity: 1;
+}
+
+html[data-theme='day'] .night-swim .chord-entry textarea:hover,
+html[data-theme='day'] .night-swim .chord-entry textarea:focus {
+  border-color: var(--green);
+  background: var(--day-surface);
+}
+
+html[data-theme='day'] .night-swim .chord-entry textarea[aria-invalid='true'] {
+  border-color: var(--destructive);
+}
+
+html[data-theme='day'] .input-error {
+  color: var(--destructive);
+}
+
+html[data-theme='day'] .night-swim .builder-row [data-slot='button'] {
+  color: var(--primary-foreground);
+  background: var(--green);
+}
+
+html[data-theme='day'] .night-swim .builder-row [data-slot='button']:hover {
+  background: #194f38;
+}
+
+/* Menus live in a portal, so their theme belongs to the document. */
+html[data-theme='day'] .music-select-trigger,
+html[data-theme='day'] .night-swim .builder-row .music-select-trigger,
+html[data-theme='day'] .night-swim .home-note-control .music-select-trigger {
+  color: var(--foreground);
+  border-color: var(--input);
+  background: var(--day-surface);
+}
+
+html[data-theme='day'] .music-select-trigger:hover,
+html[data-theme='day'] .music-select-trigger[data-popup-open],
+html[data-theme='day'] .night-swim .builder-row .music-select-trigger:hover,
+html[data-theme='day']
+  .night-swim
+  .builder-row
+  .music-select-trigger[data-popup-open],
+html[data-theme='day']
+  .night-swim
+  .home-note-control
+  .music-select-trigger:hover,
+html[data-theme='day']
+  .night-swim
+  .home-note-control
+  .music-select-trigger[data-popup-open] {
+  color: var(--foreground);
+  border-color: var(--green);
+  background: var(--day-hover);
+}
+
+html[data-theme='day'] .music-select-trigger > svg {
+  color: var(--green);
+}
+
+html[data-theme='day'] .music-select-popup {
+  color: var(--foreground);
+  border-color: var(--input);
+  background: var(--day-surface);
+  scrollbar-color: var(--input) var(--day-surface);
+  box-shadow: 0 12px 35px #12362f24;
+}
+
+html[data-theme='day'] .music-select-popup [data-slot='select-label'] {
+  color: var(--quiet);
+}
+
+html[data-theme='day']
+  .music-select-popup
+  [data-slot='select-item'][data-highlighted] {
+  color: var(--foreground);
+  background: var(--day-hover);
+}
+
+html[data-theme='day']
+  .music-select-popup
+  [data-slot='select-item'][data-selected] {
+  color: var(--green);
+}
+
+html[data-theme='day']
+  .music-select-popup
+  [data-slot='select-scroll-up-button'],
+html[data-theme='day']
+  .music-select-popup
+  [data-slot='select-scroll-down-button'] {
+  color: var(--quiet);
+  background: var(--day-surface);
+}
+
+/* The retained compact diagram also uses the same musical color identities. */
+html[data-theme='day'] .voicing svg line {
+  stroke: var(--day-string);
+}
+
+html[data-theme='day'] .voicing svg line[stroke-width='4'] {
+  stroke: var(--green);
+}
+
+html[data-theme='day'] .voicing svg text {
+  fill: var(--foreground);
+}
+
+html[data-theme='day'] .voicing svg circle {
+  fill: var(--green);
+}
+
+html[data-theme='day'] .voicing svg circle[fill='#f6c56c'] {
+  fill: var(--amber);
+}
+
+/* One quiet, 44px control for both times of day. */
+.night-swim .theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 44px;
+  margin-left: auto;
+  padding: 0 8px;
+  color: var(--green);
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--background) 96%, transparent);
+}
+
+.theme-toggle .theme-icon-sun,
+.theme-toggle .theme-icon-moon {
+  width: 19px;
+  height: 19px;
+  color: var(--quiet);
+}
+
+html[data-theme='day'] .theme-toggle .theme-icon-sun {
+  color: var(--amber);
+}
+
+html:not([data-theme='day']) .theme-toggle .theme-icon-moon {
+  color: var(--amber);
+}
+
+.theme-switch-track {
+  display: inline-block;
+  position: relative;
+  width: 46px;
+  height: 25px;
+  border: 1.5px solid currentColor;
+  border-radius: 20px;
+}
+
+.theme-switch-thumb {
+  display: block;
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translateX(20px);
+}
+
+html[data-theme='day'] .theme-toggle .theme-switch-thumb {
+  transform: translateX(0);
+}
+
+.night-swim .theme-toggle:hover .theme-switch-track {
+  background: var(--accent);
+}
+
+.night-swim .theme-toggle:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 4px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .theme-switch-thumb {
+    transition: transform 180ms ease-out;
+  }
+}
+
+/* Two header rows leave room for the switch before controls begin to crowd. */
+@media (min-width: 501px) and (max-width: 640px) {
+  .night-swim .site-header {
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 0;
+  }
+
+  .night-swim .site-header nav {
+    width: 100%;
+    height: 48px;
+    margin: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .night-swim .theme-toggle {
+    position: absolute;
+    top: 13px;
+    right: 20px;
+    margin: 0;
+  }
+}
+
+@media (max-width: 500px) {
+  .night-swim .theme-toggle {
+    top: 10px;
+    right: 14px;
+    gap: 6px;
+  }
+
+  html[data-theme='day'] .underwater-scene {
+    opacity: 0.7;
+  }
+
+  html[data-theme='day'] .chord-entry .underwater-scene {
+    opacity: 0.7;
+  }
+
+  html[data-theme='day'] .reference-water {
+    --water-overlap: 76px;
+  }
+}

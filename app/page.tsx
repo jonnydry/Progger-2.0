@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useLayoutEffect, useMemo, useState, useRef } from 'react';
 import { flushSync } from 'react-dom';
-import Image from 'next/image';
+import { ThemeToggle } from '@/components/theme-toggle';
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -145,6 +145,7 @@ export default function Home() {
         const selected = SCALES.find((s) => s.id === value.scaleId);
         if (!selected) throw new Error('Choose a supported scaleId.');
         const chosenRoot = value.root;
+        returnPoint.current = null;
         flushSync(() => {
           setScaleRoot(chosenRoot);
           setScaleId(selected.id);
@@ -189,6 +190,7 @@ export default function Home() {
     location.hash = destination;
   }
   function openMatch(candidate: Candidate, chords: Chord[]) {
+    returnPoint.current = null;
     const element = document.activeElement;
     matchReturnPoint.current = {
       element:
@@ -247,6 +249,7 @@ export default function Home() {
     });
   }
   function returnToScale() {
+    if (kind === 'scales') return;
     setKind('scales');
     const point = returnPoint.current;
     returnPoint.current = null;
@@ -348,16 +351,7 @@ export default function Home() {
   return (
     <div className="app-shell night-swim">
       <header className="site-header">
-        <Image
-          className="pond-scene"
-          unoptimized
-          src="/progger-arcade-pond.webp"
-          width={2172}
-          height={724}
-          alt=""
-          aria-hidden="true"
-          priority
-        />
+        <div className="pond-scene" aria-hidden="true" />
         <a
           href="#explore"
           onClick={() => navigate('explore')}
@@ -382,6 +376,7 @@ export default function Home() {
             Match chords
           </a>
         </nav>
+        <ThemeToggle />
       </header>
       <main id="main-content" tabIndex={-1}>
         <h1 className="sr-only">
@@ -429,6 +424,7 @@ export default function Home() {
                 <button
                   aria-pressed={kind === 'chords'}
                   onClick={() => {
+                    if (kind === 'chords') return;
                     setKind('chords');
                     returnPoint.current = null;
                     setVoicingIndex(0);

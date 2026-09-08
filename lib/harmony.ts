@@ -101,6 +101,10 @@ const targetedScales:Record<string,string[]>={
  };
 export function matchScales(chords:Chord[], home=''): MatchGroup[] {
  if (!chords.length) return [];
+ const first=chords[0],last=chords.at(-1)!;
+ const firstRoot=pitchClass(first.root),firstBass=first.bass?pitchClass(first.bass):null;
+ // Repeating a bar of unchanged harmony does not introduce a new scale choice.
+ const oneHarmony=chords.every(chord=>pitchClass(chord.root)===firstRoot && chord.quality.id===first.quality.id && (chord.bass?pitchClass(chord.bass):null)===firstBass);
  const union=new Set(chords.flatMap(chord=>chord.pcs));
  const preferFlats=chords.some(c=>c.notes.some(note=>note.name.includes('b'))) || home.includes('b');
  const explicitRoots=new Map<number,string>();
@@ -113,12 +117,12 @@ export function matchScales(chords:Chord[], home=''): MatchGroup[] {
    const pcs=new Set(notes.map(n=>n.pc));
    if (![...union].every(pc=>pcs.has(pc))) continue;
    let score=0,reason='Contains all entered chord tones. The home note is still open to interpretation.';
-   const rootPc=pitchClass(root),first=chords[0],last=chords.at(-1)!;
+   const rootPc=pitchClass(root);
    if (rootPc===pitchClass(first.root)) {score+=10;reason=`${first.root} is your first chord root, so this is one possible center.`;}
    if (rootPc===pitchClass(last.root)) score+=3;
    if (scale.family==='Major modes') score+=2;
    if (scale.id==='major' || scale.id==='minor') score+=1;
-   if (chords.length===1 && rootPc===pitchClass(first.root)) {
+   if (oneHarmony && rootPc===firstRoot) {
      const preference=targetedScales[first.quality.id]?.indexOf(scale.id) ?? -1;
      // Keep the explicit chord-scale ordering ahead of the generic +2
      // major-family preference, consistently with the per-chord list.
@@ -155,7 +159,7 @@ export function colorChoices(chords:Chord[], home=''): {candidate:Candidate;expl
   const source=groups.flatMap(g=>g.candidates).find(c=>c.scale.id===scaleId&&pitchClass(c.root)===pitchClass(center));
   if(source){const scale=SCALES.find(s=>s.id===`${scaleId}-pentatonic`)!;results.push({candidate:{...source,scale,notes:spell(source.root,scale.formula)},explanation:'A simpler five-note palette within this shared collection. It omits some chord tones; use the chord-tone view to find landing notes.'});}
  }
- if(chords.length>1 && chords.every(c=>['7','9'].includes(c.quality.id)&&[0,5,7].includes(mod(pitchClass(c.root)-pitchClass(center))))) {
+ if(chords.length>1 && chords.every(c=>['7','9','13'].includes(c.quality.id)&&[0,5,7].includes(mod(pitchClass(c.root)-pitchClass(center))))) {
   const scale=SCALES.find(s=>s.id==='minor-blues')!;
   results.push({candidate:{root:center,scale,notes:spell(center,scale.formula),score:0,reason:'Blues color'},explanation:'A traditional blues color over these dominant chords. The minor 3rd deliberately rubs against their major 3rds; phrase through it rather than treating every note as settled.'});
  }
