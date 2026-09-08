@@ -1,21 +1,21 @@
 import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Silkscreen } from 'next/font/google';
+import { SkipLink } from '@/components/skip-link';
 import './globals.css';
+import './night-swim.css';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
+const arcade = Silkscreen({
+  variable: '--font-arcade',
+  adjustFontFallback: false,
+  weight: '400',
   subsets: ['latin'],
 });
 
 export const metadata: Metadata = {
-  icons: { icon: '/progger-mascot.png' },
+  icons: { icon: { url: '/favicon.png', type: 'image/png', sizes: '64x64' } },
   title: 'Progger — Find your next note',
-  description: 'Explore guitar scales, modes, chords and three-notes-per-string patterns across all 24 frets.',
+  description:
+    'Explore guitar scales, modes, chords and three-notes-per-string patterns across all 24 frets.',
 };
 
 export default function RootLayout({
@@ -25,10 +25,17 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        <a href="#main-content" className="skip-link">Skip to guitar reference</a>
+      <head>
+        <link
+          rel="preload"
+          href="/fonts/maple-mono/MapleMono-Regular.ttf.woff2"
+          as="font"
+          type="font/woff2"
+          crossOrigin="anonymous"
+        />
+      </head>
+      <body className={`${arcade.variable} antialiased`}>
+        <SkipLink />
         {children}
       </body>
     </html>

@@ -1,0 +1,27 @@
+# Frog artwork refinement
+
+Generated with the built-in image generation tool, 6 September 2026. Final asset: `/public/night-pond-crt.png` (1448 × 1086). Original `/public/night-pond.png` retained.
+
+Two passes: enlarged and simplified the mascot first; then made the pixel clusters substantially coarser after inspecting the first pass in the actual page. CRT treatment is an artistic approximation baked into the image, not hardware emulation or a filter applied to interface text.
+
+## First pass prompt
+
+Redraw this decorative website mascot scene as beautifully art-directed, authentic early-1990s 16-bit arcade pixel art with subtle real CRT phosphor light. Use the supplied image only for the CONCEPT of a guitar-playing frog on a lily pad over reflected nighttime water. Replace its painterly frog completely; do not merely pixelate/filter it.
+
+COMPOSITION: landscape 4:3 single raster asset, midnight navy #050c18 background blending cleanly to that exact dark color at every outer edge. One charming stocky green frog with a big broad head and expressive clear eyes, playing an amber electric guitar, standing confidently on one lily pad. Frog plus guitar occupies about 38% of image width and 48% of height, centered around x60%, with full silhouette safely inside the middle 75% of canvas. Lily pad beneath it spans about 55% width. Frog reflection aligned directly beneath in a few broken horizontal bands of emerald, mint and amber on dark water. One very small dim moon upper right, sparse short reeds left, a couple of quiet water ripples. Simplify surroundings and give the mascot visual priority. Do not leave huge empty borders.
+
+PIXEL CRAFT: visibly chunky, consistent logical pixels, like a masterfully hand-authored 240x180 game scene enlarged exactly to canvas size, coherent stair-step outlines and deliberate connected color clusters. The frog should have the iconic readability and appeal of an original arcade protagonist, not mimic an existing copyrighted character. Short strong legs, broad face, readable eyes, playful confident pose. About 3-4 tones per material with controlled hue-shifted ramps: luminous lime/mint highlights, saturated emerald middle, deep teal shadows; honey amber/coral guitar with cream details. Deliberate hard pixel clusters, no anatomical microtexture, no smooth painted shading, no random speckles. Guitar clearly has body, bridge, neck and headstock; one hand grips the neck, the other hand strums over the body. Exactly two arms and two legs. Readable simplified hands.
+
+CRT FINISH: final art feels lit from within by a high quality CRT displaying pixel art: subtle warm phosphor bloom closely hugs bright mint and amber pixel clusters, tiny neighboring color blending and extremely faint horizontal scan modulation. Preserve dark gaps, pixel silhouettes, face and instrument clarity. No broad blur, no chromatic fringes, no photographic screen, no bezel, no rounded screen corners or camera glare, no all-over grunge. The pixel construction must remain evident when this image is displayed at 460px or 350px wide and recognizable at 150px wide.
+
+Output only the finished standalone scene. No text, letters, logos, interface, diagrams, musical notes or frames. Background must blend invisibly into #050c18. Preserve the peaceful lily pad and reflection idea but make this a much stronger pixel-art mascot with modern color.
+
+## Final refinement prompt
+
+Refine this exact frog-on-a-lily-pad scene into genuinely chunky arcade SPRITE art. Preserve composition, frog pose, amber electric guitar, lily pad, aligned broken water reflections, quiet moon and dark navy surroundings. Main change: aggressively simplify the pixel construction and color palette. The previous rendition is TOO finely shaded and looks like a smoothly illustrated miniature when displayed small.
+
+Imagine the entire scene painted at only 144 by 108 logical pixels. The frog itself is a carefully authored 40 by 48 pixel game sprite. Enlarge those pixels uniformly to fill this 4:3 output, with large obvious square clusters and consistent stepped diagonals. All materials share the same coarse grid. Broad connected flat shapes, only FOUR shades of emerald/mint for frog skin, THREE shades of cream for throat, FOUR amber/ochre tones on the guitar. NO gradients inside material regions, NO stipple/noise/dithering/microtexture, NO tiny specular flecks or individually rendered guitar strings. Dark outline separations, broad cheek and belly areas, friendly readable round eyes, simplified hands. Make the guitar body, neck and headstock unmistakable but graphically abbreviated like an excellent SNES-era sprite. Simplify lily pad veins into only a few broad pixels. Reeds should be three or four bent lines, water reflections simple horizontal broken blocks.
+
+Add ONLY very subtle CRT phosphor bleed at bright pixel boundaries: still square blocks, but their emissive light blends slightly at adjoining edges. Rich modern saturated emerald and mint with warm amber guitar. Dark gaps and outlines remain sharp and dark. NO blurry fog or bright halos. A little CRT scan texture may be baked into bright clusters, subordinate to coarse sprite grid. No monitor frame or simulated screen photograph.
+
+Frog plus guitar about38% of image width, standing on lily pad about55% width. Decorative scene for a minimal midnight-navy website, #050c18 at all outside edges. No text, logos, diagrams or interface. This should look like carefully drawn low-resolution sprite craft, never a realistic illustration run through a pixel filter.

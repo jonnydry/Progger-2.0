@@ -1,4 +1,24 @@
-# First-release verification
+Latest scale expansion: [28-scale coverage and verification](scale-coverage.md).
+
+## Advanced extensions — 7 September 2026
+
+See [advanced chord coverage and verification](advanced-chords.md) for 11ths, 13ths, altered tensions, explicit omissions and rootless shapes.
+
+## Expanded chord voicings — 7 September 2026
+
+See [voicing coverage, behavior and verification](voicings.md) for the expanded library, inversion labels and browser evidence.
+
+## On-neck position selection — 7 September 2026
+
+Replaced the practice-start dropdown with fret-number buttons aligned to the neck. Exact valid low-E starts select existing deterministic patterns; Full neck can enter a pattern directly. Pan controls remain separate.
+
+Verified in the browser: fret 7 selects A Dorian frets 7–12; keyboard arrows move focus without changing selection, Enter selects; Full neck clears selection; open-string selection works; left-handed arrows follow physical order. At 320px, targets are 48×44px, document widths remain 305px, and the pan control reaches frets 19–24. Independent musical review checked 2,067 patterns, including pentatonic start/min differences and octave repeats. Independent interface review corrected the hint alignment breakpoint. Typecheck, lint, existing musical tests, and production build pass. Physical-device and screen-reader listening remain untested.
+
+# Current project verification
+
+The [7 September 2026 project audit](audit-2026-09-07/report.md) is the current verification report, with fixed issues, production-browser checks, performance measurements, and remaining limits. The original release verification below is historical and is also preserved in `verification-initial.md`.
+
+# Initial release verification (historical)
 
 Independent music and UX subagents reviewed initial code, challenged the expanded implementation, and verified fixes. A release reviewer also checked input handling and deployment configuration. No unresolved source-level release blocker remained in their final reviews.
 

@@ -1,0 +1,1286 @@
+/* Night Swim: the neck is the stage; atmosphere stays at its edges. */
+:root,
+.dark {
+  --background: #050c18;
+  --foreground: #e4eadd;
+  --ink: #050c18;
+  --card: #0b1523;
+  --card-foreground: #e4eadd;
+  --primary: #b9e8c0;
+  --primary-foreground: #092118;
+  --green: #b9e8c0;
+  --amber: #ffc451;
+  --quiet: #a2aabd;
+  --muted-foreground: #a2aabd;
+  --secondary: #11212a;
+  --secondary-foreground: #d9e4dd;
+  --muted: #0f1c29;
+  --border: #344351;
+  --input: #576578;
+  --ring: #b9e8c0;
+  --accent: #17312c;
+  --accent-foreground: #d9f3de;
+}
+.night-swim {
+  position: relative;
+  isolation: isolate;
+  container-type: inline-size;
+  min-height: 100vh;
+}
+.pond-scene {
+  position: absolute;
+  inset: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 65%;
+  pointer-events: none;
+  z-index: -1;
+  /* Blend the pond into the page while keeping pixel light inside the artwork. */
+  mask-image: linear-gradient(
+    black 55%,
+    rgb(0 0 0 / 0.96) 65%,
+    rgb(0 0 0 / 0.78) 75%,
+    rgb(0 0 0 / 0.4) 85%,
+    rgb(0 0 0 / 0.1) 94%,
+    transparent 100%
+  );
+}
+.night-swim .site-header {
+  position: relative;
+  isolation: isolate;
+  height: clamp(210px, 26vw, 360px);
+  align-items: flex-start;
+  padding: 26px max(28px, calc((100vw - 1384px) / 2)) 0;
+  border: 0;
+  gap: 48px;
+}
+.night-swim .brand {
+  color: var(--green);
+}
+.night-swim .brand > span {
+  font-size: 32px;
+  letter-spacing: 1px;
+}
+.night-swim .site-header nav {
+  margin-left: 0;
+  gap: 32px;
+}
+.night-swim .site-header nav a {
+  padding: 8px 0;
+  font-size: 17px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+}
+.night-swim .site-header nav a[aria-current='page'] {
+  color: var(--green);
+  border-bottom-color: var(--green);
+}
+.night-swim main {
+  max-width: 1328px;
+  width: calc(100% - 112px);
+}
+.reference-water {
+  position: relative;
+  isolation: isolate;
+  border-bottom: 1px solid rgb(83 139 153 / 0.18);
+  margin-bottom: 24px;
+}
+.night-swim .context-banner {
+  z-index: 1;
+}
+.underwater-scene {
+  position: absolute;
+  top: calc(-1 * var(--water-overlap, 60px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100cqw;
+  max-width: none;
+  height: calc(100% + var(--water-overlap, 60px));
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.8;
+  mask-image: linear-gradient(transparent, black 22%, black 70%, transparent);
+}
+.night-swim .reference-tabs {
+  justify-content: center;
+  gap: 24px;
+  margin: 2px 0 0;
+}
+.night-swim .reference-tabs button {
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  min-height: 44px;
+  padding: 6px 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+}
+.night-swim .reference-tabs button[aria-pressed='true'] {
+  border-bottom-color: var(--green);
+}
+.night-swim .reference-tabs button:not([aria-pressed='true']) {
+  color: var(--quiet);
+}
+.night-swim .selection-overview {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 0;
+  min-height: 0;
+  padding: 0 0 30px;
+}
+.night-swim .selection-bar {
+  --reference-size: clamp(32px, 4vw, 56px);
+  --reference-height: 92px;
+  justify-content: center;
+  gap: 12px;
+  max-width: 100%;
+}
+.night-swim .selection-bar .music-select-trigger {
+  font-family: var(--font-arcade), var(--font-ui);
+  font-weight: 400;
+  font-size: var(--reference-size);
+  letter-spacing: 0;
+  color: var(--green);
+  width: auto;
+  height: auto;
+  min-height: var(--reference-height);
+  padding: 0;
+  gap: 9px;
+  max-width: 100%;
+}
+.night-swim .selection-bar .root-select {
+  flex: 0 0 auto;
+}
+.night-swim .selection-bar .root-select .music-select-trigger {
+  width: auto;
+  min-width: 0;
+}
+.night-swim .selection-bar .scale-select {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.night-swim .selection-bar:has(.long-title) .root-select .music-select-trigger,
+.night-swim .selection-bar .scale-select.long-title .music-select-trigger {
+  font-size: var(--reference-size);
+  letter-spacing: 0;
+}
+.night-swim .selection-bar .music-select-trigger > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--green);
+  opacity: 0.75;
+}
+.night-swim .selection-bar .scale-select [data-slot='select-value'] {
+  display: block;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+.night-swim .selection-bar:has(.long-title) {
+  --reference-size: clamp(28px, 3vw, 40px);
+}
+.night-swim .scale-caption {
+  margin: 2px 0 0;
+  font-size: 17px;
+  font-style: italic;
+  color: var(--quiet);
+  text-align: center;
+}
+.night-swim .note-palette {
+  margin: 25px 0 0;
+  justify-content: center;
+  gap: 37px;
+  flex-wrap: wrap;
+  width: auto;
+}
+.night-swim .palette-note {
+  min-width: 28px;
+  gap: 9px;
+}
+.night-swim .palette-note > span {
+  color: var(--green);
+  font-size: 26px;
+  font-weight: 500;
+}
+.night-swim .palette-note small {
+  color: #b9c1cf;
+  font-size: 16px;
+}
+.night-swim .root-palette > span {
+  color: var(--green);
+}
+.night-swim .neck {
+  border: 0;
+  padding-top: 0;
+}
+.night-swim .neck-meta {
+  padding: 0 0 18px;
+  letter-spacing: 0;
+  font-size: 13px;
+}
+.night-swim .neck-meta .muted {
+  font-size: 11px;
+  letter-spacing: 0.8px;
+}
+.night-swim .neck-legend {
+  font-size: 12px;
+}
+.night-swim .scale-key {
+  background: var(--green);
+}
+.night-swim .string-labels {
+  flex-basis: 40px;
+  padding-top: 36px;
+}
+.night-swim .string-labels span {
+  height: 52px;
+  font-size: 16px;
+  color: #e4eadd;
+}
+.night-swim .voicing-neck .string-labels {
+  flex-basis: 49px;
+}
+.night-swim .string-cell {
+  height: 52px;
+  background: transparent;
+  border-right: 1px solid #626355;
+}
+.night-swim .string-line {
+  background: #c6b99f80;
+}
+.night-swim .fret-number {
+  height: 36px;
+  font-size: 14px;
+  color: #b5bac2;
+}
+.night-swim .fret-number.inlaid {
+  color: #e3e4d9;
+}
+.night-swim .open-string .string-cell {
+  background: #10202855;
+  border-right: 3px solid #c2c7b6;
+}
+.night-swim .left-handed-neck .open-string .string-cell {
+  border-right: 0;
+  border-left: 3px solid #c2c7b6;
+}
+.night-swim .note-dot {
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+  color: #c8f2cc;
+  background: #0b1d25;
+  border-color: #b0d1ac;
+  box-shadow: none;
+}
+.night-swim .focused-neck .note-dot {
+  width: 38px;
+  height: 38px;
+  font-size: 18px;
+}
+.night-swim .note-dot.is-root {
+  color: var(--amber);
+  border-color: var(--amber);
+  background: #121b20;
+  outline-color: var(--amber);
+}
+.night-swim .note-dot.is-target {
+  outline-color: #e4eadd;
+}
+.night-swim .note-dot.is-target.is-root {
+  outline-color: var(--amber);
+  box-shadow: 0 0 0 5px #e4eadd;
+}
+.night-swim .inlay {
+  height: 20px;
+  margin: 0 0 9px;
+  color: #798c94;
+}
+.night-swim .neck-scroll {
+  border-radius: 0;
+  scrollbar-width: none;
+}
+.night-swim .neck-scroll::-webkit-scrollbar {
+  display: none;
+}
+.instrument-dock {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 22px 0 0;
+  padding: 16px 18px;
+  border: 1px solid #586575;
+  border-radius: 9px;
+  background: #08111e;
+}
+.night-swim .segmented {
+  padding: 0;
+  gap: 0;
+  border: 1px solid #4f6070;
+  border-radius: 5px;
+  background: transparent;
+}
+.night-swim .segmented button {
+  padding: 11px 16px;
+  min-height: 48px;
+  border: 0;
+  border-radius: 0;
+  font-size: 14px;
+  color: #bdc4cf;
+}
+.night-swim .segmented button[aria-pressed='true'] {
+  background: var(--green);
+  color: #0b251a;
+  box-shadow: none;
+}
+.night-swim .segmented button:hover:not([aria-pressed='true']) {
+  background: #152a32;
+  color: #e1f2e8;
+}
+.night-swim .segmented button:focus-visible {
+  outline-color: #edcb79;
+  outline-offset: -4px;
+}
+.night-swim .display-controls {
+  width: auto;
+  gap: 12px;
+}
+.night-swim .display-controls .compact button {
+  min-width: 0;
+}
+.night-swim .display-menu summary {
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  justify-content: center;
+}
+.night-swim .display-menu summary span {
+  display: none;
+}
+.night-swim .display-menu summary svg {
+  width: 17px;
+  height: 17px;
+}
+.night-swim .display-menu[open] > div {
+  top: auto;
+  bottom: 52px;
+  border-color: #586575;
+  background: #0c1928;
+}
+.dock-position {
+  min-width: 110px;
+  padding: 0 8px 0 0;
+  color: var(--quiet);
+  font-size: 12px;
+}
+.dock-position > span {
+  display: block;
+  white-space: nowrap;
+}
+.dock-position small {
+  font-size: 10px;
+}
+.night-swim .dock-position .music-select-trigger {
+  min-height: 44px;
+  height: 44px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  font-size: 20px;
+  color: var(--foreground);
+  justify-content: flex-start;
+  gap: 16px;
+}
+.night-swim .voicing-picker {
+  min-width: 170px;
+}
+.night-swim .voicing-picker .music-select-trigger {
+  font-size: 14px;
+}
+.night-swim .neck-navigation {
+  flex: 1;
+  min-width: 270px;
+  display: flex;
+  padding: 0 0 0 20px;
+  margin: 0;
+  border-left: 1px solid #455366;
+  gap: 12px;
+}
+.viewport-control {
+  flex: 1;
+  min-width: 100px;
+}
+.night-swim .range-label {
+  display: block;
+  white-space: nowrap;
+  color: var(--green);
+  font-size: 12px;
+}
+.neck-slider {
+  display: flex;
+  align-items: center;
+  height: 34px;
+}
+.neck-slider input {
+  width: 100%;
+  height: 24px;
+  cursor: ew-resize;
+  appearance: none;
+  background: transparent;
+  margin: 0;
+}
+.neck-slider input::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 1px;
+  background: #52606e;
+}
+.neck-slider input::-moz-range-track {
+  height: 3px;
+  border-radius: 1px;
+  background: #52606e;
+}
+.neck-slider input::-webkit-slider-thumb {
+  appearance: none;
+  width: 26px;
+  height: 9px;
+  margin-top: -3px;
+  border: 1px solid #ccebd0;
+  border-radius: 2px;
+  background: var(--green);
+}
+.neck-slider input::-moz-range-thumb {
+  width: 26px;
+  height: 9px;
+  border: 1px solid #ccebd0;
+  border-radius: 2px;
+  background: var(--green);
+}
+.neck-slider input:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.night-swim .fret-nav-buttons {
+  gap: 8px;
+  margin: 0;
+  align-items: center;
+}
+.night-swim .icon-button {
+  min-width: 44px;
+  width: 44px;
+  height: 44px;
+  border: 1px solid #536373;
+  border-radius: 4px;
+  background: transparent;
+  color: #dbebda;
+}
+.night-swim .icon-button:hover {
+  border-color: var(--green);
+  background: #132931;
+}
+.night-swim .jump-label {
+  font-size: 0;
+  gap: 0;
+}
+.night-swim .jump-label .music-select {
+  width: 80px;
+}
+.night-swim .jump-label .music-select-trigger {
+  min-height: 44px;
+  height: 44px;
+  font-size: 12px;
+}
+.night-swim .pattern-details {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--quiet);
+}
+.night-swim .theory-details {
+  margin-top: 30px;
+  border-color: #405060;
+}
+.night-swim .theory-details > summary {
+  color: var(--green);
+  font-size: 18px;
+  min-height: 72px;
+}
+.night-swim .theory-content h2 {
+  color: var(--green);
+}
+.night-swim .harmony-row button {
+  border-color: #3b5260;
+}
+.night-swim .harmony-row button:hover {
+  background: #102731;
+}
+.night-swim .context-banner {
+  position: relative;
+  font-size: 13px;
+  margin: 8px 0 10px;
+}
+.night-swim .context-banner + .explorer-panel .reference-tabs {
+  margin-top: 0;
+}
+.night-swim .chord-targets {
+  justify-content: center;
+  padding-bottom: 22px;
+}
+.night-swim .target-description {
+  color: #c8dad8;
+}
+.night-swim .outside-palette {
+  justify-content: center;
+}
+.voicing-hint {
+  color: var(--quiet);
+  font-size: 12px;
+  margin: 14px 0;
+}
+.night-swim footer {
+  border-color: #233646;
+  color: #a2aabd;
+  margin-top: 10px;
+}
+.night-swim .match-workspace {
+  margin-top: 36px;
+}
+.night-swim .chord-entry h2 {
+  font-family: var(--font-ui);
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--green);
+  font-size: 36px;
+  letter-spacing: -0.5px;
+}
+.night-swim .chord-entry {
+  --water-overlap: 96px;
+  border-color: #344653;
+}
+.chord-entry .underwater-scene {
+  object-position: right top;
+  opacity: 0.55;
+}
+.night-swim .chord-entry textarea {
+  background: #0b1925;
+  border-color: #536676;
+}
+.night-swim .chord-entry textarea:focus {
+  background: #10232d;
+}
+.night-swim .chord-entry textarea[aria-invalid='true'] {
+  border-color: #e8a084;
+}
+.night-swim .match-card,
+.night-swim .result-empty,
+.night-swim .per-chord-section {
+  border-color: #344653;
+}
+.night-swim .chord-token,
+.night-swim .examples button,
+.night-swim .alternate-modes button {
+  color: #c7e4d4;
+  border-color: #3b5360;
+}
+.night-swim .builder-row .music-select-trigger,
+.night-swim .home-note-control .music-select-trigger {
+  background: #0d1c28;
+}
+.music-select-trigger {
+  background: #0d1b29;
+  border-color: #526373;
+  color: #e4eadd;
+}
+.music-select-trigger:hover,
+.music-select-trigger[data-popup-open] {
+  background: #17312f;
+  border-color: #9ed7b0;
+}
+.music-select-trigger > svg {
+  color: #aabcc5;
+}
+.music-select-popup {
+  background: #0c1c2a;
+  border-color: #5c7480;
+  color: #e1eade;
+  scrollbar-color: #71998a #0c1c2a;
+}
+.music-select-popup [data-slot='select-label'] {
+  color: #a7c3c5;
+}
+.music-select-popup [data-slot='select-item'][data-highlighted] {
+  color: #eaf2e5;
+  background: #254138;
+}
+.music-select-popup [data-slot='select-item'][data-selected] {
+  color: #b9e8c0;
+}
+.music-select-popup [data-slot='select-scroll-up-button'],
+.music-select-popup [data-slot='select-scroll-down-button'] {
+  background: #0c1c2a;
+  color: #b2c4cb;
+}
+@media (max-width: 1200px) {
+  .instrument-dock {
+    gap: 14px;
+    padding: 14px;
+  }
+  .night-swim .neck-navigation {
+    flex-basis: 100%;
+    border-left: 0;
+    border-top: 1px solid #344654;
+    padding: 12px 0 0;
+  }
+  .night-swim .display-controls {
+    margin-left: auto;
+  }
+  .viewport-control {
+    max-width: none;
+  }
+}
+@media (max-width: 750px) {
+  .night-swim .site-header {
+    height: 210px;
+    padding: 20px 24px 0;
+    gap: 30px;
+  }
+  .night-swim .brand > span {
+    font-size: 25px;
+  }
+  .night-swim .site-header nav {
+    gap: 22px;
+  }
+  .night-swim .site-header nav a {
+    font-size: 14px;
+  }
+  .night-swim main {
+    width: calc(100% - 48px);
+  }
+  .night-swim .selection-overview {
+    padding: 10px 0 28px;
+  }
+  .night-swim .selection-bar .music-select-trigger {
+    font-size: var(--reference-size);
+    height: auto;
+  }
+  .night-swim
+    .selection-bar:has(.long-title)
+    .root-select
+    .music-select-trigger,
+  .night-swim .selection-bar .scale-select.long-title .music-select-trigger {
+    font-size: var(--reference-size);
+  }
+  .night-swim .scale-caption {
+    font-size: 14px;
+  }
+  .night-swim .note-palette {
+    gap: 27px;
+    margin-top: 20px;
+  }
+  .night-swim .palette-note > span {
+    font-size: 23px;
+  }
+  .night-swim .palette-note small {
+    font-size: 14px;
+  }
+  .night-swim .neck-meta {
+    font-size: 11px;
+    gap: 8px;
+  }
+  .night-swim .neck-meta .muted {
+    font-size: 10px;
+  }
+  .night-swim .neck-legend {
+    font-size: 11px;
+  }
+  .night-swim .string-cell,
+  .night-swim .string-labels span {
+    height: 46px;
+  }
+  .night-swim .focused-neck .note-dot {
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+  }
+  .night-swim .segmented button {
+    padding: 10px 13px;
+    min-height: 44px;
+    font-size: 13px;
+  }
+  .night-swim .dock-position {
+    min-width: 100px;
+  }
+  .night-swim .display-controls {
+    margin: 0;
+  }
+  .night-swim .match-workspace {
+    margin-top: 26px;
+  }
+  .night-swim .chord-entry {
+    --water-overlap: 86px;
+  }
+  .night-swim .chord-entry h2 {
+    font-size: 30px;
+  }
+}
+@media (max-width: 500px) {
+  .chord-entry .underwater-scene {
+    opacity: 0.35;
+    mask-image: linear-gradient(transparent, black 30%, black 70%, transparent);
+  }
+  .night-swim .site-header {
+    height: 210px;
+    padding: 18px 18px 0;
+    gap: 0;
+    align-content: flex-start;
+    justify-content: flex-start;
+  }
+  .night-swim .brand > span {
+    font-size: 24px;
+  }
+  .night-swim .site-header nav {
+    height: 48px;
+    gap: 26px;
+    width: 100%;
+  }
+  .night-swim .site-header nav a {
+    font-size: 14px;
+  }
+  .pond-scene {
+    top: 65px;
+    height: 145px;
+    object-position: right center;
+    mask-image: linear-gradient(
+      transparent,
+      black 16%,
+      black 55%,
+      rgb(0 0 0 / 0.96) 65%,
+      rgb(0 0 0 / 0.78) 75%,
+      rgb(0 0 0 / 0.4) 85%,
+      rgb(0 0 0 / 0.1) 94%,
+      transparent 100%
+    );
+  }
+  .night-swim main {
+    width: calc(100% - 32px);
+  }
+  .night-swim .reference-tabs {
+    margin: 8px 0 0;
+    gap: 24px;
+  }
+  .night-swim .reference-tabs button {
+    min-height: 44px;
+    font-size: 10px;
+  }
+  .night-swim .selection-overview {
+    padding: 4px 0 24px;
+  }
+  .night-swim .selection-bar {
+    gap: 8px;
+  }
+  .night-swim .selection-bar .music-select-trigger {
+    font-size: var(--reference-size);
+    height: auto;
+    gap: 5px;
+  }
+  .night-swim
+    .selection-bar:has(.long-title)
+    .root-select
+    .music-select-trigger,
+  .night-swim .selection-bar .scale-select.long-title .music-select-trigger {
+    font-size: var(--reference-size);
+    letter-spacing: 0;
+  }
+  .night-swim .selection-bar .music-select-trigger > svg {
+    width: 14px;
+    height: 14px;
+  }
+  .night-swim .scale-caption {
+    font-size: 13px;
+    margin-top: 4px;
+    max-width: 36ch;
+  }
+  .night-swim .note-palette {
+    width: 100%;
+    gap: 0;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    margin-top: 21px;
+  }
+  .night-swim .palette-note {
+    min-width: 23px;
+    gap: 5px;
+  }
+  .night-swim .palette-note > span {
+    font-size: 19px;
+  }
+  .night-swim .palette-note small {
+    font-size: 12px;
+  }
+  .night-swim .neck-meta {
+    padding-bottom: 12px;
+  }
+  .night-swim .neck-meta > span:first-child {
+    width: 100%;
+  }
+  .night-swim .string-labels {
+    flex-basis: 25px;
+  }
+  .night-swim .voicing-neck .string-labels {
+    flex-basis: 40px;
+  }
+  .night-swim .fret-number {
+    font-size: 12px;
+  }
+  .night-swim .string-labels span {
+    font-size: 13px;
+  }
+  .instrument-dock {
+    padding: 12px;
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .instrument-dock > .segmented {
+    width: 100%;
+  }
+  .instrument-dock > .segmented button {
+    flex: 1;
+  }
+  .night-swim .dock-position {
+    min-width: 0;
+    flex: 1;
+    padding: 0;
+  }
+  .dock-position small {
+    display: none;
+  }
+  .night-swim .dock-position .music-select-trigger {
+    height: 44px;
+    min-height: 44px;
+  }
+  .night-swim .display-controls {
+    gap: 8px;
+  }
+  .night-swim .display-controls .compact button {
+    padding: 10px;
+    font-size: 12px;
+  }
+  .night-swim .display-menu summary {
+    width: 44px;
+  }
+  .night-swim .neck-navigation {
+    min-width: 0;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .viewport-control {
+    flex-basis: 100%;
+  }
+  .night-swim .fret-nav-buttons {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .night-swim .jump-label {
+    font-size: 11px;
+    gap: 8px;
+  }
+  .night-swim .theory-details {
+    margin-top: 24px;
+  }
+  .night-swim .theory-details > summary {
+    min-height: 60px;
+    font-size: 16px;
+  }
+  .night-swim .chord-entry h2 {
+    font-size: 26px;
+    line-height: 1.15;
+    margin-bottom: 16px;
+  }
+  .night-swim .voicing-picker {
+    flex-basis: 100%;
+  }
+  .night-swim .voicing-picker .music-select-trigger {
+    font-size: 14px;
+  }
+}
+
+@media (min-width: 1201px) and (max-height: 900px) {
+  .night-swim .selection-bar .music-select-trigger {
+    height: auto;
+    font-size: var(--reference-size);
+  }
+  .night-swim
+    .selection-bar:has(.long-title)
+    .root-select
+    .music-select-trigger,
+  .night-swim .selection-bar .scale-select.long-title .music-select-trigger {
+    font-size: var(--reference-size);
+  }
+  .night-swim .selection-overview {
+    padding-bottom: 22px;
+  }
+  .night-swim .note-palette {
+    margin-top: 14px;
+  }
+  .night-swim .neck-meta {
+    padding-bottom: 12px;
+  }
+  .night-swim .string-cell,
+  .night-swim .string-labels span {
+    height: 44px;
+  }
+  .night-swim .fret-number {
+    height: 32px;
+  }
+  .night-swim .string-labels {
+    padding-top: 32px;
+  }
+  .night-swim .instrument-dock {
+    margin-top: 14px;
+  }
+}
+
+/* The two families keep the same roles at every breakpoint. */
+@media (max-width: 750px) {
+  .night-swim .selection-bar,
+  .night-swim .selection-bar:has(.long-title) {
+    --reference-size: 32px;
+    --reference-height: 76px;
+  }
+}
+@media (max-width: 500px) {
+  .night-swim .selection-bar,
+  .night-swim .selection-bar:has(.long-title) {
+    --reference-size: 24px;
+    --reference-height: 68px;
+    width: 100%;
+  }
+  .night-swim .selection-bar .root-select {
+    flex: 0 0 auto;
+  }
+  .night-swim .selection-bar .scale-select {
+    flex: 0 1 auto;
+  }
+  .night-swim .instrument-dock > .segmented button {
+    min-width: 0;
+    padding-inline: 8px;
+    white-space: normal;
+  }
+}
+@media (min-width: 1201px) and (max-height: 900px) {
+  .night-swim .selection-bar {
+    --reference-height: 76px;
+  }
+}
+
+/* Keep rare multi-accidental spellings legible inside the same fret column. */
+.night-swim .neck .note-dot.wide-note {
+  width: 44px;
+  min-width: 44px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.night-swim .jump-label .music-select-trigger {
+  width: 80px;
+  min-width: 80px;
+}
+.music-select-popup [data-slot='select-item-text'] {
+  min-width: 0;
+  flex-shrink: 1;
+  white-space: normal;
+}
+
+@media (max-width: 360px) {
+  .night-swim .jump-label {
+    font-size: 0;
+    gap: 0;
+  }
+}
+
+.night-swim .display-controls .segmented {
+  flex-shrink: 0;
+}
+@media (max-width: 370px) {
+  .night-swim .dock-position {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .night-swim .dock-position .music-select {
+    min-width: 64px;
+  }
+  .night-swim .dock-position.voicing-picker {
+    display: block;
+  }
+  .night-swim .display-controls {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+  }
+  .night-swim .display-controls .segmented {
+    flex: 1;
+  }
+  .night-swim .display-controls .segmented button {
+    flex: 1;
+  }
+}
+
+/* Pattern starts live on the instrument, aligned with their low-E frets. */
+.fret-position-row {
+  display: grid;
+}
+.night-swim .position-hint {
+  margin: 0 0 10px 40px;
+  color: #b5bac2;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.position-hint span {
+  white-space: nowrap;
+}
+.night-swim .selectable-positions .fret-number {
+  height: 44px;
+}
+.night-swim .selectable-positions .string-labels {
+  padding-top: 44px;
+}
+.night-swim .pattern-fret,
+.night-swim .pattern-fret.inlaid {
+  position: relative;
+  padding: 0;
+  min-width: 44px;
+  border: 0;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--green);
+  cursor: pointer;
+}
+.night-swim .pattern-fret::after {
+  content: '';
+  position: absolute;
+  bottom: 5px;
+  width: 4px;
+  height: 4px;
+  background: currentColor;
+  border-radius: 50%;
+}
+.night-swim .pattern-fret:hover {
+  background: #b9edc014;
+}
+.night-swim .pattern-fret[aria-pressed='true'] {
+  color: #07111d;
+  background: var(--green);
+}
+.night-swim .pattern-fret:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: -3px;
+}
+@media (max-width: 500px) {
+  .night-swim .position-hint {
+    margin-left: 25px;
+  }
+}
+
+/* One voicing on the neck, with the bass as the primary way to explore. */
+.voicing-bass-row,
+.voicing-list {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.voicing-browser {
+  margin: 0 0 24px;
+  padding: 12px 0;
+  border-bottom: 1px solid #263443;
+}
+.voicing-bass-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.voicing-filter-label {
+  color: #b5bac2;
+  font-size: 12px;
+  margin-right: 10px;
+}
+.voicing-bass-row button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid #394957;
+  border-radius: 5px;
+  background: transparent;
+  color: #c2ced4;
+}
+.voicing-bass-row button span {
+  font-size: 12px;
+}
+.voicing-bass-row button[aria-pressed='true'] {
+  color: var(--green);
+  border-color: var(--green);
+  background: #b9edc00c;
+}
+.voicing-stepper {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-top: 12px;
+}
+.voicing-stepper .icon-button {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+}
+.voicing-stepper .icon-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.voicing-current {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.voicing-current strong {
+  color: var(--green);
+  font-size: 18px;
+  font-weight: 500;
+}
+.voicing-current strong span {
+  color: #d1d8dc;
+  font-size: 14px;
+}
+.voicing-current > span,
+.voicing-current small {
+  color: #b5bac2;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.night-swim .voicing-explanation {
+  color: #b5bac2;
+  font-size: 12px;
+  margin: 10px 0 0;
+  line-height: 1.8;
+}
+.voicing-catalog {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.voicing-catalog summary {
+  min-height: 44px;
+  align-content: center;
+  color: #c2ced4;
+  cursor: pointer;
+}
+.voicing-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: 280px;
+  overflow-y: auto;
+  gap: 6px;
+  padding: 4px;
+}
+.voicing-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  min-height: 60px;
+  border: 1px solid #263443;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  color: #c2ced4;
+}
+.voicing-list button span:last-child {
+  font-size: 11px;
+  color: #aebcc5;
+}
+.voicing-list button[aria-pressed='true'] {
+  border-color: var(--green);
+  color: var(--green);
+}
+@media (max-width: 500px) {
+  .voicing-stepper {
+    gap: 10px;
+  }
+  .voicing-current strong {
+    font-size: 16px;
+  }
+  .voicing-current strong span {
+    display: block;
+    font-size: 12px;
+  }
+  .voicing-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .voicing-filter-label {
+    width: 100%;
+  }
+}
+
+.night-swim .formula-label {
+  margin: 20px 0 0;
+  color: #aebbc9;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.night-swim .formula-label + .note-palette {
+  margin-top: 12px;
+}
+.voicing-current .voicing-omissions {
+  color: #e4cba4;
+  line-height: 1.8;
+}
+.voicing-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 3px 6px;
+  border: 1px solid #53677b;
+  border-radius: 4px;
+  color: #cbdce9;
+  font-size: 10px;
+  font-weight: 400;
+  vertical-align: middle;
+}
+.voicing-list .voicing-list-omissions {
+  color: #e4cba4;
+}
+@media (max-width: 500px) {
+  .voicing-stepper {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+  }
+  .voicing-current {
+    display: contents;
+  }
+  .voicing-current > strong {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .voicing-current > span {
+    grid-column: 1 / -1;
+  }
+  .voicing-stepper > button:first-child {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .voicing-stepper > button:last-child {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}

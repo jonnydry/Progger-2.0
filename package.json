@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
-    "start": "wrangler dev --config dist/server/wrangler.json",
+    "start": "node --import ./scripts/local-tool-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
