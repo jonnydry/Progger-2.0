@@ -1,0 +1,666 @@
+/* Scene colors share musical roles. The original Pond keeps its own palette. */
+html[data-scene='tidepool'] {
+  --background: #081522;
+  --foreground: #dceff0;
+  --card: #102330;
+  --primary: #87ded0;
+  --primary-foreground: #082927;
+  --green: #87ded0;
+  --amber: #ffc08d;
+  --quiet: #a2b9c4;
+  --secondary: #172e3a;
+  --muted: #172e3a;
+  --border: #37505e;
+  --input: #698794;
+  --accent: #193c43;
+  --destructive: #ffb6ac;
+  --scene-string: #69818d;
+  --scene-open: #102632;
+  --scene-note-ink: #b8f1e7;
+  --scene-note-fill: #102d34;
+  --scene-root-ink: #ffc08d;
+  --scene-root-fill: #222833;
+}
+
+html[data-scene='tidepool'][data-theme='day'] {
+  --background: #f3f7ee;
+  --foreground: #133f42;
+  --card: #fbfcf5;
+  --primary: #146b66;
+  --primary-foreground: #f3f7ee;
+  --green: #146b66;
+  --amber: #a1462e;
+  --quiet: #4d6967;
+  --secondary: #e5eee5;
+  --muted: #e5eee5;
+  --border: #becfc6;
+  --input: #7a928c;
+  --accent: #dceee5;
+  --destructive: #a03245;
+  --scene-string: #778f89;
+  --scene-open: #e0ece1;
+  --scene-note-ink: #f3f7ee;
+  --scene-note-fill: #146b66;
+  --scene-root-ink: #fff8ee;
+  --scene-root-fill: #a1462e;
+}
+
+html[data-scene='twilight'] {
+  --background: #160f21;
+  --foreground: #f2e6f4;
+  --card: #22192e;
+  --primary: #dfb4f1;
+  --primary-foreground: #2a1535;
+  --green: #dfb4f1;
+  --amber: #ffc391;
+  --quiet: #c1adca;
+  --secondary: #2e213c;
+  --muted: #2e213c;
+  --border: #5d486d;
+  --input: #947aa1;
+  --accent: #3e2850;
+  --destructive: #ffb1c4;
+  --scene-string: #897395;
+  --scene-open: #271b35;
+  --scene-note-ink: #ebcaf5;
+  --scene-note-fill: #30203e;
+  --scene-root-ink: #ffc391;
+  --scene-root-fill: #32202f;
+}
+
+html[data-scene='twilight'][data-theme='day'] {
+  --background: #faf2f8;
+  --foreground: #412847;
+  --card: #fff9fd;
+  --primary: #903666;
+  --primary-foreground: #fff7fc;
+  --green: #903666;
+  --amber: #995222;
+  --quiet: #765e79;
+  --secondary: #f0e5ef;
+  --muted: #f0e5ef;
+  --border: #d4c1d2;
+  --input: #9b839f;
+  --accent: #f0e0ee;
+  --destructive: #ad2548;
+  --scene-string: #9c839c;
+  --scene-open: #eee0ed;
+  --scene-note-ink: #fff7fc;
+  --scene-note-fill: #903666;
+  --scene-root-ink: #fff7fc;
+  --scene-root-fill: #995222;
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight']) {
+  --ink: var(--background);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --secondary-foreground: var(--foreground);
+  --muted-foreground: var(--quiet);
+  --accent-foreground: var(--foreground);
+  --ring: var(--green);
+  --day-surface: var(--card);
+  --day-hover: var(--accent);
+  --day-divider: var(--border);
+  --day-string: var(--scene-string);
+  --scene-water-quiet: var(--quiet);
+}
+
+/* The day water previously had its own green text override. */
+html:is([data-scene='tidepool'], [data-scene='twilight']) .reference-water {
+  --quiet: var(--scene-water-quiet);
+  border-color: var(--border);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .palette-note
+  small,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .position-hint,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .formula-label,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-explanation,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .theory-content
+  p,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-section
+  p,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-filter-label,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-current
+  > span,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-current
+  small,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-list
+  button
+  span:last-child,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .fret-number,
+html:is([data-scene='tidepool'], [data-scene='twilight']) .night-swim .inlay,
+html:is([data-scene='tidepool'], [data-scene='twilight']) .night-swim footer {
+  color: var(--quiet);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight']) .night-swim .brand,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .selection-bar
+  .music-select-trigger,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .palette-note
+  > span,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .string-labels
+  span,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .fret-number.inlaid,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .target-description,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .result-count,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-current
+  strong
+  span,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-catalog
+  summary {
+  color: var(--foreground);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .root-palette
+  > span,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .root-palette
+  small,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-current
+  .voicing-omissions,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-list
+  button
+  .voicing-list-omissions:last-child {
+  color: var(--amber);
+}
+
+/* Selector lists above deliberately keep each typography role at its own
+   specificity so pressed controls can override ordinary fret labels. */
+
+/* A root keeps its extra ring; chord targets keep a separate outer ring. */
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .note-dot {
+  color: var(--scene-note-ink);
+  background: var(--scene-note-fill);
+  border-color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .note-dot.is-root {
+  color: var(--scene-root-ink);
+  background: var(--scene-root-fill);
+  border-color: var(--amber);
+  outline: 1px solid var(--amber);
+  outline-offset: 2px;
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .note-dot.is-target {
+  outline: 2px solid var(--foreground);
+  outline-offset: 3px;
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .note-dot.is-root.is-target {
+  outline: 1px solid var(--amber);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 4px var(--background),
+    0 0 0 6px var(--foreground);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .string-cell {
+  border-right-color: var(--scene-string);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .string-line {
+  background: var(--scene-string);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .open-string
+  .string-cell {
+  background: var(--scene-open);
+  border-right-color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .left-handed-neck
+  .open-string
+  .string-cell {
+  border-left-color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .instrument-dock,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .display-menu[open]
+  > div,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-entry
+  textarea,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .builder-row
+  .music-select-trigger,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .home-note-control
+  .music-select-trigger,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-badge,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-current
+  .voicing-badge {
+  color: var(--foreground);
+  border-color: var(--input);
+  background: var(--card);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .neck-navigation,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .theory-details,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-section,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-browser,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-entry,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .match-card,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .result-empty,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .per-chord-section,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .color-options
+  article,
+html:is([data-scene='tidepool'], [data-scene='twilight']) .night-swim footer,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .harmony-row
+  button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-targets
+  > button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-token,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .examples
+  button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .alternate-modes
+  button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .per-chord
+  button {
+  border-color: var(--border);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .segmented,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .icon-button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-bass-row
+  button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-list
+  button {
+  border-color: var(--input);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .segmented
+  button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-bass-row
+  button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-list
+  button {
+  color: var(--foreground);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .icon-button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .harmony-row
+  button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-targets
+  > button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-token,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .examples
+  button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .alternate-modes
+  button,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .per-chord
+  button {
+  color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .segmented
+  button:hover:not([aria-pressed='true']),
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .icon-button:hover:not(:disabled),
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .harmony-row
+  button:hover,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .pattern-fret:hover,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-bass-row
+  button:hover,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-list
+  button:hover {
+  color: var(--green);
+  background: var(--accent);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .segmented
+  button[aria-pressed='true'],
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .pattern-fret[aria-pressed='true'],
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .builder-row
+  [data-slot='button'] {
+  color: var(--primary-foreground);
+  background: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .pattern-fret:not([aria-pressed='true']) {
+  color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .icon-button:disabled {
+  border-color: var(--input);
+  background: transparent;
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .builder-row
+  [data-slot='button']:hover {
+  color: var(--primary-foreground);
+  background: var(--green);
+  box-shadow: inset 0 0 0 2px var(--primary-foreground);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-bass-row
+  button[aria-pressed='true'],
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .voicing-list
+  button[aria-pressed='true'] {
+  color: var(--green);
+  border-color: var(--green);
+  background: var(--accent);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-targets
+  > button[aria-pressed='true'] {
+  border-color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .segmented
+  button:focus-visible,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .pattern-fret:focus-visible {
+  outline-color: var(--foreground);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .segmented
+  button[aria-pressed='true']:focus-visible,
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .pattern-fret[aria-pressed='true']:focus-visible {
+  outline-color: var(--primary-foreground);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .neck-slider
+  input::-webkit-slider-runnable-track {
+  background: var(--scene-string);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .neck-slider
+  input::-moz-range-track {
+  background: var(--scene-string);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .neck-slider
+  input::-webkit-slider-thumb {
+  border-color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .neck-slider
+  input::-moz-range-thumb {
+  border-color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-entry
+  textarea:is(:hover, :focus) {
+  background: var(--card);
+  border-color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-entry
+  textarea::placeholder {
+  color: var(--quiet);
+  opacity: 1;
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .chord-entry
+  textarea[aria-invalid='true'] {
+  border-color: var(--destructive);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight']) .input-error {
+  color: var(--destructive);
+}
+
+/* Music menus are portaled outside the main instrument wrapper. */
+html:is([data-scene='tidepool'], [data-scene='twilight']) .music-select-trigger,
+html:is([data-scene='tidepool'], [data-scene='twilight']) .music-select-popup {
+  color: var(--foreground);
+  background: var(--card);
+  border-color: var(--input);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .music-select-trigger:is(:hover, [data-popup-open]),
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  :is(.builder-row, .home-note-control)
+  .music-select-trigger:is(:hover, [data-popup-open]) {
+  color: var(--foreground);
+  background: var(--accent);
+  border-color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .music-select-trigger
+  > svg {
+  color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight']) .music-select-popup {
+  scrollbar-color: var(--input) var(--card);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .music-select-popup
+  [data-slot='select-label'] {
+  color: var(--quiet);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .music-select-popup
+  [data-slot='select-item'][data-highlighted] {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .music-select-popup
+  [data-slot='select-item'][data-selected] {
+  color: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .music-select-popup
+  :is(
+    [data-slot='select-scroll-up-button'],
+    [data-slot='select-scroll-down-button']
+  ) {
+  color: var(--quiet);
+  background: var(--card);
+}
+
+/* Retained compact diagrams carry the same identities as the main neck. */
+html:is([data-scene='tidepool'], [data-scene='twilight']) .voicing svg line {
+  stroke: var(--scene-string);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .voicing
+  svg
+  line[stroke-width='4'] {
+  stroke: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight']) .voicing svg text {
+  fill: var(--foreground);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight']) .voicing svg circle {
+  fill: var(--green);
+}
+
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .voicing
+  svg
+  circle[fill='#f6c56c'] {
+  fill: var(--amber);
+}

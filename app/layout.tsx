@@ -5,6 +5,10 @@ import './globals.css';
 import './night-swim.css';
 import './day-swim.css';
 import './theme-transition.css';
+import './scene-palettes.css';
+import './scene-art.css';
+import './scene-picker.css';
+import './voicing-audition.css';
 import { themeBootstrap } from '@/lib/theme';
 
 const arcade = Silkscreen({

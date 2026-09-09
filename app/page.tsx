@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { PondScene } from '@/components/pond-scene';
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -351,7 +352,7 @@ export default function Home() {
   return (
     <div className="app-shell night-swim">
       <header className="site-header">
-        <div className="pond-scene" aria-hidden="true" />
+        <PondScene />
         <a
           href="#explore"
           onClick={() => navigate('explore')}
@@ -573,6 +574,7 @@ export default function Home() {
             )}
             {selectedVoicing && (
               <VoicingBrowser
+                active={page === 'explore'}
                 voicings={chordVoicings}
                 index={Math.min(voicingIndex, chordVoicings.length - 1)}
                 bassFilter={voicingBass}

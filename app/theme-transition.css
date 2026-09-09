@@ -2,7 +2,6 @@
   color-scheme: dark;
   --pond-art: url('/progger-arcade-pond.webp');
   --water-art: url('/progger-underwater.webp');
-  view-transition-name: none;
 }
 html[data-theme='day'] {
   color-scheme: light;
@@ -10,12 +9,15 @@ html[data-theme='day'] {
   --water-art: url('/progger-day-water-v2.webp');
 }
 .pond-scene {
+  /* Frame the illustration independently of a very wide browser window. */
+  left: 50%;
+  right: auto;
+  width: min(100%, 1280px);
+  transform: translateX(-50%);
   background-image: var(--pond-art);
   background-size: cover;
   background-position: center 65%;
-}
-.site-header {
-  view-transition-name: pond;
+  background-repeat: no-repeat;
 }
 html[data-theme='day'] .pond-scene {
   mask-image: linear-gradient(black 78%, rgb(0 0 0 / 0.75) 88%, transparent);
@@ -32,21 +34,45 @@ html[data-theme='day'] .pond-scene {
   background-image: var(--water-art);
   background-size: cover;
   background-position: center;
+  max-width: 1600px;
+  background-repeat: no-repeat;
 }
 .chord-entry .underwater-scene {
   background-position: right top;
 }
-::view-transition {
+@media (min-width: 1281px) {
+  .pond-scene,
+  html[data-theme='day'] .pond-scene {
+    mask-image:
+      linear-gradient(to right, transparent, black 8%, black 92%, transparent),
+      linear-gradient(black 70%, transparent);
+    mask-composite: intersect;
+  }
+}
+@media (min-width: 1601px) {
+  .underwater-scene,
+  html[data-theme='day'] .underwater-scene {
+    mask-image:
+      linear-gradient(to right, transparent, black 12%, black 88%, transparent),
+      linear-gradient(transparent, black 22%, black 70%, transparent);
+    mask-composite: intersect;
+  }
+}
+/* Dissolve inside the decorative layer. Browser view transitions put their
+   snapshots above live navigation, interrupting clicks during a scene change. */
+.pond-scene-previous {
+  position: absolute;
+  inset: 0;
   pointer-events: none;
+  animation: pond-dissolve 400ms ease-out both;
 }
-::view-transition-group(pond) {
-  animation-duration: 400ms;
-  animation-timing-function: ease-out;
-}
-::view-transition-old(pond),
-::view-transition-new(pond) {
-  animation-duration: 400ms;
-  mix-blend-mode: normal;
+@keyframes pond-dissolve {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 @media (max-width: 600px) {
   html:not([data-theme='day']) {
@@ -76,12 +102,8 @@ html[data-theme='day'] .pond-scene {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .site-header {
-    view-transition-name: none;
-  }
-  ::view-transition-group(pond),
-  ::view-transition-old(pond),
-  ::view-transition-new(pond) {
+  .pond-scene-previous {
+    display: none;
     animation: none;
   }
 }

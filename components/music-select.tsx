@@ -1,6 +1,6 @@
 'use client';
 
-import type { CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   Select,
   SelectContent,
@@ -33,10 +33,29 @@ export function MusicSelect({
   placeholder?: string;
   className?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    // Workspace views stay mounted to preserve musical choices. Their popup
+    // portals must close independently when history or visibility changes.
+    const close = () => setOpen(false);
+    const observer = new ResizeObserver(() => {
+      if (!trigger.current?.getClientRects().length) close();
+    });
+    if (trigger.current) observer.observe(trigger.current);
+    window.addEventListener('hashchange', close);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('hashchange', close);
+    };
+  }, [open]);
   const groups = [...new Set(options.map((option) => option.group ?? ''))];
   return (
     <div className={`music-select ${className}`}>
       <Select
+        open={open}
+        onOpenChange={setOpen}
         value={value}
         items={options}
         modal={false}
@@ -45,6 +64,7 @@ export function MusicSelect({
         }}
       >
         <SelectTrigger
+          ref={trigger}
           id={id}
           aria-label={label}
           className="music-select-trigger"
@@ -60,6 +80,11 @@ export function MusicSelect({
           align="start"
           alignItemWithTrigger={false}
           sideOffset={8}
+          finalFocus={() =>
+            trigger.current?.getClientRects().length
+              ? true
+              : (document.getElementById('main-content') ?? false)
+          }
         >
           {groups.map((group) => (
             <SelectGroup key={group}>

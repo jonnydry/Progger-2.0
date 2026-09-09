@@ -102,9 +102,10 @@ const targetedScales:Record<string,string[]>={
 export function matchScales(chords:Chord[], home=''): MatchGroup[] {
  if (!chords.length) return [];
  const first=chords[0],last=chords.at(-1)!;
- const firstRoot=pitchClass(first.root),firstBass=first.bass?pitchClass(first.bass):null;
- // Repeating a bar of unchanged harmony does not introduce a new scale choice.
- const oneHarmony=chords.every(chord=>pitchClass(chord.root)===firstRoot && chord.quality.id===first.quality.id && (chord.bass?pitchClass(chord.bass):null)===firstBass);
+ const firstRoot=pitchClass(first.root),firstPcs=new Set(first.pcs);
+ // Inverting a chord or spelling its root explicitly as a slash bass does not
+ // introduce a new scale choice. A non-chord bass can change the pitch set.
+ const oneHarmony=chords.every(chord=>pitchClass(chord.root)===firstRoot && chord.quality.id===first.quality.id && chord.pcs.length===firstPcs.size && chord.pcs.every(pc=>firstPcs.has(pc)));
  const union=new Set(chords.flatMap(chord=>chord.pcs));
  const preferFlats=chords.some(c=>c.notes.some(note=>note.name.includes('b'))) || home.includes('b');
  const explicitRoots=new Map<number,string>();

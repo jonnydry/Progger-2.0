@@ -4,12 +4,14 @@ import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { useRef } from 'react';
 import { pretty } from '@/lib/music';
 import type { Voicing } from '@/lib/harmony';
+import { VoicingAudition } from './voicing-audition';
 
 export function VoicingBrowser({
   voicings,
   index,
   bassFilter,
   symbol,
+  active,
   onSelect,
   onBassChange,
 }: {
@@ -17,6 +19,7 @@ export function VoicingBrowser({
   index: number;
   bassFilter: string;
   symbol: string;
+  active: boolean;
   onSelect: (index: number) => void;
   onBassChange: (bass: string) => void;
 }) {
@@ -151,6 +154,11 @@ export function VoicingBrowser({
           <ArrowRight size={18} />
         </button>
       </div>
+      <VoicingAudition
+        key={`${symbol}:${current.frets.join(',')}`}
+        frets={current.frets}
+        active={active}
+      />
       <p className="voicing-explanation">
         {current.omittedNotes.length === 0 && (
           <>{pretty(current.bass.name)} is the lowest sounding note.</>

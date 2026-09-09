@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:vercel": "node scripts/build-vercel.mjs",
     "start": "node --import ./scripts/local-tool-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt",
@@ -52,6 +53,9 @@
     "typescript": "5.9.3",
     "vite": "8.2.2",
     "wrangler": "4.129.0"
+  },
+  "overrides": {
+    "sharp": "0.35.4"
   },
   "type": "module"
 }

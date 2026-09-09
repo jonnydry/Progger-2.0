@@ -1,0 +1,34 @@
+.voicing-audition {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 10px;
+}
+.night-swim .voicing-listen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 44px;
+  min-width: 148px;
+  padding: 8px 14px;
+  color: var(--green);
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.night-swim .voicing-listen:hover {
+  background: color-mix(in srgb, var(--green) 9%, transparent);
+}
+.night-swim .voicing-listen:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 4px;
+}
+.voicing-audio-status {
+  color: inherit;
+  font-size: 11px;
+}

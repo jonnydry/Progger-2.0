@@ -2,6 +2,8 @@
 
 A guitar scale, mode, and chord reference with a pixel frog guitarist. Reference and matching calculations run locally in the browser.
 
+Live at [progger.studio](https://progger.studio). See [Vercel deployment](docs/vercel-deployment.md) for build settings and release checks.
+
 The [project plan](docs/project/PROGGER_PLAN.md) and [design direction](docs/project/DESIGN_EXPLORATION_02.md) record the product decisions behind this version.
 
 ## Run
@@ -38,9 +40,11 @@ The tests use Node's built-in runner and independent pitch/fingering fixtures. L
 - Full neck through fret 24, 3NPS/2NPS practice patterns, left-handed view, and text equivalents.
 - Thirty-two chord qualities, including 11ths, 13ths and altered tensions, with validated complete, reduced and rootless guitar voicings. Full formulas remain separate from sounding notes and explicit omissions. See [advanced chord coverage](docs/advanced-chords.md).
 - Chord parsing including slash basses, grouped collection matching, optional home note, per-chord palettes, and curated pentatonic/blues colors.
+- Exact-shape chord audition: a short local synthesized strum preserving inversions, muted strings and omissions. See [audio behavior and verification](docs/voicing-audio.md).
 - A feature-detected `explore_scale` WebMCP action using the same visible application state.
+- Three illustrated scenes—The Pond, Tidepool, and Twilight—with independent light/dark choices, local preference storage, and a brief artwork dissolve that respects reduced motion. Use the scene picker beside the sun/moon control. See [scene implementation and verification](docs/scenes/README.md).
 
-AI Progression Lab, alternate tunings, audio playback, accounts, and offline installation remain follow-up scope. No musical quality is claimed solely from pitch-set membership. Some movable chord and harmonic-minor patterns require wide stretches; diagrams show positions rather than prescribed fingers.
+AI Progression Lab, alternate tunings, progression playback, accounts, and offline installation remain follow-up scope. No musical quality is claimed solely from pitch-set membership. Some movable chord and harmonic-minor patterns require wide stretches; diagrams show positions rather than prescribed fingers.
 
 Progressions accept up to 32 chords and 2,048 characters, with a 32-character
 limit per chord symbol. Oversized input stays editable and produces an explicit
@@ -52,11 +56,15 @@ Current verification and limitations are recorded in `docs/verification.md`.
 
 ## Assets
 
-The Night Swim scene uses generated pixel artwork with separate desktop and
+The original Pond scene uses generated pixel artwork with separate desktop and
 mobile underwater compositions. Live delivery uses lossless WebP copies;
 original PNGs are retained. `docs/asset-delivery.md` records byte sizes and
 pixel-equivalence checks. Artwork prompts are in `docs/arcade-header/asset-notes.md`
 and `docs/underwater/asset-notes.md`.
+
+Tidepool and Twilight each have a matched light/dark illustration delivered as
+compressed WebP (270–310 KiB each). Their quiet water tails also supply the
+reference-section backgrounds. See [scene art notes](docs/scenes/README.md).
 
 Typography uses Silkscreen for the wordmark/main selectors and self-hosted Maple
 Mono elsewhere. See `docs/TYPOGRAPHY.md` and the font license/provenance in
