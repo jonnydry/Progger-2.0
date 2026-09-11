@@ -1,0 +1,58 @@
+.match-note-roles {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 14px;
+}
+.match-note-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+.match-note-role {
+  width: 130px;
+  flex-shrink: 0;
+  color: var(--quiet);
+  font-size: 12px;
+}
+.match-note-row .match-notes {
+  margin: 0;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+.match-note-row[data-role='melody'] .match-notes {
+  color: var(--green);
+}
+.match-card .palette-difference {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0 0 8px;
+  max-width: 100%;
+  font-size: 13px;
+}
+.palette-difference strong {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.palette-comparison-help {
+  margin: 12px 0 4px;
+  max-width: 75ch;
+  color: var(--quiet);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.match-note-row .palette-no-extra {
+  margin: 0;
+  color: var(--quiet);
+  font-size: 13px;
+}
+@media (max-width: 500px) {
+  .match-note-row {
+    display: grid;
+    gap: 4px;
+  }
+  .match-note-role {
+    width: auto;
+  }
+}

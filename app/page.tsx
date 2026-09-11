@@ -8,6 +8,7 @@ import {
   ArrowUpRight,
   ChevronDown,
   SlidersHorizontal,
+  PanelTopClose,
 } from 'lucide-react';
 import { MusicSelect } from '@/components/music-select';
 import { Fretboard } from '@/components/fretboard';
@@ -17,6 +18,7 @@ import { MatchChords } from '@/components/match-chords';
 import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
+import { nearestPatternIndex } from '@/lib/practice-position';
 import {
   SCALES,
   ROOTS,
@@ -45,7 +47,10 @@ export default function Home() {
   const [chordView, setChordView] = useState<'shape' | 'tones'>('shape');
   const [voicingIndex, setVoicingIndex] = useState(0);
   const [voicingBass, setVoicingBass] = useState('all');
+  const [voicingNearFret, setVoicingNearFret] = useState<number | null>(null);
+  const [voicingStrings, setVoicingStrings] = useState('all');
   const [theoryOpen, setTheoryOpen] = useState(false);
+  const [practice, setPractice] = useState(false);
   const returnPoint = useRef<{ id: string; scroll: number } | null>(null);
   const matchReturnPoint = useRef<{
     element: HTMLElement | null;
@@ -62,6 +67,7 @@ export default function Home() {
     );
   const [context, setContext] = useState<Chord[]>([]),
     [activeChord, setActiveChord] = useState(0);
+  const [localChoice, setLocalChoice] = useState<number | null>(null);
   const scale = SCALES.find((s) => s.id === scaleId)!;
   const quality = QUALITIES.find((q) => q.id === qualityId)!;
   const formula = kind === 'scales' ? scale.formula : quality.formula;
@@ -181,18 +187,25 @@ export default function Home() {
     setVoicingIndex(0);
     setVoicingBass('all');
     if (kind === 'chords') return;
+    const nextScale = SCALES.find((s) => s.id === id)!;
+    const nextPatterns = patterns(spell(rootValue, nextScale.formula));
     setScaleId(id);
-    setPosition(0);
-    setContext([]);
-    if (![5, 7].includes(SCALES.find((s) => s.id === id)!.formula.length))
-      setView('map');
+    setPosition(
+      nearestPatternIndex(nextPatterns, shapes[position]?.start ?? 0),
+    );
+    setLocalChoice(null);
+    if (!nextPatterns.length) setView('map');
   }
   function navigate(destination: string) {
     pendingMatchReturn.current = null;
     setPage(destination);
     location.hash = destination;
   }
-  function openMatch(candidate: Candidate, chords: Chord[]) {
+  function openMatch(
+    candidate: Candidate,
+    chords: Chord[],
+    activeChordIndex?: number,
+  ) {
     returnPoint.current = null;
     const element = document.activeElement;
     matchReturnPoint.current = {
@@ -208,7 +221,8 @@ export default function Home() {
     setPosition(0);
     setView('map');
     setContext(chords);
-    setActiveChord(0);
+    setActiveChord(activeChordIndex ?? 0);
+    setLocalChoice(activeChordIndex ?? null);
     navigate('explore');
     document.getElementById('main-content')?.focus();
   }
@@ -351,8 +365,32 @@ export default function Home() {
       </div>
     </>
   );
+  const voicingBrowser = selectedVoicing && (
+    <VoicingBrowser
+      active={page === 'explore'}
+      voicings={chordVoicings}
+      index={Math.min(voicingIndex, chordVoicings.length - 1)}
+      bassFilter={voicingBass}
+      nearFret={voicingNearFret}
+      strings={voicingStrings}
+      onNearFretChange={setVoicingNearFret}
+      onStringsChange={setVoicingStrings}
+      symbol={root + quality.symbol}
+      onSelect={setVoicingIndex}
+      onBassChange={(bass) => {
+        setVoicingBass(bass);
+        if (bass !== 'all' && String(selectedVoicing.bass.pc) !== bass) {
+          setVoicingIndex(
+            chordVoicings.findIndex(
+              (voicing) => String(voicing.bass.pc) === bass,
+            ),
+          );
+        }
+      }}
+    />
+  );
   return (
-    <div className="app-shell night-swim">
+    <div className={`app-shell night-swim ${practice ? 'practice-view' : ''}`}>
       <header className="site-header">
         <PondScene />
         <a
@@ -387,6 +425,20 @@ export default function Home() {
             ? 'Match your chords'
             : `${pretty(root)} ${title} guitar reference`}
         </h1>
+        <div className="workspace-tools">
+          <button
+            className="practice-toggle"
+            aria-pressed={practice}
+            onClick={() => {
+              setPractice(!practice);
+              requestAnimationFrame(() =>
+                window.scrollTo({ top: 0, behavior: 'instant' }),
+              );
+            }}
+          >
+            <PanelTopClose size={16} aria-hidden="true" /> Practice view
+          </button>
+        </div>
         <div hidden={page !== 'match'}>
           <MatchChords onExplore={openMatch} />
         </div>
@@ -404,7 +456,14 @@ export default function Home() {
                 <ArrowLeft size={15} /> Back to your chords
               </button>
               <span>{context.map((c) => pretty(c.symbol)).join(' → ')}</span>
-              <button onClick={() => setContext([])}>Clear context</button>
+              <button
+                onClick={() => {
+                  setContext([]);
+                  setLocalChoice(null);
+                }}
+              >
+                Clear context
+              </button>
             </div>
           )}
           <section
@@ -464,7 +523,10 @@ export default function Home() {
                       {kind === 'scales' ? 'Scale / mode' : 'Chord quality'}
                     </span>
                     <MusicSelect
+                      key={kind}
                       id="explore-type"
+                      searchable
+                      searchKind={kind === 'scales' ? 'scale' : 'quality'}
                       label={
                         kind === 'scales' ? 'Scale / mode' : 'Chord quality'
                       }
@@ -509,17 +571,27 @@ export default function Home() {
                     kind === 'scales' ? 'Scale notes' : 'Full chord formula'
                   }
                 >
-                  {notes.map((n) => (
-                    <div
-                      key={n.degree}
-                      className={`palette-note ${n.degree === '1' ? 'root-palette' : ''}`}
-                    >
-                      <span title={noteDescription(n)}>
-                        {pretty(readableNoteName(n))}
-                      </span>
-                      <small>{pretty(n.degree)}</small>
-                    </div>
-                  ))}
+                  {notes.map((n) => {
+                    const played = selectedVoicing?.soundedNotes.some(
+                      (note) => note.pc === n.pc,
+                    );
+                    return (
+                      <div
+                        key={n.degree}
+                        className={`palette-note ${n.degree === '1' ? 'root-palette' : ''} ${selectedVoicing ? (played ? 'formula-played' : 'formula-omitted') : ''}`}
+                      >
+                        <span title={noteDescription(n)}>
+                          {pretty(readableNoteName(n))}
+                        </span>
+                        <small>{pretty(n.degree)}</small>
+                        {selectedVoicing && (
+                          <span className="formula-state">
+                            {played ? 'played' : 'omitted'}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 <NoteSpelling key={`${kind}:${root}:${title}`} notes={notes} />
               </div>
@@ -530,6 +602,12 @@ export default function Home() {
                 role="group"
                 aria-label="Highlight chord tones"
               >
+                {localChoice !== null && context[localChoice] && (
+                  <p className="local-choice-note">
+                    Local choice for {pretty(context[localChoice].symbol)}.
+                    Check each chord for notes outside this palette.
+                  </p>
+                )}
                 <span>Chord tones</span>
                 {context.map((c, i) => (
                   <button
@@ -577,31 +655,10 @@ export default function Home() {
                 </div>
               </div>
             )}
-            {selectedVoicing && (
-              <VoicingBrowser
-                active={page === 'explore'}
-                voicings={chordVoicings}
-                index={Math.min(voicingIndex, chordVoicings.length - 1)}
-                bassFilter={voicingBass}
-                symbol={root + quality.symbol}
-                onSelect={setVoicingIndex}
-                onBassChange={(bass) => {
-                  setVoicingBass(bass);
-                  if (
-                    bass !== 'all' &&
-                    String(selectedVoicing.bass.pc) !== bass
-                  ) {
-                    setVoicingIndex(
-                      chordVoicings.findIndex(
-                        (voicing) => String(voicing.bass.pc) === bass,
-                      ),
-                    );
-                  }
-                }}
-              />
-            )}
+            {!practice && voicingBrowser}
             <Fretboard
               controls={instrumentControls}
+              controlsAbove={practice}
               notes={selectedVoicing?.soundedNotes ?? notes}
               root={`${pretty(root)} ${title}`}
               pattern={shape}
@@ -614,9 +671,12 @@ export default function Home() {
               scope={kind === 'scales' ? 'scale' : 'chord'}
               degrees={degrees}
               left={left}
-              targets={kind === 'scales' ? currentChord?.pcs : []}
+              targets={
+                kind === 'scales' ? soundingNotes.map((note) => note.pc) : []
+              }
               noteLabel={kind === 'scales' ? 'Scale note' : 'Chord note'}
             />
+            {practice && voicingBrowser}
           </section>
           {kind === 'chords' && (
             <p className="voicing-hint">

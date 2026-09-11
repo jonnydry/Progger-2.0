@@ -9,6 +9,7 @@ import './scene-palettes.css';
 import './scene-art.css';
 import './scene-picker.css';
 import './voicing-audition.css';
+import './practice-view.css';
 import { themeBootstrap } from '@/lib/theme';
 
 const arcade = Silkscreen({

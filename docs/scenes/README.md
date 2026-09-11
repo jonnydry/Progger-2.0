@@ -1,5 +1,9 @@
 # Progger scenes
 
+Current artwork: [revision v2](art-revision-v2.md), September 10, 2026. All six
+illustrations now use the same proportional framing and one image per look.
+The original feature implementation and its verification history follow.
+
 Implemented 2026-09-09. Scenes describe where Proggy plays; day/night describes
 the lighting. These are independent preferences, not musical modes.
 

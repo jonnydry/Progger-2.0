@@ -1,29 +1,30 @@
 /* Each new scene is a single illustration, with a quiet water tail. Reusing
    that tail gives Explore and Match the same atmosphere without another asset. */
 html[data-scene='tidepool'] {
-  --pond-art: url('/progger-tidepool-night.webp');
+  --pond-art: url('/art/v2/tidepool-night.webp');
   --water-art: var(--pond-art);
 }
 html[data-scene='tidepool'][data-theme='day'] {
-  --pond-art: url('/progger-tidepool-day.webp');
+  --pond-art: url('/art/v2/tidepool-day.webp');
 }
 html[data-scene='twilight'] {
-  --pond-art: url('/progger-twilight-night.webp');
+  --pond-art: url('/art/v2/twilight-night.webp');
   --water-art: var(--pond-art);
 }
 html[data-scene='twilight'][data-theme='day'] {
-  --pond-art: url('/progger-twilight-day.webp');
+  --pond-art: url('/art/v2/twilight-day.webp');
 }
 
-html:is([data-scene='tidepool'], [data-scene='twilight']) .pond-scene {
+html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+  .pond-scene {
   /* Width sets the scale; height is always intrinsic. The lower water is
      cropped by the frame rather than squeezing the characters into it. */
   background-size: 100% auto;
   background-repeat: no-repeat;
-  background-position: center top;
-  mask-image: linear-gradient(black 76%, transparent);
+  background-position: center 20%;
+  mask-image: linear-gradient(black 85%, transparent);
 }
-html:is([data-scene='tidepool'], [data-scene='twilight'])
+html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
   .night-swim
   .underwater-scene {
   /* Display only the water tail at its natural aspect ratio. Cap its height
@@ -35,21 +36,13 @@ html:is([data-scene='tidepool'], [data-scene='twilight'])
   opacity: 0.65;
   mask-image: linear-gradient(transparent, black 24%, black 72%, transparent);
 }
-html:is([data-scene='tidepool'], [data-scene='twilight']) .reference-water {
+html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+  .reference-water {
   --water-overlap: 92px;
 }
 
-@media (min-width: 1281px) {
-  html:is([data-scene='tidepool'], [data-scene='twilight']) .pond-scene {
-    mask-image:
-      linear-gradient(to right, transparent, black 8%, black 92%, transparent),
-      linear-gradient(black 76%, transparent);
-    mask-composite: intersect;
-  }
-}
-
 @media (min-width: 1601px) {
-  html:is([data-scene='tidepool'], [data-scene='twilight'])
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .night-swim
     .underwater-scene {
     mask-image:
@@ -60,25 +53,70 @@ html:is([data-scene='tidepool'], [data-scene='twilight']) .reference-water {
 }
 
 @media (min-width: 501px) and (max-width: 900px) {
-  html:is([data-scene='tidepool'], [data-scene='twilight']) .pond-scene {
-    mask-image: linear-gradient(transparent, black 10%, black 76%, transparent);
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .pond-scene {
+    mask-image: linear-gradient(transparent, black 10%, black 85%, transparent);
   }
 }
 @media (max-width: 500px) {
-  html:is([data-scene='tidepool'], [data-scene='twilight']) .pond-scene {
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .pond-scene {
     top: 82px;
-    height: 128px;
+    height: 168px;
     background-size: max(100%, 460px) auto;
-    background-position: 79% top;
-    mask-image: linear-gradient(transparent, black 14%, black 74%, transparent);
+    background-position: 79% 20%;
+    mask-image: linear-gradient(transparent, black 14%, black 85%, transparent);
   }
-  html:is([data-scene='tidepool'], [data-scene='twilight'])
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .night-swim
     .underwater-scene {
-    background-position: 79% bottom;
-    opacity: 0.5;
+    /* The center of the water stays calm; the hero's reflection is at right. */
+    background-position: center bottom;
+    opacity: 0.4;
   }
-  html:is([data-scene='tidepool'], [data-scene='twilight']) .reference-water {
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .reference-water {
     --water-overlap: 64px;
+  }
+}
+
+/* One frame for every scene keeps the band still during a dissolve. The Pond
+   composition reaches farther into the water, so leave room for its lily pad. */
+@media (min-width: 901px) {
+  .night-swim .site-header {
+    height: clamp(450px, calc(90px + 40vw), 520px);
+  }
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .pond-scene {
+    /* Reserve navigation space above the tallest headstocks, then blend sky in. */
+    top: 70px;
+    height: calc(100% - 70px);
+    mask-image: linear-gradient(transparent, black 9%, black 85%, transparent);
+  }
+}
+@media (min-width: 501px) and (max-width: 900px) {
+  .night-swim .site-header {
+    height: calc(90px + 40vw);
+  }
+}
+@media (max-width: 500px) {
+  .night-swim .site-header {
+    height: 250px;
+  }
+}
+html:is([data-scene='pond'], [data-scene='tidepool'])
+  .night-swim
+  .underwater-scene {
+  /* Crop below the pad and dense tidal reflections to keep controls readable. */
+  background-size: clamp(2400px, 150cqw, 2600px) auto;
+}
+
+@media (min-width: 1281px) {
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .pond-scene {
+    mask-image:
+      linear-gradient(to right, transparent, black 8%, black 92%, transparent),
+      linear-gradient(transparent, black 9%, black 85%, transparent);
+    mask-composite: intersect;
   }
 }

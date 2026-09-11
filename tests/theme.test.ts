@@ -279,7 +279,7 @@ void test('session storage events cannot change the persistent theme', async () 
   }
 });
 
-void test('artwork warmup retries failed requests and loads the appropriate asset after a viewport change', async () => {
+void test('artwork warmup retries failed requests and reuses the same proportional asset after a viewport change', async () => {
   const theme = await freshTheme();
   const page = browser();
   let mobile = false;
@@ -307,11 +307,8 @@ void test('artwork warmup retries failed requests and loads the appropriate asse
     mobile = true;
     await theme.warmTheme('night');
     assert.deepEqual(requests, [
-      '/progger-arcade-pond.webp',
-      '/progger-underwater.webp',
-      '/progger-arcade-pond.webp',
-      '/progger-underwater.webp',
-      '/progger-underwater-mobile.webp',
+      '/art/v2/pond-night.webp',
+      '/art/v2/pond-night.webp',
     ]);
   } finally {
     restore();
@@ -533,9 +530,9 @@ void test('the latest scene choice wins when its image finishes before an earlie
   try {
     const first = theme.chooseScene('tidepool');
     const last = theme.chooseScene('twilight');
-    finishers.get('/progger-twilight-day.webp')!();
+    finishers.get('/art/v2/twilight-day.webp')!();
     await last;
-    finishers.get('/progger-tidepool-day.webp')!();
+    finishers.get('/art/v2/tidepool-day.webp')!();
     await first;
     assert.equal(theme.currentScene(), 'twilight');
     assert.equal(theme.currentTheme(), 'day');
@@ -682,7 +679,7 @@ void test('system mode changes during a scene load use the latest matching artwo
   try {
     const pending = theme.chooseScene('twilight');
     page.system(true);
-    assert.ok(finishers.has('/progger-twilight-night.webp'));
+    assert.ok(finishers.has('/art/v2/twilight-night.webp'));
     for (const finish of finishers.values()) finish();
     await pending;
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -716,8 +713,8 @@ void test('scene warmup requests only that scene and mode and reuses decoded ass
     await theme.warmScene('tidepool');
     await theme.warmTheme('day');
     assert.deepEqual(requests, [
-      '/progger-tidepool-night.webp',
-      '/progger-twilight-day.webp',
+      '/art/v2/tidepool-night.webp',
+      '/art/v2/twilight-day.webp',
     ]);
   } finally {
     restore();

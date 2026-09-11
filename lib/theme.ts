@@ -9,8 +9,8 @@ export const SCENES = [
     label: 'The Pond',
     description: 'Our home among the lily pads.',
     artwork: {
-      day: '/progger-day-pond.webp',
-      night: '/progger-arcade-pond.webp',
+      day: '/art/v2/pond-day.webp',
+      night: '/art/v2/pond-night.webp',
     },
   },
   {
@@ -18,8 +18,8 @@ export const SCENES = [
     label: 'Tidepool',
     description: 'A little salt in the set list.',
     artwork: {
-      day: '/progger-tidepool-day.webp',
-      night: '/progger-tidepool-night.webp',
+      day: '/art/v2/tidepool-day.webp',
+      night: '/art/v2/tidepool-night.webp',
     },
   },
   {
@@ -27,8 +27,8 @@ export const SCENES = [
     label: 'Twilight',
     description: 'Pink skies. Purple water. One more song.',
     artwork: {
-      day: '/progger-twilight-day.webp',
-      night: '/progger-twilight-night.webp',
+      day: '/art/v2/twilight-day.webp',
+      night: '/art/v2/twilight-night.webp',
     },
   },
 ] as const satisfies ReadonlyArray<{
@@ -190,15 +190,6 @@ const warmed = new Map<string, Promise<void>>();
 export function warmScene(scene: Scene, theme: Theme = currentTheme()) {
   const selected = SCENES.find((entry) => entry.id === scene) ?? SCENES[0];
   const urls: string[] = [selected.artwork[theme]];
-  if (scene === 'pond') {
-    urls.push(
-      theme === 'day'
-        ? '/progger-day-water-v2.webp'
-        : matchMedia('(max-width: 600px)').matches
-          ? '/progger-underwater-mobile.webp'
-          : '/progger-underwater.webp',
-    );
-  }
   return Promise.allSettled(
     urls.map((src) => {
       let pending = warmed.get(src);

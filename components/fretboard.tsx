@@ -16,6 +16,7 @@ export function Fretboard({
   notes,
   root,
   controls,
+  controlsAbove = false,
   pattern,
   availablePatterns = [],
   onPatternSelect,
@@ -28,6 +29,7 @@ export function Fretboard({
 }: {
   notes: Note[];
   controls: ReactNode;
+  controlsAbove?: boolean;
   root: string;
   pattern?: Pattern;
   availablePatterns?: Pattern[];
@@ -158,6 +160,9 @@ export function Fretboard({
       className={`neck ${focused ? 'focused-neck' : ''} ${voicing ? 'voicing-neck' : ''} ${left ? 'left-handed-neck' : ''}`}
       aria-labelledby={titleId}
     >
+      {controlsAbove && (
+        <div className="instrument-dock practice-controls">{controls}</div>
+      )}
       <div className="neck-meta">
         <span id={titleId}>
           STANDARD TUNING <span className="muted">/ E A D G B E</span>
@@ -330,7 +335,7 @@ export function Fretboard({
         </div>
       </div>
       <div className="instrument-dock">
-        {controls}
+        {!controlsAbove && controls}
         <div className="neck-navigation">
           <div className="viewport-control">
             <span className="range-label" aria-live="polite">

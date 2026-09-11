@@ -1,0 +1,122 @@
+.music-search-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  border: 1px solid var(--input);
+  border-radius: 4px;
+  padding: 8px 12px;
+  text-align: left;
+  font: inherit;
+}
+.music-search-trigger > svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+.music-search-positioner {
+  z-index: 60;
+  max-width: calc(100vw - 24px);
+}
+.music-search-popup {
+  width: max(300px, var(--anchor-width));
+  max-width: min(var(--available-width), calc(100vw - 24px));
+  max-height: var(--available-height);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 10px 36px rgb(0 0 0 / 0.22);
+  font-family: var(--font-ui);
+  font-size: 14px;
+}
+.music-search-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--quiet);
+}
+.music-search-field input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  outline: none;
+  box-shadow: none;
+}
+.music-search-field:focus-within {
+  border-bottom-color: var(--green);
+}
+.music-search-field input::placeholder {
+  color: var(--quiet);
+  opacity: 1;
+}
+.music-search-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  max-height: 340px;
+  padding: 5px;
+  scrollbar-color: var(--input) var(--card);
+  scroll-padding: 6px;
+}
+.music-search-group-label {
+  padding: 12px 10px 5px;
+  font-size: 11px;
+  color: var(--quiet);
+}
+.music-search-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 9px 30px 9px 10px;
+  border-radius: 3px;
+  cursor: default;
+  outline: none;
+}
+.music-search-item > span:first-child {
+  min-width: 0;
+}
+.music-search-item small {
+  margin-left: auto;
+  white-space: nowrap;
+  color: var(--quiet);
+  font-size: 12px;
+}
+.music-search-item[data-highlighted] {
+  background: var(--accent);
+}
+.music-search-item[data-selected] {
+  color: var(--green);
+}
+.music-search-check {
+  position: absolute;
+  right: 8px;
+}
+.music-search-empty {
+  color: var(--quiet);
+  line-height: 1.6;
+}
+.music-search-empty:not(:empty) {
+  padding: 18px 14px;
+}
+
+@media (max-width: 600px) {
+  .music-search-field input {
+    font-size: 16px;
+  }
+}

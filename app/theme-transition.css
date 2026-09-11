@@ -1,12 +1,12 @@
 :root {
   color-scheme: dark;
-  --pond-art: url('/progger-arcade-pond.webp');
-  --water-art: url('/progger-underwater.webp');
+  --pond-art: url('/art/v2/pond-night.webp');
+  --water-art: var(--pond-art);
 }
 html[data-theme='day'] {
   color-scheme: light;
-  --pond-art: url('/progger-day-pond.webp');
-  --water-art: url('/progger-day-water-v2.webp');
+  --pond-art: url('/art/v2/pond-day.webp');
+  --water-art: var(--pond-art);
 }
 .pond-scene {
   /* Frame the illustration independently of a very wide browser window. */
@@ -72,11 +72,6 @@ html[data-theme='day'] .pond-scene {
   }
   to {
     opacity: 0;
-  }
-}
-@media (max-width: 600px) {
-  html:not([data-theme='day']) {
-    --water-art: url('/progger-underwater-mobile.webp');
   }
 }
 @media (max-width: 500px) {

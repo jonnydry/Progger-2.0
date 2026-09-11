@@ -1,0 +1,125 @@
+/* An optional working layout; the full scene is one toggle away. */
+.workspace-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 4px;
+}
+.practice-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+  color: var(--quiet);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.practice-toggle:hover,
+.practice-toggle[aria-pressed='true'] {
+  color: var(--green);
+  background: var(--accent);
+  border-color: var(--border);
+}
+.practice-toggle:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+.night-swim.practice-view .site-header {
+  height: 94px;
+}
+.practice-view .pond-scene,
+.practice-view .underwater-scene {
+  display: none;
+}
+.night-swim.practice-view .reference-water {
+  margin-bottom: 14px;
+}
+.night-swim.practice-view .selection-overview {
+  padding: 4px 0 16px;
+}
+.night-swim.practice-view .selection-bar,
+.night-swim.practice-view .selection-bar:has(.long-title) {
+  --reference-size: clamp(24px, 2.5vw, 32px);
+  --reference-height: 52px;
+}
+.night-swim.practice-view .scale-caption {
+  font-size: 13px;
+  margin-top: 0;
+}
+.night-swim.practice-view .note-palette {
+  margin-top: 14px;
+  gap: 24px;
+}
+.night-swim.practice-view .palette-note {
+  gap: 4px;
+}
+.night-swim.practice-view .palette-note > span {
+  font-size: 21px;
+}
+.night-swim.practice-view .palette-note small {
+  font-size: 12px;
+}
+.night-swim.practice-view .instrument-dock.practice-controls {
+  margin: 0 0 18px;
+  padding: 10px 0;
+  border-width: 0 0 1px;
+  border-color: var(--border);
+}
+.night-swim.practice-view .neck + .voicing-browser {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.night-swim.practice-view .match-workspace {
+  margin-top: 12px;
+}
+.local-choice-note {
+  flex-basis: 100%;
+  text-align: center;
+  color: var(--quiet);
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+.night-swim .palette-note.formula-omitted > span:first-child {
+  color: var(--quiet);
+  text-decoration: underline dashed;
+  text-underline-offset: 5px;
+}
+.night-swim .palette-note > span.formula-state {
+  color: var(--quiet);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.night-swim .palette-note.formula-played > span.formula-state {
+  color: var(--green);
+}
+@media (max-width: 900px) {
+  .night-swim.practice-view .site-header {
+    height: 124px;
+  }
+}
+@media (max-width: 500px) {
+  .night-swim.practice-view .site-header {
+    height: 108px;
+  }
+  .night-swim.practice-view .reference-tabs {
+    margin-top: 0;
+  }
+  .night-swim.practice-view .selection-bar,
+  .night-swim.practice-view .selection-bar:has(.long-title) {
+    --reference-size: clamp(18px, 4.8vw, 24px);
+    --reference-height: 48px;
+  }
+  .night-swim.practice-view .note-palette {
+    gap: 0;
+  }
+  .night-swim .note-palette:has(.formula-state) {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px 17px;
+  }
+  .night-swim .palette-note:has(.formula-state) {
+    min-width: 42px;
+  }
+}

@@ -6,6 +6,8 @@ import { MusicSelect } from '@/components/music-select';
 import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
+import { comparePalette } from '@/lib/palette-comparison';
+import './match-comparison.css';
 import { Button } from '@/components/ui/button';
 import { ROOTS, SCALES, pretty } from '@/lib/music';
 import {
@@ -24,7 +26,11 @@ const catalogFamilies = [...new Set(SCALES.map((scale) => scale.family))];
 export function MatchChords({
   onExplore,
 }: {
-  onExplore: (candidate: Candidate, chords: Chord[]) => void;
+  onExplore: (
+    candidate: Candidate,
+    chords: Chord[],
+    activeChordIndex?: number,
+  ) => void;
 }) {
   const [text, setText] = useState('Am F C G'),
     [home, setHome] = useState('');
@@ -45,12 +51,32 @@ export function MatchChords({
     [parsed],
   );
   const valid = parsed.errors.length === 0;
+  const comparisonReference = groups[0]?.candidates[0];
   const setProgression = (value: string) => {
     setText(value);
     setShowAll(false);
   };
   function renderGroup(group: MatchGroup) {
     const best = group.candidates[0];
+    const comparison = comparePalette(best, parsed.chords, comparisonReference);
+    const difference = comparison.difference;
+    const referenceName = comparisonReference
+      ? `${pretty(comparisonReference.root)} ${comparisonReference.scale.name}`
+      : '';
+    const changes = difference
+      ? difference.added.length === 1 && difference.removed.length === 1
+        ? `${noteDescription(difference.removed[0])} → ${noteDescription(difference.added[0])}`
+        : [
+            difference.added.length
+              ? `Adds ${difference.added.map(noteDescription).join(', ')}`
+              : '',
+            difference.removed.length
+              ? `Leaves out ${difference.removed.map(noteDescription).join(', ')}`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+      : '';
     return (
       <article key={group.key} className="match-card">
         <div className="match-card-top">
@@ -61,13 +87,54 @@ export function MatchChords({
           {pretty(best.root)} {best.scale.name}
         </h3>
         <p>{best.reason}</p>
-        <div className="match-notes">
-          {best.notes.map((n) => (
-            <span key={n.degree} title={noteDescription(n)}>
-              {pretty(readableNoteName(n))}
-            </span>
+        <div className="match-note-roles">
+          {[
+            {
+              label: 'Chord tones',
+              role: 'chord',
+              notes: comparison.chordTones,
+            },
+            {
+              label: 'Optional melody',
+              role: 'melody',
+              notes: comparison.melodicNotes,
+            },
+          ].map(({ label, role, notes }) => (
+            <div className="match-note-row" data-role={role} key={role}>
+              <span className="match-note-role">{label}</span>
+              {notes.length ? (
+                <div className="match-notes">
+                  {notes.map((note) => (
+                    <span key={note.pc} title={noteDescription(note)}>
+                      {pretty(readableNoteName(note))}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="palette-no-extra">
+                  No extra notes in this collection.
+                </p>
+              )}
+            </div>
           ))}
         </div>
+        {comparisonReference && (
+          <p className="palette-difference">
+            {best === comparisonReference ? (
+              <>
+                <span>Comparison reference</span>
+                <strong>{referenceName}</strong>
+              </>
+            ) : (
+              <>
+                <span>Compared with {referenceName}</span>
+                <strong>
+                  {changes || 'Same pitches; a different reference root.'}
+                </strong>
+              </>
+            )}
+          </p>
+        )}
         <NoteSpelling
           key={`${best.root}:${best.scale.id}`}
           notes={best.notes}
@@ -167,6 +234,8 @@ export function MatchChords({
                 <MusicSelect
                   id="builder-quality"
                   label="Chord quality"
+                  searchable
+                  searchKind="quality"
                   value={builderQuality}
                   onValueChange={setBuilderQuality}
                   options={QUALITIES.map((q) => ({
@@ -267,9 +336,16 @@ export function MatchChords({
               <span>· across {SCALES.length} scales and modes</span>
             </div>
             {groups.length > 0 ? (
-              <div className="match-grid">
-                {(showAll ? groups : groups.slice(0, 3)).map(renderGroup)}
-              </div>
+              <>
+                <p className="palette-comparison-help">
+                  Optional melody notes are not in your chords or their bass
+                  notes. Their effect depends on timing and phrasing. Compare
+                  with the first result shown; it is not a confirmed key.
+                </p>
+                <div className="match-grid">
+                  {(showAll ? groups : groups.slice(0, 3)).map(renderGroup)}
+                </div>
+              </>
             ) : (
               <div className="result-empty">
                 <Layers3 size={28} />
@@ -297,8 +373,9 @@ export function MatchChords({
             >
               <summary>Follow each chord</summary>
               <p>
-                Useful local choices. You can stay with a shared scale when one
-                is available.
+                Each choice covers this chord, not necessarily the whole
+                progression. The neck keeps all your chords so you can compare
+                them. You can stay with a shared scale when one is available.
               </p>
               <div className="per-chord-grid">
                 {parsed.chords.map((chord, i) => (
@@ -312,7 +389,7 @@ export function MatchChords({
                     {localChoices[i]?.map((c) => (
                       <button
                         key={c.scale.id}
-                        onClick={() => onExplore(c, [chord])}
+                        onClick={() => onExplore(c, parsed.chords, i)}
                       >
                         {pretty(c.root)} {c.scale.name}
                         <ArrowRight size={13} />
