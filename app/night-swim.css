@@ -205,6 +205,35 @@
   min-width: 28px;
   gap: 9px;
 }
+.note-spelling {
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.65;
+  margin-top: 14px;
+  max-width: 100%;
+}
+.selection-overview > .note-spelling {
+  align-self: center;
+  width: fit-content;
+  max-width: 42rem;
+}
+.note-spelling > summary {
+  cursor: pointer;
+  min-height: 44px;
+  align-content: center;
+}
+.note-spelling > summary:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+.note-spelling > p {
+  margin: 4px 0 8px;
+  font-size: inherit;
+}
+.note-spelling > ul {
+  margin: 0;
+  padding-left: 20px;
+}
 .night-swim .palette-note > span {
   color: var(--green);
   font-size: 26px;

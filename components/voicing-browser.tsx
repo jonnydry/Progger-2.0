@@ -3,6 +3,7 @@
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { useRef } from 'react';
 import { pretty } from '@/lib/music';
+import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import type { Voicing } from '@/lib/harmony';
 import { VoicingAudition } from './voicing-audition';
 
@@ -98,9 +99,10 @@ export function VoicingBrowser({
             key={bass.pc}
             type="button"
             aria-pressed={bassFilter === String(bass.pc)}
+            title={noteDescription(bass)}
             onClick={() => onBassChange(String(bass.pc))}
           >
-            {pretty(bass.name)}{' '}
+            {pretty(readableNoteName(bass))}{' '}
             <span>· {bass.degree === '1' ? 'root' : pretty(bass.degree)}</span>
           </button>
         ))}
@@ -121,7 +123,7 @@ export function VoicingBrowser({
             <span>
               ·{' '}
               {current.omittedNotes.length > 0
-                ? `${pretty(current.bass.name)} in bass`
+                ? `${pretty(readableNoteName(current.bass))} in bass`
                 : current.inversion.replace(/^[b#]+\d+/, pretty)}
             </span>
             {current.rootless && (
@@ -138,7 +140,7 @@ export function VoicingBrowser({
               {current.omittedNotes
                 .map(
                   (note) =>
-                    `${pretty(note.name)} (${note.degree === '1' ? 'root' : pretty(note.degree)})`,
+                    `${noteDescription(note)} (${note.degree === '1' ? 'root' : pretty(note.degree)})`,
                 )
                 .join(' · ')}
             </span>
@@ -161,14 +163,10 @@ export function VoicingBrowser({
       />
       <p className="voicing-explanation">
         {current.omittedNotes.length === 0 && (
-          <>{pretty(current.bass.name)} is the lowest sounding note.</>
+          <>{noteDescription(current.bass)} is the lowest sounding note.</>
         )}
         {current.omittedNotes.length > 0 && (
-          <>
-            {' '}
-            Played:{' '}
-            {current.soundedNotes.map((note) => pretty(note.name)).join(' · ')}.
-          </>
+          <> Played: {current.soundedNotes.map(noteDescription).join(' · ')}.</>
         )}
         {current.rootless && <> The root is implied.</>}
       </p>
@@ -193,7 +191,8 @@ export function VoicingBrowser({
                 )}
               </span>
               <span>
-                {pretty(voicing.bass.name)} bass · {rangeLabel(voicing)}
+                {pretty(readableNoteName(voicing.bass))} bass ·{' '}
+                {rangeLabel(voicing)}
               </span>
               {voicing.omittedNotes.length > 0 && (
                 <span className="voicing-list-omissions">

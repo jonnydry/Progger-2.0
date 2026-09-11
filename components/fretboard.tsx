@@ -10,6 +10,7 @@ import {
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { MusicSelect } from '@/components/music-select';
 import { mod, pretty, TUNING, type Note, type Pattern } from '@/lib/music';
+import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 
 export function Fretboard({
   notes,
@@ -285,7 +286,7 @@ export function Fretboard({
               minWidth: 0,
             }}
             role="img"
-            aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${pretty(n.name)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${pretty(note.name)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Practice pattern from fret ${pattern.min} to ${pattern.max}.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
+            aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${noteDescription(n)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${noteDescription(note)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Practice pattern from fret ${pattern.min} to ${pattern.max}.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
           >
             {frets.map((fret) => (
               <div
@@ -295,7 +296,7 @@ export function Fretboard({
                 {[5, 4, 3, 2, 1, 0].map((string) => {
                   const note = noteMap.get(mod(TUNING[string] + fret));
                   const label = note
-                    ? pretty(degrees ? note.degree : note.name)
+                    ? pretty(degrees ? note.degree : readableNoteName(note))
                     : '';
                   const show =
                     note && (!selected || selected.has(`${string}:${fret}`));
@@ -308,7 +309,7 @@ export function Fretboard({
                       {show && (
                         <span
                           className={`note-dot ${label.length > 3 ? 'wide-note' : ''} ${note.degree === '1' ? 'is-root' : ''} ${targets.includes(note.pc) ? 'is-target' : ''}`}
-                          title={`${pretty(note.name)} · ${pretty(note.degree)} · string ${6 - string}, fret ${fret}`}
+                          title={`${noteDescription(note)} · ${pretty(note.degree)} · string ${6 - string}, fret ${fret}`}
                         >
                           {label}
                         </span>
@@ -449,7 +450,7 @@ export function Fretboard({
                   )
                   .map(
                     ({ fret, note }) =>
-                      `${fret === 0 ? 'open' : fret} ${pretty(note!.name)}`,
+                      `${fret === 0 ? 'open' : fret} ${pretty(readableNoteName(note!))}`,
                   )
                   .join(' · ')}
           </p>

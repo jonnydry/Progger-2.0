@@ -15,6 +15,8 @@ import { VoicingBrowser } from '@/components/voicing-browser';
 import { qualityGroup } from '@/lib/chord-presentation';
 import { MatchChords } from '@/components/match-chords';
 import { UnderwaterScene } from '@/components/underwater-scene';
+import { NoteSpelling } from '@/components/note-spelling';
+import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import {
   SCALES,
   ROOTS,
@@ -512,11 +514,14 @@ export default function Home() {
                       key={n.degree}
                       className={`palette-note ${n.degree === '1' ? 'root-palette' : ''}`}
                     >
-                      <span>{pretty(n.name)}</span>
+                      <span title={noteDescription(n)}>
+                        {pretty(readableNoteName(n))}
+                      </span>
                       <small>{pretty(n.degree)}</small>
                     </div>
                   ))}
                 </div>
+                <NoteSpelling key={`${kind}:${root}:${title}`} notes={notes} />
               </div>
             </div>
             {kind === 'scales' && currentChord && (
@@ -536,14 +541,14 @@ export default function Home() {
                   </button>
                 ))}
                 <span className="target-description">
-                  {currentChord.notes.map((n) => pretty(n.name)).join(' · ')}
+                  {currentChord.notes.map(noteDescription).join(' · ')}
                   {currentChord.bass && ` / Bass ${pretty(currentChord.bass)}`}
                 </span>
                 <div className="outside-palette">
                   {outside.length > 0 && (
                     <span>
                       Outside this palette:{' '}
-                      {outside.map((n) => pretty(n.name)).join(', ')}.
+                      {outside.map(noteDescription).join(', ')}.
                     </span>
                   )}
                   <button

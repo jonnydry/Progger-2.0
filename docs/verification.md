@@ -1,5 +1,7 @@
 Latest scale expansion: [28-scale coverage and verification](scale-coverage.md).
 
+Latest notation audit: [10 September 2026 scale spellings and readable labels](notation-audit-2026-09-10.md).
+
 ## Advanced extensions — 7 September 2026
 
 See [advanced chord coverage and verification](advanced-chords.md) for 11ths, 13ths, altered tensions, explicit omissions and rootless shapes.

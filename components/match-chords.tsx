@@ -4,6 +4,8 @@ import { useMemo, useState } from 'react';
 import { ArrowRight, Plus, X, Layers3, ChevronDown } from 'lucide-react';
 import { MusicSelect } from '@/components/music-select';
 import { UnderwaterScene } from '@/components/underwater-scene';
+import { NoteSpelling } from '@/components/note-spelling';
+import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import { Button } from '@/components/ui/button';
 import { ROOTS, SCALES, pretty } from '@/lib/music';
 import {
@@ -61,9 +63,15 @@ export function MatchChords({
         <p>{best.reason}</p>
         <div className="match-notes">
           {best.notes.map((n) => (
-            <span key={n.degree}>{pretty(n.name)}</span>
+            <span key={n.degree} title={noteDescription(n)}>
+              {pretty(readableNoteName(n))}
+            </span>
           ))}
         </div>
+        <NoteSpelling
+          key={`${best.root}:${best.scale.id}`}
+          notes={best.notes}
+        />
         <button
           className="show-neck"
           onClick={() => onExplore(best, parsed.chords)}
@@ -298,7 +306,7 @@ export function MatchChords({
                     <strong>{pretty(chord.symbol)}</strong>
                     <span>
                       Chord tones:{' '}
-                      {chord.notes.map((n) => pretty(n.name)).join(' · ')}
+                      {chord.notes.map(noteDescription).join(' · ')}
                     </span>
                     {chord.bass && <span>Bass: {pretty(chord.bass)}</span>}
                     {localChoices[i]?.map((c) => (

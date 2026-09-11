@@ -25,7 +25,7 @@ Single-chord result ranking and the per-chord shortlist share explicit quality p
 
 ## Spelling and interpretation
 
-Altered uses functional dominant spelling: 1, ♭9, ♯9, 3, ♯11, ♭13, ♭7. This preserves its pitch collection while showing the major third and named tensions rather than a theoretical flat fourth. Half–whole diminished follows the same dominant convention and includes 5 and 13. Whole–half diminished uses 6 in the scale; its text explains the enharmonic relationship with a diminished chord’s double-flat seventh. Ultralocrian retains its theoretical double-flat seventh. Explicit roots are preserved; inferred roots retain readable-spelling selection.
+Altered uses functional dominant spelling: 1, ♭9, ♯9, 3, ♯11, ♭13, ♭7. This preserves its pitch collection while showing the major third and named tensions rather than a theoretical flat fourth. Half–whole diminished follows the same dominant convention and includes 5 and 13. Whole–half diminished uses 6 in the scale; its text explains the enharmonic relationship with a diminished chord’s double-flat seventh. Ultralocrian retains its theoretical double-flat seventh. Explicit roots are preserved; inferred roots retain readable-spelling selection. The [10 September notation audit](notation-audit-2026-09-10.md) adds display-only aliases for multiple-accidental note names, with the original spelling disclosed; canonical notes and degrees remain intact.
 
 Altered does not contain a perfect fifth. It therefore does not become an exact same-root match for a complete C7♯9 formula just because a selected guitar grip omits G. Whole tone likewise does not cover an unaltered perfect fifth. Contextual altered-scale substitutions and arbitrary combined altered chord symbols remain outside this change.
 
