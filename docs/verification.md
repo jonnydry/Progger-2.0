@@ -1,3 +1,5 @@
+Latest interaction update: [1 October 2026 connected-neck behavior and verification](connected-neck.md). This supersedes the separate fret-button and pan interaction described below.
+
 Latest scale expansion: [28-scale coverage and verification](scale-coverage.md).
 
 Latest notation audit: [10 September 2026 scale spellings and readable labels](notation-audit-2026-09-10.md).

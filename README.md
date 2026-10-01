@@ -37,7 +37,7 @@ The tests use Node's built-in runner and independent pitch/fingering fixtures. L
 ## First release
 
 - Twenty-eight scales and modes across all roots: all major, harmonic-minor and jazz melodic-minor modes, pentatonic/blues, whole tone and both diminished scales. See [scale coverage](docs/scale-coverage.md).
-- Full neck through fret 24, 3NPS/2NPS practice patterns, left-handed view, and text equivalents.
+- A continuous neck through fret 24 with connected 3NPS/2NPS forms, neighboring-form overlap, adjustable view width, an optional whole-neck navigation map, left-handed view, and text equivalents. See [connected-neck behavior and verification](docs/connected-neck.md).
 - Thirty-two chord qualities, including 11ths, 13ths and altered tensions, with validated complete, reduced and rootless guitar voicings. Full formulas remain separate from sounding notes and explicit omissions. See [advanced chord coverage](docs/advanced-chords.md).
 - Chord parsing including slash basses, grouped collection matching, optional home note, per-chord palettes, and curated pentatonic/blues colors.
 - Exact-shape chord audition: a short local synthesized strum preserving inversions, muted strings and omissions. See [audio behavior and verification](docs/voicing-audio.md).

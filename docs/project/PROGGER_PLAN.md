@@ -42,6 +42,8 @@ The Frogger influence can appear in the position selector as small stepping mark
 
 ### Explore
 
+October 2026 direction: use one continuous neck, with connected forms as a layer over the full scale. Dragging, the position slider, keyboard navigation, and the optional whole-neck map move the same viewport and advance the active form. Show one neighboring form on demand, distinguishing its shared string/fret positions from the active form and quiet scale context. View width controls how much neck is visible; switching the form layer off and on preserves position. See [connected-neck behavior](../connected-neck.md).
+
 1. Choose Scales & Modes or Chords.
 2. Choose a root and named scale, mode, or chord quality; show a useful initial selection immediately.
 3. Read spelled notes and an interval formula beside the diagram.

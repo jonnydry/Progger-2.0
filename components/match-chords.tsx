@@ -216,7 +216,13 @@ export function MatchChords({
         <div className="entry-options">
           <details className="chord-builder">
             <summary>
-              <Plus size={16} /> Build a chord by name
+              <Plus size={16} aria-hidden="true" />{' '}
+              <span>Build a chord by name</span>
+              <ChevronDown
+                className="disclosure-chevron"
+                size={16}
+                aria-hidden="true"
+              />
             </summary>
             <div className="builder-row">
               <label htmlFor="builder-root">
@@ -258,8 +264,13 @@ export function MatchChords({
           </details>
           <details className="match-options">
             <summary>
-              <ChevronDown size={16} /> Home note & examples
+              <span>Home note & examples</span>
               {home && <span className="chosen-home"> · {pretty(home)}</span>}
+              <ChevronDown
+                className="disclosure-chevron"
+                size={16}
+                aria-hidden="true"
+              />
             </summary>
             <div className="home-note-control">
               <label htmlFor="match-home">

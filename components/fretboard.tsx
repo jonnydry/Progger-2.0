@@ -5,12 +5,28 @@ import {
   useState,
   useId,
   useCallback,
+  useMemo,
+  type KeyboardEvent,
   type ReactNode,
 } from 'react';
-import { ArrowLeft, ArrowRight } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronDown,
+  ListMusic,
+  Map as MapIcon,
+} from 'lucide-react';
 import { MusicSelect } from '@/components/music-select';
 import { mod, pretty, TUNING, type Note, type Pattern } from '@/lib/music';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
+import {
+  formAtViewport,
+  formLayers,
+  scrollToForm,
+  scrollToCenter,
+  viewportCenter,
+} from '@/lib/connected-neck';
+import { NeckOverview } from '@/components/neck-overview';
 
 export function Fretboard({
   notes,
@@ -19,7 +35,9 @@ export function Fretboard({
   controlsAbove = false,
   pattern,
   availablePatterns = [],
+  activePatternIndex = 0,
   onPatternSelect,
+  onPatternFollow,
   voicing,
   scope,
   degrees,
@@ -33,7 +51,9 @@ export function Fretboard({
   root: string;
   pattern?: Pattern;
   availablePatterns?: Pattern[];
+  activePatternIndex?: number;
   onPatternSelect?: (index: number) => void;
+  onPatternFollow?: (index: number) => void;
   scope: 'scale' | 'chord';
   voicing?: {
     name: string;
@@ -50,11 +70,45 @@ export function Fretboard({
   const [range, setRange] = useState([0, 24]);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [scrollFret, setScrollFret] = useState(0);
+  const [widthMode, setWidthMode] = useState('balanced');
+  const [overlap, setOverlap] = useState('next');
+  const [overview, setOverview] = useState(false);
+  const followingPattern = useRef<Pattern | null>(null);
+  const programmaticScroll = useRef<number | null>(null);
+  const viewCenter = useRef(7.5);
+  const viewProgress = useRef(0.3);
+  const drag = useRef<{ pointer: number; x: number; scroll: number } | null>(
+    null,
+  );
   const focused = Boolean(pattern || voicing);
   const canSelectPattern =
-    availablePatterns.length > 0 && Boolean(onPatternSelect);
-  const columnWidth = Math.max(48, viewportWidth / (focused ? 10 : 25));
-  const musicalRange = useRef([0, 24]);
+    scope === 'scale' &&
+    availablePatterns.length > 0 &&
+    Boolean(onPatternSelect);
+  const connected = scope === 'scale' && Boolean(pattern);
+  const density =
+    widthMode === 'close'
+      ? [72, 6]
+      : widthMode === 'wide'
+        ? [44, 16]
+        : [48, 10];
+  const columnWidth =
+    scope === 'scale'
+      ? Math.max(density[0], viewportWidth / density[1])
+      : Math.max(48, viewportWidth / (focused ? 10 : 25));
+  const activeIndex = pattern
+    ? availablePatterns.indexOf(pattern)
+    : activePatternIndex;
+  const neighborIndex =
+    overlap === 'previous' ? activeIndex - 1 : activeIndex + 1;
+  const neighbor =
+    connected && overlap !== 'off' && activeIndex >= 0
+      ? availablePatterns[neighborIndex]
+      : undefined;
+  const layers = useMemo(
+    () => formLayers(pattern, neighbor),
+    [pattern, neighbor],
+  );
   const wasHidden = useRef(false);
   const titleId = useId();
   const frets = Array.from({ length: 25 }, (_, i) => (left ? 24 - i : i));
@@ -68,35 +122,123 @@ export function Fretboard({
     : pattern
       ? new Set(pattern.positions.map((p) => `${p.string}:${p.fret}`))
       : null;
-  const updateRange = useCallback(() => {
-    const el = viewport.current;
-    if (!el || !el.clientWidth || !el.scrollWidth || wasHidden.current) return;
-    const cell = el.scrollWidth / 25;
-    const first = Math.max(0, Math.floor((el.scrollLeft + 0.5) / cell));
-    const last = Math.min(
-      24,
-      Math.ceil((el.scrollLeft + el.clientWidth - 0.5) / cell) - 1,
-    );
-    const next = left ? [24 - last, 24 - first] : [first, last];
-    musicalRange.current = next;
-    setScrollFret(el.scrollLeft / cell);
-    setRange((previous) =>
-      previous[0] === next[0] && previous[1] === next[1] ? previous : next,
-    );
-  }, [left]);
+  const updateRange = useCallback(
+    (follow = false) => {
+      const el = viewport.current;
+      if (!el || !el.clientWidth || !el.scrollWidth || wasHidden.current)
+        return;
+      // Native scrolling can clamp against the old grid before ResizeObserver
+      // supplies the new viewport width. That is layout, not player movement.
+      if (follow && Math.abs(el.clientWidth - viewportWidth) > 1) return;
+      const cell = el.scrollWidth / 25;
+      const first = Math.max(0, Math.floor((el.scrollLeft + 0.5) / cell));
+      const last = Math.min(
+        24,
+        Math.ceil((el.scrollLeft + el.clientWidth - 0.5) / cell) - 1,
+      );
+      const next = left ? [24 - last, 24 - first] : [first, last];
+      viewCenter.current = viewportCenter(
+        el.scrollLeft,
+        el.clientWidth,
+        cell,
+        left,
+      );
+      const travel = el.scrollWidth - el.clientWidth;
+      const progress = travel > 0 ? el.scrollLeft / travel : 0.5;
+      viewProgress.current = left ? 1 - progress : progress;
+      setScrollFret(el.scrollLeft / cell);
+      setRange((previous) =>
+        previous[0] === next[0] && previous[1] === next[1] ? previous : next,
+      );
+      if (!follow) return;
+      const programmed = programmaticScroll.current;
+      programmaticScroll.current = null;
+      if (programmed !== null && Math.abs(el.scrollLeft - programmed) < 1)
+        return;
+      if (scope === 'scale' && onPatternFollow) {
+        const index = formAtViewport(
+          availablePatterns,
+          el.scrollLeft,
+          el.clientWidth,
+          cell,
+          left,
+          activeIndex,
+        );
+        if (index >= 0 && index !== activeIndex) {
+          followingPattern.current = availablePatterns[index];
+          onPatternFollow(index);
+        }
+      }
+    },
+    [
+      left,
+      scope,
+      activeIndex,
+      availablePatterns,
+      onPatternFollow,
+      viewportWidth,
+    ],
+  );
+  const centerOn = useCallback(
+    (fret: number) => {
+      const el = viewport.current;
+      if (!el) return;
+      const next = scrollToCenter(fret, el.clientWidth, columnWidth, left);
+      programmaticScroll.current = next;
+      el.scrollTo({ left: next, behavior: 'instant' });
+    },
+    [columnWidth, left],
+  );
+  const centerForm = useCallback(
+    (index: number) => {
+      const el = viewport.current;
+      if (!el) return;
+      const next = scrollToForm(
+        availablePatterns,
+        index,
+        el.clientWidth,
+        columnWidth,
+        left,
+      );
+      programmaticScroll.current = next;
+      el.scrollTo({ left: next, behavior: 'instant' });
+    },
+    [availablePatterns, columnWidth, left],
+  );
+  const restoreProgress = useCallback(
+    (progress: number) => {
+      const el = viewport.current;
+      if (!el) return;
+      const next =
+        (left ? 1 - progress : progress) *
+        Math.max(0, 25 * columnWidth - el.clientWidth);
+      programmaticScroll.current = next;
+      el.scrollTo({ left: next, behavior: 'instant' });
+    },
+    [left, columnWidth],
+  );
   const jump = useCallback(
     (fret: number) => {
       const el = viewport.current;
-      if (el)
+      if (el) {
+        programmaticScroll.current = null;
         el.scrollTo({
-          left: ((left ? 24 - fret : fret) * el.scrollWidth) / 25,
-          behavior: 'auto',
+          left: scrollToCenter(fret, el.clientWidth, columnWidth, left),
+          behavior: 'instant',
         });
+      }
     },
-    [left],
+    [left, columnWidth],
   );
-  const previous = useRef({ left, scope, pattern, voicing, columnWidth });
-  const scaleRange = useRef([0, 24]);
+  const previous = useRef({
+    left,
+    scope,
+    pattern,
+    voicing,
+    columnWidth,
+    viewportWidth,
+  });
+  const scaleProgress = useRef(0.3);
   const initialized = useRef(false);
   useLayoutEffect(() => {
     const el = viewport.current;
@@ -120,26 +262,49 @@ export function Fretboard({
     if (viewportWidth <= 0) return;
     const before = previous.current;
     if (before.scope === 'scale' && scope === 'chord')
-      scaleRange.current = [...musicalRange.current];
+      scaleProgress.current = viewProgress.current;
     const returning = before.scope === 'chord' && scope === 'scale';
     const changed =
       !initialized.current ||
       before.pattern !== pattern ||
       before.voicing !== voicing;
     if (returning) {
-      jump(left ? scaleRange.current[1] : scaleRange.current[0]);
+      restoreProgress(scaleProgress.current);
     } else if (before.left !== left) {
-      jump(left ? musicalRange.current[1] : musicalRange.current[0]);
+      if (scope === 'scale') restoreProgress(viewProgress.current);
+      else centerOn(viewCenter.current);
+    } else if (
+      initialized.current &&
+      before.scope === 'scale' &&
+      scope === 'scale' &&
+      !before.pattern &&
+      pattern
+    ) {
+      // Enabling the connected layer keeps the view where the player left it.
     } else if (changed && (pattern || voicing)) {
-      const sounding = voicing?.frets.filter((f): f is number => f !== null);
-      const min = sounding ? Math.min(...sounding) : pattern!.min;
-      const max = sounding ? Math.max(...sounding) : pattern!.max;
-      const padding = viewportWidth >= 480 ? (pattern ? 2 : 1) : 0;
-      jump(left ? Math.min(24, max + padding) : Math.max(0, min - padding));
-    } else if (wasHidden.current || before.columnWidth !== columnWidth) {
-      jump(left ? musicalRange.current[1] : musicalRange.current[0]);
+      if (followingPattern.current !== pattern || voicing) {
+        const sounding = voicing?.frets.filter((f): f is number => f !== null);
+        if (sounding)
+          centerOn((Math.min(...sounding) + Math.max(...sounding)) / 2);
+        else centerForm(activeIndex);
+      }
+    } else if (
+      wasHidden.current ||
+      before.columnWidth !== columnWidth ||
+      before.viewportWidth !== viewportWidth
+    ) {
+      if (scope === 'scale') restoreProgress(viewProgress.current);
+      else centerOn(viewCenter.current);
     }
-    previous.current = { left, scope, pattern, voicing, columnWidth };
+    followingPattern.current = null;
+    previous.current = {
+      left,
+      scope,
+      pattern,
+      voicing,
+      columnWidth,
+      viewportWidth,
+    };
     initialized.current = true;
     wasHidden.current = false;
     updateRange();
@@ -150,14 +315,49 @@ export function Fretboard({
     left,
     columnWidth,
     viewportWidth,
-    jump,
+    centerOn,
+    centerForm,
+    restoreProgress,
+    activeIndex,
     updateRange,
   ]);
   const maxScrollFret = Math.max(0, 25 - viewportWidth / columnWidth);
+  const moveWithKey = (event: KeyboardEvent<HTMLElement>) => {
+    const el = viewport.current;
+    if (!el) return;
+    const delta = {
+      ArrowLeft: -1,
+      ArrowDown: -1,
+      ArrowRight: 1,
+      ArrowUp: 1,
+      PageDown: -5,
+      PageUp: 5,
+    }[event.key];
+    if (delta === undefined && event.key !== 'Home' && event.key !== 'End')
+      return;
+    event.preventDefault();
+    programmaticScroll.current = null;
+    el.scrollTo({
+      left:
+        event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? el.scrollWidth - el.clientWidth
+            : el.scrollLeft + (delta ?? 0) * columnWidth,
+      behavior: 'instant',
+    });
+  };
+  const selectForm = (index: number) => {
+    const form = availablePatterns[index];
+    if (!form) return;
+    followingPattern.current = null;
+    centerForm(index);
+    onPatternSelect?.(index);
+  };
 
   return (
     <section
-      className={`neck ${focused ? 'focused-neck' : ''} ${voicing ? 'voicing-neck' : ''} ${left ? 'left-handed-neck' : ''}`}
+      className={`neck ${connected ? 'connected-neck' : ''} ${focused ? 'focused-neck' : ''} ${voicing ? 'voicing-neck' : ''} ${left ? 'left-handed-neck' : ''}`}
       aria-labelledby={titleId}
     >
       {controlsAbove && (
@@ -183,14 +383,109 @@ export function Fretboard({
           )}
         </span>
       </div>
-      {canSelectPattern && (
-        <p className="position-hint" id={`${titleId}-positions`}>
-          Choose a lit fret to start a pattern <span>· low E</span>
-        </p>
+      {scope === 'scale' && (
+        <div className="connection-controls">
+          {canSelectPattern && (
+            <label className="form-picker" htmlFor={`${titleId}-form`}>
+              <span>Active form · low-E start</span>
+              <MusicSelect
+                id={`${titleId}-form`}
+                label="Active form starting fret on low E"
+                value={pattern ? String(pattern.start) : null}
+                placeholder="Choose a form"
+                onValueChange={(value) =>
+                  selectForm(
+                    availablePatterns.findIndex(
+                      (form) => form.start === Number(value),
+                    ),
+                  )
+                }
+                options={availablePatterns.map((form) => ({
+                  value: String(form.start),
+                  label: `${form.start === 0 ? 'Open' : `Fret ${form.start}`} · ${pretty(noteMap.get(mod(TUNING[0] + form.start))!.name)}`,
+                }))}
+              />
+            </label>
+          )}
+          {connected && (
+            <label htmlFor={`${titleId}-overlap`}>
+              <span>Overlap</span>
+              <MusicSelect
+                id={`${titleId}-overlap`}
+                label="Form overlap"
+                value={overlap}
+                onValueChange={setOverlap}
+                options={[
+                  { value: 'off', label: 'Active form only' },
+                  { value: 'previous', label: 'Lower neighbor' },
+                  { value: 'next', label: 'Higher neighbor' },
+                ]}
+              />
+            </label>
+          )}
+          <label htmlFor={`${titleId}-width`}>
+            <span>View width</span>
+            <MusicSelect
+              id={`${titleId}-width`}
+              label="Neck view width"
+              value={widthMode}
+              onValueChange={setWidthMode}
+              options={[
+                { value: 'close', label: 'Close' },
+                { value: 'balanced', label: 'Balanced' },
+                { value: 'wide', label: 'Wide' },
+              ]}
+            />
+          </label>
+          <button
+            className="overview-toggle"
+            aria-expanded={overview}
+            aria-controls={`${titleId}-overview`}
+            onClick={() => setOverview(!overview)}
+          >
+            <MapIcon size={17} aria-hidden="true" /> Whole-neck overview
+          </button>
+        </div>
       )}
-      <div
-        className={`neck-frame ${canSelectPattern ? 'selectable-positions' : ''}`}
-      >
+      {connected && pattern && (
+        <div className="connection-caption" id={`${titleId}-connections`}>
+          <p>
+            <strong>{notes.length === 5 ? 2 : 3} notes/string per form</strong>{' '}
+            · active frets {pattern.min}–{pattern.max}
+            {neighbor
+              ? ` · ${overlap === 'previous' ? 'lower' : 'higher'} neighbor starts at ${neighbor.start === 0 ? 'open low E' : `fret ${neighbor.start}`} · ${layers.shared.size} shared positions`
+              : overlap !== 'off'
+                ? ` · no ${overlap === 'previous' ? 'lower' : 'higher'} complete form`
+                : ''}
+          </p>
+          <div className="connection-legend">
+            <span>
+              <i className="active-swatch" />
+              Active
+            </span>
+            {neighbor && (
+              <>
+                <span>
+                  <i className="neighbor-swatch" />
+                  Neighbor
+                </span>
+                <span>
+                  <i className="shared-swatch" />
+                  Shared
+                </span>
+              </>
+            )}
+            <span>
+              <i className="context-swatch" />
+              Scale context
+            </span>
+          </div>
+          <p className="pan-hint">
+            Drag the neck to explore. The active form follows your view.
+          </p>
+        </div>
+      )}
+      <div className="neck-frame">
         <div className="string-labels" aria-hidden="true">
           {['e', 'B', 'G', 'D', 'A', 'E'].map((string, i) => (
             <span key={i}>
@@ -207,13 +502,44 @@ export function Fretboard({
             </span>
           ))}
         </div>
+        {/* oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- The named, focusable neck region supports keyboard scrolling and pointer panning. */}
         <div
           ref={viewport}
           className="neck-scroll"
           tabIndex={0}
           role="region"
           aria-label="Guitar neck, open strings through fret 24. Scroll horizontally or use the fret navigation controls."
-          onScroll={updateRange}
+          onScroll={() => updateRange(true)}
+          onKeyDown={(event) => {
+            if (event.target === event.currentTarget) moveWithKey(event);
+          }}
+          onPointerDown={(event) => {
+            if (event.pointerType === 'touch' || event.button !== 0) return;
+            event.preventDefault();
+            event.currentTarget.focus({ preventScroll: true });
+            drag.current = {
+              pointer: event.pointerId,
+              x: event.clientX,
+              scroll: event.currentTarget.scrollLeft,
+            };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            if (!drag.current || drag.current.pointer !== event.pointerId)
+              return;
+            programmaticScroll.current = null;
+            event.currentTarget.scrollLeft =
+              drag.current.scroll + drag.current.x - event.clientX;
+          }}
+          onPointerUp={() => {
+            drag.current = null;
+          }}
+          onPointerCancel={() => {
+            drag.current = null;
+          }}
+          onLostPointerCapture={() => {
+            drag.current = null;
+          }}
         >
           <div
             className="fret-position-row"
@@ -222,66 +548,16 @@ export function Fretboard({
               width: columnWidth * 25,
             }}
             role="group"
-            aria-label={
-              canSelectPattern ? 'Pattern starting fret' : 'Fret numbers'
-            }
-            aria-describedby={
-              canSelectPattern ? `${titleId}-positions` : undefined
-            }
+            aria-label="Fret numbers"
           >
-            {frets.map((fret) => {
-              const index = availablePatterns.findIndex(
-                (candidate) => candidate.start === fret,
-              );
-              const className = `fret-number ${[3, 5, 7, 9, 12, 15, 17, 19, 21, 24].includes(fret) ? 'inlaid' : ''}`;
-              return canSelectPattern && index >= 0 ? (
-                <button
-                  key={fret}
-                  type="button"
-                  className={`${className} pattern-fret`}
-                  aria-label={`Start pattern at ${fret === 0 ? 'open low E' : `fret ${fret} on low E`}`}
-                  aria-pressed={pattern === availablePatterns[index]}
-                  onKeyDown={(event) => {
-                    if (
-                      !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(
-                        event.key,
-                      )
-                    )
-                      return;
-                    const buttons = Array.from(
-                      event.currentTarget.parentElement!.querySelectorAll(
-                        'button',
-                      ),
-                    );
-                    const current = buttons.indexOf(
-                      event.target as HTMLButtonElement,
-                    );
-                    if (current < 0) return;
-                    event.preventDefault();
-                    const next =
-                      event.key === 'Home'
-                        ? 0
-                        : event.key === 'End'
-                          ? buttons.length - 1
-                          : Math.max(
-                              0,
-                              Math.min(
-                                buttons.length - 1,
-                                current + (event.key === 'ArrowLeft' ? -1 : 1),
-                              ),
-                            );
-                    buttons[next]?.focus();
-                  }}
-                  onClick={() => onPatternSelect?.(index)}
-                >
-                  {fret === 0 ? 'OPEN' : fret}
-                </button>
-              ) : (
-                <span key={fret} className={className}>
-                  {fret === 0 ? 'OPEN' : fret}
-                </span>
-              );
-            })}
+            {frets.map((fret) => (
+              <span
+                key={fret}
+                className={`fret-number ${pattern && fret >= pattern.min && fret <= pattern.max ? 'in-active-form' : ''} ${[3, 5, 7, 9, 12, 15, 17, 19, 21, 24].includes(fret) ? 'inlaid' : ''}`}
+              >
+                {fret === 0 ? 'OPEN' : fret}
+              </span>
+            ))}
           </div>
           <div
             className="fret-grid"
@@ -291,7 +567,7 @@ export function Fretboard({
               minWidth: 0,
             }}
             role="img"
-            aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${noteDescription(n)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${noteDescription(note)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Practice pattern from fret ${pattern.min} to ${pattern.max}.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
+            aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${noteDescription(n)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${noteDescription(note)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Active ${notes.length === 5 ? 2 : 3}-notes-per-string form starts on low E at fret ${pattern.start} and spans frets ${pattern.min} to ${pattern.max}. ${neighbor ? `Neighbor form starts at fret ${neighbor.start}; ${layers.shared.size} shared string and fret positions. ` : ''}All scale notes remain visible as context.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
           >
             {frets.map((fret) => (
               <div
@@ -303,8 +579,17 @@ export function Fretboard({
                   const label = note
                     ? pretty(degrees ? note.degree : readableNoteName(note))
                     : '';
+                  const key = `${string}:${fret}`;
+                  const membership = layers.shared.has(key)
+                    ? 'shared'
+                    : layers.active.has(key)
+                      ? 'active'
+                      : layers.neighbor.has(key)
+                        ? 'neighbor'
+                        : 'context';
                   const show =
-                    note && (!selected || selected.has(`${string}:${fret}`));
+                    note &&
+                    (scope === 'scale' || !selected || selected.has(key));
                   return (
                     <div
                       key={string}
@@ -313,8 +598,8 @@ export function Fretboard({
                       <span className="string-line" />
                       {show && (
                         <span
-                          className={`note-dot ${label.length > 3 ? 'wide-note' : ''} ${note.degree === '1' ? 'is-root' : ''} ${targets.includes(note.pc) ? 'is-target' : ''}`}
-                          title={`${noteDescription(note)} · ${pretty(note.degree)} · string ${6 - string}, fret ${fret}`}
+                          className={`note-dot ${connected ? `connection-${membership}` : ''} ${label.length > 3 ? 'wide-note' : ''} ${note.degree === '1' ? 'is-root' : ''} ${targets.includes(note.pc) ? 'is-target' : ''}`}
+                          title={`${noteDescription(note)} · ${pretty(note.degree)} · string ${6 - string}, fret ${fret}${connected ? ` · ${membership === 'shared' ? 'shared by active and neighboring forms' : membership === 'context' ? 'scale context' : `${membership} form`}` : ''}`}
                         >
                           {label}
                         </span>
@@ -338,7 +623,7 @@ export function Fretboard({
         {!controlsAbove && controls}
         <div className="neck-navigation">
           <div className="viewport-control">
-            <span className="range-label" aria-live="polite">
+            <span className="range-label">
               Frets {range[0]}–{range[1]} <span className="muted">of 24</span>
             </span>
             <label className="neck-slider" htmlFor={`${titleId}-viewport`}>
@@ -352,40 +637,16 @@ export function Fretboard({
                 disabled={maxScrollFret === 0}
                 value={Math.min(scrollFret, maxScrollFret)}
                 aria-valuetext={`Frets ${range[0]} through ${range[1]} of 24`}
-                onKeyDown={(event) => {
-                  const el = viewport.current;
-                  if (!el) return;
-                  const delta = {
-                    ArrowLeft: -1,
-                    ArrowDown: -1,
-                    ArrowRight: 1,
-                    ArrowUp: 1,
-                    PageDown: -5,
-                    PageUp: 5,
-                  }[event.key];
-                  if (
-                    delta === undefined &&
-                    event.key !== 'Home' &&
-                    event.key !== 'End'
-                  )
-                    return;
-                  event.preventDefault();
-                  const cell = el.scrollWidth / 25;
-                  const next =
-                    event.key === 'Home'
-                      ? 0
-                      : event.key === 'End'
-                        ? el.scrollWidth - el.clientWidth
-                        : el.scrollLeft + (delta ?? 0) * cell;
-                  el.scrollTo({ left: next, behavior: 'instant' });
-                }}
+                onKeyDown={moveWithKey}
                 onChange={(event) => {
                   const el = viewport.current;
-                  if (el)
+                  if (el) {
+                    programmaticScroll.current = null;
                     el.scrollTo({
                       left: Number(event.target.value) * columnWidth,
                       behavior: 'instant',
                     });
+                  }
                 }}
               />
             </label>
@@ -432,34 +693,100 @@ export function Fretboard({
           </div>
         </div>
       </div>
-      <details className="pattern-details">
+      {scope === 'scale' && overview && (
+        <NeckOverview
+          id={`${titleId}-overview`}
+          notes={notes}
+          left={left}
+          layers={connected ? layers : undefined}
+          range={range}
+          offset={scrollFret / 25}
+          windowWidth={Math.min(1, viewportWidth / (25 * columnWidth))}
+          onNavigate={jump}
+          onKeyDown={moveWithKey}
+        />
+      )}
+      <details className="pattern-details string-reference">
         <summary>
-          {voicing
-            ? 'Read this chord shape by string'
-            : pattern
-              ? 'Read this pattern as fret numbers'
-              : 'Read note positions by string'}
+          <ListMusic size={18} aria-hidden="true" />
+          <span>
+            {voicing
+              ? 'Read this chord shape by string'
+              : pattern
+                ? 'Read the active form as fret numbers'
+                : 'Read note positions by string'}
+          </span>
+          <ChevronDown
+            className="disclosure-chevron"
+            size={16}
+            aria-hidden="true"
+          />
         </summary>
-        {TUNING.map((open, string) => (
-          <p key={string}>
-            <strong>{['Low E', 'A', 'D', 'G', 'B', 'High e'][string]}: </strong>
-            {voicing?.frets[string] === null
-              ? 'Muted'
-              : Array.from({ length: 25 }, (_, fret) => ({
-                  fret,
-                  note: noteMap.get(mod(open + fret)),
-                }))
-                  .filter(
-                    ({ fret, note }) =>
-                      note && (!selected || selected.has(`${string}:${fret}`)),
-                  )
-                  .map(
-                    ({ fret, note }) =>
-                      `${fret === 0 ? 'open' : fret} ${pretty(readableNoteName(note!))}`,
-                  )
-                  .join(' · ')}
+        <div className="string-reference-content">
+          <p className="string-reference-key">
+            Fret number + note · from low E to high e
+            {connected &&
+              ' · active form, with shared and neighboring positions below.'}
           </p>
-        ))}
+          <dl className="string-reference-rows">
+            {TUNING.map((open, string) => (
+              <div key={string}>
+                <dt>
+                  <small>{6 - string}</small>
+                  {['Low E', 'A', 'D', 'G', 'B', 'High e'][string]}
+                </dt>
+                <dd>
+                  <span>
+                    {voicing?.frets[string] === null
+                      ? 'Muted'
+                      : Array.from({ length: 25 }, (_, fret) => ({
+                          fret,
+                          note: noteMap.get(mod(open + fret)),
+                        }))
+                          .filter(
+                            ({ fret, note }) =>
+                              note &&
+                              (!selected || selected.has(`${string}:${fret}`)),
+                          )
+                          .map(
+                            ({ fret, note }) =>
+                              `${fret === 0 ? 'open' : fret} ${pretty(readableNoteName(note!))}`,
+                          )
+                          .join(' · ')}
+                  </span>
+                  {neighbor && (
+                    <span className="string-connection-reference">
+                      <span>
+                        Shared:{' '}
+                        {neighbor.positions
+                          .filter(
+                            (position) =>
+                              position.string === string &&
+                              layers.shared.has(`${string}:${position.fret}`),
+                          )
+                          .map(
+                            ({ fret }) =>
+                              `${fret === 0 ? 'open' : fret} ${pretty(readableNoteName(noteMap.get(mod(open + fret))!))}`,
+                          )
+                          .join(' · ') || 'none'}
+                      </span>
+                      <span>
+                        Neighbor:{' '}
+                        {neighbor.positions
+                          .filter((position) => position.string === string)
+                          .map(
+                            ({ fret }) =>
+                              `${fret === 0 ? 'open' : fret} ${pretty(readableNoteName(noteMap.get(mod(open + fret))!))}`,
+                          )
+                          .join(' · ')}
+                      </span>
+                    </span>
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
       </details>
     </section>
   );

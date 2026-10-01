@@ -7,7 +7,8 @@ import {
   ArrowLeft,
   ArrowUpRight,
   ChevronDown,
-  SlidersHorizontal,
+  BookOpen,
+  Music2,
   PanelTopClose,
 } from 'lucide-react';
 import { MusicSelect } from '@/components/music-select';
@@ -17,6 +18,7 @@ import { qualityGroup } from '@/lib/chord-presentation';
 import { MatchChords } from '@/components/match-chords';
 import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
+import { NeckDisplay } from '@/components/neck-display';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import { nearestPatternIndex } from '@/lib/practice-position';
 import {
@@ -312,7 +314,7 @@ export default function Home() {
             kind === 'scales' ? setView('map') : setChordView('tones')
           }
         >
-          {kind === 'scales' ? 'Full neck' : 'All chord tones'}
+          {kind === 'scales' ? 'All notes' : 'All chord tones'}
         </button>
         {kind === 'chords' && chordVoicings.length > 0 && (
           <button
@@ -327,7 +329,7 @@ export default function Home() {
             aria-pressed={view === 'pattern'}
             onClick={() => setView('pattern')}
           >
-            {notes.length === 5 ? '2' : '3'} notes / string
+            Connected forms
           </button>
         )}
       </div>
@@ -345,23 +347,7 @@ export default function Home() {
             Degrees
           </button>
         </div>
-        <details className="display-menu">
-          <summary aria-label="Display">
-            <SlidersHorizontal size={15} />
-            <span>Display</span>
-          </summary>
-          <div>
-            <label className="handedness">
-              <input
-                type="checkbox"
-                checked={left}
-                onChange={(e) => setLeft(e.target.checked)}
-              />{' '}
-              Left-handed
-            </label>
-            <p>Standard tuning · 6 strings</p>
-          </div>
-        </details>
+        <NeckDisplay left={left} onLeftChange={setLeft} />
       </div>
     </>
   );
@@ -667,6 +653,8 @@ export default function Home() {
                 setPosition(index);
                 setView('pattern');
               }}
+              onPatternFollow={setPosition}
+              activePatternIndex={position}
               voicing={selectedVoicing}
               scope={kind === 'scales' ? 'scale' : 'chord'}
               degrees={degrees}
@@ -689,23 +677,41 @@ export default function Home() {
           )}
           {kind === 'scales' && (
             <details
-              className="theory-details"
+              className="theory-details reference-guide"
               open={theoryOpen}
               onToggle={(event) => setTheoryOpen(event.currentTarget.open)}
             >
               <summary>
-                Chords & scale notes <ChevronDown size={18} />
+                <BookOpen size={20} aria-hidden="true" />
+                <span className="guide-summary-text">
+                  <span>Chords & scale notes</span>
+                  <small>
+                    {pretty(root)} {scale.name} · {notes.length} notes
+                  </small>
+                </span>
+                <ChevronDown
+                  className="disclosure-chevron"
+                  size={18}
+                  aria-hidden="true"
+                />
               </summary>
               <div className="theory-content">
-                <div>
+                <div className="scale-story">
+                  <span className="reference-eyebrow">The sound</span>
                   <h2>
                     {pretty(root)} {scale.name}
                   </h2>
                   <p>{scale.description}</p>
-                  <p>
-                    {scale.color} Start and finish a short phrase on{' '}
-                    {pretty(root)} to hear it as home.
-                  </p>
+                  <div className="listening-note">
+                    <Music2 size={17} aria-hidden="true" />
+                    <div>
+                      <span className="reference-eyebrow">Listen for it</span>
+                      <p>
+                        {scale.color} Start and finish a short phrase on{' '}
+                        {pretty(root)} to hear it as home.
+                      </p>
+                    </div>
+                  </div>
                   <p className="muted">
                     The small numbers under each note show its degree relative
                     to {pretty(root)}.
@@ -720,7 +726,11 @@ export default function Home() {
                 </div>
                 {related.length > 0 && (
                   <section className="related-chords">
+                    <span className="reference-eyebrow">The harmony</span>
                     <h3>Chords in this scale</h3>
+                    <p className="chord-explainer">
+                      Choose a triad to explore its shapes.
+                    </p>
                     <div className="harmony-row">
                       {related.map((chord, i) => (
                         <button
@@ -740,7 +750,7 @@ export default function Home() {
                                 : ''}
                           </small>
                           <strong>{pretty(chord.symbol)}</strong>
-                          <ArrowUpRight size={13} />
+                          <ArrowUpRight size={15} aria-hidden="true" />
                         </button>
                       ))}
                     </div>
