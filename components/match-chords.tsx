@@ -1,21 +1,17 @@
 'use client';
-import { qualityGroup } from '@/lib/chord-presentation';
-import { useMemo, useState } from 'react';
-import { ArrowRight, Plus, X, Layers3, ChevronDown } from 'lucide-react';
-import { MusicSelect } from '@/components/music-select';
-import { UnderwaterScene } from '@/components/underwater-scene';
+import { useMemo, useRef, useState } from 'react';
+import { ArrowRight, Music2 } from 'lucide-react';
+import { MatchEntry } from '@/components/match-entry';
 import { NoteSpelling } from '@/components/note-spelling';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import { comparePalette } from '@/lib/palette-comparison';
 import './match-comparison.css';
-import { Button } from '@/components/ui/button';
-import { ROOTS, SCALES, pretty } from '@/lib/music';
+import { SCALES, pretty } from '@/lib/music';
 import {
   colorChoices,
   matchScales,
   parseProgression,
   perChordChoices,
-  QUALITIES,
   type Candidate,
   type Chord,
   type MatchGroup,
@@ -32,11 +28,11 @@ export function MatchChords({
     activeChordIndex?: number,
   ) => void;
 }) {
-  const [text, setText] = useState('Am F C G'),
+  const [text, setText] = useState(''),
     [home, setHome] = useState('');
-  const [builderRoot, setBuilderRoot] = useState('D'),
-    [builderQuality, setBuilderQuality] = useState('minor');
+  const resultsTitle = useRef<HTMLHeadingElement>(null);
   const [showAll, setShowAll] = useState(false);
+  const [homeFromStarter, setHomeFromStarter] = useState(false);
   const parsed = useMemo(() => parseProgression(text), [text]);
   const groups = useMemo(
     () => (parsed.errors.length ? [] : matchScales(parsed.chords, home)),
@@ -55,8 +51,19 @@ export function MatchChords({
   const setProgression = (value: string) => {
     setText(value);
     setShowAll(false);
+    if (homeFromStarter) {
+      setHome('');
+      setHomeFromStarter(false);
+    }
   };
-  function renderGroup(group: MatchGroup) {
+  const seeMatches = () => {
+    // Example selection commits before we move focus to its new results.
+    requestAnimationFrame(() => {
+      resultsTitle.current?.focus({ preventScroll: true });
+      resultsTitle.current?.scrollIntoView({ block: 'start' });
+    });
+  };
+  function renderGroup(group: MatchGroup, index: number) {
     const best = group.candidates[0];
     const comparison = comparePalette(best, parsed.chords, comparisonReference);
     const difference = comparison.difference;
@@ -78,73 +85,110 @@ export function MatchChords({
             .join(' · ')
       : '';
     return (
-      <article key={group.key} className="match-card">
+      <article
+        key={group.key}
+        className={`match-card ${index === 0 ? 'starting-match' : ''}`}
+      >
         <div className="match-card-top">
-          <span className="match-badge">Contains all chord tones</span>
+          <span className="match-badge">
+            {index === 0 ? 'A starting point' : 'Another direction'}
+          </span>
           <span className="muted">{best.notes.length} notes</span>
         </div>
         <h3>
           {pretty(best.root)} {best.scale.name}
         </h3>
         <p>{best.reason}</p>
-        <div className="match-note-roles">
-          {[
-            {
-              label: 'Chord tones',
-              role: 'chord',
-              notes: comparison.chordTones,
-            },
-            {
-              label: 'Optional melody',
-              role: 'melody',
-              notes: comparison.melodicNotes,
-            },
-          ].map(({ label, role, notes }) => (
-            <div className="match-note-row" data-role={role} key={role}>
-              <span className="match-note-role">{label}</span>
-              {notes.length ? (
-                <div className="match-notes">
-                  {notes.map((note) => (
-                    <span key={note.pc} title={noteDescription(note)}>
-                      {pretty(readableNoteName(note))}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="palette-no-extra">
-                  No extra notes in this collection.
-                </p>
-              )}
-            </div>
+        <div className="match-scale-notes" aria-label="Notes to try">
+          {best.notes.map((note) => (
+            <span
+              key={note.degree}
+              title={noteDescription(note)}
+              data-root={note.degree === '1'}
+            >
+              {pretty(readableNoteName(note))}
+            </span>
           ))}
         </div>
-        {comparisonReference && (
-          <p className="palette-difference">
-            {best === comparisonReference ? (
-              <>
-                <span>Comparison reference</span>
-                <strong>{referenceName}</strong>
-              </>
-            ) : (
-              <>
-                <span>Compared with {referenceName}</span>
-                <strong>
-                  {changes || 'Same pitches; a different reference root.'}
-                </strong>
-              </>
-            )}
+        <div className="match-play-row">
+          <button
+            className="show-neck"
+            onClick={() => onExplore(best, parsed.chords)}
+          >
+            Try on the fretboard <ArrowRight size={17} aria-hidden="true" />
+          </button>
+          {index === 0 && (
+            <p>
+              Start with two or three notes.
+              <br />
+              Leave a little space. Make a phrase.
+            </p>
+          )}
+        </div>
+        <details className="match-explanation">
+          <summary>Why these notes?</summary>
+          <p>
+            This scale contains all the notes from your chords. As the chords
+            change, try landing on a note from the chord you’re playing over.
           </p>
-        )}
-        <NoteSpelling
-          key={`${best.root}:${best.scale.id}`}
-          notes={best.notes}
-        />
-        <button
-          className="show-neck"
-          onClick={() => onExplore(best, parsed.chords)}
-        >
-          Show on neck <ArrowRight size={16} />
-        </button>
+          <div className="match-note-roles">
+            {[
+              {
+                label: 'From your chords',
+                role: 'chord',
+                notes: comparison.chordTones,
+              },
+              {
+                label: 'Extra melody notes',
+                role: 'melody',
+                notes: comparison.melodicNotes,
+              },
+            ].map(({ label, role, notes }) => (
+              <div className="match-note-row" data-role={role} key={role}>
+                <span className="match-note-role">{label}</span>
+                {notes.length ? (
+                  <div className="match-notes">
+                    {notes.map((note) => (
+                      <span key={note.pc} title={noteDescription(note)}>
+                        {pretty(readableNoteName(note))}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="palette-no-extra">
+                    No extra notes in this collection.
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+          <p>
+            Extra notes add melodic possibilities. Their effect depends on the
+            chord, timing, and phrasing. This is a place to explore, not a
+            confirmed key.
+          </p>
+          {comparisonReference && groups.length > 1 && (
+            <p className="palette-difference">
+              {best === comparisonReference ? (
+                <>
+                  <span>Compare other choices with</span>
+                  <strong>{referenceName}</strong>
+                </>
+              ) : (
+                <>
+                  <span>Compared with {referenceName}</span>
+                  <strong>
+                    {changes || 'Same pitches; a different reference root.'}
+                  </strong>
+                </>
+              )}
+            </p>
+          )}
+          <NoteSpelling
+            key={`${best.root}:${best.scale.id}`}
+            notes={best.notes}
+          />
+        </details>
         {group.candidates.length > 1 && (
           <details className="alternate-modes">
             <summary>
@@ -172,198 +216,78 @@ export function MatchChords({
   }
   return (
     <div className="match-workspace">
-      <section
-        className="chord-entry reference-water"
-        aria-labelledby="chord-entry-title"
-      >
-        <UnderwaterScene />
-        <div>
-          <h2 id="chord-entry-title">Find a scale for your chords.</h2>
-          <p>Enter a progression. Find the notes that connect it.</p>
-        </div>
-        <label className="input-label" htmlFor="chord-progression">
-          YOUR CHORDS
-        </label>
-        <textarea
-          id="chord-progression"
-          value={text}
-          onChange={(e) => setProgression(e.target.value)}
-          spellCheck={false}
-          aria-invalid={!valid && text.trim().length > 0}
-          aria-describedby="chord-input-help chord-errors"
-          placeholder="Am F C G"
-          rows={1}
-        />
-        <p className="input-help" id="chord-input-help">
-          Separate chords with spaces, commas, or bars. Slash chords work too:
-          D/F♯.
-        </p>
-        <div className="chord-tokens" aria-label="Recognized chords">
-          {parsed.chords.map((chord, i) => (
-            <span key={i} className="chord-token">
-              {pretty(chord.symbol)}
-            </span>
-          ))}
-        </div>
-        <div id="chord-errors" role="status" aria-live="polite">
-          {text.trim() &&
-            [...new Set(parsed.errors)].map((error) => (
-              <p className="input-error" key={error}>
-                {error}
-              </p>
-            ))}
-        </div>
-        <div className="entry-options">
-          <details className="chord-builder">
-            <summary>
-              <Plus size={16} aria-hidden="true" />{' '}
-              <span>Build a chord by name</span>
-              <ChevronDown
-                className="disclosure-chevron"
-                size={16}
-                aria-hidden="true"
-              />
-            </summary>
-            <div className="builder-row">
-              <label htmlFor="builder-root">
-                Root
-                <MusicSelect
-                  id="builder-root"
-                  label="Chord root"
-                  value={builderRoot}
-                  onValueChange={setBuilderRoot}
-                  options={ROOTS.map((r) => ({ value: r, label: pretty(r) }))}
-                />
-              </label>
-              <label htmlFor="builder-quality">
-                Quality
-                <MusicSelect
-                  id="builder-quality"
-                  label="Chord quality"
-                  searchable
-                  searchKind="quality"
-                  value={builderQuality}
-                  onValueChange={setBuilderQuality}
-                  options={QUALITIES.map((q) => ({
-                    value: q.id,
-                    label: q.name,
-                    group: qualityGroup(q),
-                  }))}
-                />
-              </label>
-              <Button
-                onClick={() =>
-                  setProgression(
-                    `${text.trim()} ${builderRoot}${QUALITIES.find((q) => q.id === builderQuality)!.symbol}`.trim(),
-                  )
-                }
-              >
-                Add chord <Plus size={15} />
-              </Button>
-            </div>
-          </details>
-          <details className="match-options">
-            <summary>
-              <span>Home note & examples</span>
-              {home && <span className="chosen-home"> · {pretty(home)}</span>}
-              <ChevronDown
-                className="disclosure-chevron"
-                size={16}
-                aria-hidden="true"
-              />
-            </summary>
-            <div className="home-note-control">
-              <label htmlFor="match-home">
-                HOME NOTE <span className="muted">(OPTIONAL)</span>
-                <MusicSelect
-                  id="match-home"
-                  label="Home note"
-                  value={home}
-                  onValueChange={setHome}
-                  options={[
-                    { value: '', label: 'Not sure yet' },
-                    ...ROOTS.map((r) => ({ value: r, label: pretty(r) })),
-                  ]}
-                />
-              </label>
-              <p>
-                The note that feels like home. Leave it open if you’re
-                exploring.
-              </p>
-            </div>
-            <div className="examples">
-              <span>TRY A PROGRESSION</span>
-              {[
-                { name: 'A Dorian color', value: 'Am D', home: 'A' },
-                { name: 'A minor with a twist', value: 'Am G F E7', home: 'A' },
-                { name: 'A blues changes', value: 'A7 D7 E7', home: 'A' },
-              ].map((example) => (
-                <button
-                  key={example.name}
-                  onClick={() => {
-                    setProgression(example.value);
-                    setHome(example.home);
-                  }}
-                >
-                  {example.name}
-                  <ArrowRight size={14} />
-                </button>
-              ))}
-            </div>
-          </details>
-          <button className="clear-chords" onClick={() => setProgression('')}>
-            Clear chords
-            <X size={13} />
-          </button>
-        </div>
-      </section>
+      <MatchEntry
+        text={text}
+        home={home}
+        chords={parsed.chords}
+        errors={parsed.errors}
+        onTextChange={setProgression}
+        onHomeChange={(value) => {
+          setHome(value);
+          setHomeFromStarter(false);
+        }}
+        onChooseStarter={(chords, starterHome) => {
+          setText(chords);
+          setHome(starterHome);
+          setHomeFromStarter(true);
+          setShowAll(false);
+          seeMatches();
+        }}
+        onSeeMatches={seeMatches}
+      />
       <section className="match-results" aria-labelledby="results-title">
         <div className="results-heading">
-          <h2 id="results-title">Your possible palettes</h2>
+          <h2 id="results-title" ref={resultsTitle} tabIndex={-1}>
+            Scales to try
+          </h2>
           <p>
-            Start with a shared collection, then follow the chord tones. No
-            single note choice is a rule.
+            Find a sound that catches your ear, then take it to the fretboard.
+            Your chords come along with you.
           </p>
         </div>
         {!valid ? (
           <div className="result-empty">
-            <Layers3 size={28} />
+            <Music2 size={24} aria-hidden="true" />
             <h3>
               {text.trim()
                 ? 'Let’s get your chords in place.'
-                : 'Start with a chord or two.'}
+                : 'No need to know the key.'}
             </h3>
             <p>
               {text.trim()
-                ? 'Fix the highlighted input to see fresh results.'
-                : 'Type your chords above, or use the chord builder to find a name.'}
+                ? 'Check the chord names above. Your entry is still there to edit.'
+                : 'Bring the chords you know, or try an example above. We’ll help you find a place to start.'}
             </p>
           </div>
         ) : (
           <>
             <div className="result-count" role="status">
-              {groups.length} shared note{' '}
-              {groups.length === 1 ? 'collection' : 'collections'}{' '}
-              <span>· across {SCALES.length} scales and modes</span>
+              {groups.length > 0
+                ? `${groups.length} ${groups.length === 1 ? 'collection contains' : 'different collections contain'} all your chord tones`
+                : colors.length > 0
+                  ? 'Explore color or follow the individual chords below'
+                  : 'Explore the individual chords below'}
+              <span>
+                {' '}
+                ·{' '}
+                {parsed.chords.map((chord) => pretty(chord.symbol)).join(' → ')}
+              </span>
             </div>
             {groups.length > 0 ? (
               <>
-                <p className="palette-comparison-help">
-                  Optional melody notes are not in your chords or their bass
-                  notes. Their effect depends on timing and phrasing. Compare
-                  with the first result shown; it is not a confirmed key.
-                </p>
                 <div className="match-grid">
                   {(showAll ? groups : groups.slice(0, 3)).map(renderGroup)}
                 </div>
               </>
             ) : (
               <div className="result-empty">
-                <Layers3 size={28} />
-                <h3>No shared scale in this catalog.</h3>
+                <Music2 size={24} aria-hidden="true" />
+                <h3>Let the notes move with the chords.</h3>
                 <p>
-                  None of these scales contains every entered chord tone.
-                  Explore a local option for each chord below.
+                  These chords reach beyond a single scale in our catalog.
+                  {colors.length > 0
+                    ? ' Try a color below, or explore the individual chords using their notes as landing points.'
+                    : ' Explore the individual chords below, using their notes as landing points.'}
                 </p>
               </div>
             )}
@@ -376,6 +300,32 @@ export function MatchChords({
                   ? 'Show fewer collections'
                   : `Show all ${groups.length} collections`}
               </button>
+            )}
+            {colors.length > 0 && (
+              <section className="color-options">
+                <h3>
+                  {groups.length
+                    ? 'A little more color'
+                    : 'A sound to try across your chords'}
+                </h3>
+                {colors.map(({ candidate, explanation }) => (
+                  <article key={candidate.scale.id}>
+                    <div>
+                      <strong>
+                        {pretty(candidate.root)} {candidate.scale.name}
+                      </strong>
+                      <p>{explanation}</p>
+                    </div>
+                    <button
+                      className="show-neck"
+                      onClick={() => onExplore(candidate, parsed.chords)}
+                    >
+                      Try on the fretboard{' '}
+                      <ArrowRight size={16} aria-hidden="true" />
+                    </button>
+                  </article>
+                ))}
+              </section>
             )}
             <details
               key={groups.length === 0 ? 'local' : 'shared'}
@@ -416,32 +366,15 @@ export function MatchChords({
                 ))}
               </div>
             </details>
-            {colors.length > 0 && (
-              <section className="color-options">
-                <h3>A little more color</h3>
-                {colors.map(({ candidate, explanation }) => (
-                  <article key={candidate.scale.id}>
-                    <div>
-                      <strong>
-                        {pretty(candidate.root)} {candidate.scale.name}
-                      </strong>
-                      <p>{explanation}</p>
-                    </div>
-                    <button
-                      className="show-neck"
-                      onClick={() => onExplore(candidate, parsed.chords)}
-                    >
-                      Explore <ArrowRight size={16} />
-                    </button>
-                  </article>
-                ))}
-              </section>
-            )}
-            <p className="catalog-note">
-              Catalog: {catalogFamilies.join(', ')}. Chords are treated as equal
-              length. Tonal centers are suggestions; your melody and emphasis
-              matter.
-            </p>
+            <details className="catalog-note">
+              <summary>About these suggestions</summary>
+              <p>
+                We compare your chords with {SCALES.length} scales and modes:{' '}
+                {catalogFamilies.join(', ')}. Chords are treated as equal
+                length. Tonal centers are suggestions; your melody and emphasis
+                matter.
+              </p>
+            </details>
           </>
         )}
       </section>

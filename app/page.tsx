@@ -594,6 +594,10 @@ export default function Home() {
                     Check each chord for notes outside this palette.
                   </p>
                 )}
+                <p className="chord-landing-help">
+                  Pick a chord to highlight its notes. Try landing on one as
+                  that chord plays.
+                </p>
                 <span>Chord tones</span>
                 {context.map((c, i) => (
                   <button

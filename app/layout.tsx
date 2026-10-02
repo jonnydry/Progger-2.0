@@ -12,6 +12,7 @@ import './voicing-audition.css';
 import './practice-view.css';
 import './reference-panels.css';
 import './connected-neck.css';
+import './match-welcome.css';
 import { themeBootstrap } from '@/lib/theme';
 
 const arcade = Silkscreen({
