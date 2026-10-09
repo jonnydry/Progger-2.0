@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { qualityGroup } from '../lib/chord-presentation.ts';
 import { QUALITIES } from '../lib/harmony.ts';
 import { SCALES } from '../lib/music.ts';
 import {
@@ -24,6 +25,44 @@ const searchQualities = (query: string) =>
   qualities
     .filter((choice) => matchesMusicChoice(choice, query, 'quality'))
     .map((choice) => choice.value);
+const groupedQualities = QUALITIES.map((quality) => ({
+  value: quality.id,
+  label: quality.name,
+  group: qualityGroup(quality),
+}));
+const searchGroupedQualities = (query: string) =>
+  groupedQualities
+    .filter((choice) => matchesMusicChoice(choice, query, 'quality'))
+    .map((choice) => choice.value);
+const coreIds = [
+  'major',
+  'minor',
+  '7',
+  'maj7',
+  'm7',
+  '5',
+  'sus2',
+  'sus4',
+  'dim',
+  'aug',
+  '6',
+  'm6',
+  'm7b5',
+  'dim7',
+];
+const dominantIds = [
+  '7',
+  'dim',
+  '9',
+  '11',
+  '13',
+  '7b9',
+  '7#9',
+  '7#11',
+  '7b13',
+  '9#11',
+];
+const dominant7Ids = ['7', 'dim7', '7b9', '7#9', '7#11', '7b13'];
 
 void test('scale search recognizes familiar aliases and ASCII / written accidentals', () => {
   assert.deepEqual(searchScales('Aeolian'), ['minor']);
@@ -88,6 +127,36 @@ void test('full symbols resolve only after parsing the complete supported chord'
   assert.deepEqual(searchQualities('C(#5)'), ['aug']);
   assert.ok(searchQualities('dominant').includes('7'));
   assert.ok(searchQualities('Dominant').includes('9'));
+});
+
+void test('letter o keeps diminished symbols and the name or group they prefix', () => {
+  assert.deepEqual(
+    groupedQualities
+      .filter((choice) => choice.group === 'Core chords')
+      .map((choice) => choice.value),
+    coreIds,
+  );
+  assert.deepEqual(
+    groupedQualities
+      .filter((choice) => choice.label.startsWith('Dominant'))
+      .map((choice) => choice.value),
+    ['7', '9', '11', '13', '7b9', '7#9', '7#11', '7b13', '9#11'],
+  );
+  assert.deepEqual(searchGroupedQualities('co'), coreIds);
+  assert.deepEqual(searchGroupedQualities('cor'), coreIds);
+  assert.deepEqual(searchGroupedQualities('core'), coreIds);
+  for (const query of ['do', 'Do', 'DO', 'dO']) {
+    assert.deepEqual(searchGroupedQualities(query), dominantIds, query);
+  }
+  for (const query of ['do7', 'Do7', 'DO7', 'dO7']) {
+    assert.deepEqual(searchGroupedQualities(query), dominant7Ids, query);
+  }
+  for (const letter of ['a', 'b', 'e', 'f', 'g']) {
+    assert.deepEqual(searchGroupedQualities(`${letter}o`), ['dim'], letter);
+  }
+  assert.deepEqual(searchGroupedQualities('Co'), ['dim']);
+  assert.deepEqual(searchGroupedQualities('Co7'), ['dim7']);
+  assert.deepEqual(searchGroupedQualities('co7'), ['dim7']);
 });
 
 void test('descriptions show engine symbols without changing values or labels', () => {
