@@ -360,10 +360,22 @@ export function Fretboard({
       viewportWidth,
     ],
   );
-  const scrollReading = useRef({ updateRange, trackScroll, viewportWidth });
+  const scrollReading = useRef({
+    updateRange,
+    trackScroll,
+    viewportWidth,
+    scope,
+    onNeckProgress,
+  });
   useLayoutEffect(() => {
-    scrollReading.current = { updateRange, trackScroll, viewportWidth };
-  }, [updateRange, trackScroll, viewportWidth]);
+    scrollReading.current = {
+      updateRange,
+      trackScroll,
+      viewportWidth,
+      scope,
+      onNeckProgress,
+    };
+  }, [updateRange, trackScroll, viewportWidth, scope, onNeckProgress]);
   const onNeckScroll = useCallback(() => {
     const el = viewport.current;
     const reading = scrollReading.current;
@@ -373,8 +385,13 @@ export function Fretboard({
       el.scrollWidth &&
       !wasHidden.current &&
       Math.abs(el.clientWidth - reading.viewportWidth) <= 1
-    )
+    ) {
       reading.trackScroll(el);
+      // Match can hide the neck in this same frame, and the queued update
+      // then no-ops. The handoff reads this progress, so publish it now.
+      if (reading.scope === 'scale')
+        reading.onNeckProgress?.(viewProgress.current);
+    }
     if (scrollFrame.current !== null) return;
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = null;
