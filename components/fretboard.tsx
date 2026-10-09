@@ -245,7 +245,7 @@ export function Fretboard({
     null,
   );
   const scrollFrame = useRef<number | null>(null);
-  const sliderCommit = useRef(false);
+  const sliderScroll = useRef<number | null>(null);
   const focused = Boolean(pattern || voicing);
   const canSelectPattern =
     scope === 'scale' &&
@@ -396,10 +396,15 @@ export function Fretboard({
         reading.onNeckProgress?.(viewProgress.current);
     }
     // The slider commits in the input event. scrollTo updates scrollLeft
-    // immediately, then Chrome fires this scroll after that handler returns
-    // and before the next frame. Skip queueing a second updateRange for it.
-    if (sliderCommit.current) {
-      sliderCommit.current = false;
+    // immediately, and Chrome fires this scroll in the next frame's rendering
+    // step. Skip that event only when it lands on the slider's target, so a
+    // pan in the same frame still queues updateRange.
+    if (
+      el &&
+      sliderScroll.current !== null &&
+      Math.abs(el.scrollLeft - sliderScroll.current) < 1
+    ) {
+      sliderScroll.current = null;
       return;
     }
     if (scrollFrame.current !== null) return;
@@ -855,19 +860,19 @@ export function Fretboard({
                   const el = viewport.current;
                   if (!el) return;
                   programmaticScroll.current = null;
-                  // Stay set until the scroll event that scrollTo queues, which
-                  // arrives after this handler. The frame below clears it when
-                  // that event never comes, so the next pan is not swallowed.
-                  sliderCommit.current = true;
                   el.scrollTo({
                     left: Number(event.target.value) * columnWidth,
                     behavior: 'instant',
                   });
+                  // The scroll event for this move fires in the next frame's
+                  // rendering step. Remember where scrollLeft landed, and clear
+                  // that target on the next frame when the event never comes.
+                  sliderScroll.current = el.scrollLeft;
                   // The slider is controlled. Commit its fret in this event so
                   // the thumb is not restored to the previous frame.
                   updateRange(true);
                   requestAnimationFrame(() => {
-                    sliderCommit.current = false;
+                    sliderScroll.current = null;
                   });
                 }}
               />
