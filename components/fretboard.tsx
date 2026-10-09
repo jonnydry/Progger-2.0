@@ -28,6 +28,21 @@ import {
 } from '@/lib/connected-neck';
 import { NeckOverview } from '@/components/neck-overview';
 
+const PHONE_NECK_QUERY = '(max-width: 500px)';
+
+function usePhoneNeck() {
+  const [phone, setPhone] = useState(false);
+  useLayoutEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const media = matchMedia(PHONE_NECK_QUERY);
+    const sync = () => setPhone(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+  return phone;
+}
+
 export function Fretboard({
   notes,
   root,
@@ -360,35 +375,9 @@ export function Fretboard({
     centerForm(index);
     onPatternSelect?.(index);
   };
-
-  return (
-    <section
-      className={`neck ${connected ? 'connected-neck' : ''} ${focused ? 'focused-neck' : ''} ${voicing ? 'voicing-neck' : ''} ${left ? 'left-handed-neck' : ''}`}
-      aria-labelledby={titleId}
-    >
-      {controlsAbove && (
-        <div className="instrument-dock practice-controls">{controls}</div>
-      )}
-      <div className="neck-meta">
-        <span id={titleId}>
-          STANDARD TUNING <span className="muted">/ E A D G B E</span>
-        </span>
-        <span className="neck-legend">
-          {voicing?.rootless ? (
-            <span className="muted">Root omitted</span>
-          ) : (
-            <>
-              <i className="root-key" /> Root
-            </>
-          )}{' '}
-          <i className="scale-key" /> {noteLabel}
-          {targets.length > 0 && (
-            <>
-              <i className="target-key" /> Chord tone
-            </>
-          )}
-        </span>
-      </div>
+  const phoneNeck = usePhoneNeck();
+  const scaleForm = (
+    <>
       {scope === 'scale' && (
         <div className="connection-controls">
           {canSelectPattern && (
@@ -491,6 +480,38 @@ export function Fretboard({
           </p>
         </div>
       )}
+    </>
+  );
+
+  return (
+    <section
+      className={`neck ${connected ? 'connected-neck' : ''} ${focused ? 'focused-neck' : ''} ${voicing ? 'voicing-neck' : ''} ${left ? 'left-handed-neck' : ''}`}
+      aria-labelledby={titleId}
+    >
+      {controlsAbove && (
+        <div className="instrument-dock practice-controls">{controls}</div>
+      )}
+      <div className="neck-meta">
+        <span id={titleId}>
+          STANDARD TUNING <span className="muted">/ E A D G B E</span>
+        </span>
+        <span className="neck-legend">
+          {voicing?.rootless ? (
+            <span className="muted">Root omitted</span>
+          ) : (
+            <>
+              <i className="root-key" /> Root
+            </>
+          )}{' '}
+          <i className="scale-key" /> {noteLabel}
+          {targets.length > 0 && (
+            <>
+              <i className="target-key" /> Chord tone
+            </>
+          )}
+        </span>
+      </div>
+      {!phoneNeck && scaleForm}
       <div className="neck-frame">
         <div className="string-labels" aria-hidden="true">
           {['e', 'B', 'G', 'D', 'A', 'E'].map((string, i) => (
@@ -699,6 +720,7 @@ export function Fretboard({
           </div>
         </div>
       </div>
+      {phoneNeck && scaleForm}
       {scope === 'scale' && overview && (
         <NeckOverview
           id={`${titleId}-overview`}
