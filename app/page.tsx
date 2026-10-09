@@ -232,42 +232,45 @@ export default function Home() {
     setLocalChoice(null);
     if (!nextPatterns.length) setView('map');
   }
-  function navigate(destination: string) {
+  const navigate = useCallback(function navigate(destination: string) {
     pendingMatchReturn.current = null;
     setPage(destination);
     location.hash = destination;
-  }
-  function openMatch(
-    candidate: Candidate,
-    chords: Chord[],
-    activeChordIndex?: number,
-  ) {
-    returnPoint.current = null;
-    const element = document.activeElement;
-    matchReturnPoint.current = {
-      element:
-        element instanceof HTMLElement && element.closest('.match-workspace')
-          ? element
-          : null,
-      scroll: window.scrollY,
-    };
-    setScaleRoot(candidate.root);
-    setScaleId(candidate.scale.id);
-    setKind('scales');
-    setPosition(
-      connectedFormForScale(
-        candidate.root,
-        candidate.scale.formula,
-        neckProgress.current,
-      ),
-    );
-    setView('map');
-    setContext(chords);
-    setActiveChord(activeChordIndex ?? 0);
-    setLocalChoice(activeChordIndex ?? null);
-    navigate('explore');
-    document.getElementById('main-content')?.focus();
-  }
+  }, []);
+  const openMatch = useCallback(
+    function openMatch(
+      candidate: Candidate,
+      chords: Chord[],
+      activeChordIndex?: number,
+    ) {
+      returnPoint.current = null;
+      const element = document.activeElement;
+      matchReturnPoint.current = {
+        element:
+          element instanceof HTMLElement && element.closest('.match-workspace')
+            ? element
+            : null,
+        scroll: window.scrollY,
+      };
+      setScaleRoot(candidate.root);
+      setScaleId(candidate.scale.id);
+      setKind('scales');
+      setPosition(
+        connectedFormForScale(
+          candidate.root,
+          candidate.scale.formula,
+          neckProgress.current,
+        ),
+      );
+      setView('map');
+      setContext(chords);
+      setActiveChord(activeChordIndex ?? 0);
+      setLocalChoice(activeChordIndex ?? null);
+      navigate('explore');
+      document.getElementById('main-content')?.focus();
+    },
+    [navigate],
+  );
   function returnToMatch() {
     pendingMatchReturn.current = matchReturnPoint.current ?? {
       element: null,
@@ -340,15 +343,30 @@ export default function Home() {
       ? currentChord.bass
       : undefined;
   }, [currentChord]);
-  const soundingNotes = currentChord
-    ? [
-        ...currentChord.notes.map((n) => ({ name: n.name, pc: n.pc })),
-        ...(currentChord.bass &&
-        !currentChord.notes.some((n) => n.pc === pitchClass(currentChord.bass!))
-          ? [{ name: currentChord.bass, pc: pitchClass(currentChord.bass) }]
-          : []),
-      ]
-    : [];
+  const soundingNotes = useMemo(
+    () =>
+      currentChord
+        ? [
+            ...currentChord.notes.map((n) => ({ name: n.name, pc: n.pc })),
+            ...(currentChord.bass &&
+            !currentChord.notes.some(
+              (n) => n.pc === pitchClass(currentChord.bass!),
+            )
+              ? [
+                  {
+                    name: currentChord.bass,
+                    pc: pitchClass(currentChord.bass),
+                  },
+                ]
+              : []),
+          ]
+        : [],
+    [currentChord],
+  );
+  const targets = useMemo(
+    () => (kind === 'scales' ? soundingNotes.map((note) => note.pc) : []),
+    [kind, soundingNotes],
+  );
   const outside = soundingNotes.filter(
     (n) => !notes.some((scaleNote) => scaleNote.pc === n.pc),
   );
@@ -765,9 +783,7 @@ export default function Home() {
               scope={kind === 'scales' ? 'scale' : 'chord'}
               degrees={degrees}
               left={left}
-              targets={
-                kind === 'scales' ? soundingNotes.map((note) => note.pc) : []
-              }
+              targets={targets}
               noteLabel={kind === 'scales' ? 'Scale note' : 'Chord note'}
             />
             {practice && voicingBrowser}

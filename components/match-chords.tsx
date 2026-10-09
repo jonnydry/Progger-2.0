@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Music2 } from 'lucide-react';
 import { MatchEntry } from '@/components/match-entry';
 import { NoteSpelling } from '@/components/note-spelling';
@@ -20,7 +20,7 @@ import {
 
 const catalogFamilies = [...new Set(SCALES.map((scale) => scale.family))];
 
-export function MatchChords({
+export const MatchChords = memo(function MatchChords({
   onExplore,
 }: {
   onExplore: (
@@ -382,4 +382,4 @@ export function MatchChords({
       </section>
     </div>
   );
-}
+});
