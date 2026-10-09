@@ -245,6 +245,7 @@ export function Fretboard({
     null,
   );
   const scrollFrame = useRef<number | null>(null);
+  const sliderCommit = useRef(false);
   const focused = Boolean(pattern || voicing);
   const canSelectPattern =
     scope === 'scale' &&
@@ -393,6 +394,12 @@ export function Fretboard({
       // then no-ops. The handoff reads this progress, so publish it now.
       if (reading.scope === 'scale')
         reading.onNeckProgress?.(viewProgress.current);
+    }
+    // The slider commits in the input event. Skip the frame that scroll would
+    // queue for that same move.
+    if (sliderCommit.current) {
+      sliderCommit.current = false;
+      return;
     }
     if (scrollFrame.current !== null) return;
     scrollFrame.current = requestAnimationFrame(() => {
@@ -847,13 +854,17 @@ export function Fretboard({
                   const el = viewport.current;
                   if (!el) return;
                   programmaticScroll.current = null;
+                  sliderCommit.current = true;
                   el.scrollTo({
                     left: Number(event.target.value) * columnWidth,
                     behavior: 'instant',
                   });
                   // The slider is controlled. Commit its fret in this event so
-                  // the thumb is not restored to the previous frame.
+                  // the thumb is not restored to the previous frame. scrollTo
+                  // consumes the flag when it fires, so this input does not
+                  // also queue updateRange.
                   updateRange(true);
+                  sliderCommit.current = false;
                 }}
               />
             </label>
