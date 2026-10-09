@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { qualityGroup } from '@/lib/chord-presentation';
 import { ROOTS, pretty } from '@/lib/music';
 import { QUALITIES, type Chord } from '@/lib/harmony';
-import { MATCH_STARTERS } from '@/lib/match-starters';
+import { MATCH_STARTERS, PROGRESSION_PLACEHOLDER } from '@/lib/match-starters';
 
 export function MatchEntry({
   text,
@@ -101,7 +101,7 @@ export function MatchEntry({
             autoCorrect="off"
             aria-invalid={hasInput && errors.length > 0}
             aria-describedby="chord-input-help chord-errors"
-            placeholder="Am F C G"
+            placeholder={PROGRESSION_PLACEHOLDER}
             rows={2}
           />
           <p className="input-help" id="chord-input-help">

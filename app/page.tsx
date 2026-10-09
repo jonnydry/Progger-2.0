@@ -20,6 +20,7 @@ import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
 import { NeckDisplay } from '@/components/neck-display';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
+import { scaleReturnFocusId } from '@/lib/explore-focus';
 import { nearestPatternIndex } from '@/lib/practice-position';
 import {
   SCALES,
@@ -267,15 +268,16 @@ export default function Home() {
         ?.scrollIntoView({ block: 'start' });
     });
   }
-  function returnToScale() {
+  function returnToScale(event?: { currentTarget: HTMLElement }) {
     if (kind === 'scales') return;
+    const sourceId = event?.currentTarget.id;
     setKind('scales');
     const point = returnPoint.current;
     returnPoint.current = null;
+    const focusId = scaleReturnFocusId(point, sourceId);
+    if (!focusId) return;
     requestAnimationFrame(() => {
-      document
-        .getElementById(point?.id || 'main-content')
-        ?.focus({ preventScroll: true });
+      document.getElementById(focusId)?.focus({ preventScroll: true });
       if (point) window.scrollTo({ top: point.scroll, behavior: 'instant' });
     });
   }
@@ -376,7 +378,9 @@ export default function Home() {
     />
   );
   return (
-    <div className={`app-shell night-swim ${practice ? 'practice-view' : ''}`}>
+    <div
+      className={`app-shell night-swim ${page === 'explore' && practice ? 'practice-view' : ''}`}
+    >
       <header className="site-header">
         <PondScene />
         <a
@@ -411,7 +415,7 @@ export default function Home() {
             ? 'Match your chords'
             : `${pretty(root)} ${title} guitar reference`}
         </h1>
-        <div className="workspace-tools">
+        <div className="workspace-tools" hidden={page !== 'explore'}>
           <button
             className="practice-toggle"
             aria-pressed={practice}
@@ -464,6 +468,7 @@ export default function Home() {
                 aria-label="Reference type"
               >
                 <button
+                  id="scales-reference-tab"
                   aria-pressed={kind === 'scales'}
                   onClick={returnToScale}
                 >

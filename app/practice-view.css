@@ -73,6 +73,39 @@
 .night-swim.practice-view .match-workspace {
   margin-top: 12px;
 }
+/* Artwork is hidden here, so neck marks have to clear the flat background. */
+.night-swim.practice-view .string-line {
+  background: #b7ad96;
+}
+.night-swim.practice-view .string-cell {
+  border-right-color: #7d806e;
+}
+.night-swim.practice-view .open-string .string-cell {
+  border-right-color: #c2c7b6;
+}
+html
+  .night-swim.practice-view
+  .connected-neck
+  .fret-grid
+  .note-dot.connection-context:not(.is-root) {
+  border-color: #8d9aaa;
+}
+html[data-theme='day'] .night-swim.practice-view .string-line {
+  background: #4d5c46;
+}
+html[data-theme='day'] .night-swim.practice-view .string-cell {
+  border-right-color: #4d5c46;
+}
+html[data-theme='day'] .night-swim.practice-view .open-string .string-cell {
+  border-right-color: var(--green);
+}
+html[data-theme='day']
+  .night-swim.practice-view
+  .connected-neck
+  .fret-grid
+  .note-dot.connection-context:not(.is-root) {
+  border-color: #4d5c46;
+}
 .local-choice-note {
   flex-basis: 100%;
   text-align: center;
