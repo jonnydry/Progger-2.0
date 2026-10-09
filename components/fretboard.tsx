@@ -38,6 +38,7 @@ export function Fretboard({
   activePatternIndex = 0,
   onPatternSelect,
   onPatternFollow,
+  onNeckProgress,
   voicing,
   scope,
   degrees,
@@ -54,6 +55,7 @@ export function Fretboard({
   activePatternIndex?: number;
   onPatternSelect?: (index: number) => void;
   onPatternFollow?: (index: number) => void;
+  onNeckProgress?: (progress: number) => void;
   scope: 'scale' | 'chord';
   voicing?: {
     name: string;
@@ -146,6 +148,9 @@ export function Fretboard({
       const travel = el.scrollWidth - el.clientWidth;
       const progress = travel > 0 ? el.scrollLeft / travel : 0.5;
       viewProgress.current = left ? 1 - progress : progress;
+      // Chord shapes scroll independently, then the scale view is restored.
+      // Connected forms follow the scale neck, not that temporary chord scroll.
+      if (scope === 'scale') onNeckProgress?.(viewProgress.current);
       setScrollFret(el.scrollLeft / cell);
       setRange((previous) =>
         previous[0] === next[0] && previous[1] === next[1] ? previous : next,
@@ -176,6 +181,7 @@ export function Fretboard({
       activeIndex,
       availablePatterns,
       onPatternFollow,
+      onNeckProgress,
       viewportWidth,
     ],
   );
