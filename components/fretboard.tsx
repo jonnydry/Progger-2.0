@@ -307,22 +307,27 @@ export function Fretboard({
       viewportWidth,
     ],
   );
+  const scrollReading = useRef({ updateRange, trackScroll, viewportWidth });
+  useLayoutEffect(() => {
+    scrollReading.current = { updateRange, trackScroll, viewportWidth };
+  }, [updateRange, trackScroll, viewportWidth]);
   const onNeckScroll = useCallback(() => {
     const el = viewport.current;
+    const reading = scrollReading.current;
     if (
       el &&
       el.clientWidth &&
       el.scrollWidth &&
       !wasHidden.current &&
-      Math.abs(el.clientWidth - viewportWidth) <= 1
+      Math.abs(el.clientWidth - reading.viewportWidth) <= 1
     )
-      trackScroll(el);
+      reading.trackScroll(el);
     if (scrollFrame.current !== null) return;
     scrollFrame.current = requestAnimationFrame(() => {
       scrollFrame.current = null;
-      updateRange(true);
+      scrollReading.current.updateRange(true);
     });
-  }, [trackScroll, updateRange, viewportWidth]);
+  }, []);
   useEffect(() => {
     return () => {
       if (scrollFrame.current !== null)
@@ -728,13 +733,15 @@ export function Fretboard({
                 onKeyDown={moveWithKey}
                 onChange={(event) => {
                   const el = viewport.current;
-                  if (el) {
-                    programmaticScroll.current = null;
-                    el.scrollTo({
-                      left: Number(event.target.value) * columnWidth,
-                      behavior: 'instant',
-                    });
-                  }
+                  if (!el) return;
+                  programmaticScroll.current = null;
+                  el.scrollTo({
+                    left: Number(event.target.value) * columnWidth,
+                    behavior: 'instant',
+                  });
+                  // The slider is controlled. Commit its fret in this event so
+                  // the thumb is not restored to the previous frame.
+                  updateRange(true);
                 }}
               />
             </label>
