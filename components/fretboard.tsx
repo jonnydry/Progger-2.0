@@ -51,6 +51,8 @@ const FretGrid = memo(function FretGrid({
   scope,
   connected,
   targets,
+  noteMap,
+  selected,
 }: {
   notes: Note[];
   columnWidth: number;
@@ -64,18 +66,10 @@ const FretGrid = memo(function FretGrid({
   scope: 'scale' | 'chord';
   connected: boolean;
   targets: number[];
+  noteMap: Map<number, Note>;
+  selected: Set<string> | null;
 }) {
   const frets = Array.from({ length: 25 }, (_, i) => (left ? 24 - i : i));
-  const noteMap = new Map(notes.map((note) => [note.pc, note]));
-  const selected = voicing
-    ? new Set(
-        voicing.frets.flatMap((fret, string) =>
-          fret === null ? [] : [`${string}:${fret}`],
-        ),
-      )
-    : pattern
-      ? new Set(pattern.positions.map((p) => `${p.string}:${p.fret}`))
-      : null;
   return (
     <>
       <div
@@ -280,18 +274,25 @@ export function Fretboard({
     () => formLayers(pattern, neighbor),
     [pattern, neighbor],
   );
+  const noteMap = useMemo(
+    () => new Map(notes.map((note) => [note.pc, note])),
+    [notes],
+  );
+  const selected = useMemo(
+    () =>
+      voicing
+        ? new Set(
+            voicing.frets.flatMap((fret, string) =>
+              fret === null ? [] : [`${string}:${fret}`],
+            ),
+          )
+        : pattern
+          ? new Set(pattern.positions.map((p) => `${p.string}:${p.fret}`))
+          : null,
+    [voicing, pattern],
+  );
   const wasHidden = useRef(false);
   const titleId = useId();
-  const noteMap = new Map(notes.map((note) => [note.pc, note]));
-  const selected = voicing
-    ? new Set(
-        voicing.frets.flatMap((fret, string) =>
-          fret === null ? [] : [`${string}:${fret}`],
-        ),
-      )
-    : pattern
-      ? new Set(pattern.positions.map((p) => `${p.string}:${p.fret}`))
-      : null;
   const trackScroll = useCallback(
     (el: HTMLDivElement) => {
       const cell = el.scrollWidth / 25;
@@ -818,6 +819,8 @@ export function Fretboard({
             scope={scope}
             connected={connected}
             targets={targets}
+            noteMap={noteMap}
+            selected={selected}
           />
         </div>
       </div>
