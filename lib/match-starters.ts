@@ -1,3 +1,6 @@
+/** Example copy, so an empty field is not mistaken for a typed progression. */
+export const PROGRESSION_PLACEHOLDER = 'e.g. Am F C G';
+
 /** Musical invitations, with an explicit home-note choice for each example. */
 export const MATCH_STARTERS = [
   {
