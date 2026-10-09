@@ -1,5 +1,7 @@
 'use client';
 import {
+  memo,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -28,6 +30,129 @@ import {
 } from '@/lib/connected-neck';
 import { NeckOverview } from '@/components/neck-overview';
 
+type NeckVoicing = {
+  name: string;
+  frets: (number | null)[];
+  omittedNotes?: Note[];
+  rootless?: boolean;
+};
+
+const FretGrid = memo(function FretGrid({
+  notes,
+  columnWidth,
+  left,
+  degrees,
+  root,
+  voicing,
+  pattern,
+  layers,
+  neighbor,
+  scope,
+  connected,
+  targets,
+}: {
+  notes: Note[];
+  columnWidth: number;
+  left: boolean;
+  degrees: boolean;
+  root: string;
+  voicing?: NeckVoicing;
+  pattern?: Pattern;
+  layers: ReturnType<typeof formLayers>;
+  neighbor?: Pattern;
+  scope: 'scale' | 'chord';
+  connected: boolean;
+  targets: number[];
+}) {
+  const frets = Array.from({ length: 25 }, (_, i) => (left ? 24 - i : i));
+  const noteMap = new Map(notes.map((note) => [note.pc, note]));
+  const selected = voicing
+    ? new Set(
+        voicing.frets.flatMap((fret, string) =>
+          fret === null ? [] : [`${string}:${fret}`],
+        ),
+      )
+    : pattern
+      ? new Set(pattern.positions.map((p) => `${p.string}:${p.fret}`))
+      : null;
+  return (
+    <>
+      <div
+        className="fret-position-row"
+        style={{
+          gridTemplateColumns: `repeat(25, ${columnWidth}px)`,
+          width: columnWidth * 25,
+        }}
+        role="group"
+        aria-label="Fret numbers"
+      >
+        {frets.map((fret) => (
+          <span
+            key={fret}
+            className={`fret-number ${pattern && fret >= pattern.min && fret <= pattern.max ? 'in-active-form' : ''} ${[3, 5, 7, 9, 12, 15, 17, 19, 21, 24].includes(fret) ? 'inlaid' : ''}`}
+          >
+            {fret === 0 ? 'OPEN' : fret}
+          </span>
+        ))}
+      </div>
+      <div
+        className="fret-grid"
+        style={{
+          gridTemplateColumns: `repeat(25, ${columnWidth}px)`,
+          width: columnWidth * 25,
+          minWidth: 0,
+        }}
+        role="img"
+        aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${noteDescription(n)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${noteDescription(note)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Active ${notes.length === 5 ? 2 : 3}-notes-per-string form starts on low E at fret ${pattern.start} and spans frets ${pattern.min} to ${pattern.max}. ${neighbor ? `Neighbor form starts at fret ${neighbor.start}; ${layers.shared.size} shared string and fret positions. ` : ''}All scale notes remain visible as context.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
+      >
+        {frets.map((fret) => (
+          <div
+            className={`fret-column ${fret === 0 ? 'open-string' : ''}`}
+            key={fret}
+          >
+            {[5, 4, 3, 2, 1, 0].map((string) => {
+              const note = noteMap.get(mod(TUNING[string] + fret));
+              const label = note
+                ? pretty(degrees ? note.degree : readableNoteName(note))
+                : '';
+              const key = `${string}:${fret}`;
+              const membership = layers.shared.has(key)
+                ? 'shared'
+                : layers.active.has(key)
+                  ? 'active'
+                  : layers.neighbor.has(key)
+                    ? 'neighbor'
+                    : 'context';
+              const show =
+                note && (scope === 'scale' || !selected || selected.has(key));
+              return (
+                <div key={string} className={`string-cell string-${string}`}>
+                  <span className="string-line" />
+                  {show && (
+                    <span
+                      className={`note-dot ${connected ? `connection-${membership}` : ''} ${label.length > 3 ? 'wide-note' : ''} ${note.degree === '1' ? 'is-root' : ''} ${targets.includes(note.pc) ? 'is-target' : ''}`}
+                      title={`${noteDescription(note)} · ${pretty(note.degree)} · string ${6 - string}, fret ${fret}${connected ? ` · ${membership === 'shared' ? 'shared by active and neighboring forms' : membership === 'context' ? 'scale context' : `${membership} form`}` : ''}`}
+                    >
+                      {label}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+            <span className="inlay" aria-hidden="true">
+              {[12, 24].includes(fret)
+                ? '••'
+                : [3, 5, 7, 9, 15, 17, 19, 21].includes(fret)
+                  ? '•'
+                  : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+});
+
 export function Fretboard({
   notes,
   root,
@@ -55,12 +180,7 @@ export function Fretboard({
   onPatternSelect?: (index: number) => void;
   onPatternFollow?: (index: number) => void;
   scope: 'scale' | 'chord';
-  voicing?: {
-    name: string;
-    frets: (number | null)[];
-    omittedNotes?: Note[];
-    rootless?: boolean;
-  };
+  voicing?: NeckVoicing;
   degrees: boolean;
   left: boolean;
   targets?: number[];
@@ -80,6 +200,7 @@ export function Fretboard({
   const drag = useRef<{ pointer: number; x: number; scroll: number } | null>(
     null,
   );
+  const scrollFrame = useRef<number | null>(null);
   const focused = Boolean(pattern || voicing);
   const canSelectPattern =
     scope === 'scale' &&
@@ -111,7 +232,6 @@ export function Fretboard({
   );
   const wasHidden = useRef(false);
   const titleId = useId();
-  const frets = Array.from({ length: 25 }, (_, i) => (left ? 24 - i : i));
   const noteMap = new Map(notes.map((note) => [note.pc, note]));
   const selected = voicing
     ? new Set(
@@ -122,21 +242,9 @@ export function Fretboard({
     : pattern
       ? new Set(pattern.positions.map((p) => `${p.string}:${p.fret}`))
       : null;
-  const updateRange = useCallback(
-    (follow = false) => {
-      const el = viewport.current;
-      if (!el || !el.clientWidth || !el.scrollWidth || wasHidden.current)
-        return;
-      // Native scrolling can clamp against the old grid before ResizeObserver
-      // supplies the new viewport width. That is layout, not player movement.
-      if (follow && Math.abs(el.clientWidth - viewportWidth) > 1) return;
+  const trackScroll = useCallback(
+    (el: HTMLDivElement) => {
       const cell = el.scrollWidth / 25;
-      const first = Math.max(0, Math.floor((el.scrollLeft + 0.5) / cell));
-      const last = Math.min(
-        24,
-        Math.ceil((el.scrollLeft + el.clientWidth - 0.5) / cell) - 1,
-      );
-      const next = left ? [24 - last, 24 - first] : [first, last];
       viewCenter.current = viewportCenter(
         el.scrollLeft,
         el.clientWidth,
@@ -146,6 +254,25 @@ export function Fretboard({
       const travel = el.scrollWidth - el.clientWidth;
       const progress = travel > 0 ? el.scrollLeft / travel : 0.5;
       viewProgress.current = left ? 1 - progress : progress;
+      return cell;
+    },
+    [left],
+  );
+  const updateRange = useCallback(
+    (follow = false) => {
+      const el = viewport.current;
+      if (!el || !el.clientWidth || !el.scrollWidth || wasHidden.current)
+        return;
+      // Native scrolling can clamp against the old grid before ResizeObserver
+      // supplies the new viewport width. That is layout, not player movement.
+      if (follow && Math.abs(el.clientWidth - viewportWidth) > 1) return;
+      const cell = trackScroll(el);
+      const first = Math.max(0, Math.floor((el.scrollLeft + 0.5) / cell));
+      const last = Math.min(
+        24,
+        Math.ceil((el.scrollLeft + el.clientWidth - 0.5) / cell) - 1,
+      );
+      const next = left ? [24 - last, 24 - first] : [first, last];
       setScrollFret(el.scrollLeft / cell);
       setRange((previous) =>
         previous[0] === next[0] && previous[1] === next[1] ? previous : next,
@@ -176,9 +303,32 @@ export function Fretboard({
       activeIndex,
       availablePatterns,
       onPatternFollow,
+      trackScroll,
       viewportWidth,
     ],
   );
+  const onNeckScroll = useCallback(() => {
+    const el = viewport.current;
+    if (
+      el &&
+      el.clientWidth &&
+      el.scrollWidth &&
+      !wasHidden.current &&
+      Math.abs(el.clientWidth - viewportWidth) <= 1
+    )
+      trackScroll(el);
+    if (scrollFrame.current !== null) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      updateRange(true);
+    });
+  }, [trackScroll, updateRange, viewportWidth]);
+  useEffect(() => {
+    return () => {
+      if (scrollFrame.current !== null)
+        cancelAnimationFrame(scrollFrame.current);
+    };
+  }, []);
   const centerOn = useCallback(
     (fret: number) => {
       const el = viewport.current;
@@ -509,7 +659,7 @@ export function Fretboard({
           tabIndex={0}
           role="region"
           aria-label="Guitar neck, open strings through fret 24. Scroll horizontally or use the fret navigation controls."
-          onScroll={() => updateRange(true)}
+          onScroll={onNeckScroll}
           onKeyDown={(event) => {
             if (event.target === event.currentTarget) moveWithKey(event);
           }}
@@ -541,82 +691,20 @@ export function Fretboard({
             drag.current = null;
           }}
         >
-          <div
-            className="fret-position-row"
-            style={{
-              gridTemplateColumns: `repeat(25, ${columnWidth}px)`,
-              width: columnWidth * 25,
-            }}
-            role="group"
-            aria-label="Fret numbers"
-          >
-            {frets.map((fret) => (
-              <span
-                key={fret}
-                className={`fret-number ${pattern && fret >= pattern.min && fret <= pattern.max ? 'in-active-form' : ''} ${[3, 5, 7, 9, 12, 15, 17, 19, 21, 24].includes(fret) ? 'inlaid' : ''}`}
-              >
-                {fret === 0 ? 'OPEN' : fret}
-              </span>
-            ))}
-          </div>
-          <div
-            className="fret-grid"
-            style={{
-              gridTemplateColumns: `repeat(25, ${columnWidth}px)`,
-              width: columnWidth * 25,
-              minWidth: 0,
-            }}
-            role="img"
-            aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${noteDescription(n)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${noteDescription(note)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Active ${notes.length === 5 ? 2 : 3}-notes-per-string form starts on low E at fret ${pattern.start} and spans frets ${pattern.min} to ${pattern.max}. ${neighbor ? `Neighbor form starts at fret ${neighbor.start}; ${layers.shared.size} shared string and fret positions. ` : ''}All scale notes remain visible as context.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
-          >
-            {frets.map((fret) => (
-              <div
-                className={`fret-column ${fret === 0 ? 'open-string' : ''}`}
-                key={fret}
-              >
-                {[5, 4, 3, 2, 1, 0].map((string) => {
-                  const note = noteMap.get(mod(TUNING[string] + fret));
-                  const label = note
-                    ? pretty(degrees ? note.degree : readableNoteName(note))
-                    : '';
-                  const key = `${string}:${fret}`;
-                  const membership = layers.shared.has(key)
-                    ? 'shared'
-                    : layers.active.has(key)
-                      ? 'active'
-                      : layers.neighbor.has(key)
-                        ? 'neighbor'
-                        : 'context';
-                  const show =
-                    note &&
-                    (scope === 'scale' || !selected || selected.has(key));
-                  return (
-                    <div
-                      key={string}
-                      className={`string-cell string-${string}`}
-                    >
-                      <span className="string-line" />
-                      {show && (
-                        <span
-                          className={`note-dot ${connected ? `connection-${membership}` : ''} ${label.length > 3 ? 'wide-note' : ''} ${note.degree === '1' ? 'is-root' : ''} ${targets.includes(note.pc) ? 'is-target' : ''}`}
-                          title={`${noteDescription(note)} · ${pretty(note.degree)} · string ${6 - string}, fret ${fret}${connected ? ` · ${membership === 'shared' ? 'shared by active and neighboring forms' : membership === 'context' ? 'scale context' : `${membership} form`}` : ''}`}
-                        >
-                          {label}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-                <span className="inlay" aria-hidden="true">
-                  {[12, 24].includes(fret)
-                    ? '••'
-                    : [3, 5, 7, 9, 15, 17, 19, 21].includes(fret)
-                      ? '•'
-                      : ''}
-                </span>
-              </div>
-            ))}
-          </div>
+          <FretGrid
+            notes={notes}
+            columnWidth={columnWidth}
+            left={left}
+            degrees={degrees}
+            root={root}
+            voicing={voicing}
+            pattern={pattern}
+            layers={layers}
+            neighbor={neighbor}
+            scope={scope}
+            connected={connected}
+            targets={targets}
+          />
         </div>
       </div>
       <div className="instrument-dock">

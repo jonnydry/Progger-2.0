@@ -1,5 +1,12 @@
 'use client';
-import { useEffect, useLayoutEffect, useMemo, useState, useRef } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useRef,
+} from 'react';
 import { flushSync } from 'react-dom';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { PondScene } from '@/components/pond-scene';
@@ -198,36 +205,35 @@ export default function Home() {
     setLocalChoice(null);
     if (!nextPatterns.length) setView('map');
   }
-  function navigate(destination: string) {
+  const navigate = useCallback((destination: string) => {
     pendingMatchReturn.current = null;
     setPage(destination);
     location.hash = destination;
-  }
-  function openMatch(
-    candidate: Candidate,
-    chords: Chord[],
-    activeChordIndex?: number,
-  ) {
-    returnPoint.current = null;
-    const element = document.activeElement;
-    matchReturnPoint.current = {
-      element:
-        element instanceof HTMLElement && element.closest('.match-workspace')
-          ? element
-          : null,
-      scroll: window.scrollY,
-    };
-    setScaleRoot(candidate.root);
-    setScaleId(candidate.scale.id);
-    setKind('scales');
-    setPosition(0);
-    setView('map');
-    setContext(chords);
-    setActiveChord(activeChordIndex ?? 0);
-    setLocalChoice(activeChordIndex ?? null);
-    navigate('explore');
-    document.getElementById('main-content')?.focus();
-  }
+  }, []);
+  const openMatch = useCallback(
+    (candidate: Candidate, chords: Chord[], activeChordIndex?: number) => {
+      returnPoint.current = null;
+      const element = document.activeElement;
+      matchReturnPoint.current = {
+        element:
+          element instanceof HTMLElement && element.closest('.match-workspace')
+            ? element
+            : null,
+        scroll: window.scrollY,
+      };
+      setScaleRoot(candidate.root);
+      setScaleId(candidate.scale.id);
+      setKind('scales');
+      setPosition(0);
+      setView('map');
+      setContext(chords);
+      setActiveChord(activeChordIndex ?? 0);
+      setLocalChoice(activeChordIndex ?? null);
+      navigate('explore');
+      document.getElementById('main-content')?.focus();
+    },
+    [navigate],
+  );
   function returnToMatch() {
     pendingMatchReturn.current = matchReturnPoint.current ?? {
       element: null,
