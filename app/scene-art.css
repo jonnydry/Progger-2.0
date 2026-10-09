@@ -64,7 +64,7 @@ html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     /* Same vertical crop as the 460px-wide phone scene, drawn smaller so the
        header band is shorter and the character stays in frame. */
     top: 82px;
-    height: 36.25vw;
+    height: min(168px, 36.25vw);
     background-size: 100% auto;
     background-position: 79% 20%;
     mask-image: linear-gradient(transparent, black 14%, black 85%, transparent);
