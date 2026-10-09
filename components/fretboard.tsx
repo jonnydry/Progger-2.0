@@ -395,8 +395,9 @@ export function Fretboard({
       if (reading.scope === 'scale')
         reading.onNeckProgress?.(viewProgress.current);
     }
-    // The slider commits in the input event. Skip the frame that scroll would
-    // queue for that same move.
+    // The slider commits in the input event. scrollTo updates scrollLeft
+    // immediately, then Chrome fires this scroll after that handler returns
+    // and before the next frame. Skip queueing a second updateRange for it.
     if (sliderCommit.current) {
       sliderCommit.current = false;
       return;
@@ -854,17 +855,20 @@ export function Fretboard({
                   const el = viewport.current;
                   if (!el) return;
                   programmaticScroll.current = null;
+                  // Stay set until the scroll event that scrollTo queues, which
+                  // arrives after this handler. The frame below clears it when
+                  // that event never comes, so the next pan is not swallowed.
                   sliderCommit.current = true;
                   el.scrollTo({
                     left: Number(event.target.value) * columnWidth,
                     behavior: 'instant',
                   });
                   // The slider is controlled. Commit its fret in this event so
-                  // the thumb is not restored to the previous frame. scrollTo
-                  // consumes the flag when it fires, so this input does not
-                  // also queue updateRange.
+                  // the thumb is not restored to the previous frame.
                   updateRange(true);
-                  sliderCommit.current = false;
+                  requestAnimationFrame(() => {
+                    sliderCommit.current = false;
+                  });
                 }}
               />
             </label>
