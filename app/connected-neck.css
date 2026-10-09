@@ -243,6 +243,42 @@ html
   font-size: 10px;
   margin-top: 10px;
 }
+@media (max-width: 500px) {
+  /* Paint the fretboard above the form controls before hydration, and keep
+     the fret transport directly under the neck. */
+  .neck {
+    display: flex;
+    flex-direction: column;
+  }
+  .neck > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .neck > .instrument-dock.practice-controls {
+    order: 0;
+  }
+  .neck > .neck-meta {
+    order: 1;
+  }
+  .neck > .neck-frame {
+    order: 2;
+  }
+  .neck > .instrument-dock:not(.practice-controls) {
+    order: 3;
+  }
+  .neck > .connection-controls {
+    order: 4;
+  }
+  .neck > .connection-caption {
+    order: 5;
+  }
+  .neck > .neck-overview {
+    order: 6;
+  }
+  .neck > .pattern-details {
+    order: 7;
+  }
+}
 @media (max-width: 600px) {
   .connection-controls {
     gap: 10px;

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { QUALITIES, voicings, type Voicing } from '../lib/harmony.ts';
 import {
   browseVoicings,
+  matchingShapesLabel,
+  matchingVoicingIndex,
   stringSetLabel,
   voicingStringSet,
 } from '../lib/voicing-navigation.ts';
@@ -141,6 +143,86 @@ void test('an impossible bass and string intersection stays empty until filters 
     reset.map(({ voicing }) => voicing),
     source,
   );
+});
+
+void test('filters and catalog changes jump to the first matching shape', () => {
+  const major = catalog('major');
+  const strings = voicingStringSet(major[0]);
+  const outside = major.findIndex(
+    (voicing) => voicingStringSet(voicing) !== strings,
+  );
+  const later = major.findIndex(
+    (voicing, index) => index > 0 && voicingStringSet(voicing) === strings,
+  );
+  assert.ok(outside > 0 && later > 0);
+  assert.equal(
+    matchingVoicingIndex(
+      major,
+      { bass: 'all', strings, nearFret: null },
+      outside,
+    ),
+    0,
+  );
+  assert.equal(
+    matchingVoicingIndex(
+      major,
+      { bass: 'all', strings, nearFret: null },
+      later,
+    ),
+    later,
+  );
+  const nearest = browseVoicings(major, {
+    bass: 'all',
+    strings,
+    nearFret: 15,
+  })[0];
+  assert.notEqual(nearest.originalIndex, 0);
+  assert.ok(nearest.voicing.max >= 12);
+  assert.equal(
+    matchingVoicingIndex(
+      major,
+      { bass: 'all', strings, nearFret: 15 },
+      outside,
+    ),
+    nearest.originalIndex,
+  );
+  assert.equal(
+    matchingVoicingIndex(major, { bass: 'all', strings, nearFret: 15 }, 0),
+    0,
+  );
+  assert.equal(
+    matchingVoicingIndex(
+      major,
+      { bass: 'all', strings: '0,5', nearFret: null },
+      outside,
+    ),
+    outside,
+  );
+
+  const minor = catalog('minor');
+  const retained = voicingStringSet(minor[1]);
+  assert.notEqual(retained, voicingStringSet(minor[0]));
+  const firstRetained = minor.findIndex(
+    (voicing) => voicingStringSet(voicing) === retained,
+  );
+  assert.equal(
+    matchingVoicingIndex(
+      minor,
+      { bass: 'all', strings: retained, nearFret: null },
+      0,
+    ),
+    firstRetained,
+  );
+  assert.equal(
+    matchingVoicingIndex(
+      major,
+      { bass: 'all', strings: 'all', nearFret: null },
+      outside,
+    ),
+    outside,
+  );
+  assert.equal(matchingShapesLabel(1), '1 matching shape');
+  assert.equal(matchingShapesLabel(4), '4 matching shapes');
 });
 
 void test('a ringing open string does not misclassify a high-position grip as near the nut', () => {
