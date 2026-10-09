@@ -2,7 +2,7 @@
 
 Historical record of the first expansion. The later [advanced-chord expansion](advanced-chords.md) adds 11ths, 13ths, altered tensions and explicitly labeled reduced/rootless ninth shapes, superseding the coverage limits below.
 
-The chord reference keeps a single playable shape on the full 0–24 neck. Bass-note buttons filter the library, Previous/Next moves through the filtered shapes, and Browse exposes the full filtered list. Selecting a list item collapses it and returns keyboard focus to its summary. Root and quality changes reset the filter; switching to Any preserves the current shape.
+The chord reference keeps a single playable shape on the full 0–24 neck. Bass-note buttons filter the library, Previous/Next moves through the filtered shapes, and Browse exposes the full filtered list. Selecting a list item collapses it and returns keyboard focus to its summary. String-set and bass filters keep the current shape when it still matches. Root, quality, and the Chords tab restart at the first matching shape.
 
 Each voicing carries its sounding bass, correctly spelled as a chord member. Bass means the lowest absolute pitch, not the lowest fret or the first displayed string. Conventional triads and seventh chords have numbered inversion labels; suspended and extended structures use plain bass-degree descriptions where an inversion ordinal would be misleading. Chord previews opened from a slash-chord context select the requested bass when a complete shape exists.
 
