@@ -48,6 +48,10 @@ const scenes = readFileSync(
   new URL('../app/scene-palettes.css', import.meta.url),
   'utf8',
 );
+const welcome = readFileSync(
+  new URL('../app/match-welcome.css', import.meta.url),
+  'utf8',
+);
 
 function normalize(value: string) {
   return value.replace(/\s+/g, ' ').trim();
@@ -218,15 +222,29 @@ void test('the progression placeholder stays an example and clears every scene f
     scenes,
     `${sceneWater} .reference-water`,
   );
+  const pondNightInk = decl(night, nightPlaceholder, 'color');
+  const pondNightRest = decl(
+    welcome,
+    '.night-swim .progression-entry textarea',
+    'background',
+  );
+  const pondNightFocus = decl(
+    night,
+    '.night-swim .chord-entry textarea:focus',
+    'background',
+  );
+  assert.equal(concrete(pondNightRest, pondNight), '#050c18');
+  assert.equal(concrete(pondNightFocus, pondNight), '#10232d');
   const pairs: [string, string, string, Record<string, string>][] = [
-    ['pond night', decl(night, nightPlaceholder, 'color'), decl(night, nightField, 'background'), pondNight],
+    ['pond night', pondNightInk, pondNightRest, pondNight],
+    ['pond night focus', pondNightInk, pondNightFocus, pondNight],
     ['pond day', decl(day, dayPlaceholder, 'color'), decl(day, dayField, 'background'), pondDay],
     ['tidepool night', decl(scenes, scenePlaceholder, 'color'), decl(scenes, sceneField, 'background'), tidepoolNight],
     ['tidepool day', decl(scenes, scenePlaceholder, 'color'), decl(scenes, sceneField, 'background'), tidepoolDay],
     ['twilight night', decl(scenes, scenePlaceholder, 'color'), decl(scenes, sceneField, 'background'), twilightNight],
     ['twilight day', decl(scenes, scenePlaceholder, 'color'), decl(scenes, sceneField, 'background'), twilightDay],
   ];
-  assert.equal(pairs.length, 6);
+  assert.equal(pairs.length, 7);
   for (const [name, inkValue, fieldValue, scope] of pairs) {
     const ink = concrete(inkValue, scope);
     const field = concrete(fieldValue, scope);
