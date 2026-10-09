@@ -187,6 +187,12 @@ void test('a space before a chord-word number matches the unspaced symbol', () =
   assert.ok(searchGroupedQualities('dominant 7').includes('7'));
   assert.ok(searchGroupedQualities('major 7').includes('maj7'));
   assert.equal(searchGroupedQualities('major 7').includes('dim'), false);
+  // A space before a digit stays a word search when the compacted token is
+  // not itself a symbol or a parseable chord.
+  assert.ok(searchGroupedQualities('7 9').includes('7b9'));
+  assert.ok(searchGroupedQualities('7 9').includes('7#9'));
+  assert.ok(searchGroupedQualities('maj 6').includes('6'));
+  assert.ok(searchGroupedQualities('9 11').includes('9#11'));
 });
 
 void test('descriptions show engine symbols without changing values or labels', () => {

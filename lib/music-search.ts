@@ -119,7 +119,15 @@ function collapseSpaceBeforeNumber(query: string): string | null {
   if (!/\s+\d/.test(trimmed)) return null;
   const collapsed = trimmed.replace(/\s+(?=\d)/g, '');
   if (collapsed === trimmed) return null;
-  if (qualitySymbolQuery(collapsed) !== null) return collapsed;
+  // A leading digit makes qualitySymbolQuery return a prefix, including tokens
+  // such as "79" that match no symbol. Collapse only when some quality symbol
+  // actually starts with that prefix, or the compacted chord parses.
+  const symbol = qualitySymbolQuery(collapsed);
+  if (
+    symbol !== null &&
+    QUALITIES.some((item) => (item.symbol || 'maj').startsWith(symbol))
+  )
+    return collapsed;
   const chordQuery = chordLikeQuery(collapsed);
   if (chordQuery === null) return null;
   try {
