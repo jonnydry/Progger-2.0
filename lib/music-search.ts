@@ -75,32 +75,11 @@ export function musicChoiceDescription(
     : undefined;
 }
 
-/** Search only supplied choices; unsupported chords stay absent. */
-export function matchesMusicChoice(
+function matchesChoiceText(
   choice: MusicChoice,
   query: string,
   kind?: MusicSearchKind,
 ): boolean {
-  if (!query.trim()) return true;
-  if (kind === 'quality') {
-    // Parse a complete full symbol before using its quality, so C7alt cannot
-    // silently become C7. This picker changes the quality, never the root.
-    if (
-      /^[A-Ga-g][#♯b♭]{0,2}(?:maj|min|m|M|\d|[Δø°+−/-]|sus|add|dim|aug|$)/.test(
-        query.trim(),
-      )
-    ) {
-      try {
-        return parseChord(query.trim()).quality.id === choice.value;
-      } catch {
-        return false;
-      }
-    }
-    const symbolQuery = qualitySymbolQuery(query);
-    const quality = QUALITIES.find((item) => item.id === choice.value);
-    if (symbolQuery !== null && quality)
-      return (quality.symbol || 'maj').startsWith(symbolQuery);
-  }
   const terms = normalizeWords(query).split(' ');
   const searchable = [
     choice.label,
@@ -111,4 +90,42 @@ export function matchesMusicChoice(
     ...(kind === 'scale' ? (scaleAliases[choice.value] ?? []) : []),
   ].map(normalizeWords);
   return searchable.some((text) => terms.every((term) => text.includes(term)));
+}
+
+/** Search only supplied choices; unsupported chords stay absent. */
+export function matchesMusicChoice(
+  choice: MusicChoice,
+  query: string,
+  kind?: MusicSearchKind,
+): boolean {
+  if (!query.trim()) return true;
+  if (kind === 'quality') {
+    // Parse a complete full symbol before using its quality, so C7alt cannot
+    // silently become C7. This picker changes the quality, never the root.
+    // "o" and "(" are whole suffixes only, so "Dom" stays a name search.
+    // "Do" is D diminished and also how "dominant" begins.
+    const trimmed = query.trim();
+    if (
+      /^[A-Ga-g][#♯b♭]{0,2}(?:maj|min|m|M|\d|[Δø°+−/-]|sus|add|dim|aug|$)/.test(
+        trimmed,
+      ) ||
+      /^[A-Ga-g][#♯b♭]{0,2}(?:o7?|\([^)]*\))(?:\/[A-Ga-g][#♯b♭]{0,2})?$/.test(
+        trimmed,
+      )
+    ) {
+      try {
+        const parsed = parseChord(trimmed).quality.id === choice.value;
+        // "co" is inside the group name "Core chords", so only the dominant prefix keeps both.
+        if (!/^do$/i.test(trimmed)) return parsed;
+        return parsed || matchesChoiceText(choice, trimmed, kind);
+      } catch {
+        return false;
+      }
+    }
+    const symbolQuery = qualitySymbolQuery(query);
+    const quality = QUALITIES.find((item) => item.id === choice.value);
+    if (symbolQuery !== null && quality)
+      return (quality.symbol || 'maj').startsWith(symbolQuery);
+  }
+  return matchesChoiceText(choice, query, kind);
 }
