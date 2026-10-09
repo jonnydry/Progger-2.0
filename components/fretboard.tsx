@@ -22,6 +22,7 @@ import { MusicSelect } from '@/components/music-select';
 import { mod, pretty, TUNING, type Note, type Pattern } from '@/lib/music';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import {
+  formAtProgress,
   formAtViewport,
   formLayers,
   scrollToForm,
@@ -523,7 +524,28 @@ export function Fretboard({
       if (scope === 'scale') restoreProgress(viewProgress.current);
       else centerOn(viewCenter.current);
     }
-    followingPattern.current = null;
+    // A scroll frame can no-op once Match hides the neck. Catch the form up
+    // to the progress already on screen without recentering that view.
+    const revealing =
+      wasHidden.current &&
+      initialized.current &&
+      !returning &&
+      before.left === left &&
+      !(changed && (pattern || voicing));
+    let caughtUp: Pattern | undefined;
+    if (revealing && scope === 'scale' && onPatternFollow) {
+      const index = formAtProgress(
+        availablePatterns,
+        viewProgress.current,
+        activeIndex,
+      );
+      const next = availablePatterns[index];
+      if (index >= 0 && index !== activeIndex && next) {
+        caughtUp = next;
+        onPatternFollow(index);
+      }
+    }
+    followingPattern.current = caughtUp ?? null;
     previous.current = {
       left,
       scope,
@@ -547,6 +569,8 @@ export function Fretboard({
     restoreProgress,
     activeIndex,
     updateRange,
+    availablePatterns,
+    onPatternFollow,
   ]);
   const maxScrollFret = Math.max(0, 25 - viewportWidth / columnWidth);
   const moveWithKey = (event: KeyboardEvent<HTMLElement>) => {
