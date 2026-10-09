@@ -805,9 +805,33 @@
     margin: 8px 0 0;
     gap: 24px;
   }
+  .night-swim .brand {
+    min-height: 44px;
+  }
   .night-swim .reference-tabs button {
+    min-width: 44px;
     min-height: 44px;
     font-size: 10px;
+  }
+  .night-swim .selection-bar .root-select .music-select-trigger {
+    min-width: 44px;
+  }
+  .neck-slider {
+    height: 44px;
+  }
+  .neck-slider input {
+    height: 44px;
+  }
+  .neck-slider input::-webkit-slider-thumb {
+    width: 44px;
+    height: 44px;
+    margin-top: -20.5px;
+    border-radius: 6px;
+  }
+  .neck-slider input::-moz-range-thumb {
+    width: 44px;
+    height: 44px;
+    border-radius: 6px;
   }
   .night-swim .selection-overview {
     padding: 4px 0 24px;

@@ -73,6 +73,87 @@
 .night-swim.practice-view .match-workspace {
   margin-top: 12px;
 }
+/* Artwork is hidden here, so neck marks clear the flat neck in that scene's
+   own ink. Pond keeps its tuned wood colours. Tidepool and Twilight use their
+   string, quiet, and green tokens, which stay at or above 3:1. */
+html[data-scene='pond'] .night-swim.practice-view .string-line {
+  background: #b7ad96;
+}
+html[data-scene='pond'] .night-swim.practice-view .string-cell {
+  border-right-color: #7d806e;
+}
+html[data-scene='pond'] .night-swim.practice-view .open-string .string-cell {
+  border-right-color: #c2c7b6;
+}
+html[data-scene='pond']
+  .night-swim.practice-view
+  .connected-neck
+  .fret-grid
+  .note-dot.connection-context:not(.is-root) {
+  border-color: #8d9aaa;
+}
+html[data-scene='pond'][data-theme='day']
+  .night-swim.practice-view
+  .string-line {
+  background: #4d5c46;
+}
+html[data-scene='pond'][data-theme='day']
+  .night-swim.practice-view
+  .string-cell {
+  border-right-color: #4d5c46;
+}
+html[data-scene='pond'][data-theme='day']
+  .night-swim.practice-view
+  .open-string
+  .string-cell {
+  border-right-color: var(--green);
+}
+html[data-scene='pond'][data-theme='day']
+  .night-swim.practice-view
+  .connected-neck
+  .fret-grid
+  .note-dot.connection-context:not(.is-root) {
+  border-color: #4d5c46;
+}
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim.practice-view
+  .string-line {
+  background: var(--scene-string);
+}
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim.practice-view
+  .string-cell {
+  border-right-color: var(--scene-string);
+}
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim.practice-view
+  .open-string
+  .string-cell {
+  border-right-color: var(--green);
+}
+html:is([data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim.practice-view
+  .connected-neck
+  .fret-grid
+  .note-dot.connection-context:not(.is-root) {
+  border-color: var(--quiet);
+}
+html:is([data-scene='tidepool'], [data-scene='twilight'])[data-theme='day']
+  .night-swim.practice-view
+  .string-line {
+  background: var(--quiet);
+}
+html:is([data-scene='tidepool'], [data-scene='twilight'])[data-theme='day']
+  .night-swim.practice-view
+  .string-cell {
+  border-right-color: var(--quiet);
+}
+html:is([data-scene='tidepool'], [data-scene='twilight'])[data-theme='day']
+  .night-swim.practice-view
+  .open-string
+  .string-cell {
+  border-right-color: var(--green);
+}
 .local-choice-note {
   flex-basis: 100%;
   text-align: center;

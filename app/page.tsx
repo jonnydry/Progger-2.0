@@ -27,9 +27,13 @@ import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
 import { NeckDisplay } from '@/components/neck-display';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
+import { scaleReturnFocusId } from '@/lib/explore-focus';
 import { nearestPatternIndex } from '@/lib/practice-position';
-import { nearestConnectedForm } from '@/lib/connected-neck';
-import { matchingVoicingIndex } from '@/lib/voicing-navigation';
+import { connectedFormForScale } from '@/lib/connected-neck';
+import {
+  matchingVoicingIndex,
+  voicingIndexForChange,
+} from '@/lib/voicing-navigation';
 import {
   SCALES,
   ROOTS,
@@ -178,7 +182,11 @@ export default function Home() {
           setPage('explore');
           setView('map');
           setPosition(
-            nearestConnectedForm(patterns(nextNotes), neckProgress.current),
+            connectedFormForScale(
+              chosenRoot,
+              selected.formula,
+              neckProgress.current,
+            ),
           );
           setContext([]);
         });
@@ -205,10 +213,11 @@ export default function Home() {
     setVoicingBass('all');
     if (kind === 'chords') {
       setVoicingIndex(
-        matchingVoicingIndex(
+        voicingIndexForChange(
           voicings(rootValue, quality),
           { bass: 'all', strings: voicingStrings, nearFret: voicingNearFret },
-          0,
+          voicingIndex,
+          'root',
         ),
       );
       return;
@@ -246,8 +255,9 @@ export default function Home() {
     setScaleId(candidate.scale.id);
     setKind('scales');
     setPosition(
-      nearestConnectedForm(
-        patterns(spell(candidate.root, candidate.scale.formula)),
+      connectedFormForScale(
+        candidate.root,
+        candidate.scale.formula,
         neckProgress.current,
       ),
     );
@@ -307,15 +317,16 @@ export default function Home() {
         ?.scrollIntoView({ block: 'start' });
     });
   }
-  function returnToScale() {
+  function returnToScale(event?: { currentTarget: HTMLElement }) {
     if (kind === 'scales') return;
+    const sourceId = event?.currentTarget.id;
     setKind('scales');
     const point = returnPoint.current;
     returnPoint.current = null;
+    const focusId = scaleReturnFocusId(point, sourceId);
+    if (!focusId) return;
     requestAnimationFrame(() => {
-      document
-        .getElementById(point?.id || 'main-content')
-        ?.focus({ preventScroll: true });
+      document.getElementById(focusId)?.focus({ preventScroll: true });
       if (point) window.scrollTo({ top: point.scroll, behavior: 'instant' });
     });
   }
@@ -405,7 +416,7 @@ export default function Home() {
       onStringsChange={(nextStrings) => {
         setVoicingStrings(nextStrings);
         setVoicingIndex(
-          matchingVoicingIndex(
+          voicingIndexForChange(
             chordVoicings,
             {
               bass: voicingBass,
@@ -413,16 +424,18 @@ export default function Home() {
               nearFret: voicingNearFret,
             },
             voicingIndex,
+            'strings',
           ),
         );
       }}
       onBassChange={(bass) => {
         setVoicingBass(bass);
         setVoicingIndex(
-          matchingVoicingIndex(
+          voicingIndexForChange(
             chordVoicings,
             { bass, strings: voicingStrings, nearFret: voicingNearFret },
             voicingIndex,
+            'bass',
           ),
         );
       }}
@@ -436,7 +449,9 @@ export default function Home() {
     />
   );
   return (
-    <div className={`app-shell night-swim ${practice ? 'practice-view' : ''}`}>
+    <div
+      className={`app-shell night-swim ${page === 'explore' && practice ? 'practice-view' : ''}`}
+    >
       <header className="site-header">
         <PondScene />
         <a
@@ -471,7 +486,7 @@ export default function Home() {
             ? 'Match your chords'
             : `${pretty(root)} ${title} guitar reference`}
         </h1>
-        <div className="workspace-tools">
+        <div className="workspace-tools" hidden={page !== 'explore'}>
           <button
             className="practice-toggle"
             aria-pressed={practice}
@@ -524,6 +539,7 @@ export default function Home() {
                 aria-label="Reference type"
               >
                 <button
+                  id="scales-reference-tab"
                   aria-pressed={kind === 'scales'}
                   onClick={returnToScale}
                 >
@@ -537,14 +553,15 @@ export default function Home() {
                     returnPoint.current = null;
                     setVoicingBass('all');
                     setVoicingIndex(
-                      matchingVoicingIndex(
+                      voicingIndexForChange(
                         voicings(chordRoot, quality),
                         {
                           bass: 'all',
                           strings: voicingStrings,
                           nearFret: voicingNearFret,
                         },
-                        0,
+                        voicingIndex,
+                        'chord-tab',
                       ),
                     );
                     setChordView('shape');
@@ -596,14 +613,15 @@ export default function Home() {
                           setQualityId(value);
                           setVoicingBass('all');
                           setVoicingIndex(
-                            matchingVoicingIndex(
+                            voicingIndexForChange(
                               voicings(root, nextQuality),
                               {
                                 bass: 'all',
                                 strings: voicingStrings,
                                 nearFret: voicingNearFret,
                               },
-                              0,
+                              voicingIndex,
+                              'quality',
                             ),
                           );
                         }

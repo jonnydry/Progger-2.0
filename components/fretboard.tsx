@@ -30,16 +30,48 @@ import { NeckOverview } from '@/components/neck-overview';
 
 const PHONE_NECK_QUERY = '(max-width: 500px)';
 
-function usePhoneNeck() {
+function focusedNeckControlId(root: HTMLElement | null): string | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root) return null;
+  const moving = active.closest('.connection-controls');
+  if (moving && root.contains(moving)) {
+    if (active.id) return active.id;
+    const owned = active.closest<HTMLElement>('[id]');
+    return owned && moving.contains(owned) ? owned.id : null;
+  }
+  const trigger = root.querySelector<HTMLElement>(
+    '.connection-controls [aria-expanded="true"][id]',
+  );
+  const popupId = trigger?.getAttribute('aria-controls');
+  const popup = popupId ? document.getElementById(popupId) : null;
+  if (trigger && popup && !root.contains(popup) && popup.contains(active))
+    return trigger.id;
+  return null;
+}
+
+function usePhoneNeck(rememberFocus: () => string | null) {
   const [phone, setPhone] = useState(false);
+  const pendingFocusId = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const id = pendingFocusId.current;
+    if (!id) return;
+    pendingFocusId.current = null;
+    const next = document.getElementById(id);
+    if (next instanceof HTMLElement && document.activeElement !== next)
+      next.focus({ preventScroll: true });
+  }, [phone]);
   useLayoutEffect(() => {
     if (typeof matchMedia !== 'function') return;
     const media = matchMedia(PHONE_NECK_QUERY);
-    const sync = () => setPhone(media.matches);
+    const sync = () => {
+      const id = rememberFocus();
+      if (id) pendingFocusId.current = id;
+      setPhone(media.matches);
+    };
     sync();
     media.addEventListener('change', sync);
     return () => media.removeEventListener('change', sync);
-  }, []);
+  }, [rememberFocus]);
   return phone;
 }
 
@@ -375,7 +407,12 @@ export function Fretboard({
     centerForm(index);
     onPatternSelect?.(index);
   };
-  const phoneNeck = usePhoneNeck();
+  const neckSection = useRef<HTMLElement>(null);
+  const rememberNeckFocus = useCallback(
+    () => focusedNeckControlId(neckSection.current),
+    [],
+  );
+  const phoneNeck = usePhoneNeck(rememberNeckFocus);
   const scaleForm = (
     <>
       {scope === 'scale' && (
@@ -433,6 +470,7 @@ export function Fretboard({
             />
           </label>
           <button
+            id={`${titleId}-overview-toggle`}
             className="overview-toggle"
             aria-expanded={overview}
             aria-controls={`${titleId}-overview`}
@@ -485,6 +523,7 @@ export function Fretboard({
 
   return (
     <section
+      ref={neckSection}
       className={`neck ${connected ? 'connected-neck' : ''} ${focused ? 'focused-neck' : ''} ${voicing ? 'voicing-neck' : ''} ${left ? 'left-handed-neck' : ''}`}
       aria-labelledby={titleId}
     >

@@ -145,7 +145,7 @@ void test('an impossible bass and string intersection stays empty until filters 
   );
 });
 
-void test('filters and catalog changes jump to the first matching shape', () => {
+void test('a supplied index stays only when that shape still matches', () => {
   const major = catalog('major');
   const strings = voicingStringSet(major[0]);
   const outside = major.findIndex(

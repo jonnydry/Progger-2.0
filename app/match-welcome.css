@@ -356,6 +356,9 @@
 .match-results .result-empty p {
   margin: 0;
 }
+.match-results .color-options.color-lead {
+  margin-top: 0;
+}
 .match-results .color-options article {
   padding: 18px 20px;
   border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--border));

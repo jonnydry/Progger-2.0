@@ -1,4 +1,4 @@
-import type { Pattern } from './music.ts';
+import { patterns, spell, type Pattern } from './music.ts';
 
 /** Follow the musical center of the view without flickering at form boundaries. */
 export function formAtFret(
@@ -40,6 +40,17 @@ export function nearestConnectedForm(
 ): number {
   const index = formAtProgress(forms, progress, -1);
   return index < 0 ? 0 : index;
+}
+
+export function connectedFormForScale(
+  root: string,
+  formula: readonly string[],
+  neckProgress: number,
+): number {
+  return nearestConnectedForm(
+    patterns(spell(root, [...formula])),
+    neckProgress,
+  );
 }
 
 /** Spread the form centers over the available travel, including both end forms.

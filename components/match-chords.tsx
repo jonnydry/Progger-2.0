@@ -4,6 +4,7 @@ import { ArrowRight, Music2 } from 'lucide-react';
 import { MatchEntry } from '@/components/match-entry';
 import { NoteSpelling } from '@/components/note-spelling';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
+import { matchLead } from '@/lib/match-presentation';
 import { comparePalette } from '@/lib/palette-comparison';
 import './match-comparison.css';
 import { SCALES, pretty } from '@/lib/music';
@@ -47,6 +48,7 @@ export function MatchChords({
     [parsed],
   );
   const valid = parsed.errors.length === 0;
+  const lead = matchLead(groups.length, colors.length);
   const comparisonReference = groups[0]?.candidates[0];
   const setProgression = (value: string) => {
     setText(value);
@@ -273,21 +275,19 @@ export function MatchChords({
                 {parsed.chords.map((chord) => pretty(chord.symbol)).join(' → ')}
               </span>
             </div>
-            {groups.length > 0 ? (
-              <>
-                <div className="match-grid">
-                  {(showAll ? groups : groups.slice(0, 3)).map(renderGroup)}
-                </div>
-              </>
-            ) : (
+            {lead === 'shared' && (
+              <div className="match-grid">
+                {(showAll ? groups : groups.slice(0, 3)).map(renderGroup)}
+              </div>
+            )}
+            {lead === 'local' && (
               <div className="result-empty">
                 <Music2 size={24} aria-hidden="true" />
                 <h3>Let the notes move with the chords.</h3>
                 <p>
                   These chords reach beyond a single scale in our catalog.
-                  {colors.length > 0
-                    ? ' Try a color below, or explore the individual chords using their notes as landing points.'
-                    : ' Explore the individual chords below, using their notes as landing points.'}
+                  Explore the individual chords below, using their notes as
+                  landing points.
                 </p>
               </div>
             )}
@@ -302,9 +302,11 @@ export function MatchChords({
               </button>
             )}
             {colors.length > 0 && (
-              <section className="color-options">
+              <section
+                className={`color-options${lead === 'color' ? ' color-lead' : ''}`}
+              >
                 <h3>
-                  {groups.length
+                  {lead === 'shared'
                     ? 'A little more color'
                     : 'A sound to try across your chords'}
                 </h3>
