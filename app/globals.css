@@ -999,11 +999,6 @@ footer {
   min-height: 88px;
   color: var(--foreground);
 }
-.chord-entry textarea::placeholder {
-  /* Half the ink of typed chords, so the example cannot be read as a value. */
-  color: color-mix(in srgb, var(--foreground) 52%, var(--background));
-  opacity: 1;
-}
 .chord-entry textarea[aria-invalid='true'] {
   border-color: #e8a084;
 }

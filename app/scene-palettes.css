@@ -565,7 +565,7 @@ html:is([data-scene='tidepool'], [data-scene='twilight'])
   .night-swim
   .chord-entry
   textarea::placeholder {
-  color: color-mix(in srgb, var(--foreground) 52%, var(--background));
+  color: var(--quiet);
   opacity: 1;
 }
 
