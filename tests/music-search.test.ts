@@ -4,8 +4,11 @@ import { qualityGroup } from '../lib/chord-presentation.ts';
 import { QUALITIES } from '../lib/harmony.ts';
 import { SCALES } from '../lib/music.ts';
 import {
+  clearQualityHitCache,
   matchesMusicChoice,
   musicChoiceDescription,
+  qualityHitCacheLimit,
+  qualityHitCacheSize,
 } from '../lib/music-search.ts';
 
 const scales = SCALES.map((scale) => ({
@@ -244,6 +247,56 @@ void test('a space before a number fills only an empty chord search, except do 7
   assert.ok(searchGroupedQualities('7 9').includes('7#9'));
   assert.ok(searchGroupedQualities('maj 6').includes('6'));
   assert.ok(searchGroupedQualities('9 11').includes('9#11'));
+});
+
+void test('quality hit cache stays bounded and still matches after eviction', () => {
+  clearQualityHitCache();
+  const probes = [
+    'C 7',
+    'maj 7',
+    'do 7',
+    'Co 7',
+    'co 7',
+    'a 7',
+    'dim 7',
+    'sus 4',
+    'Ab 7',
+    'min 7',
+    'major 7',
+    'do 13',
+  ];
+  const grouped = probes.map((query) => searchGroupedQualities(query));
+  const plain = probes.map((query) => searchQualities(query));
+  clearQualityHitCache();
+
+  for (let spaces = 1; spaces <= qualityHitCacheLimit + 1; spaces += 1) {
+    searchGroupedQualities(`C${' '.repeat(spaces)}7`);
+    assert.ok(
+      qualityHitCacheSize() <= qualityHitCacheLimit,
+      `cache grew to ${qualityHitCacheSize()}`,
+    );
+  }
+  // Clear-when-full drops every entry once the cap is reached, then stores the miss.
+  assert.equal(qualityHitCacheSize(), 1);
+
+  const evicted = 'C 7';
+  assert.deepEqual(
+    searchGroupedQualities(evicted),
+    searchGroupedQualities('C7'),
+  );
+  assert.equal(qualityHitCacheSize(), 2);
+  const retained = `C${' '.repeat(qualityHitCacheLimit + 1)}7`;
+  searchGroupedQualities(retained);
+  assert.equal(qualityHitCacheSize(), 2);
+  assert.deepEqual(
+    searchGroupedQualities(retained),
+    searchGroupedQualities('C7'),
+  );
+
+  probes.forEach((query, index) => {
+    assert.deepEqual(searchGroupedQualities(query), grouped[index], query);
+    assert.deepEqual(searchQualities(query), plain[index], query);
+  });
 });
 
 void test('descriptions show engine symbols without changing values or labels', () => {

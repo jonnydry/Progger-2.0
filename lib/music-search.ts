@@ -119,7 +119,7 @@ function isSpacedDo7(query: string): boolean {
   return /^do\s+7$/i.test(query.trim());
 }
 
-/** `do 7` is the same chord word as `do7` when that compacted token already parses. */
+/** Space before a number collapses only as a fallback when the original query finds nothing, plus the `do 7` family. */
 function collapseSpaceBeforeNumber(query: string): string | null {
   const trimmed = query.trim();
   if (!/\s+\d/.test(trimmed)) return null;
@@ -149,7 +149,17 @@ const groupedQualityChoices: MusicChoice[] = QUALITIES.map((quality) => ({
   label: quality.name,
   group: qualityGroup(quality),
 }));
+// A hit is a pure function of the query, so dropping a full map only recomputes it.
+export const qualityHitCacheLimit = 256;
 const qualityHitCache = new Map<string, boolean>();
+
+export function qualityHitCacheSize(): number {
+  return qualityHitCache.size;
+}
+
+export function clearQualityHitCache(): void {
+  qualityHitCache.clear();
+}
 
 /** The quality branch as it stood before a spaced number is collapsed. */
 function matchesQualityDirect(choice: MusicChoice, query: string): boolean {
@@ -180,6 +190,7 @@ function qualityQueryHits(query: string): boolean {
   const hit = groupedQualityChoices.some((item) =>
     matchesQualityDirect(item, query),
   );
+  if (qualityHitCache.size >= qualityHitCacheLimit) qualityHitCache.clear();
   qualityHitCache.set(query, hit);
   return hit;
 }
