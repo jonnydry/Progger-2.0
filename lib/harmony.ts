@@ -37,18 +37,45 @@ export const QUALITIES: Quality[] = [
 export const MAX_PROGRESSION_LENGTH = 2048;
 export const MAX_CHORD_TOKEN_LENGTH = 32;
 export type Chord = { original: string; root: string; quality: Quality; bass?: string; notes: Note[]; pcs: number[]; symbol: string };
+// Spellings below name a quality that already exists. A leading hyphen, "mi",
+// or "min" is minor; it is not a flat sign. Flat accidentals stay on the root.
+// A later hyphen is flat only for alterations the catalog already has.
+// Bare "sus" is suspended 4. "maj6" is major 6. Parenthetical b5 is half-diminished only.
+function canonicalQualitySuffix(suffix: string): string {
+ let text = suffix
+  .replace(/^major(?=\d|\(|$)/i, 'maj')
+  .replace(/^MAJ/i, 'maj')
+  .replace(/^Ma(?=\d|\(|$)/, 'maj')
+  .replace(/^MA(?=\d|\(|$)/, 'maj')
+  .replace(/^ma(?=\d|\(|$)/, 'maj')
+  .replace(/^(?:minor|min|mi|−|-)/i, 'm')
+  .replace(/−/g, '-')
+  .replace(/\(-((?:9|11|13))\)/g, '(b$1)');
+ if (text === 'm7(b5)' || text === 'm7(-5)' || text === 'm7-5') return 'm7b5';
+ if (text === '7-9') return '7b9';
+ if (text === '7-13') return '7b13';
+ if (text === 'm(add9)' || text === 'madd(9)') return 'madd9';
+ if (text === 'maj(add9)' || text === 'M(add9)') return 'add9';
+ if (text === '(add9)' || text === 'add(9)') return 'add9';
+ if (text === 'sus') return 'sus4';
+ if (text === 'o') return 'dim';
+ if (text === 'o7') return 'dim7';
+ if (text === '(#5)') return 'aug';
+ text = text.replace(/^M(?=\d)/, 'maj');
+ if (text === 'maj6') return '6';
+ const parenthetical=/^((?:maj|min|M|m)?(?:7|9|11|13))\(([b#](?:9|11|13))\)$/.exec(text);
+ if (parenthetical) text=parenthetical[1]+parenthetical[2];
+ return text.replace(/^M(?=\d)/, 'maj').replace(/^min(?=\d)/, 'm');
+}
 export function parseChord(token: string): Chord {
  if (token.length > MAX_CHORD_TOKEN_LENGTH) throw new Error(`A chord symbol can contain up to ${MAX_CHORD_TOKEN_LENGTH} characters.`);
  const original = token;
- const normalized = token.trim().replace(/♯/g,'#').replace(/♭/g,'b').replace(/Δ(13|11|9|7)?/g,(_,extension)=>'maj'+(extension||'7')).replace(/ø7?/g,'m7b5').replace(/°/g,'dim');
+ const normalized = token.trim().replace(/♯/g,'#').replace(/♭/g,'b').replace(/[Δ∆](13|11|9|7)?/g,(_,extension)=>'maj'+(extension||'7')).replace(/ø7?/g,'m7b5').replace(/°/g,'dim');
  const match = /^([A-Ga-g])((?:#{1,2}|b{1,2})?)([^/]*)(?:\/([A-Ga-g])((?:#{1,2}|b{1,2})?))?$/.exec(normalized);
  if (!match) throw new Error(`“${original}” is not a recognized chord. Try Am, G7, or D/F#.`);
  const root = match[1].toUpperCase()+match[2];
- let suffix = match[3];
- const parenthetical=/^((?:maj|min|M|m)?(?:7|9|11|13))\(([b#](?:9|11|13))\)$/.exec(suffix);
- if (parenthetical) suffix=parenthetical[1]+parenthetical[2];
- suffix=suffix.replace(/^M(?=\d)/,'maj').replace(/^min(?=\d)/,'m');
- const aliases: Record<string,string> = {maj:'major',M:'major',min:'minor',m:'minor','-':'minor','+':'aug',M7:'maj7',M9:'maj9',min7:'m7',min9:'m9','m(add9)':'madd9'};
+ const suffix = canonicalQualitySuffix(match[3]);
+ const aliases: Record<string,string> = {maj:'major',M:'major',min:'minor',m:'minor','+':'aug',M7:'maj7',M9:'maj9',min7:'m7',min9:'m9'};
  const quality = QUALITIES.find(q=>q.id===(aliases[suffix]??suffix) || q.symbol===suffix);
  if (!quality) throw new Error(`“${original}” has an unsupported chord quality. Use the chord builder to see supported choices.`);
  const notes = spell(root,quality.formula), bass = match[4] ? match[4].toUpperCase()+match[5] : undefined;

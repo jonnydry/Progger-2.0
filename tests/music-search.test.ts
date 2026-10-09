@@ -72,6 +72,22 @@ void test('full symbols resolve only after parsing the complete supported chord'
   assert.deepEqual(searchQualities('C7alt'), []);
   assert.deepEqual(searchQualities('7sus4'), []);
   assert.deepEqual(searchQualities('Cmaj7b9'), []);
+  assert.deepEqual(searchQualities('Cmi'), ['minor']);
+  assert.deepEqual(searchQualities('C-7'), ['m7']);
+  assert.deepEqual(searchQualities('Csus'), ['sus4']);
+  assert.deepEqual(searchQualities('Co'), ['dim']);
+  assert.ok(searchQualities('Do').includes('dim'));
+  assert.equal(searchQualities('Do').includes('major'), false);
+  assert.ok(searchQualities('do').includes('7'));
+  assert.equal(searchQualities('do').includes('major'), false);
+  assert.ok(searchQualities('Do').includes('13'));
+  assert.ok(searchQualities('Dom').includes('7'));
+  assert.equal(searchQualities('Dom').includes('dim'), false);
+  assert.deepEqual(searchQualities('Co7'), ['dim7']);
+  assert.deepEqual(searchQualities('C(add9)'), ['add9']);
+  assert.deepEqual(searchQualities('C(#5)'), ['aug']);
+  assert.ok(searchQualities('dominant').includes('7'));
+  assert.ok(searchQualities('Dominant').includes('9'));
 });
 
 void test('descriptions show engine symbols without changing values or labels', () => {
