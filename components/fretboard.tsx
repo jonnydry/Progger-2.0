@@ -51,6 +51,8 @@ const FretGrid = memo(function FretGrid({
   scope,
   connected,
   targets,
+  noteMap,
+  selected,
 }: {
   notes: Note[];
   columnWidth: number;
@@ -64,18 +66,10 @@ const FretGrid = memo(function FretGrid({
   scope: 'scale' | 'chord';
   connected: boolean;
   targets: number[];
+  noteMap: Map<number, Note>;
+  selected: Set<string> | null;
 }) {
   const frets = Array.from({ length: 25 }, (_, i) => (left ? 24 - i : i));
-  const noteMap = new Map(notes.map((note) => [note.pc, note]));
-  const selected = voicing
-    ? new Set(
-        voicing.frets.flatMap((fret, string) =>
-          fret === null ? [] : [`${string}:${fret}`],
-        ),
-      )
-    : pattern
-      ? new Set(pattern.positions.map((p) => `${p.string}:${p.fret}`))
-      : null;
   return (
     <>
       <div
@@ -251,6 +245,7 @@ export function Fretboard({
     null,
   );
   const scrollFrame = useRef<number | null>(null);
+  const sliderScroll = useRef<number | null>(null);
   const focused = Boolean(pattern || voicing);
   const canSelectPattern =
     scope === 'scale' &&
@@ -280,18 +275,25 @@ export function Fretboard({
     () => formLayers(pattern, neighbor),
     [pattern, neighbor],
   );
+  const noteMap = useMemo(
+    () => new Map(notes.map((note) => [note.pc, note])),
+    [notes],
+  );
+  const selected = useMemo(
+    () =>
+      voicing
+        ? new Set(
+            voicing.frets.flatMap((fret, string) =>
+              fret === null ? [] : [`${string}:${fret}`],
+            ),
+          )
+        : pattern
+          ? new Set(pattern.positions.map((p) => `${p.string}:${p.fret}`))
+          : null,
+    [voicing, pattern],
+  );
   const wasHidden = useRef(false);
   const titleId = useId();
-  const noteMap = new Map(notes.map((note) => [note.pc, note]));
-  const selected = voicing
-    ? new Set(
-        voicing.frets.flatMap((fret, string) =>
-          fret === null ? [] : [`${string}:${fret}`],
-        ),
-      )
-    : pattern
-      ? new Set(pattern.positions.map((p) => `${p.string}:${p.fret}`))
-      : null;
   const trackScroll = useCallback(
     (el: HTMLDivElement) => {
       const cell = el.scrollWidth / 25;
@@ -392,6 +394,18 @@ export function Fretboard({
       // then no-ops. The handoff reads this progress, so publish it now.
       if (reading.scope === 'scale')
         reading.onNeckProgress?.(viewProgress.current);
+    }
+    // The slider commits in the input event. scrollTo updates scrollLeft
+    // immediately, and Chrome fires this scroll in the next frame's rendering
+    // step. Skip that event only when it lands on the slider's target, so a
+    // pan in the same frame still queues updateRange.
+    if (
+      el &&
+      sliderScroll.current !== null &&
+      Math.abs(el.scrollLeft - sliderScroll.current) < 1
+    ) {
+      sliderScroll.current = null;
+      return;
     }
     if (scrollFrame.current !== null) return;
     scrollFrame.current = requestAnimationFrame(() => {
@@ -818,6 +832,8 @@ export function Fretboard({
             scope={scope}
             connected={connected}
             targets={targets}
+            noteMap={noteMap}
+            selected={selected}
           />
         </div>
       </div>
@@ -848,9 +864,16 @@ export function Fretboard({
                     left: Number(event.target.value) * columnWidth,
                     behavior: 'instant',
                   });
+                  // The scroll event for this move fires in the next frame's
+                  // rendering step. Remember where scrollLeft landed, and clear
+                  // that target on the next frame when the event never comes.
+                  sliderScroll.current = el.scrollLeft;
                   // The slider is controlled. Commit its fret in this event so
                   // the thumb is not restored to the previous frame.
                   updateRange(true);
+                  requestAnimationFrame(() => {
+                    sliderScroll.current = null;
+                  });
                 }}
               />
             </label>

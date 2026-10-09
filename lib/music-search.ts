@@ -1,3 +1,4 @@
+import { qualityGroup } from './chord-presentation.ts';
 import { QUALITIES, parseChord } from './harmony.ts';
 
 export type MusicChoice = {
@@ -98,6 +99,91 @@ function nameBesideOSuffix(query: string): string | null {
   return null;
 }
 
+function chordLikeQuery(query: string): string | null {
+  const trimmed = query.trim();
+  const chordQuery = trimmed.replace(/^([Dd])O(7)?$/, '$1o$2');
+  if (
+    /^[A-Ga-g][#♯b♭]{0,2}(?:maj|min|m|M|\d|[Δø°+−/-]|sus|add|dim|aug|$)/.test(
+      trimmed,
+    ) ||
+    /^[A-Ga-g][#♯b♭]{0,2}(?:o7?|\([^)]*\))(?:\/[A-Ga-g][#♯b♭]{0,2})?$/.test(
+      chordQuery,
+    )
+  )
+    return chordQuery;
+  return null;
+}
+
+/** `do 7` is the same chord word as `do7`. Other spacing is not. */
+function isSpacedDo7(query: string): boolean {
+  return /^do\s+7$/i.test(query.trim());
+}
+
+/** `do 7` is the same chord word as `do7` when that compacted token already parses. */
+function collapseSpaceBeforeNumber(query: string): string | null {
+  const trimmed = query.trim();
+  if (!/\s+\d/.test(trimmed)) return null;
+  const collapsed = trimmed.replace(/\s+(?=\d)/g, '');
+  if (collapsed === trimmed) return null;
+  // A leading digit makes qualitySymbolQuery return a prefix, including tokens
+  // such as "79" that match no symbol. Collapse only when some quality symbol
+  // actually starts with that prefix, or the compacted chord parses.
+  const symbol = qualitySymbolQuery(collapsed);
+  if (
+    symbol !== null &&
+    QUALITIES.some((item) => (item.symbol || 'maj').startsWith(symbol))
+  )
+    return collapsed;
+  const chordQuery = chordLikeQuery(collapsed);
+  if (chordQuery === null) return null;
+  try {
+    parseChord(chordQuery);
+  } catch {
+    return null;
+  }
+  return collapsed;
+}
+
+const groupedQualityChoices: MusicChoice[] = QUALITIES.map((quality) => ({
+  value: quality.id,
+  label: quality.name,
+  group: qualityGroup(quality),
+}));
+const qualityHitCache = new Map<string, boolean>();
+
+/** The quality branch as it stood before a spaced number is collapsed. */
+function matchesQualityDirect(choice: MusicChoice, query: string): boolean {
+  // Parse a complete full symbol before using its quality, so C7alt cannot
+  // silently become C7. This picker changes the quality, never the root.
+  const trimmed = query.trim();
+  const chordQuery = chordLikeQuery(trimmed);
+  if (chordQuery !== null) {
+    try {
+      const parsed = parseChord(chordQuery).quality.id === choice.value;
+      const alongside = nameBesideOSuffix(trimmed);
+      if (alongside === null) return parsed;
+      return parsed || matchesChoiceText(choice, alongside, 'quality');
+    } catch {
+      return false;
+    }
+  }
+  const symbolQuery = qualitySymbolQuery(query);
+  const quality = QUALITIES.find((item) => item.id === choice.value);
+  if (symbolQuery !== null && quality)
+    return (quality.symbol || 'maj').startsWith(symbolQuery);
+  return matchesChoiceText(choice, query, 'quality');
+}
+
+function qualityQueryHits(query: string): boolean {
+  const cached = qualityHitCache.get(query);
+  if (cached !== undefined) return cached;
+  const hit = groupedQualityChoices.some((item) =>
+    matchesQualityDirect(item, query),
+  );
+  qualityHitCache.set(query, hit);
+  return hit;
+}
+
 /** Search only supplied choices; unsupported chords stay absent. */
 export function matchesMusicChoice(
   choice: MusicChoice,
@@ -106,31 +192,18 @@ export function matchesMusicChoice(
 ): boolean {
   if (!query.trim()) return true;
   if (kind === 'quality') {
-    // Parse a complete full symbol before using its quality, so C7alt cannot
-    // silently become C7. This picker changes the quality, never the root.
-    const trimmed = query.trim();
-    const chordQuery = trimmed.replace(/^([Dd])O(7)?$/, '$1o$2');
-    if (
-      /^[A-Ga-g][#♯b♭]{0,2}(?:maj|min|m|M|\d|[Δø°+−/-]|sus|add|dim|aug|$)/.test(
-        trimmed,
-      ) ||
-      /^[A-Ga-g][#♯b♭]{0,2}(?:o7?|\([^)]*\))(?:\/[A-Ga-g][#♯b♭]{0,2})?$/.test(
-        chordQuery,
-      )
-    ) {
-      try {
-        const parsed = parseChord(chordQuery).quality.id === choice.value;
-        const alongside = nameBesideOSuffix(trimmed);
-        if (alongside === null) return parsed;
-        return parsed || matchesChoiceText(choice, alongside, kind);
-      } catch {
-        return false;
-      }
-    }
-    const symbolQuery = qualitySymbolQuery(query);
-    const quality = QUALITIES.find((item) => item.id === choice.value);
-    if (symbolQuery !== null && quality)
-      return (quality.symbol || 'maj').startsWith(symbolQuery);
+    // `do 7` already matches the dominant-7 names. It still gains dim7.
+    if (isSpacedDo7(query))
+      return matchesMusicChoice(
+        choice,
+        query.trim().replace(/\s+/g, ''),
+        kind,
+      );
+    if (matchesQualityDirect(choice, query)) return true;
+    // Collapse a space before a number only when this query matches nothing.
+    const collapsed = collapseSpaceBeforeNumber(query);
+    if (collapsed === null || qualityQueryHits(query)) return false;
+    return matchesQualityDirect(choice, collapsed);
   }
   return matchesChoiceText(choice, query, kind);
 }

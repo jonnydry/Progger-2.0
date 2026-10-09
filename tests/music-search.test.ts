@@ -159,6 +159,93 @@ void test('letter o keeps diminished symbols and the name or group they prefix',
   assert.deepEqual(searchGroupedQualities('co7'), ['dim7']);
 });
 
+void test('a space before a number fills only an empty chord search, except do 7', () => {
+  const same = (spaced: string, compact: string) =>
+    assert.deepEqual(
+      searchGroupedQualities(spaced),
+      searchGroupedQualities(compact),
+      spaced,
+    );
+  for (const query of ['do 7', 'Do 7', 'DO 7', 'dO 7', 'do  7'])
+    same(query, query.replace(/\s+/g, ''));
+  assert.deepEqual(searchGroupedQualities('do 7'), dominant7Ids);
+  // These matched nothing, so the compacted chord word is used.
+  same('Co 7', 'Co7');
+  same('co 7', 'co7');
+  same('maj 7', 'maj7');
+  same('dim 7', 'dim7');
+  same('sus 4', 'sus4');
+  same('C 7', 'C7');
+  same('Ab 7', 'Ab7');
+  // These already matched, so the spaced form keeps that result.
+  const broadSevens = [
+    '7',
+    'maj7',
+    'm7',
+    'm7b5',
+    'dim7',
+    '7b9',
+    '7#9',
+    '7#11',
+    '7b13',
+    'maj7#11',
+  ];
+  assert.deepEqual(searchGroupedQualities('a 7'), [
+    '7',
+    'maj7',
+    '7b9',
+    '7#9',
+    '7#11',
+    '7b13',
+    'maj7#11',
+  ]);
+  assert.deepEqual(searchGroupedQualities('d 7'), [
+    '7',
+    'dim7',
+    '7b9',
+    '7#9',
+    '7#11',
+    '7b13',
+  ]);
+  assert.deepEqual(searchGroupedQualities('e 7'), ['dim7']);
+  assert.deepEqual(searchGroupedQualities('b 7'), ['m7b5', '7b9', '7b13']);
+  assert.deepEqual(searchGroupedQualities('b 5'), ['m7b5']);
+  assert.deepEqual(searchGroupedQualities('m 7'), broadSevens);
+  assert.deepEqual(searchGroupedQualities('M 7'), broadSevens);
+  assert.deepEqual(searchGroupedQualities('a 9'), [
+    'add9',
+    'madd9',
+    '9',
+    'maj9',
+    '7b9',
+    '7#9',
+    '9#11',
+    'maj9#11',
+  ]);
+  assert.deepEqual(searchGroupedQualities('min 7'), [
+    '7',
+    'm7',
+    'dim7',
+    '7b9',
+    '7#9',
+    '7#11',
+    '7b13',
+  ]);
+  assert.deepEqual(searchGroupedQualities('add 9'), ['add9', 'madd9']);
+  assert.deepEqual(searchGroupedQualities('Co'), ['dim']);
+  assert.deepEqual(searchGroupedQualities('co'), coreIds);
+  assert.deepEqual(searchGroupedQualities('cor'), coreIds);
+  assert.deepEqual(searchGroupedQualities('core'), coreIds);
+  assert.deepEqual(searchGroupedQualities('do 13'), ['13', '7b13']);
+  assert.ok(searchGroupedQualities('dominant 7').includes('7'));
+  assert.ok(searchGroupedQualities('major 7').includes('maj7'));
+  assert.equal(searchGroupedQualities('major 7').includes('dim'), false);
+  assert.ok(searchGroupedQualities('7 9').includes('7b9'));
+  assert.ok(searchGroupedQualities('7 9').includes('7#9'));
+  assert.ok(searchGroupedQualities('maj 6').includes('6'));
+  assert.ok(searchGroupedQualities('9 11').includes('9#11'));
+});
+
 void test('descriptions show engine symbols without changing values or labels', () => {
   const halfDiminished = qualities.find((quality) => quality.value === 'm7b5')!;
   assert.equal(musicChoiceDescription(halfDiminished, 'quality'), 'm7♭5');
