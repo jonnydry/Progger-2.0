@@ -80,10 +80,17 @@ export function matchingShapesLabel(count: number): string {
   return `${count} matching ${count === 1 ? 'shape' : 'shapes'}`;
 }
 
+export type VoicingBrowseChange =
+  | 'strings'
+  | 'bass'
+  | 'root'
+  | 'quality'
+  | 'chord-tab';
+
 /**
- * Keep the current shape when it passes the filters.
- * Otherwise take the first shape in browsing order.
- * An empty result keeps the current index so Reset browsing can recover it.
+ * Keeps `index` when that shape still matches.
+ * Otherwise takes the first shape in browsing order.
+ * An empty result keeps `index` so Reset browsing can recover it.
  */
 export function matchingVoicingIndex(
   source: Voicing[],
@@ -96,4 +103,14 @@ export function matchingVoicingIndex(
   if (choices.some(({ originalIndex }) => originalIndex === current))
     return current;
   return choices[0]?.originalIndex ?? current;
+}
+
+export function voicingIndexForChange(
+  source: Voicing[],
+  filters: VoicingFilters,
+  currentIndex: number,
+  change: VoicingBrowseChange,
+): number {
+  const retain = change === 'strings' || change === 'bass';
+  return matchingVoicingIndex(source, filters, retain ? currentIndex : 0);
 }
