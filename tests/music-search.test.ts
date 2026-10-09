@@ -159,6 +159,36 @@ void test('letter o keeps diminished symbols and the name or group they prefix',
   assert.deepEqual(searchGroupedQualities('co7'), ['dim7']);
 });
 
+void test('a space before a chord-word number matches the unspaced symbol', () => {
+  const same = (spaced: string, compact: string) =>
+    assert.deepEqual(
+      searchGroupedQualities(spaced),
+      searchGroupedQualities(compact),
+      spaced,
+    );
+  for (const query of ['do 7', 'Do 7', 'DO 7', 'dO 7', 'do  7'])
+    same(query, query.replace(/\s+/g, ''));
+  assert.deepEqual(searchGroupedQualities('do 7'), dominant7Ids);
+  same('Co 7', 'Co7');
+  same('co 7', 'co7');
+  same('maj 7', 'maj7');
+  same('min 7', 'min7');
+  same('dim 7', 'dim7');
+  same('sus 4', 'sus4');
+  same('add 9', 'add9');
+  same('m 7', 'm7');
+  same('C 7', 'C7');
+  same('Ab 7', 'Ab7');
+  assert.deepEqual(searchGroupedQualities('Co'), ['dim']);
+  assert.deepEqual(searchGroupedQualities('co'), coreIds);
+  assert.deepEqual(searchGroupedQualities('cor'), coreIds);
+  assert.deepEqual(searchGroupedQualities('core'), coreIds);
+  assert.deepEqual(searchGroupedQualities('do 13'), ['13', '7b13']);
+  assert.ok(searchGroupedQualities('dominant 7').includes('7'));
+  assert.ok(searchGroupedQualities('major 7').includes('maj7'));
+  assert.equal(searchGroupedQualities('major 7').includes('dim'), false);
+});
+
 void test('descriptions show engine symbols without changing values or labels', () => {
   const halfDiminished = qualities.find((quality) => quality.value === 'm7b5')!;
   assert.equal(musicChoiceDescription(halfDiminished, 'quality'), 'm7♭5');

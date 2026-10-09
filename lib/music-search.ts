@@ -98,6 +98,38 @@ function nameBesideOSuffix(query: string): string | null {
   return null;
 }
 
+function chordLikeQuery(query: string): string | null {
+  const trimmed = query.trim();
+  const chordQuery = trimmed.replace(/^([Dd])O(7)?$/, '$1o$2');
+  if (
+    /^[A-Ga-g][#♯b♭]{0,2}(?:maj|min|m|M|\d|[Δø°+−/-]|sus|add|dim|aug|$)/.test(
+      trimmed,
+    ) ||
+    /^[A-Ga-g][#♯b♭]{0,2}(?:o7?|\([^)]*\))(?:\/[A-Ga-g][#♯b♭]{0,2})?$/.test(
+      chordQuery,
+    )
+  )
+    return chordQuery;
+  return null;
+}
+
+/** `do 7` is the same chord word as `do7` when that compacted token already parses. */
+function collapseSpaceBeforeNumber(query: string): string | null {
+  const trimmed = query.trim();
+  if (!/\s+\d/.test(trimmed)) return null;
+  const collapsed = trimmed.replace(/\s+(?=\d)/g, '');
+  if (collapsed === trimmed) return null;
+  if (qualitySymbolQuery(collapsed) !== null) return collapsed;
+  const chordQuery = chordLikeQuery(collapsed);
+  if (chordQuery === null) return null;
+  try {
+    parseChord(chordQuery);
+  } catch {
+    return null;
+  }
+  return collapsed;
+}
+
 /** Search only supplied choices; unsupported chords stay absent. */
 export function matchesMusicChoice(
   choice: MusicChoice,
@@ -106,18 +138,14 @@ export function matchesMusicChoice(
 ): boolean {
   if (!query.trim()) return true;
   if (kind === 'quality') {
+    const collapsed = collapseSpaceBeforeNumber(query);
+    if (collapsed !== null)
+      return matchesMusicChoice(choice, collapsed, kind);
     // Parse a complete full symbol before using its quality, so C7alt cannot
     // silently become C7. This picker changes the quality, never the root.
     const trimmed = query.trim();
-    const chordQuery = trimmed.replace(/^([Dd])O(7)?$/, '$1o$2');
-    if (
-      /^[A-Ga-g][#♯b♭]{0,2}(?:maj|min|m|M|\d|[Δø°+−/-]|sus|add|dim|aug|$)/.test(
-        trimmed,
-      ) ||
-      /^[A-Ga-g][#♯b♭]{0,2}(?:o7?|\([^)]*\))(?:\/[A-Ga-g][#♯b♭]{0,2})?$/.test(
-        chordQuery,
-      )
-    ) {
+    const chordQuery = chordLikeQuery(trimmed);
+    if (chordQuery !== null) {
       try {
         const parsed = parseChord(chordQuery).quality.id === choice.value;
         const alongside = nameBesideOSuffix(trimmed);
