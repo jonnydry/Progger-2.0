@@ -27,7 +27,13 @@ import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
 import { NeckDisplay } from '@/components/neck-display';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
+import { scaleReturnFocusId } from '@/lib/explore-focus';
 import { nearestPatternIndex } from '@/lib/practice-position';
+import { connectedFormForScale } from '@/lib/connected-neck';
+import {
+  matchingVoicingIndex,
+  voicingIndexForChange,
+} from '@/lib/voicing-navigation';
 import {
   SCALES,
   ROOTS,
@@ -67,6 +73,10 @@ export default function Home() {
   } | null>(null);
   const pendingMatchReturn = useRef<typeof matchReturnPoint.current>(null);
   const [view, setView] = useState<'map' | 'pattern'>('pattern');
+  const neckProgress = useRef(0.3);
+  const rememberNeckProgress = useCallback((progress: number) => {
+    neckProgress.current = progress;
+  }, []);
   const [degrees, setDegrees] = useState(false),
     [left, setLeft] = useState(false),
     [position, setPosition] = useState(() =>
@@ -163,6 +173,7 @@ export default function Home() {
         const selected = SCALES.find((s) => s.id === value.scaleId);
         if (!selected) throw new Error('Choose a supported scaleId.');
         const chosenRoot = value.root;
+        const nextNotes = spell(chosenRoot, selected.formula);
         returnPoint.current = null;
         flushSync(() => {
           setScaleRoot(chosenRoot);
@@ -170,14 +181,20 @@ export default function Home() {
           setKind('scales');
           setPage('explore');
           setView('map');
-          setPosition(0);
+          setPosition(
+            connectedFormForScale(
+              chosenRoot,
+              selected.formula,
+              neckProgress.current,
+            ),
+          );
           setContext([]);
         });
         location.hash = 'explore';
         return {
           root: chosenRoot,
           scale: selected.name,
-          notes: spell(chosenRoot, selected.formula).map((n) => n.name),
+          notes: nextNotes.map((n) => n.name),
           formula: selected.formula,
         };
       },
@@ -193,9 +210,19 @@ export default function Home() {
   }, []);
   function choose(rootValue: string, id: string) {
     setRoot(rootValue);
-    setVoicingIndex(0);
     setVoicingBass('all');
-    if (kind === 'chords') return;
+    if (kind === 'chords') {
+      setVoicingIndex(
+        voicingIndexForChange(
+          voicings(rootValue, quality),
+          { bass: 'all', strings: voicingStrings, nearFret: voicingNearFret },
+          voicingIndex,
+          'root',
+        ),
+      );
+      return;
+    }
+    setVoicingIndex(0);
     const nextScale = SCALES.find((s) => s.id === id)!;
     const nextPatterns = patterns(spell(rootValue, nextScale.formula));
     setScaleId(id);
@@ -205,13 +232,17 @@ export default function Home() {
     setLocalChoice(null);
     if (!nextPatterns.length) setView('map');
   }
-  const navigate = useCallback((destination: string) => {
+  const navigate = useCallback(function navigate(destination: string) {
     pendingMatchReturn.current = null;
     setPage(destination);
     location.hash = destination;
   }, []);
   const openMatch = useCallback(
-    (candidate: Candidate, chords: Chord[], activeChordIndex?: number) => {
+    function openMatch(
+      candidate: Candidate,
+      chords: Chord[],
+      activeChordIndex?: number,
+    ) {
       returnPoint.current = null;
       const element = document.activeElement;
       matchReturnPoint.current = {
@@ -224,7 +255,13 @@ export default function Home() {
       setScaleRoot(candidate.root);
       setScaleId(candidate.scale.id);
       setKind('scales');
-      setPosition(0);
+      setPosition(
+        connectedFormForScale(
+          candidate.root,
+          candidate.scale.formula,
+          neckProgress.current,
+        ),
+      );
       setView('map');
       setContext(chords);
       setActiveChord(activeChordIndex ?? 0);
@@ -253,15 +290,25 @@ export default function Home() {
     setChordRoot(chordRoot);
     setQualityId(id);
     const requestedBass = bass ? pitchClass(bass) : undefined;
+    const nextVoicings = voicings(
+      chordRoot,
+      QUALITIES.find((candidate) => candidate.id === id)!,
+    );
     const bassIndex =
       requestedBass === undefined
         ? -1
-        : voicings(
-            chordRoot,
-            QUALITIES.find((candidate) => candidate.id === id)!,
-          ).findIndex((voicing) => voicing.bass.pc === requestedBass);
-    setVoicingIndex(bassIndex >= 0 ? bassIndex : 0);
-    setVoicingBass(bassIndex >= 0 ? String(requestedBass) : 'all');
+        : nextVoicings.findIndex(
+            (voicing) => voicing.bass.pc === requestedBass,
+          );
+    const nextBass = bassIndex >= 0 ? String(requestedBass) : 'all';
+    setVoicingBass(nextBass);
+    setVoicingIndex(
+      matchingVoicingIndex(
+        nextVoicings,
+        { bass: nextBass, strings: voicingStrings, nearFret: voicingNearFret },
+        bassIndex >= 0 ? bassIndex : 0,
+      ),
+    );
     setChordView('shape');
     setKind('chords');
     requestAnimationFrame(() => {
@@ -273,15 +320,16 @@ export default function Home() {
         ?.scrollIntoView({ block: 'start' });
     });
   }
-  function returnToScale() {
+  function returnToScale(event?: { currentTarget: HTMLElement }) {
     if (kind === 'scales') return;
+    const sourceId = event?.currentTarget.id;
     setKind('scales');
     const point = returnPoint.current;
     returnPoint.current = null;
+    const focusId = scaleReturnFocusId(point, sourceId);
+    if (!focusId) return;
     requestAnimationFrame(() => {
-      document
-        .getElementById(point?.id || 'main-content')
-        ?.focus({ preventScroll: true });
+      document.getElementById(focusId)?.focus({ preventScroll: true });
       if (point) window.scrollTo({ top: point.scroll, behavior: 'instant' });
     });
   }
@@ -295,15 +343,30 @@ export default function Home() {
       ? currentChord.bass
       : undefined;
   }, [currentChord]);
-  const soundingNotes = currentChord
-    ? [
-        ...currentChord.notes.map((n) => ({ name: n.name, pc: n.pc })),
-        ...(currentChord.bass &&
-        !currentChord.notes.some((n) => n.pc === pitchClass(currentChord.bass!))
-          ? [{ name: currentChord.bass, pc: pitchClass(currentChord.bass) }]
-          : []),
-      ]
-    : [];
+  const soundingNotes = useMemo(
+    () =>
+      currentChord
+        ? [
+            ...currentChord.notes.map((n) => ({ name: n.name, pc: n.pc })),
+            ...(currentChord.bass &&
+            !currentChord.notes.some(
+              (n) => n.pc === pitchClass(currentChord.bass!),
+            )
+              ? [
+                  {
+                    name: currentChord.bass,
+                    pc: pitchClass(currentChord.bass),
+                  },
+                ]
+              : []),
+          ]
+        : [],
+    [currentChord],
+  );
+  const targets = useMemo(
+    () => (kind === 'scales' ? soundingNotes.map((note) => note.pc) : []),
+    [kind, soundingNotes],
+  );
   const outside = soundingNotes.filter(
     (n) => !notes.some((scaleNote) => scaleNote.pc === n.pc),
   );
@@ -366,23 +429,47 @@ export default function Home() {
       nearFret={voicingNearFret}
       strings={voicingStrings}
       onNearFretChange={setVoicingNearFret}
-      onStringsChange={setVoicingStrings}
       symbol={root + quality.symbol}
       onSelect={setVoicingIndex}
+      onStringsChange={(nextStrings) => {
+        setVoicingStrings(nextStrings);
+        setVoicingIndex(
+          voicingIndexForChange(
+            chordVoicings,
+            {
+              bass: voicingBass,
+              strings: nextStrings,
+              nearFret: voicingNearFret,
+            },
+            voicingIndex,
+            'strings',
+          ),
+        );
+      }}
       onBassChange={(bass) => {
         setVoicingBass(bass);
-        if (bass !== 'all' && String(selectedVoicing.bass.pc) !== bass) {
-          setVoicingIndex(
-            chordVoicings.findIndex(
-              (voicing) => String(voicing.bass.pc) === bass,
-            ),
-          );
-        }
+        setVoicingIndex(
+          voicingIndexForChange(
+            chordVoicings,
+            { bass, strings: voicingStrings, nearFret: voicingNearFret },
+            voicingIndex,
+            'bass',
+          ),
+        );
+      }}
+      onReset={() => {
+        // Cleared filters include the held shape. Applying each clear through
+        // its own handler would still see the previous filters and jump away.
+        setVoicingStrings('all');
+        setVoicingNearFret(null);
+        setVoicingBass('all');
       }}
     />
   );
   return (
-    <div className={`app-shell night-swim ${practice ? 'practice-view' : ''}`}>
+    <div
+      className={`app-shell night-swim ${page === 'explore' && practice ? 'practice-view' : ''}`}
+    >
       <header className="site-header">
         <PondScene />
         <a
@@ -417,7 +504,7 @@ export default function Home() {
             ? 'Match your chords'
             : `${pretty(root)} ${title} guitar reference`}
         </h1>
-        <div className="workspace-tools">
+        <div className="workspace-tools" hidden={page !== 'explore'}>
           <button
             className="practice-toggle"
             aria-pressed={practice}
@@ -470,6 +557,7 @@ export default function Home() {
                 aria-label="Reference type"
               >
                 <button
+                  id="scales-reference-tab"
                   aria-pressed={kind === 'scales'}
                   onClick={returnToScale}
                 >
@@ -481,8 +569,19 @@ export default function Home() {
                     if (kind === 'chords') return;
                     setKind('chords');
                     returnPoint.current = null;
-                    setVoicingIndex(0);
                     setVoicingBass('all');
+                    setVoicingIndex(
+                      voicingIndexForChange(
+                        voicings(chordRoot, quality),
+                        {
+                          bass: 'all',
+                          strings: voicingStrings,
+                          nearFret: voicingNearFret,
+                        },
+                        voicingIndex,
+                        'chord-tab',
+                      ),
+                    );
                     setChordView('shape');
                   }}
                 >
@@ -526,9 +625,23 @@ export default function Home() {
                       onValueChange={(value) => {
                         if (kind === 'scales') choose(root, value);
                         else {
+                          const nextQuality = QUALITIES.find(
+                            (q) => q.id === value,
+                          )!;
                           setQualityId(value);
-                          setVoicingIndex(0);
                           setVoicingBass('all');
+                          setVoicingIndex(
+                            voicingIndexForChange(
+                              voicings(root, nextQuality),
+                              {
+                                bass: 'all',
+                                strings: voicingStrings,
+                                nearFret: voicingNearFret,
+                              },
+                              voicingIndex,
+                              'quality',
+                            ),
+                          );
                         }
                       }}
                       options={
@@ -664,14 +777,13 @@ export default function Home() {
                 setView('pattern');
               }}
               onPatternFollow={setPosition}
+              onNeckProgress={rememberNeckProgress}
               activePatternIndex={position}
               voicing={selectedVoicing}
               scope={kind === 'scales' ? 'scale' : 'chord'}
               degrees={degrees}
               left={left}
-              targets={
-                kind === 'scales' ? soundingNotes.map((note) => note.pc) : []
-              }
+              targets={targets}
               noteLabel={kind === 'scales' ? 'Scale note' : 'Chord note'}
             />
             {practice && voicingBrowser}

@@ -153,6 +153,53 @@ const FretGrid = memo(function FretGrid({
   );
 });
 
+const PHONE_NECK_QUERY = '(max-width: 500px)';
+
+function focusedNeckControlId(root: HTMLElement | null): string | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root) return null;
+  const moving = active.closest('.connection-controls');
+  if (moving && root.contains(moving)) {
+    if (active.id) return active.id;
+    const owned = active.closest<HTMLElement>('[id]');
+    return owned && moving.contains(owned) ? owned.id : null;
+  }
+  const trigger = root.querySelector<HTMLElement>(
+    '.connection-controls [aria-expanded="true"][id]',
+  );
+  const popupId = trigger?.getAttribute('aria-controls');
+  const popup = popupId ? document.getElementById(popupId) : null;
+  if (trigger && popup && !root.contains(popup) && popup.contains(active))
+    return trigger.id;
+  return null;
+}
+
+function usePhoneNeck(rememberFocus: () => string | null) {
+  const [phone, setPhone] = useState(false);
+  const pendingFocusId = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const id = pendingFocusId.current;
+    if (!id) return;
+    pendingFocusId.current = null;
+    const next = document.getElementById(id);
+    if (next instanceof HTMLElement && document.activeElement !== next)
+      next.focus({ preventScroll: true });
+  }, [phone]);
+  useLayoutEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const media = matchMedia(PHONE_NECK_QUERY);
+    const sync = () => {
+      const id = rememberFocus();
+      if (id) pendingFocusId.current = id;
+      setPhone(media.matches);
+    };
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, [rememberFocus]);
+  return phone;
+}
+
 export function Fretboard({
   notes,
   root,
@@ -163,6 +210,7 @@ export function Fretboard({
   activePatternIndex = 0,
   onPatternSelect,
   onPatternFollow,
+  onNeckProgress,
   voicing,
   scope,
   degrees,
@@ -179,6 +227,7 @@ export function Fretboard({
   activePatternIndex?: number;
   onPatternSelect?: (index: number) => void;
   onPatternFollow?: (index: number) => void;
+  onNeckProgress?: (progress: number) => void;
   scope: 'scale' | 'chord';
   voicing?: NeckVoicing;
   degrees: boolean;
@@ -273,6 +322,9 @@ export function Fretboard({
         Math.ceil((el.scrollLeft + el.clientWidth - 0.5) / cell) - 1,
       );
       const next = left ? [24 - last, 24 - first] : [first, last];
+      // Chord shapes scroll independently, then the scale view is restored.
+      // Connected forms follow the scale neck, not that temporary chord scroll.
+      if (scope === 'scale') onNeckProgress?.(viewProgress.current);
       setScrollFret(el.scrollLeft / cell);
       setRange((previous) =>
         previous[0] === next[0] && previous[1] === next[1] ? previous : next,
@@ -304,6 +356,7 @@ export function Fretboard({
       availablePatterns,
       onPatternFollow,
       trackScroll,
+      onNeckProgress,
       viewportWidth,
     ],
   );
@@ -330,8 +383,10 @@ export function Fretboard({
   }, []);
   useEffect(() => {
     return () => {
-      if (scrollFrame.current !== null)
+      if (scrollFrame.current !== null) {
         cancelAnimationFrame(scrollFrame.current);
+        scrollFrame.current = null;
+      }
     };
   }, []);
   const centerOn = useCallback(
@@ -509,35 +564,14 @@ export function Fretboard({
     centerForm(index);
     onPatternSelect?.(index);
   };
-
-  return (
-    <section
-      className={`neck ${connected ? 'connected-neck' : ''} ${focused ? 'focused-neck' : ''} ${voicing ? 'voicing-neck' : ''} ${left ? 'left-handed-neck' : ''}`}
-      aria-labelledby={titleId}
-    >
-      {controlsAbove && (
-        <div className="instrument-dock practice-controls">{controls}</div>
-      )}
-      <div className="neck-meta">
-        <span id={titleId}>
-          STANDARD TUNING <span className="muted">/ E A D G B E</span>
-        </span>
-        <span className="neck-legend">
-          {voicing?.rootless ? (
-            <span className="muted">Root omitted</span>
-          ) : (
-            <>
-              <i className="root-key" /> Root
-            </>
-          )}{' '}
-          <i className="scale-key" /> {noteLabel}
-          {targets.length > 0 && (
-            <>
-              <i className="target-key" /> Chord tone
-            </>
-          )}
-        </span>
-      </div>
+  const neckSection = useRef<HTMLElement>(null);
+  const rememberNeckFocus = useCallback(
+    () => focusedNeckControlId(neckSection.current),
+    [],
+  );
+  const phoneNeck = usePhoneNeck(rememberNeckFocus);
+  const scaleForm = (
+    <>
       {scope === 'scale' && (
         <div className="connection-controls">
           {canSelectPattern && (
@@ -593,6 +627,7 @@ export function Fretboard({
             />
           </label>
           <button
+            id={`${titleId}-overview-toggle`}
             className="overview-toggle"
             aria-expanded={overview}
             aria-controls={`${titleId}-overview`}
@@ -640,6 +675,39 @@ export function Fretboard({
           </p>
         </div>
       )}
+    </>
+  );
+
+  return (
+    <section
+      ref={neckSection}
+      className={`neck ${connected ? 'connected-neck' : ''} ${focused ? 'focused-neck' : ''} ${voicing ? 'voicing-neck' : ''} ${left ? 'left-handed-neck' : ''}`}
+      aria-labelledby={titleId}
+    >
+      {controlsAbove && (
+        <div className="instrument-dock practice-controls">{controls}</div>
+      )}
+      <div className="neck-meta">
+        <span id={titleId}>
+          STANDARD TUNING <span className="muted">/ E A D G B E</span>
+        </span>
+        <span className="neck-legend">
+          {voicing?.rootless ? (
+            <span className="muted">Root omitted</span>
+          ) : (
+            <>
+              <i className="root-key" /> Root
+            </>
+          )}{' '}
+          <i className="scale-key" /> {noteLabel}
+          {targets.length > 0 && (
+            <>
+              <i className="target-key" /> Chord tone
+            </>
+          )}
+        </span>
+      </div>
+      {!phoneNeck && scaleForm}
       <div className="neck-frame">
         <div className="string-labels" aria-hidden="true">
           {['e', 'B', 'G', 'D', 'A', 'E'].map((string, i) => (
@@ -788,6 +856,7 @@ export function Fretboard({
           </div>
         </div>
       </div>
+      {phoneNeck && scaleForm}
       {scope === 'scale' && overview && (
         <NeckOverview
           id={`${titleId}-overview`}

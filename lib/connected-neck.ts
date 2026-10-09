@@ -1,4 +1,4 @@
-import type { Pattern } from './music.ts';
+import { patterns, spell, type Pattern } from './music.ts';
 
 /** Follow the musical center of the view without flickering at form boundaries. */
 export function formAtFret(
@@ -20,6 +20,39 @@ export function formAtFret(
     : best;
 }
 
+/** Map musical neck progress onto complete-form centers. 0 is the nut, 1 is fret 24. */
+export function formAtProgress(
+  forms: Pattern[],
+  progress: number,
+  current: number,
+): number {
+  if (!forms.length) return -1;
+  const clamped = Math.max(0, Math.min(1, progress));
+  const first = (forms[0].min + forms[0].max) / 2;
+  const last = (forms.at(-1)!.min + forms.at(-1)!.max) / 2;
+  return formAtFret(forms, first + clamped * (last - first), current);
+}
+
+/** The form already in view when the neck stays put. Boundary hysteresis does not apply. */
+export function nearestConnectedForm(
+  forms: Pattern[],
+  progress: number,
+): number {
+  const index = formAtProgress(forms, progress, -1);
+  return index < 0 ? 0 : index;
+}
+
+export function connectedFormForScale(
+  root: string,
+  formula: readonly string[],
+  neckProgress: number,
+): number {
+  return nearestConnectedForm(
+    patterns(spell(root, [...formula])),
+    neckProgress,
+  );
+}
+
 /** Spread the form centers over the available travel, including both end forms.
  * A wide viewport cannot physically center an open or fret-24 form. */
 export function formAtViewport(
@@ -35,9 +68,7 @@ export function formAtViewport(
   if (!travel) return current >= 0 && current < forms.length ? current : 0;
   const physical = Math.max(0, Math.min(1, scroll / travel));
   const progress = left ? 1 - physical : physical;
-  const first = (forms[0].min + forms[0].max) / 2;
-  const last = (forms.at(-1)!.min + forms.at(-1)!.max) / 2;
-  return formAtFret(forms, first + progress * (last - first), current);
+  return formAtProgress(forms, progress, current);
 }
 
 /** The inverse of form following, so selecting a form remains stable on a drag. */

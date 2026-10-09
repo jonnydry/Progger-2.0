@@ -7,6 +7,7 @@ import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import type { Voicing } from '@/lib/harmony';
 import {
   browseVoicings,
+  matchingShapesLabel,
   stringSetLabel,
   voicingStringSets,
 } from '@/lib/voicing-navigation';
@@ -26,6 +27,7 @@ export function VoicingBrowser({
   onBassChange,
   onNearFretChange,
   onStringsChange,
+  onReset,
 }: {
   voicings: Voicing[];
   index: number;
@@ -38,6 +40,7 @@ export function VoicingBrowser({
   onBassChange: (bass: string) => void;
   onNearFretChange: (fret: number | null) => void;
   onStringsChange: (strings: string) => void;
+  onReset: () => void;
 }) {
   const catalog = useRef<HTMLDetailsElement>(null);
   const catalogSummary = useRef<HTMLElement>(null);
@@ -175,11 +178,7 @@ export function VoicingBrowser({
           <button
             type="button"
             className="voicing-filter-action"
-            onClick={() => {
-              onStringsChange('all');
-              onNearFretChange(null);
-              onBassChange('all');
-            }}
+            onClick={onReset}
           >
             Reset browsing
           </button>
@@ -189,7 +188,7 @@ export function VoicingBrowser({
         <output className="voicing-filter-notice">
           {choices.length === 0
             ? 'No shapes match these bass and string filters. Reset browsing to see all shapes.'
-            : `${choices.length} matching shapes. Your current shape is outside these filters.`}{' '}
+            : `${matchingShapesLabel(choices.length)}. Your current shape is outside these filters.`}{' '}
           The displayed shape stays selected until you choose another.
         </output>
       )}

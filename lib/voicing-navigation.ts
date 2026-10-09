@@ -74,3 +74,43 @@ export function browseVoicings(
     );
   });
 }
+
+/** One matching shape, or several matching shapes. */
+export function matchingShapesLabel(count: number): string {
+  return `${count} matching ${count === 1 ? 'shape' : 'shapes'}`;
+}
+
+export type VoicingBrowseChange =
+  | 'strings'
+  | 'bass'
+  | 'root'
+  | 'quality'
+  | 'chord-tab';
+
+/**
+ * Keeps `index` when that shape still matches.
+ * Otherwise takes the first shape in browsing order.
+ * An empty result keeps `index` so Reset browsing can recover it.
+ */
+export function matchingVoicingIndex(
+  source: Voicing[],
+  filters: VoicingFilters,
+  index: number,
+): number {
+  const choices = browseVoicings(source, filters);
+  const current =
+    source.length > 0 ? Math.min(Math.max(index, 0), source.length - 1) : index;
+  if (choices.some(({ originalIndex }) => originalIndex === current))
+    return current;
+  return choices[0]?.originalIndex ?? current;
+}
+
+export function voicingIndexForChange(
+  source: Voicing[],
+  filters: VoicingFilters,
+  currentIndex: number,
+  change: VoicingBrowseChange,
+): number {
+  const retain = change === 'strings' || change === 'bass';
+  return matchingVoicingIndex(source, filters, retain ? currentIndex : 0);
+}

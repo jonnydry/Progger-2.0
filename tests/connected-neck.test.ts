@@ -5,6 +5,7 @@ import {
   formAtFret,
   formAtViewport,
   formLayers,
+  nearestConnectedForm,
   scrollToForm,
   scrollToCenter,
   viewportCenter,
@@ -103,6 +104,59 @@ void test('overlap preserves each full form and counts shared physical notes', (
     6,
   );
   assert.equal(formLayers(dorian[0]).shared.size, 0);
+});
+
+void test('a neck that stays put selects the in-view form, including both ends', () => {
+  const center = (index: number) => (dorian[index].min + dorian[index].max) / 2;
+  const progressFor = (fret: number) =>
+    (fret - center(0)) / (center(dorian.length - 1) - center(0));
+  assert.equal(nearestConnectedForm(dorian, 0), 0);
+  assert.equal(nearestConnectedForm(dorian, 1), dorian.length - 1);
+  assert.equal(
+    nearestConnectedForm(dorian, 0.3),
+    dorian.findIndex((form) => form.start === 5),
+  );
+  // 8.6 still sticks to the start-5 form while following, but a fresh handoff
+  // must take the form whose center is actually nearer.
+  assert.equal(formAtFret(dorian, 8.6, start5), start5);
+  assert.equal(nearestConnectedForm(dorian, progressFor(8.6)), start7);
+  assert.equal(nearestConnectedForm([], 0.8), 0);
+  const wholeTone = patterns(
+    spell('C', SCALES.find((scale) => scale.id === 'whole-tone')!.formula),
+  );
+  assert.equal(wholeTone.length, 0);
+  assert.equal(nearestConnectedForm(wholeTone, 0.4), 0);
+  const pentatonic = patterns(
+    spell(
+      'A',
+      SCALES.find((scale) => scale.id === 'minor-pentatonic')!.formula,
+    ),
+  );
+  assert.equal(nearestConnectedForm(pentatonic, 0), 0);
+  assert.equal(nearestConnectedForm(pentatonic, 1), pentatonic.length - 1);
+
+  const width = 480;
+  const cell = 48;
+  const travel = 25 * cell - width;
+  const major = patterns(
+    spell('C', SCALES.find((scale) => scale.id === 'major')!.formula),
+  );
+  for (const [forms, progress] of [
+    [dorian, 0.3],
+    [dorian, 0.8],
+    [major, 0.8],
+    [pentatonic, 1],
+  ] as const) {
+    assert.equal(
+      nearestConnectedForm(forms, progress),
+      formAtViewport(forms, progress * travel, width, cell, false, -1),
+    );
+    assert.equal(
+      nearestConnectedForm(forms, progress),
+      formAtViewport(forms, (1 - progress) * travel, width, cell, true, -1),
+    );
+  }
+  assert.notEqual(nearestConnectedForm(major, 0.8), 0);
 });
 
 void test('centering is mirrored and clamps the viewport at both neck boundaries', () => {
