@@ -75,7 +75,7 @@ export function parseChord(token: string): Chord {
  if (!match) throw new Error(`“${original}” is not a recognized chord. Try Am, G7, or D/F#.`);
  const root = match[1].toUpperCase()+match[2];
  const suffix = canonicalQualitySuffix(match[3]);
- const aliases: Record<string,string> = {maj:'major',M:'major',min:'minor',m:'minor','-':'minor','−':'minor',mi:'minor','+':'aug',M7:'maj7',M9:'maj9',min7:'m7',min9:'m9','m(add9)':'madd9'};
+ const aliases: Record<string,string> = {maj:'major',M:'major',min:'minor',m:'minor','+':'aug',M7:'maj7',M9:'maj9',min7:'m7',min9:'m9'};
  const quality = QUALITIES.find(q=>q.id===(aliases[suffix]??suffix) || q.symbol===suffix);
  if (!quality) throw new Error(`“${original}” has an unsupported chord quality. Use the chord builder to see supported choices.`);
  const notes = spell(root,quality.formula), bass = match[4] ? match[4].toUpperCase()+match[5] : undefined;

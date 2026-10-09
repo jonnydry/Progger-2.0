@@ -194,6 +194,23 @@ void test('aliases stay distinct from neighboring chord symbols', () => {
   assert.equal(emDash.errors.length, 1);
 });
 
+void test('hyphenated letter chains stay errors instead of minor chords', () => {
+  for (const text of ['C-G-Am-F', 'E-A-B']) {
+    assert.throws(() => parseChord(text), text);
+    const parsed = parseProgression(text);
+    assert.equal(parsed.chords.length, 0, text);
+    assert.equal(
+      parsed.chords.some((chord) => chord.quality.id === 'minor'),
+      false,
+      text,
+    );
+    assert.ok(
+      parsed.errors.some((error) => error.includes(`“${text}”`)),
+      text,
+    );
+  }
+});
+
 void test('unsupported new chord types are still rejected', () => {
   const unsupportedQuality = [
     'C7sus4',
