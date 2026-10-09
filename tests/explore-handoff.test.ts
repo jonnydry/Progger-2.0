@@ -65,6 +65,7 @@ void test('openMatch and explore_scale call the connected-form handoff', () => {
     'const nextQuality = QUALITIES.find(',
     'options={',
   );
+  assert.equal(openMatch.split('setPosition(').length - 1, 1);
   const positioned = callBody(openMatch, 'setPosition');
   const formArgs = splitArgs(callBody(positioned, 'connectedFormForScale'));
   assert.deepEqual(formArgs, [
@@ -72,6 +73,10 @@ void test('openMatch and explore_scale call the connected-form handoff', () => {
     'candidate.scale.formula',
     'neckProgress.current',
   ]);
+  assert.equal(
+    splitArgs(callBody(tool, 'connectedFormForScale')).at(-1),
+    'neckProgress.current',
+  );
   assert.equal(
     splitArgs(callBody(qualityChange, 'voicingIndexForChange')).at(-1),
     "'quality'",
