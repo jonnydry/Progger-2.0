@@ -92,6 +92,12 @@ function matchesChoiceText(
   return searchable.some((text) => terms.every((term) => text.includes(term)));
 }
 
+function nameBesideOSuffix(query: string): string | null {
+  if (/^do7$/i.test(query)) return 'do 7';
+  if (/^do$/i.test(query) || /^[a-g]o$/.test(query)) return query;
+  return null;
+}
+
 /** Search only supplied choices; unsupported chords stay absent. */
 export function matchesMusicChoice(
   choice: MusicChoice,
@@ -102,22 +108,21 @@ export function matchesMusicChoice(
   if (kind === 'quality') {
     // Parse a complete full symbol before using its quality, so C7alt cannot
     // silently become C7. This picker changes the quality, never the root.
-    // "o" and "(" are whole suffixes only, so "Dom" stays a name search.
-    // "Do" is D diminished and also how "dominant" begins.
     const trimmed = query.trim();
+    const chordQuery = trimmed.replace(/^([Dd])O(7)?$/, '$1o$2');
     if (
       /^[A-Ga-g][#♯b♭]{0,2}(?:maj|min|m|M|\d|[Δø°+−/-]|sus|add|dim|aug|$)/.test(
         trimmed,
       ) ||
       /^[A-Ga-g][#♯b♭]{0,2}(?:o7?|\([^)]*\))(?:\/[A-Ga-g][#♯b♭]{0,2})?$/.test(
-        trimmed,
+        chordQuery,
       )
     ) {
       try {
-        const parsed = parseChord(trimmed).quality.id === choice.value;
-        // "co" is inside the group name "Core chords", so only the dominant prefix keeps both.
-        if (!/^do$/i.test(trimmed)) return parsed;
-        return parsed || matchesChoiceText(choice, trimmed, kind);
+        const parsed = parseChord(chordQuery).quality.id === choice.value;
+        const alongside = nameBesideOSuffix(trimmed);
+        if (alongside === null) return parsed;
+        return parsed || matchesChoiceText(choice, alongside, kind);
       } catch {
         return false;
       }
