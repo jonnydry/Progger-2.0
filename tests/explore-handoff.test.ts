@@ -12,12 +12,31 @@ const formStart = (root: string, id: string, progress: number) =>
     connectedFormForScale(root, scale(id).formula, progress)
   ].start;
 
-function sliceBetween(source: string, start: string, end: string) {
-  const from = source.indexOf(start);
-  const to = end ? source.indexOf(end, from + start.length) : source.length;
-  assert.ok(from >= 0, start);
-  assert.ok(to > from, end);
-  return source.slice(from, to);
+function locate(source: string, anchor: string | RegExp, from = 0) {
+  if (typeof anchor === 'string') {
+    const index = source.indexOf(anchor, from);
+    return { index, length: anchor.length };
+  }
+  const match = anchor.exec(source.slice(from));
+  if (!match) return { index: -1, length: 0 };
+  return { index: from + match.index, length: match[0].length };
+}
+
+function sliceBetween(
+  source: string,
+  start: string | RegExp,
+  end: string | RegExp,
+) {
+  const found = locate(source, start);
+  assert.ok(found.index >= 0, String(start));
+  const tail = locate(source, end, found.index + found.length);
+  assert.ok(tail.index > found.index, String(end));
+  return source.slice(found.index, tail.index);
+}
+
+function unquote(value: string | undefined) {
+  const match = value?.match(/^(['"])([\s\S]*)\1$/);
+  return match ? match[2] : value;
 }
 
 function callBody(source: string, callee: string) {
@@ -56,14 +75,18 @@ void test('openMatch and explore_scale call the connected-form handoff', () => {
     new URL('../app/page.tsx', import.meta.url),
     'utf8',
   );
-  const tool = sliceBetween(source, "name: 'explore_scale'", 'function choose');
+  const tool = sliceBetween(
+    source,
+    /name:\s*['"]explore_scale['"]/,
+    'function choose',
+  );
   const openMatch = sliceBetween(source, 'function openMatch', 'function returnToMatch');
   const strings = sliceBetween(source, 'onStringsChange', 'onBassChange');
   const bass = sliceBetween(source, 'onBassChange', 'onReset');
   const qualityChange = sliceBetween(
     source,
-    'const nextQuality = QUALITIES.find(',
-    'options={',
+    /const\s+nextQuality\s*=\s*QUALITIES\.find\s*\(/,
+    /options\s*=\s*\{/,
   );
   assert.equal(openMatch.split('setPosition(').length - 1, 1);
   const positioned = callBody(openMatch, 'setPosition');
@@ -78,21 +101,25 @@ void test('openMatch and explore_scale call the connected-form handoff', () => {
     'neckProgress.current',
   );
   assert.equal(
-    splitArgs(callBody(qualityChange, 'voicingIndexForChange')).at(-1),
-    "'quality'",
+    unquote(splitArgs(callBody(qualityChange, 'voicingIndexForChange')).at(-1)),
+    'quality',
   );
   assert.match(tool, /connectedFormForScale\(/);
   assert.doesNotMatch(tool, /nearestConnectedForm\(/);
   assert.doesNotMatch(openMatch, /nearestConnectedForm\(/);
-  assert.match(strings, /voicingIndexForChange\([\s\S]*'strings'/);
-  assert.match(bass, /voicingIndexForChange\([\s\S]*'bass'/);
+  assert.match(strings, /voicingIndexForChange\([\s\S]*['"]strings['"]/);
+  assert.match(bass, /voicingIndexForChange\([\s\S]*['"]bass['"]/);
   assert.match(
     sliceBetween(source, 'function choose', 'function navigate'),
-    /voicingIndexForChange\([\s\S]*'root'/,
+    /voicingIndexForChange\([\s\S]*['"]root['"]/,
   );
   assert.match(
-    sliceBetween(source, 'aria-pressed={kind === \'chords\'}', 'Chords'),
-    /voicingIndexForChange\([\s\S]*'chord-tab'/,
+    sliceBetween(
+      source,
+      /aria-pressed=\{\s*kind\s*===\s*['"]chords['"]\s*\}/,
+      'Chords',
+    ),
+    /voicingIndexForChange\([\s\S]*['"]chord-tab['"]/,
   );
 });
 
