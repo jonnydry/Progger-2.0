@@ -1,5 +1,12 @@
 'use client';
-import { useEffect, useLayoutEffect, useMemo, useState, useRef } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useRef,
+} from 'react';
 import { flushSync } from 'react-dom';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { PondScene } from '@/components/pond-scene';
@@ -21,6 +28,8 @@ import { NoteSpelling } from '@/components/note-spelling';
 import { NeckDisplay } from '@/components/neck-display';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import { nearestPatternIndex } from '@/lib/practice-position';
+import { nearestConnectedForm } from '@/lib/connected-neck';
+import { matchingVoicingIndex } from '@/lib/voicing-navigation';
 import {
   SCALES,
   ROOTS,
@@ -60,6 +69,10 @@ export default function Home() {
   } | null>(null);
   const pendingMatchReturn = useRef<typeof matchReturnPoint.current>(null);
   const [view, setView] = useState<'map' | 'pattern'>('pattern');
+  const neckProgress = useRef(0.3);
+  const rememberNeckProgress = useCallback((progress: number) => {
+    neckProgress.current = progress;
+  }, []);
   const [degrees, setDegrees] = useState(false),
     [left, setLeft] = useState(false),
     [position, setPosition] = useState(() =>
@@ -156,6 +169,7 @@ export default function Home() {
         const selected = SCALES.find((s) => s.id === value.scaleId);
         if (!selected) throw new Error('Choose a supported scaleId.');
         const chosenRoot = value.root;
+        const nextNotes = spell(chosenRoot, selected.formula);
         returnPoint.current = null;
         flushSync(() => {
           setScaleRoot(chosenRoot);
@@ -163,14 +177,16 @@ export default function Home() {
           setKind('scales');
           setPage('explore');
           setView('map');
-          setPosition(0);
+          setPosition(
+            nearestConnectedForm(patterns(nextNotes), neckProgress.current),
+          );
           setContext([]);
         });
         location.hash = 'explore';
         return {
           root: chosenRoot,
           scale: selected.name,
-          notes: spell(chosenRoot, selected.formula).map((n) => n.name),
+          notes: nextNotes.map((n) => n.name),
           formula: selected.formula,
         };
       },
@@ -186,9 +202,18 @@ export default function Home() {
   }, []);
   function choose(rootValue: string, id: string) {
     setRoot(rootValue);
-    setVoicingIndex(0);
     setVoicingBass('all');
-    if (kind === 'chords') return;
+    if (kind === 'chords') {
+      setVoicingIndex(
+        matchingVoicingIndex(
+          voicings(rootValue, quality),
+          { bass: 'all', strings: voicingStrings, nearFret: voicingNearFret },
+          0,
+        ),
+      );
+      return;
+    }
+    setVoicingIndex(0);
     const nextScale = SCALES.find((s) => s.id === id)!;
     const nextPatterns = patterns(spell(rootValue, nextScale.formula));
     setScaleId(id);
@@ -220,7 +245,12 @@ export default function Home() {
     setScaleRoot(candidate.root);
     setScaleId(candidate.scale.id);
     setKind('scales');
-    setPosition(0);
+    setPosition(
+      nearestConnectedForm(
+        patterns(spell(candidate.root, candidate.scale.formula)),
+        neckProgress.current,
+      ),
+    );
     setView('map');
     setContext(chords);
     setActiveChord(activeChordIndex ?? 0);
@@ -247,15 +277,25 @@ export default function Home() {
     setChordRoot(chordRoot);
     setQualityId(id);
     const requestedBass = bass ? pitchClass(bass) : undefined;
+    const nextVoicings = voicings(
+      chordRoot,
+      QUALITIES.find((candidate) => candidate.id === id)!,
+    );
     const bassIndex =
       requestedBass === undefined
         ? -1
-        : voicings(
-            chordRoot,
-            QUALITIES.find((candidate) => candidate.id === id)!,
-          ).findIndex((voicing) => voicing.bass.pc === requestedBass);
-    setVoicingIndex(bassIndex >= 0 ? bassIndex : 0);
-    setVoicingBass(bassIndex >= 0 ? String(requestedBass) : 'all');
+        : nextVoicings.findIndex(
+            (voicing) => voicing.bass.pc === requestedBass,
+          );
+    const nextBass = bassIndex >= 0 ? String(requestedBass) : 'all';
+    setVoicingBass(nextBass);
+    setVoicingIndex(
+      matchingVoicingIndex(
+        nextVoicings,
+        { bass: nextBass, strings: voicingStrings, nearFret: voicingNearFret },
+        bassIndex >= 0 ? bassIndex : 0,
+      ),
+    );
     setChordView('shape');
     setKind('chords');
     requestAnimationFrame(() => {
@@ -360,18 +400,38 @@ export default function Home() {
       nearFret={voicingNearFret}
       strings={voicingStrings}
       onNearFretChange={setVoicingNearFret}
-      onStringsChange={setVoicingStrings}
       symbol={root + quality.symbol}
       onSelect={setVoicingIndex}
+      onStringsChange={(nextStrings) => {
+        setVoicingStrings(nextStrings);
+        setVoicingIndex(
+          matchingVoicingIndex(
+            chordVoicings,
+            {
+              bass: voicingBass,
+              strings: nextStrings,
+              nearFret: voicingNearFret,
+            },
+            voicingIndex,
+          ),
+        );
+      }}
       onBassChange={(bass) => {
         setVoicingBass(bass);
-        if (bass !== 'all' && String(selectedVoicing.bass.pc) !== bass) {
-          setVoicingIndex(
-            chordVoicings.findIndex(
-              (voicing) => String(voicing.bass.pc) === bass,
-            ),
-          );
-        }
+        setVoicingIndex(
+          matchingVoicingIndex(
+            chordVoicings,
+            { bass, strings: voicingStrings, nearFret: voicingNearFret },
+            voicingIndex,
+          ),
+        );
+      }}
+      onReset={() => {
+        // Cleared filters include the held shape. Applying each clear through
+        // its own handler would still see the previous filters and jump away.
+        setVoicingStrings('all');
+        setVoicingNearFret(null);
+        setVoicingBass('all');
       }}
     />
   );
@@ -475,8 +535,18 @@ export default function Home() {
                     if (kind === 'chords') return;
                     setKind('chords');
                     returnPoint.current = null;
-                    setVoicingIndex(0);
                     setVoicingBass('all');
+                    setVoicingIndex(
+                      matchingVoicingIndex(
+                        voicings(chordRoot, quality),
+                        {
+                          bass: 'all',
+                          strings: voicingStrings,
+                          nearFret: voicingNearFret,
+                        },
+                        0,
+                      ),
+                    );
                     setChordView('shape');
                   }}
                 >
@@ -520,9 +590,22 @@ export default function Home() {
                       onValueChange={(value) => {
                         if (kind === 'scales') choose(root, value);
                         else {
+                          const nextQuality = QUALITIES.find(
+                            (q) => q.id === value,
+                          )!;
                           setQualityId(value);
-                          setVoicingIndex(0);
                           setVoicingBass('all');
+                          setVoicingIndex(
+                            matchingVoicingIndex(
+                              voicings(root, nextQuality),
+                              {
+                                bass: 'all',
+                                strings: voicingStrings,
+                                nearFret: voicingNearFret,
+                              },
+                              0,
+                            ),
+                          );
                         }
                       }}
                       options={
@@ -658,6 +741,7 @@ export default function Home() {
                 setView('pattern');
               }}
               onPatternFollow={setPosition}
+              onNeckProgress={rememberNeckProgress}
               activePatternIndex={position}
               voicing={selectedVoicing}
               scope={kind === 'scales' ? 'scale' : 'chord'}
