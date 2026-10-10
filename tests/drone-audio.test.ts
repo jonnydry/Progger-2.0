@@ -4,6 +4,7 @@ import {
   DRONE_DUCK_GAIN,
   DRONE_LIMITER,
   DRONE_MAX_LINEAR_GAIN,
+  REED_MAX_LINEAR_GAIN,
   DroneEngine,
   type DronePatch,
   type DroneStatus,
@@ -306,6 +307,9 @@ void test('Locrian drones the octave and the reed uses a symmetric pair', async 
     root.map((oscillator) => oscillator.detune.value).sort((a, b) => a - b),
     [-3.5, 3.5],
   );
+  const master = context.gains.find((gain) => gain.gain.value === REED_MAX_LINEAR_GAIN);
+  assert.ok(master);
+  assert.equal(master.gain.value, 0.15);
   engine.dispose();
 });
 

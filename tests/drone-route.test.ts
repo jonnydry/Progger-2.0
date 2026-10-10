@@ -44,7 +44,12 @@ void test('the lab audio module does not touch the voicing player', () => {
   const source = readFileSync('lib/drone-audio.ts', 'utf8');
   assert.equal(source.includes('voicing-audio'), false);
   assert.equal(source.includes('VoicingPlayer'), false);
+});
+
+void test('the lab page auditions a note and a chord with the existing voicing player', () => {
   const page = readFileSync('components/drone-lab.tsx', 'utf8');
-  assert.equal(page.includes('VoicingPlayer'), false);
-  assert.equal(page.includes('voicing-audio'), false);
+  assert.equal(page.includes('VoicingPlayer'), true);
+  assert.equal(page.includes('voicing-audio'), true);
+  assert.match(page, /Reed under A4/);
+  assert.match(page, /Reed under Am/);
 });

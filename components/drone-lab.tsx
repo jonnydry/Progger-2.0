@@ -20,7 +20,11 @@ import {
   type DronePatch,
   type DroneStatus,
 } from '@/lib/drone-audio';
+import { VoicingPlayer } from '@/lib/voicing-audio';
 import './drone-lab.css';
+
+const HEAR_NOTE: (number | null)[] = [null, null, null, null, null, 5];
+const HEAR_CHORD: (number | null)[] = [5, 7, 7, 5, 5, 5];
 
 const SOUNDS: { id: DroneSoundId; label: string; copy: string }[] = [
   {
@@ -42,6 +46,7 @@ const SOUNDS: { id: DroneSoundId; label: string; copy: string }[] = [
 
 export function DroneLab() {
   const engineRef = useRef<DroneEngine | null>(null);
+  const playerRef = useRef<VoicingPlayer | null>(null);
   const patchRef = useRef<DronePatch>({
     sound: 'bow',
     root: 'A',
@@ -71,6 +76,8 @@ export function DroneLab() {
     return () => {
       engine.dispose();
       engineRef.current = null;
+      playerRef.current?.dispose();
+      playerRef.current = null;
     };
   }, []);
 
@@ -125,6 +132,29 @@ export function DroneLab() {
     remember(patch);
     setOctave(next);
     if (busy) engineRef.current?.update(patch);
+  }
+
+  function hear(frets: readonly (number | null)[]) {
+    const patch: DronePatch = {
+      sound: 'reed',
+      root: 'A',
+      modeId: 'dorian',
+      octave: 'layered',
+      volume: 1,
+    };
+    remember(patch);
+    setSound('reed');
+    setRoot('A');
+    setModeId('dorian');
+    setOctave('layered');
+    setVolume(1);
+    setWalkIndex(null);
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (!playerRef.current) playerRef.current = new VoicingPlayer(() => {});
+    engine.stop();
+    engine.play(patch);
+    void playerRef.current.play(frets);
   }
 
   const statusText =
@@ -250,7 +280,17 @@ export function DroneLab() {
               >
                 {walkIndex === null ? 'Walk the scale' : 'Stop walk'}
               </button>
+              <button type="button" className="drone-play" onClick={() => hear(HEAR_NOTE)}>
+                Reed under A4
+              </button>
+              <button type="button" className="drone-play" onClick={() => hear(HEAR_CHORD)}>
+                Reed under Am
+              </button>
             </div>
+            <p className="drone-note">
+              The two reed buttons play A Dorian at the 0.15 cap, then a single
+              A4 or a six-string Am.
+            </p>
             <label className="drone-volume-row">
               Volume
               <input

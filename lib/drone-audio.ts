@@ -31,10 +31,13 @@ export type DronePatch = {
 };
 
 /**
- * Output scale at volume 1. Tuned so the loudest drone, summed with the
- * loudest full six-string pluck, stays at least 1 dB under full scale.
+ * Bow and cello scale at volume 1.
+ * The reed uses REED_MAX_LINEAR_GAIN so one plucked note stays 1 dB under full scale.
  */
 export const DRONE_MAX_LINEAR_GAIN = 0.3;
+
+/** Reed scale at volume 1. Same cap as the shared engine. */
+export const REED_MAX_LINEAR_GAIN = 0.15;
 
 /** A few dB, recovered smoothly after each walk note. */
 export const DRONE_DUCK_DB = 4;
@@ -96,11 +99,19 @@ type EngineOptions = {
 const impulses = new WeakMap<BaseAudioContext, AudioBuffer>();
 const noises = new WeakMap<BaseAudioContext, AudioBuffer>();
 
-export function createMasterBus(context: BaseAudioContext, volume: number): MasterBus {
+function linearCap(sound: DroneSoundId): number {
+  return sound === 'reed' ? REED_MAX_LINEAR_GAIN : DRONE_MAX_LINEAR_GAIN;
+}
+
+export function createMasterBus(
+  context: BaseAudioContext,
+  volume: number,
+  sound: DroneSoundId = 'bow',
+): MasterBus {
   const duck = context.createGain();
   duck.gain.value = 1;
   const master = context.createGain();
-  master.gain.value = clampVolume(volume) * DRONE_MAX_LINEAR_GAIN;
+  master.gain.value = clampVolume(volume) * linearCap(sound);
   const limiter = context.createDynamicsCompressor();
   limiter.threshold.value = DRONE_LIMITER.threshold;
   limiter.knee.value = DRONE_LIMITER.knee;
@@ -587,6 +598,7 @@ export class DroneEngine {
   private cancelResume: (() => void) | null = null;
   private disposed = false;
   private volume = 0.85;
+  private sound: DroneSoundId = 'bow';
   private readonly onStatus: StatusHandler;
   private readonly onWalk: WalkHandler;
   private readonly createContext: () => AudioContext;
@@ -636,11 +648,13 @@ export class DroneEngine {
 
   play(patch: DronePatch): void {
     this.volume = clampVolume(patch.volume);
+    this.sound = patch.sound;
     void this.start(patch, PLAY_ATTACK);
   }
 
   update(patch: DronePatch): void {
     this.volume = clampVolume(patch.volume);
+    this.sound = patch.sound;
     this.applyVolume();
     this.cancelWalk();
     if (this.phase === 'idle' || this.phase === 'error') return;
@@ -654,6 +668,7 @@ export class DroneEngine {
     }
     this.walking = true;
     this.volume = clampVolume(patch.volume);
+    this.sound = patch.sound;
     const begin = () => {
       if (!this.walking || this.phase !== 'playing') {
         this.walking = false;
@@ -745,7 +760,7 @@ export class DroneEngine {
     if (!this.context) {
       const context = this.createContext();
       this.context = context;
-      const bus = createMasterBus(context, this.volume);
+      const bus = createMasterBus(context, this.volume, this.sound);
       this.duck = bus.duck;
       this.master = bus.master;
       this.limiter = bus.limiter;
@@ -825,7 +840,7 @@ export class DroneEngine {
   private applyVolume(): void {
     if (!this.master || !this.context) return;
     const now = this.context.currentTime;
-    const next = this.volume * DRONE_MAX_LINEAR_GAIN;
+    const next = this.volume * linearCap(this.sound);
     this.master.gain.cancelScheduledValues(now);
     this.master.gain.setValueAtTime(this.master.gain.value, now);
     this.master.gain.linearRampToValueAtTime(next, now + 0.03);
