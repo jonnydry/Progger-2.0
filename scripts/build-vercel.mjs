@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -25,4 +25,45 @@ if (
 ) {
   throw new Error('Static export did not produce a complete Progger homepage.');
 }
+const homepage = readFileSync(html, 'utf8');
+if (homepage.includes('/lab/drone')) {
+  throw new Error('The public homepage links the unlisted drone preview.');
+}
+
+// A non-OK prerender fails vinext's entire static export, so production
+// removes the already-built route instead of calling notFound().
+const droneFiles = [
+  'lab/drone.html',
+  'lab/drone.txt',
+  'lab/drone/index.html',
+  'lab/drone/index.txt',
+];
+const droneUrl = (relative) => new URL(`../dist/client/${relative}`, import.meta.url);
+if (process.env.VERCEL_ENV === 'production') {
+  for (const relative of droneFiles) {
+    const file = droneUrl(relative);
+    if (existsSync(file)) rmSync(file);
+  }
+  for (const relative of droneFiles) {
+    if (existsSync(droneUrl(relative))) {
+      throw new Error(`Production export still contains ${relative}.`);
+    }
+  }
+  console.log('Removed /lab/drone from the production static export.');
+} else {
+  const previewHtml = existsSync(droneUrl('lab/drone.html'))
+    ? droneUrl('lab/drone.html')
+    : droneUrl('lab/drone/index.html');
+  const previewRsc = existsSync(droneUrl('lab/drone.txt'))
+    ? droneUrl('lab/drone.txt')
+    : droneUrl('lab/drone/index.txt');
+  if (!existsSync(previewHtml) || !existsSync(previewRsc)) {
+    throw new Error('Static export did not produce the drone preview route.');
+  }
+  if (!/noindex/i.test(readFileSync(previewHtml, 'utf8'))) {
+    throw new Error('The drone preview is missing a noindex robots tag.');
+  }
+  console.log('Verified the unlisted drone preview is noindex.');
+}
+
 console.log('Verified static homepage and hydration payload for Vercel.');
