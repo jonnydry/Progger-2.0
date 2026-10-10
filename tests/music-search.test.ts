@@ -265,8 +265,25 @@ void test('quality hit cache stays bounded and still matches after eviction', ()
     'major 7',
     'do 13',
   ];
-  const grouped = probes.map((query) => searchGroupedQualities(query));
-  const plain = probes.map((query) => searchQualities(query));
+  const coldGrouped = probes.map((query) => searchGroupedQualities(query));
+  const coldPlain = probes.map((query) => searchQualities(query));
+  const expectedGrouped = coldGrouped.map((rows) => rows.slice());
+  const expectedPlain = coldPlain.map((rows) => rows.slice());
+  // The memo does not hand back these lists. Mutating them leaves the next lookup unchanged.
+  coldGrouped.forEach((rows) => rows.push('mutated'));
+  coldPlain.forEach((rows) => rows.push('mutated'));
+  probes.forEach((query, index) => {
+    assert.deepEqual(
+      searchGroupedQualities(query),
+      expectedGrouped[index],
+      `warm ${query}`,
+    );
+    assert.deepEqual(
+      searchQualities(query),
+      expectedPlain[index],
+      `warm ${query}`,
+    );
+  });
   clearQualityHitCache();
 
   for (let spaces = 1; spaces <= qualityHitCacheLimit + 1; spaces += 1) {
@@ -294,8 +311,16 @@ void test('quality hit cache stays bounded and still matches after eviction', ()
   );
 
   probes.forEach((query, index) => {
-    assert.deepEqual(searchGroupedQualities(query), grouped[index], query);
-    assert.deepEqual(searchQualities(query), plain[index], query);
+    assert.deepEqual(
+      searchGroupedQualities(query),
+      expectedGrouped[index],
+      `evicted ${query}`,
+    );
+    assert.deepEqual(
+      searchQualities(query),
+      expectedPlain[index],
+      `evicted ${query}`,
+    );
   });
 });
 

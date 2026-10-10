@@ -149,7 +149,8 @@ const groupedQualityChoices: MusicChoice[] = QUALITIES.map((quality) => ({
   label: quality.name,
   group: qualityGroup(quality),
 }));
-// A hit is a pure function of the query, so dropping a full map only recomputes it.
+// The memo stores a boolean, not a choice list. A hit is that same boolean,
+// so it equals a fresh lookup and callers cannot mutate the stored entry.
 export const qualityHitCacheLimit = 256;
 const qualityHitCache = new Map<string, boolean>();
 
