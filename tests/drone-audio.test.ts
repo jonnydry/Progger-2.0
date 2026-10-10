@@ -98,8 +98,8 @@ class FakeContext {
   currentTime = 4;
   sampleRate = 48000;
   destination = new FakeNode();
-  onstatechange: (() => void) | null = null;
   closed = 0;
+  private stateListeners = new Set<() => void>();
   oscillators: Oscillator[] = [];
   sources: BufferSource[] = [];
   compressors: Compressor[] = [];
@@ -115,6 +115,18 @@ class FakeContext {
     this.closed += 1;
     this.state = 'closed';
     return Promise.resolve();
+  }
+  addEventListener(type: string, listener: () => void) {
+    if (type === 'statechange') this.stateListeners.add(listener);
+  }
+  removeEventListener(type: string, listener: () => void) {
+    if (type === 'statechange') this.stateListeners.delete(listener);
+  }
+  emitState() {
+    for (const listener of this.stateListeners) listener();
+  }
+  stateListenerCount() {
+    return this.stateListeners.size;
   }
   createGain() {
     const gain = new Param();
@@ -252,7 +264,7 @@ void test('constructing the reed engine does not create an audio context', () =>
   assert.equal(created(), 0);
 });
 
-void test('a low reed starts on one context, centers the root, and closes on dispose', async () => {
+void test('a low reed starts on one context and centers the root', async () => {
   const { engine, context, states, created } = setup();
   engine.play(lowRequest);
   await until(() => states.at(-1) === 'playing');
@@ -274,7 +286,7 @@ void test('a low reed starts on one context, centers the root, and closes on dis
   );
   assert.deepEqual(context.sources[0].starts, [4.02]);
   const master = masterGain(context);
-  assert.equal(master.gain.value, 0.3);
+  assert.equal(master.gain.value, 0.15);
   const root = context.oscillators.filter(
     (oscillator) => oscillator.frequency.value === midiHz(45),
   );
@@ -327,7 +339,8 @@ void test('a low reed starts on one context, centers the root, and closes on dis
     [0.45, 0.5, 4.4, 5.4, 6.2],
   );
   engine.dispose();
-  assert.equal(context.closed, 1);
+  assert.equal(context.closed, 0);
+  assert.equal(context.stateListenerCount(), 0);
 });
 
 void test('a replay whose resume reports state immediately stays on the same context', async () => {
@@ -336,7 +349,7 @@ void test('a replay whose resume reports state immediately stays on the same con
   await until(() => states.at(-1) === 'playing');
   context.resume = () => {
     context.state = 'running';
-    context.onstatechange?.();
+    context.emitState();
     return Promise.resolve();
   };
   const mark = states.length;
@@ -416,11 +429,11 @@ void test('volume is stored before a context exists and clamps on the master ram
   engine.play(lowRequest);
   await until(() => states.at(-1) === 'playing');
   const master = masterGain(context);
-  assert.equal(master.gain.value, 0.15);
+  assert.equal(master.gain.value, 0.075);
   engine.setVolume(2);
   assert.equal(
     master.gain.events.filter((event) => event.method === 'linear').at(-1)?.value,
-    0.3,
+    0.15,
   );
   engine.setVolume(Number.NaN);
   assert.equal(
@@ -468,7 +481,7 @@ void test('an interrupted context stops, and the next play resumes it', async ()
   engine.play(lowRequest);
   await until(() => states.at(-1) === 'playing');
   context.state = 'interrupted';
-  context.onstatechange?.();
+  context.emitState();
   assert.equal(states.at(-1), 'idle');
   assert.equal(created(), 1);
   assert.equal(context.closed, 0);
@@ -516,7 +529,36 @@ void test('stop goes idle without closing, and stop before play creates nothing'
   engine.stop();
   assert.equal(context.closed, 0);
   engine.dispose();
-  assert.equal(context.closed, 1);
+  assert.equal(context.closed, 0);
+});
+
+void test('dispose closes a context the reed created and leaves a passed-in context open', async () => {
+  const passed = setup();
+  passed.engine.play(lowRequest);
+  await until(() => passed.states.at(-1) === 'playing');
+  passed.engine.dispose();
+  assert.equal(passed.context.closed, 0);
+  assert.equal(passed.context.stateListenerCount(), 0);
+
+  const owned = new FakeContext();
+  const previous = globalThis.AudioContext;
+  globalThis.AudioContext = function AudioContext() {
+    return owned;
+  } as unknown as typeof AudioContext;
+  try {
+    const states: DroneStatus[] = [];
+    const engine = new ReedDrone((status) => {
+      states.push(status);
+    });
+    engine.play(lowRequest);
+    await until(() => states.at(-1) === 'playing');
+    assert.equal(owned.closed, 0);
+    engine.dispose();
+    assert.equal(owned.closed, 1);
+    assert.equal(owned.stateListenerCount(), 0);
+  } finally {
+    globalThis.AudioContext = previous;
+  }
 });
 
 void test('an unknown root throws before a context is created', () => {

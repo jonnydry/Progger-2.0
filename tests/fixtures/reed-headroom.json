@@ -1,0 +1,236 @@
+{
+  "sampleRate": 48000,
+  "gain": 0.15,
+  "fullScaleMargin": 0.8912509381337456,
+  "pluckAtSeconds": 3.7,
+  "shapesMeasured": 8779,
+  "droneSeconds": 12,
+  "bySize": [
+    {
+      "strings": 1,
+      "kind": "single",
+      "measured": 150,
+      "label": "string 1 fret 13",
+      "frets": [
+        13,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "peak": 0.6378752589225769,
+      "dbfs": -3.905284847468244,
+      "coherent": {
+        "peak": 0.8838632851839066,
+        "dbfs": -1.0722981178826847
+      }
+    },
+    {
+      "strings": 2,
+      "kind": "catalog",
+      "measured": 238,
+      "label": "E5 Dyad · E–A strings",
+      "frets": [
+        0,
+        2,
+        null,
+        null,
+        null,
+        null
+      ],
+      "peak": 0.5769426226615906,
+      "dbfs": -4.777347511599597,
+      "coherent": {
+        "peak": 0.8229306489229202,
+        "dbfs": -1.6927352534498397
+      }
+    },
+    {
+      "strings": 3,
+      "kind": "catalog",
+      "measured": 2402,
+      "label": "Dm13 3-note · D–G–B strings",
+      "frets": [
+        null,
+        null,
+        3,
+        4,
+        1,
+        null
+      ],
+      "peak": 0.5470727682113647,
+      "dbfs": -5.239098053559738,
+      "coherent": {
+        "peak": 0.7930607944726944,
+        "dbfs": -2.0138703849970794
+      }
+    },
+    {
+      "strings": 4,
+      "kind": "catalog",
+      "measured": 5150,
+      "label": "D#7#11 4-note · D–G–B–e strings",
+      "frets": [
+        null,
+        null,
+        11,
+        12,
+        10,
+        11
+      ],
+      "peak": 0.49486157298088074,
+      "dbfs": -6.110325374789056,
+      "coherent": {
+        "peak": 0.7408495992422104,
+        "dbfs": -2.6053989942298506
+      }
+    },
+    {
+      "strings": 5,
+      "kind": "catalog",
+      "measured": 226,
+      "label": "D# C-shape",
+      "frets": [
+        null,
+        6,
+        5,
+        3,
+        4,
+        3
+      ],
+      "peak": 0.420549601316452,
+      "dbfs": -7.523655488040523,
+      "coherent": {
+        "peak": 0.6665376275777817,
+        "dbfs": -3.5235065727703874
+      }
+    },
+    {
+      "strings": 6,
+      "kind": "catalog",
+      "measured": 613,
+      "label": "Bm9 E-shape",
+      "frets": [
+        19,
+        21,
+        19,
+        19,
+        19,
+        21
+      ],
+      "peak": 0.3633635640144348,
+      "dbfs": -8.793172467406903,
+      "coherent": {
+        "peak": 0.6093515902757645,
+        "dbfs": -4.302641022326275
+      }
+    }
+  ],
+  "drone": {
+    "root": "C",
+    "modeId": "locrian",
+    "octave": "layered",
+    "peak": 0.24598802626132965,
+    "dbfs": -12.181720642907315,
+    "nodeCount": 34,
+    "sound": "reed",
+    "note": "Non-Locrian modes share root and fifth, so Dorian stands in for them."
+  },
+  "sum": {
+    "strings": 1,
+    "label": "string 1 fret 13",
+    "frets": [
+      13,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "peak": 0.7453058362007141,
+    "dbfs": -2.5533095592983406
+  },
+  "passes": true,
+  "nodeCounts": {
+    "low": 28,
+    "layered": 34
+  },
+  "droneTop": [
+    {
+      "root": "C",
+      "modeId": "locrian",
+      "octave": "layered",
+      "peak": 0.24598802626132965,
+      "dbfs": -12.181720642907315,
+      "nodeCount": 34
+    },
+    {
+      "root": "Eb",
+      "modeId": "locrian",
+      "octave": "layered",
+      "peak": 0.21840772032737732,
+      "dbfs": -13.214640283053125,
+      "nodeCount": 34
+    },
+    {
+      "root": "D",
+      "modeId": "locrian",
+      "octave": "layered",
+      "peak": 0.2071746438741684,
+      "dbfs": -13.673267980407239,
+      "nodeCount": 34
+    },
+    {
+      "root": "F#",
+      "modeId": "dorian",
+      "octave": "layered",
+      "peak": 0.20094768702983856,
+      "dbfs": -13.938339766145472,
+      "nodeCount": 34
+    },
+    {
+      "root": "C#",
+      "modeId": "dorian",
+      "octave": "layered",
+      "peak": 0.19472581148147583,
+      "dbfs": -14.211529552958702,
+      "nodeCount": 34
+    },
+    {
+      "root": "Eb",
+      "modeId": "dorian",
+      "octave": "layered",
+      "peak": 0.19215333461761475,
+      "dbfs": -14.327041488269181,
+      "nodeCount": 34
+    }
+  ],
+  "listening": {
+    "root": "A",
+    "modeId": "dorian",
+    "octave": "layered",
+    "note": {
+      "frets": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        5
+      ],
+      "label": "A4, high E fret 5"
+    },
+    "chord": {
+      "frets": [
+        5,
+        7,
+        7,
+        5,
+        5,
+        5
+      ],
+      "label": "Am E-shape"
+    }
+  }
+}

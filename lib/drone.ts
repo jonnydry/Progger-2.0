@@ -1,5 +1,6 @@
 import { pitchClass, pretty, spell, SCALES, type Note } from './music.ts';
 
+// Guitar catalog spelling mixes sharps and flats: C# and F# sit beside Eb, Ab, and Bb.
 export const DRONE_ROOTS = [
   'C',
   'C#',
@@ -22,6 +23,7 @@ const MODE_SPECS = [
     id: 'ionian',
     scaleId: 'major',
     name: 'Ionian',
+    // Natural 7 is the leading tone Mixolydian flattens. The perfect 4th is shared with the five darker modes, and Lydian already marks the sharp 4.
     colourDegree: '7',
     colourLabel: 'natural 7',
   },

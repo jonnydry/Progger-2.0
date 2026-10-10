@@ -1,6 +1,6 @@
 import { QUALITIES, voicings } from '../lib/harmony.ts';
 import { DRONE_ROOTS, type DroneModeId, type DroneOctave } from '../lib/drone.ts';
-import { ReedDrone } from '../lib/drone-audio.ts';
+import { DRONE_MAX_LINEAR_GAIN, ReedDrone } from '../lib/drone-audio.ts';
 import { ROOTS } from '../lib/music.ts';
 import { VoicingPlayer } from '../lib/voicing-audio.ts';
 
@@ -9,7 +9,14 @@ const FULL_SCALE_MARGIN = 10 ** (-1 / 20);
 const PLUCK_AT = 3.7;
 const DRONE_SECONDS = 12;
 
-type PluckCandidate = { frets: number[]; label: string; peak: number; dbfs: number };
+type PluckCandidate = {
+  frets: (number | null)[];
+  label: string;
+  strings: number;
+  kind: 'catalog' | 'single';
+  peak: number;
+  dbfs: number;
+};
 type DroneCandidate = {
   root: string;
   modeId: DroneModeId;
@@ -22,7 +29,9 @@ type DroneCandidate = {
 declare global {
   interface Window {
     __report?: unknown;
-    __clip?: string;
+    __clipAlone?: string;
+    __clipNote?: string;
+    __clipChord?: string;
   }
 }
 
@@ -69,22 +78,59 @@ function asRunning(offline: OfflineAudioContext, now: number): AudioContext {
   }) as unknown as AudioContext;
 }
 
-function sixStringShapes(): { frets: number[]; label: string }[] {
-  const seen = new Map<string, string>();
+const LISTEN_NOTE: (number | null)[] = [null, null, null, null, null, 5];
+const LISTEN_CHORD: (number | null)[] = [5, 7, 7, 5, 5, 5];
+
+function fretKey(frets: readonly (number | null)[]): string {
+  return frets.map((fret) => (fret === null ? 'x' : String(fret))).join(',');
+}
+
+function collectShapes(): {
+  frets: (number | null)[];
+  label: string;
+  strings: number;
+  kind: 'catalog' | 'single';
+}[] {
+  const seen = new Map<
+    string,
+    { frets: (number | null)[]; label: string; strings: number; kind: 'catalog' | 'single' }
+  >();
   for (const root of ROOTS) {
     for (const quality of QUALITIES) {
       for (const voicing of voicings(root, quality)) {
-        if (voicing.frets.some((fret) => fret === null)) continue;
-        const frets = voicing.frets.filter((fret): fret is number => fret !== null);
-        const key = frets.join(',');
-        if (!seen.has(key)) seen.set(key, `${root}${quality.symbol} ${voicing.name}`);
+        const strings = voicing.frets.filter((fret) => fret !== null).length;
+        if (strings < 1) continue;
+        const key = fretKey(voicing.frets);
+        if (!seen.has(key)) {
+          seen.set(key, {
+            frets: [...voicing.frets],
+            label: `${root}${quality.symbol} ${voicing.name}`,
+            strings,
+            kind: 'catalog',
+          });
+        }
       }
     }
   }
-  return [...seen.entries()].map(([key, label]) => ({
-    frets: key.split(',').map((fret) => Number(fret)),
-    label,
-  }));
+  const singles: {
+    frets: (number | null)[];
+    label: string;
+    strings: number;
+    kind: 'single';
+  }[] = [];
+  for (let string = 0; string < 6; string += 1) {
+    for (let fret = 0; fret <= 24; fret += 1) {
+      const frets: (number | null)[] = [null, null, null, null, null, null];
+      frets[string] = fret;
+      singles.push({
+        frets,
+        label: `string ${string + 1} fret ${fret}`,
+        strings: 1,
+        kind: 'single',
+      });
+    }
+  }
+  return [...seen.values(), ...singles];
 }
 
 async function untilPlaying(read: () => string): Promise<void> {
@@ -97,7 +143,11 @@ async function untilPlaying(read: () => string): Promise<void> {
   throw new Error(`Audio stayed ${read()}.`);
 }
 
-async function renderPluck(frets: readonly number[], when: number, tail: number): Promise<AudioBuffer> {
+async function renderPluck(
+  frets: readonly (number | null)[],
+  when: number,
+  tail: number,
+): Promise<AudioBuffer> {
   const offline = new OfflineAudioContext(2, Math.ceil(RATE * (when + tail)), RATE);
   let state = 'idle';
   const player = new VoicingPlayer(
@@ -140,9 +190,9 @@ async function renderSum(
   root: string,
   modeId: DroneModeId,
   octave: DroneOctave,
-  frets: readonly number[],
+  frets: readonly (number | null)[],
+  seconds = Math.max(PLUCK_AT + 3, DRONE_SECONDS),
 ): Promise<AudioBuffer> {
-  const seconds = Math.max(PLUCK_AT + 3, DRONE_SECONDS);
   const offline = new OfflineAudioContext(2, Math.ceil(RATE * seconds), RATE);
   let droneState = 'idle';
   const engine = new ReedDrone(
@@ -213,19 +263,34 @@ function wavBase64(buffer: AudioBuffer): string {
 }
 
 async function main() {
-  const shapes = sixStringShapes();
-  let loudestPluck: PluckCandidate | null = null;
+  const shapes = collectShapes();
+  const buckets = new Map<string, { measured: number; best: PluckCandidate | null }>();
+  const bucketFor = (shape: (typeof shapes)[number]) =>
+    shape.kind === 'single' ? 'single' : `catalog:${shape.strings}`;
   for (let index = 0; index < shapes.length; index += 1) {
     const shape = shapes[index];
-    if (index % 40 === 0) status(`Pluck ${index + 1} of ${shapes.length}`);
-    const peak = peakOf(await renderPluck(shape.frets, 0, 0.5));
-    if (!loudestPluck || peak > loudestPluck.peak) {
-      loudestPluck = { frets: shape.frets, label: shape.label, peak, dbfs: dbfs(peak) };
+    if (index % 400 === 0) status(`Pluck ${index + 1} of ${shapes.length}`);
+    const peak = peakOf(await renderPluck(shape.frets, 0, 0.06 + shape.strings * 0.05));
+    const key = bucketFor(shape);
+    const bucket = buckets.get(key) ?? { measured: 0, best: null };
+    bucket.measured += 1;
+    if (!bucket.best || peak > bucket.best.peak) {
+      bucket.best = {
+        frets: shape.frets,
+        label: shape.label,
+        strings: shape.strings,
+        kind: shape.kind,
+        peak,
+        dbfs: dbfs(peak),
+      };
     }
+    buckets.set(key, bucket);
   }
-  if (!loudestPluck) throw new Error('No six-string voicing was rendered.');
-  const confirmedPeak = peakOf(await renderPluck(loudestPluck.frets, 0, 3));
-  loudestPluck = { ...loudestPluck, peak: confirmedPeak, dbfs: dbfs(confirmedPeak) };
+  for (const bucket of buckets.values()) {
+    if (!bucket.best) continue;
+    const peak = peakOf(await renderPluck(bucket.best.frets, 0, 3));
+    bucket.best = { ...bucket.best, peak, dbfs: dbfs(peak) };
+  }
 
   const octaves: DroneOctave[] = ['low', 'layered'];
   const modes: DroneModeId[] = ['dorian', 'locrian'];
@@ -253,28 +318,65 @@ async function main() {
   const loudestDrone = drones.reduce((best, candidate) =>
     candidate.peak > best.peak ? candidate : best,
   );
-  status(`Summing reed ${loudestDrone.root} ${loudestDrone.modeId} with ${loudestPluck.label}`);
-  const sumPeak = peakOf(
-    await renderSum(loudestDrone.root, loudestDrone.modeId, loudestDrone.octave, loudestPluck.frets),
+  const bySize = [1, 2, 3, 4, 5, 6].map((strings) => {
+    const catalog = buckets.get(`catalog:${strings}`);
+    const single = strings === 1 ? buckets.get('single') : undefined;
+    const best = [catalog?.best, single?.best].reduce<PluckCandidate | null>(
+      (winner, candidate) => {
+        if (!candidate) return winner;
+        if (!winner || candidate.peak > winner.peak) return candidate;
+        return winner;
+      },
+      null,
+    );
+    if (!best) throw new Error(`No voicing of size ${strings} was rendered.`);
+    const coherentPeak = loudestDrone.peak + best.peak;
+    return {
+      strings,
+      kind: best.kind,
+      measured: (catalog?.measured ?? 0) + (single?.measured ?? 0),
+      label: best.label,
+      frets: best.frets,
+      peak: best.peak,
+      dbfs: best.dbfs,
+      coherent: { peak: coherentPeak, dbfs: dbfs(coherentPeak) },
+    };
+  });
+  const worst = bySize.reduce((loudest, row) =>
+    row.coherent.peak > loudest.coherent.peak ? row : loudest,
   );
-  const coherent = loudestDrone.peak + loudestPluck.peak;
-  const clip = await renderDrone('A', 'dorian', 'layered', 8);
-  window.__clip = wavBase64(clip.buffer);
+  status(`Summing reed ${loudestDrone.root} ${loudestDrone.modeId} with ${worst.label}`);
+  const sumPeak = peakOf(
+    await renderSum(loudestDrone.root, loudestDrone.modeId, loudestDrone.octave, worst.frets),
+  );
+  const passes = bySize.every((row) => row.coherent.peak <= FULL_SCALE_MARGIN);
+  const alone = await renderDrone('A', 'dorian', 'layered', 8);
+  const withNote = await renderSum('A', 'dorian', 'layered', LISTEN_NOTE, 8);
+  const withChord = await renderSum('A', 'dorian', 'layered', LISTEN_CHORD, 8);
+  window.__clipAlone = wavBase64(alone.buffer);
+  window.__clipNote = wavBase64(withNote);
+  window.__clipChord = wavBase64(withChord);
   window.__report = {
     sampleRate: RATE,
-    gain: 0.3,
+    gain: DRONE_MAX_LINEAR_GAIN,
+    fullScaleMargin: FULL_SCALE_MARGIN,
     pluckAtSeconds: PLUCK_AT,
     shapesMeasured: shapes.length,
     droneSeconds: DRONE_SECONDS,
-    pluck: loudestPluck,
+    bySize,
     drone: {
       ...loudestDrone,
       sound: 'reed',
       note: 'Non-Locrian modes share root and fifth, so Dorian stands in for them.',
     },
-    sum: { peak: sumPeak, dbfs: dbfs(sumPeak) },
-    coherent: { peak: coherent, dbfs: dbfs(coherent) },
-    passes: sumPeak <= FULL_SCALE_MARGIN && coherent <= FULL_SCALE_MARGIN,
+    sum: {
+      strings: worst.strings,
+      label: worst.label,
+      frets: worst.frets,
+      peak: sumPeak,
+      dbfs: dbfs(sumPeak),
+    },
+    passes,
     nodeCounts: {
       low: drones.find((item) => item.root === 'A' && item.modeId === 'dorian' && item.octave === 'low')
         ?.nodeCount,
@@ -283,7 +385,15 @@ async function main() {
       )?.nodeCount,
     },
     droneTop: [...drones].sort((a, b) => b.peak - a.peak).slice(0, 6),
+    listening: {
+      root: 'A',
+      modeId: 'dorian',
+      octave: 'layered',
+      note: { frets: LISTEN_NOTE, label: 'A4, high E fret 5' },
+      chord: { frets: LISTEN_CHORD, label: 'Am E-shape' },
+    },
   };
+  if (!passes) throw new Error('A coherent sum is above -1 dBFS.');
   status('done');
 }
 

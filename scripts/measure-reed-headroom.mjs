@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -94,7 +95,7 @@ try {
   const started = Date.now();
   let report;
   for (;;) {
-    if (Date.now() - started > 12 * 60 * 1000) throw new Error('Headroom render timed out.');
+    if (Date.now() - started > 20 * 60 * 1000) throw new Error('Headroom render timed out.');
     const evaluated = await page.send('Runtime.evaluate', {
       expression: 'window.__report ? JSON.stringify(window.__report) : ""',
       returnByValue: true,
@@ -108,21 +109,34 @@ try {
   }
   if (report.error) throw new Error(report.error);
   mkdirSync(outDir, { recursive: true });
-  writeFileSync(join(outDir, 'reed-headroom.json'), `${JSON.stringify(report, null, 2)}\n`);
-  const clipEval = await page.send('Runtime.evaluate', {
-    expression: 'window.__clip || ""',
-    returnByValue: true,
-  });
-  const clip = clipEval.result?.value;
-  if (!clip) throw new Error('The A Dorian clip was not rendered.');
-  writeFileSync(join(outDir, 'drone-reed-a-dorian.wav'), Buffer.from(clip, 'base64'));
+  const fixtureDir = join(process.cwd(), 'tests/fixtures');
+  mkdirSync(fixtureDir, { recursive: true });
+  const json = `${JSON.stringify(report, null, 2)}\n`;
+  writeFileSync(join(outDir, 'reed-headroom.json'), json);
+  writeFileSync(join(fixtureDir, 'reed-headroom.json'), json);
+  const clips = [
+    ['__clipAlone', 'reed-0.15-alone.wav', 'reed-0.15-alone.mp4'],
+    ['__clipNote', 'reed-0.15-single-note.wav', 'reed-0.15-single-note.mp4'],
+    ['__clipChord', 'reed-0.15-six-string.wav', 'reed-0.15-six-string.mp4'],
+  ];
+  for (const [expression, wavName, mp4Name] of clips) {
+    const clipEval = await page.send('Runtime.evaluate', {
+      expression: `window.${expression} || ""`,
+      returnByValue: true,
+    });
+    const clip = clipEval.result?.value;
+    if (!clip) throw new Error(`${expression} was not rendered.`);
+    const wavPath = join(outDir, wavName);
+    writeFileSync(wavPath, Buffer.from(clip, 'base64'));
+    await waveToMp4(wavPath, join(outDir, mp4Name));
+  }
   console.log(
     JSON.stringify(
       {
-        pluck: report.pluck,
+        gain: report.gain,
+        bySize: report.bySize,
         drone: report.drone,
         sum: report.sum,
-        coherent: report.coherent,
         passes: report.passes,
         nodeCounts: report.nodeCounts,
       },
@@ -132,6 +146,38 @@ try {
   );
 } finally {
   stop();
+}
+
+function waveToMp4(wavPath, mp4Path) {
+  mkdirSync(dirname(mp4Path), { recursive: true });
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn(
+      'ffmpeg',
+      [
+        '-y',
+        '-i',
+        wavPath,
+        '-filter_complex',
+        '[0:a]showwaves=s=960x240:mode=cline:rate=30:colors=0xC4A574,format=yuv420p[v]',
+        '-map',
+        '[v]',
+        '-map',
+        '0:a',
+        '-c:v',
+        'libx264',
+        '-c:a',
+        'aac',
+        '-shortest',
+        mp4Path,
+      ],
+      { stdio: 'ignore' },
+    );
+    ffmpeg.on('error', reject);
+    ffmpeg.on('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg exited ${code} for ${mp4Path}`));
+    });
+  });
 }
 
 function connect(url) {

@@ -16,7 +16,8 @@ export type ReedRequest = {
   octave: DroneOctave;
 };
 
-export const DRONE_MAX_LINEAR_GAIN = 0.3;
+/** Volume 1 stays at least 1 dB under full scale when added to one plucked note. */
+export const DRONE_MAX_LINEAR_GAIN = 0.15;
 
 export const DRONE_LIMITER = {
   threshold: -1,
@@ -334,6 +335,8 @@ export class ReedDrone {
   private cancelResume: (() => void) | null = null;
   private readonly onStatus: (status: DroneStatus, message?: string) => void;
   private readonly createContext: () => AudioContext;
+  private readonly ownsContext: boolean;
+  private onContextState: (() => void) | null = null;
   private readonly documentTarget: VisibilityTarget | null;
   private readonly windowTarget: WindowTarget | null;
   private readonly onVisibility = () => {
@@ -348,6 +351,7 @@ export class ReedDrone {
     options: ReedOptions = {},
   ) {
     this.onStatus = onStatus;
+    this.ownsContext = options.createContext === undefined;
     this.createContext = options.createContext ?? (() => new AudioContext());
     this.documentTarget =
       options.document === undefined
@@ -423,9 +427,12 @@ export class ReedDrone {
     this.documentTarget?.removeEventListener('visibilitychange', this.onVisibility);
     this.windowTarget?.removeEventListener('pagehide', this.onPageHide);
     if (this.context) {
-      this.context.onstatechange = null;
+      if (this.onContextState) {
+        this.context.removeEventListener('statechange', this.onContextState);
+        this.onContextState = null;
+      }
       this.fadeVoices(this.context.currentTime, HIDE_FADE);
-      void this.context.close().catch(() => {});
+      if (this.ownsContext) void this.context.close().catch(() => {});
       this.context = null;
     }
     this.master = null;
@@ -488,11 +495,12 @@ export class ReedDrone {
     limiter.release.value = DRONE_LIMITER.release;
     master.connect(limiter);
     limiter.connect(context.destination);
-    context.onstatechange = () => {
+    this.onContextState = () => {
       if (this.phase !== 'playing') return;
       if (context.state === 'running' || context.state === 'closed') return;
       this.halt(HIDE_FADE);
     };
+    context.addEventListener('statechange', this.onContextState);
     this.context = context;
     this.master = master;
     void context.resume().catch(() => {});

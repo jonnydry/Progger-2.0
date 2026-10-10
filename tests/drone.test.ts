@@ -18,6 +18,10 @@ import {
 import { SCALES } from '../lib/music.ts';
 
 void test('drone roots sit on MIDI pitch classes above C2', () => {
+  assert.deepEqual(
+    [...DRONE_ROOTS],
+    ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'],
+  );
   assert.equal(DRONE_ROOTS.length, 12);
   assert.deepEqual(
     DRONE_ROOTS.map((root) => lowRootMidi(root) - 36),
