@@ -21,7 +21,7 @@ import {
   type GainRamp,
   type ReedRequest,
 } from '../lib/drone-audio.ts';
-import { CELLO_FORMATS, CELLO_SAMPLES, midiHz, scaleWalk } from '../lib/drone.ts';
+import { CELLO_SAMPLES, midiHz, scaleWalk } from '../lib/drone.ts';
 import { droneControlName } from '../lib/drone-controls.ts';
 import { ExploreDrone } from '../lib/drone-session.ts';
 
@@ -79,6 +79,8 @@ class Oscillator extends FakeNode {
 class BufferSource extends FakeNode {
   buffer: FakeBuffer | null = null;
   loop = false;
+  loopStart = 0;
+  loopEnd = 0;
   playbackRate = new Param();
   starts: number[] = [];
   stops: number[] = [];
@@ -106,6 +108,9 @@ class FakeBuffer {
   }
   getChannelData(channel: number) {
     return this.channels[channel];
+  }
+  get duration() {
+    return this.length / this.sampleRate;
   }
 }
 
@@ -1401,7 +1406,7 @@ void test('a rejected cello fetch keeps the sounding voice and the next choice r
   await until(
     () => envelopesTargeting(rig.context, CELLO_GAINS.envelope).length > 0,
   );
-  assert.equal(urls.length, CELLO_SAMPLES.length * (CELLO_FORMATS.length + 1));
+  assert.equal(urls.length, CELLO_SAMPLES.length * 2);
   assert.equal(rig.controller.snapshot().sound, 'cello');
   assert.equal(rig.controller.snapshot().pressed, true);
   rig.controller.dispose();
@@ -1452,44 +1457,11 @@ void test('a key change during a failed cello switch retunes the voice that stay
   );
   assert.equal(envelopesTargeting(rig.context, CELLO_GAINS.envelope).length, 0);
   await new Promise((resolve) => setTimeout(resolve, 40));
-  assert.equal(urls.length, CELLO_SAMPLES.length * CELLO_FORMATS.length);
+  assert.equal(urls.length, CELLO_SAMPLES.length);
   rig.controller.dispose();
 });
 
-void test('a failed aac decode plays the opus loops', async () => {
-  const urls: string[] = [];
-  const rig = sessionSoundRig(async (input) => {
-    const url = fetchUrl(input);
-    urls.push(url);
-    const bytes = new Uint8Array(8);
-    bytes[0] = url.endsWith('.webm') ? 2 : 1;
-    return new Response(bytes);
-  });
-  (
-    rig.context as FakeContext & {
-      decodeAudioData: (bytes: ArrayBuffer) => Promise<FakeBuffer>;
-    }
-  ).decodeAudioData = (bytes) => {
-    if (new Uint8Array(bytes)[0] === 1) return Promise.reject(new Error('aac'));
-    return Promise.resolve(celloBuffer(rig.context));
-  };
-  rig.controller.toggle();
-  await until(
-    () => envelopesTargeting(rig.context, REED_GAINS.envelope).length > 0,
-  );
-  rig.controller.setSound('cello');
-  await until(
-    () => envelopesTargeting(rig.context, CELLO_GAINS.envelope).length > 0,
-  );
-  assert.equal(rig.controller.snapshot().sound, 'cello');
-  assert.equal(rig.controller.snapshot().pressed, true);
-  assert.equal(rig.controller.snapshot().celloAvailable, true);
-  assert.ok(urls.some((url) => url.endsWith('.m4a')));
-  assert.ok(urls.some((url) => url.endsWith('.webm')));
-  rig.controller.dispose();
-});
-
-void test('a late body from a failed cello format cannot replace the format that plays', async () => {
+void test('a late cello body cannot replace the samples a retry decodes', async () => {
   let releaseLate: () => void = () => {};
   const lateBody = new Promise<ArrayBuffer>((resolve) => {
     releaseLate = () => {
@@ -1499,21 +1471,22 @@ void test('a late body from a failed cello format cannot replace the format that
     };
   });
   const seen: number[] = [];
+  let calls = 0;
   const rig = sessionSoundRig(async (input) => {
     const url = fetchUrl(input);
-    if (url.endsWith('.webm')) {
-      const bytes = new Uint8Array(8);
-      bytes[0] = 2;
-      return new Response(bytes);
-    }
-    if (url.endsWith('cello-f4.m4a')) {
+    calls += 1;
+    const firstWave = calls <= CELLO_SAMPLES.length;
+    if (firstWave && url.endsWith('cello-f4.m4a')) {
       return {
         ok: true,
         status: 200,
         arrayBuffer: () => lateBody,
       } as Response;
     }
-    return new Response(null, { status: 404 });
+    if (firstWave) return new Response(null, { status: 404 });
+    const bytes = new Uint8Array(8);
+    bytes[0] = 2;
+    return new Response(bytes);
   });
   (
     rig.context as FakeContext & {
@@ -1532,6 +1505,10 @@ void test('a late body from a failed cello format cannot replace the format that
   );
   rig.controller.setSound('cello');
   await until(
+    () => calls >= CELLO_SAMPLES.length && rig.controller.snapshot().sound === 'reed',
+  );
+  rig.controller.setSound('cello');
+  await until(
     () =>
       envelopesTargeting(rig.context, CELLO_GAINS.envelope).length > 0 ||
       seen.includes(1),
@@ -1547,17 +1524,16 @@ void test('a late body from a failed cello format cannot replace the format that
 });
 
 void test('a key change during cello decode waits for the load already running', async () => {
-  let releaseOpus: () => void = () => {};
-  const opusGate = new Promise<void>((resolve) => {
-    releaseOpus = resolve;
+  let releaseDecode: () => void = () => {};
+  const decodeGate = new Promise<void>((resolve) => {
+    releaseDecode = resolve;
   });
-  let startedOpus = false;
+  let startedDecode = false;
   const urls: string[] = [];
   const rig = sessionSoundRig(async (input) => {
-    const url = fetchUrl(input);
-    urls.push(url);
+    urls.push(fetchUrl(input));
     const bytes = new Uint8Array(8);
-    bytes[0] = url.endsWith('.webm') ? 2 : 1;
+    bytes[0] = 2;
     return new Response(bytes);
   });
   (
@@ -1567,10 +1543,10 @@ void test('a key change during cello decode waits for the load already running',
   ).decodeAudioData = (bytes) => {
     const mark = new Uint8Array(bytes)[0] ?? 0;
     if (mark !== 2) return Promise.reject(new Error('aac'));
-    if (!startedOpus) {
-      startedOpus = true;
+    if (!startedDecode) {
+      startedDecode = true;
       rig.controller.setRequest({ root: 'C', modeId: 'ionian', octave: 'low' });
-      return opusGate.then(() => celloBuffer(rig.context));
+      return decodeGate.then(() => celloBuffer(rig.context));
     }
     return Promise.resolve(celloBuffer(rig.context));
   };
@@ -1579,22 +1555,15 @@ void test('a key change during cello decode waits for the load already running',
     () => envelopesTargeting(rig.context, REED_GAINS.envelope).length > 0,
   );
   rig.controller.setSound('cello');
-  await until(() => startedOpus);
+  await until(() => startedDecode);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  releaseOpus();
+  releaseDecode();
   await until(
     () =>
       envelopesTargeting(rig.context, CELLO_GAINS.envelope).length > 0 ||
       urls.filter((url) => url.endsWith('.m4a')).length > CELLO_SAMPLES.length,
   );
-  assert.equal(
-    urls.filter((url) => url.endsWith('.m4a')).length,
-    CELLO_SAMPLES.length,
-  );
-  assert.equal(
-    urls.filter((url) => url.endsWith('.webm')).length,
-    CELLO_SAMPLES.length,
-  );
+  assert.equal(urls.length, CELLO_SAMPLES.length);
   assert.equal(rig.controller.snapshot().sound, 'cello');
   assert.equal(rig.controller.snapshot().pressed, true);
   assert.equal(rig.controller.snapshot().celloAvailable, true);
@@ -1602,24 +1571,7 @@ void test('a key change during cello decode waits for the load already running',
   rig.controller.dispose();
 });
 
-void test('opus is fetched when the browser prefers it', async () => {
-  const urls: string[] = [];
-  const rig = sessionSoundRig(async (input) => {
-    urls.push(fetchUrl(input));
-    return new Response(new Uint8Array(16));
-  }, (mime) => (mime.includes('webm') ? 'probably' : ''));
-  rig.controller.setSound('cello');
-  rig.controller.toggle();
-  await until(
-    () => envelopesTargeting(rig.context, CELLO_GAINS.envelope).length > 0,
-  );
-  assert.equal(urls.length, CELLO_SAMPLES.length);
-  assert.ok(urls.every((url) => url.endsWith('.webm')));
-  assert.equal(rig.controller.snapshot().sound, 'cello');
-  rig.controller.dispose();
-});
-
-void test('a failed decode of every cello format keeps the current sound and marks cello unavailable', async () => {
+void test('a failed cello decode keeps the current sound and marks cello unavailable', async () => {
   const urls: string[] = [];
   const rig = sessionSoundRig(async (input) => {
     urls.push(fetchUrl(input));
@@ -1652,7 +1604,7 @@ void test('a failed decode of every cello format keeps the current sound and mar
   );
   assert.equal(swell[0].gain.events.length, scheduled);
   assert.equal(masterGain(rig.context).gain.value, 1);
-  assert.equal(urls.length, CELLO_SAMPLES.length * CELLO_FORMATS.length);
+  assert.equal(urls.length, CELLO_SAMPLES.length);
   const fetched = urls.length;
   rig.controller.setSound('cello');
   await new Promise((resolve) => setTimeout(resolve, 30));
@@ -1712,10 +1664,7 @@ void test('voice and dispose disconnects wait for the room after the dry fade', 
   }
 });
 
-function sessionSoundRig(
-  fetchImpl?: typeof fetch,
-  canPlayType?: (mime: string) => string,
-) {
+function sessionSoundRig(fetchImpl?: typeof fetch) {
   const context = new FakeContext();
   (
     context as FakeContext & {
@@ -1730,7 +1679,6 @@ function sessionSoundRig(
         onWalk,
         onHeld,
         onCelloUnavailable,
-        canPlayType,
         fetchImpl,
         createContext: () => context as unknown as AudioContext,
         document: documentTarget,

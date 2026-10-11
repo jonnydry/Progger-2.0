@@ -1,8 +1,5 @@
 import {
   CELLO_SAMPLES,
-  celloFormatOrder,
-  celloSources,
-  type CelloFormatId,
   type DroneLayer,
   type DroneModeId,
   type DroneOctave,
@@ -375,17 +372,9 @@ type ReedOptions = {
    * The second request is the one that failed.
    */
   onHeld?: (heard: ReedRequest, attempted: ReedRequest) => void;
-  /** Every cello container failed to decode. `hold` keeps the current voice. */
+  /** The cello loops failed to decode. `hold` keeps the current voice. */
   onCelloUnavailable?: (mode: 'hold' | 'fallback') => void;
-  canPlayType?: (mime: string) => string;
 };
-
-function defaultCanPlay(mime: string): string {
-  if (typeof document === 'undefined') return '';
-  const audio = document.createElement('audio');
-  if (typeof audio.canPlayType !== 'function') return '';
-  return audio.canPlayType(mime);
-}
 
 class CelloDecodeError extends Error {
   constructor(file: string) {
@@ -980,9 +969,8 @@ export class ReedDrone {
   private celloBuffers = new Map<string, AudioBuffer>();
   private celloBlocked = false;
   private celloLoad: Promise<void> | null = null;
-  private readonly formatLoads = new Map<CelloFormatId, Promise<void>>();
+  private sampleLoad: Promise<void> | null = null;
   private readonly fetchImpl: typeof fetch;
-  private readonly canPlayType: (mime: string) => string;
   private readonly onCelloUnavailable: (mode: 'hold' | 'fallback') => void;
   private readonly onWalk: (index: number | null) => void;
   private resumeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1015,7 +1003,6 @@ export class ReedDrone {
     this.onHeld = options.onHeld ?? (() => {});
     this.onCelloUnavailable = options.onCelloUnavailable ?? (() => {});
     this.onWalk = options.onWalk ?? (() => {});
-    this.canPlayType = options.canPlayType ?? defaultCanPlay;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.ownsContext = options.createContext === undefined;
     this.createContext = options.createContext ?? (() => new AudioContext());
@@ -1077,14 +1064,13 @@ export class ReedDrone {
     );
   }
 
-  /** Fetch the first playable cello container. Decode waits until a context exists. */
+  /** Fetch the cello loops. Decode waits until a context exists. */
   preloadCello(): Promise<void> {
     if (this.celloBlocked || this.celloBuffers.size === CELLO_SAMPLES.length) {
       return Promise.resolve();
     }
-    const format = celloFormatOrder(this.canPlayType)[0];
-    return this.fetchFormat(format).catch(() => {
-      // Playback tries the other container and reports a failed decode.
+    return this.fetchSamples().catch(() => {
+      // Playback reports a failed decode. A failed fetch retries on the next choice.
     });
   }
 
@@ -1339,35 +1325,33 @@ export class ReedDrone {
     this.voices = [];
   }
 
-  private fetchFormat(format: CelloFormatId): Promise<void> {
-    const pending = this.formatLoads.get(format);
-    if (pending) return pending;
-    const load = this.readFormat(format).catch((error: unknown) => {
-      this.formatLoads.delete(format);
+  private fetchSamples(): Promise<void> {
+    if (this.sampleLoad) return this.sampleLoad;
+    const load = this.readSamples().catch((error: unknown) => {
+      this.sampleLoad = null;
       throw error;
     });
-    this.formatLoads.set(format, load);
+    this.sampleLoad = load;
     return load;
   }
 
-  private async readFormat(format: CelloFormatId): Promise<void> {
+  private async readSamples(): Promise<void> {
     const loaded = new Map<string, ArrayBuffer>();
     await Promise.all(
-      celloSources(format).map(async (source) => {
-        const response = await this.fetchImpl(source.href);
+      CELLO_SAMPLES.map(async (sample) => {
+        const response = await this.fetchImpl(sample.href);
         if (!response.ok) {
           throw new Error(`Cello sample failed (${response.status}).`);
         }
         // Promise.all rejects on the first failure and leaves the other
-        // bodies running. Those bodies share sample ids with the next
-        // format, so a late body stays in this map and is dropped.
-        loaded.set(source.id, await response.arrayBuffer());
+        // bodies running. A late body stays in this map and is dropped.
+        loaded.set(sample.file, await response.arrayBuffer());
       }),
     );
     for (const [id, bytes] of loaded) this.celloBytes.set(id, bytes);
   }
 
-  private async decodeFormat(context: BaseAudioContext): Promise<void> {
+  private async decodeSamples(context: BaseAudioContext): Promise<void> {
     const pending: { file: string; bytes: ArrayBuffer }[] = [];
     for (const sample of CELLO_SAMPLES) {
       if (this.celloBuffers.has(sample.file)) continue;
@@ -1390,8 +1374,7 @@ export class ReedDrone {
     if (this.celloBlocked) return Promise.reject(new CelloDecodeError('cello'));
     if (this.celloBuffers.size === CELLO_SAMPLES.length) return Promise.resolve();
     // A key change while the loops are decoding starts another play.
-    // That play waits for this load. A second load would fetch AAC again
-    // and clear the Opus bytes this decode is still reading.
+    // That play waits for this load instead of fetching the files again.
     if (!this.celloLoad) {
       this.celloLoad = this.loadCello(context).finally(() => {
         this.celloLoad = null;
@@ -1401,24 +1384,16 @@ export class ReedDrone {
   }
 
   private async loadCello(context: BaseAudioContext): Promise<void> {
-    const order = celloFormatOrder(this.canPlayType);
-    let last: unknown;
-    let decodeFailures = 0;
-    for (const format of order) {
-      try {
-        await this.fetchFormat(format);
-        await this.decodeFormat(context);
-        return;
-      } catch (error) {
-        last = error;
-        this.celloBytes.clear();
-        this.celloBuffers.clear();
-        this.formatLoads.delete(format);
-        if (error instanceof CelloDecodeError) decodeFailures += 1;
-      }
+    try {
+      await this.fetchSamples();
+      await this.decodeSamples(context);
+    } catch (error) {
+      this.celloBytes.clear();
+      this.celloBuffers.clear();
+      this.sampleLoad = null;
+      if (error instanceof CelloDecodeError) this.celloBlocked = true;
+      throw error instanceof Error ? error : new Error('Cello samples failed.');
     }
-    if (decodeFailures === order.length) this.celloBlocked = true;
-    throw last instanceof Error ? last : new Error('Cello samples failed.');
   }
 
   private runWalk(notes: ReturnType<typeof scaleWalk>): void {
