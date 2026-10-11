@@ -60,6 +60,52 @@ export const REED_TIMING = {
   stopTail: 0.02,
 } as const;
 
+/** The exponential envelope scheduled in buildReed. Stop reads this instead of gain.value. */
+export type GainRamp = {
+  start: number;
+  target: number;
+  startTime: number;
+  endTime: number;
+};
+
+type HoldParam = Omit<AudioParam, 'cancelAndHoldAtTime'> & {
+  cancelAndHoldAtTime?: (cancelTime: number) => AudioParam;
+};
+
+/** Value of an exponential ramp at `time`. Web Audio uses v(t) = start * (target/start) ^ progress. */
+export function exponentialRampValue(ramp: GainRamp, time: number): number {
+  if (!(ramp.start > 0) || !(ramp.target > 0)) return ramp.target;
+  if (ramp.endTime <= ramp.startTime || time <= ramp.startTime)
+    return ramp.start;
+  if (time >= ramp.endTime) return ramp.target;
+  const progress = (time - ramp.startTime) / (ramp.endTime - ramp.startTime);
+  return ramp.start * (ramp.target / ramp.start) ** progress;
+}
+
+/**
+ * Hold the in-progress swell, then fade to silence.
+ * Chrome has cancelAndHoldAtTime. Firefox does not, and gain.value is stale mid-ramp,
+ * so the fallback cancels at `now` and writes the ramp value at that instant.
+ */
+export function holdGainThenFade(
+  param: HoldParam,
+  ramp: GainRamp,
+  stopAt: number,
+  release: number,
+  now = stopAt,
+): void {
+  const time = Math.min(now, stopAt);
+  // Before the swell's setValueAtTime, Chrome's hold keeps the default gain of 1.
+  const rampStarted = time >= ramp.startTime;
+  if (rampStarted && typeof param.cancelAndHoldAtTime === 'function') {
+    param.cancelAndHoldAtTime(stopAt);
+  } else {
+    param.cancelScheduledValues(time);
+    param.setValueAtTime(exponentialRampValue(ramp, time), time);
+  }
+  param.linearRampToValueAtTime(0, stopAt + release);
+}
+
 const REED_CENTS = [-3.5, 3.5] as const;
 
 export function clampDroneVolume(volume: number): number {
@@ -168,8 +214,11 @@ function createReedVoice(
   };
   const kit: VoiceKit = { gain, osc, filter, player, convolver };
   let envelope: GainNode;
+  let ramp: GainRamp;
   try {
-    envelope = buildReed(context, destination, pitches, when, attack, kit);
+    const built = buildReed(context, destination, pitches, when, attack, kit);
+    envelope = built.envelope;
+    ramp = built.ramp;
   } catch (error) {
     for (const source of sources) {
       try {
@@ -185,12 +234,13 @@ function createReedVoice(
     nodeCount: nodes.length,
     stop(stopAt: number, fade: number) {
       const release = Math.max(fade, 0.015);
-      envelope.gain.cancelScheduledValues(stopAt);
-      envelope.gain.setValueAtTime(
-        Math.max(envelope.gain.value, REED_GAINS.silence),
+      holdGainThenFade(
+        envelope.gain,
+        ramp,
         stopAt,
+        release,
+        context.currentTime,
       );
-      envelope.gain.linearRampToValueAtTime(0, stopAt + release);
       for (const source of sources)
         source.stop(stopAt + release + REED_TIMING.stopTail);
       const leftover = nodes;
@@ -211,7 +261,7 @@ function buildReed(
   when: number,
   attack: number,
   kit: VoiceKit,
-): GainNode {
+): { envelope: GainNode; ramp: GainRamp } {
   const mixer = kit.gain();
   mixer.gain.value = 1;
   for (const pitch of pitches) {
@@ -278,11 +328,14 @@ function buildReed(
   noise.start(when);
 
   const envelope = kit.gain();
-  envelope.gain.setValueAtTime(REED_GAINS.silence, when);
-  envelope.gain.exponentialRampToValueAtTime(
-    REED_GAINS.envelope,
-    when + attack,
-  );
+  const ramp: GainRamp = {
+    start: REED_GAINS.silence,
+    target: REED_GAINS.envelope,
+    startTime: when,
+    endTime: when + attack,
+  };
+  envelope.gain.setValueAtTime(ramp.start, ramp.startTime);
+  envelope.gain.exponentialRampToValueAtTime(ramp.target, ramp.endTime);
   sum.connect(envelope);
 
   const bellows = kit.osc();
@@ -306,7 +359,7 @@ function buildReed(
     REED_GAINS.wet,
     REED_GAINS.dry,
   );
-  return envelope;
+  return { envelope, ramp };
 }
 
 function connectRoom(
@@ -397,6 +450,7 @@ export class ReedDrone {
   private limiter: DynamicsCompressorNode | null = null;
   private voices: ReedVoice[] = [];
   private voiceNodes = 0;
+  private outputUntil = 0;
   private generation = 0;
   private phase: DroneStatus = 'idle';
   private disposed = false;
@@ -514,19 +568,28 @@ export class ReedDrone {
       this.onVisibility,
     );
     this.windowTarget?.removeEventListener('pagehide', this.onPageHide);
-    if (this.context) {
+    const context = this.context;
+    const master = this.master;
+    const limiter = this.limiter;
+    const ownsContext = this.ownsContext;
+    if (context) {
       if (this.onContextState) {
-        this.context.removeEventListener('statechange', this.onContextState);
+        context.removeEventListener('statechange', this.onContextState);
         this.onContextState = null;
       }
-      this.fadeVoices(this.context.currentTime, REED_TIMING.hideFade);
-      // A shared context outlives the drone, so the output nodes have to leave
-      // its destination or the next owner inherits this graph.
-      this.master?.disconnect();
-      this.limiter?.disconnect();
-      if (this.ownsContext) void this.context.close().catch(() => {});
-      this.context = null;
+      const release = Math.max(REED_TIMING.hideFade, 0.015);
+      const now = context.currentTime;
+      this.fadeVoices(now, REED_TIMING.hideFade);
+      // A fade that is already running may outlast the hide cut. Keep the
+      // master connected until the later of the two reaches silence.
+      const wait = Math.max(release, this.outputUntil - now);
+      setTimeout(() => {
+        master?.disconnect();
+        limiter?.disconnect();
+        if (ownsContext) void context.close().catch(() => {});
+      }, wait * 1000);
     }
+    this.context = null;
     this.master = null;
     this.limiter = null;
     this.voices = [];
@@ -661,6 +724,10 @@ export class ReedDrone {
   }
 
   private fadeVoices(when: number, fade: number): void {
+    if (this.voices.length) {
+      const release = Math.max(fade, 0.015);
+      this.outputUntil = Math.max(this.outputUntil, when + release);
+    }
     for (const voice of this.voices) voice.stop(when, fade);
     this.voices = [];
   }

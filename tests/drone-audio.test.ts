@@ -2,28 +2,36 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ReedDrone,
+  REED_GAINS,
   REED_TIMING,
   droneMasterGain,
+  exponentialRampValue,
   type DroneStatus,
+  type GainRamp,
   type ReedRequest,
 } from '../lib/drone-audio.ts';
 import { midiHz } from '../lib/drone.ts';
 
 class Param {
   value = 0;
-  events: { method: string; value: number }[] = [];
-  cancelScheduledValues() {}
-  setValueAtTime(value: number) {
-    this.value = value;
-    this.events.push({ method: 'set', value });
+  events: { method: string; value: number; time: number }[] = [];
+  cancelScheduledValues(time = 0) {
+    this.events.push({ method: 'cancel', value: 0, time });
   }
-  linearRampToValueAtTime(value: number) {
-    this.value = value;
-    this.events.push({ method: 'linear', value });
+  cancelAndHoldAtTime(time = 0) {
+    this.events.push({ method: 'hold', value: 0, time });
   }
-  exponentialRampToValueAtTime(value: number) {
+  setValueAtTime(value: number, time = 0) {
     this.value = value;
-    this.events.push({ method: 'exponential', value });
+    this.events.push({ method: 'set', value, time });
+  }
+  linearRampToValueAtTime(value: number, time = 0) {
+    this.value = value;
+    this.events.push({ method: 'linear', value, time });
+  }
+  exponentialRampToValueAtTime(value: number, time = 0) {
+    this.value = value;
+    this.events.push({ method: 'exponential', value, time });
   }
 }
 
@@ -469,7 +477,7 @@ void test('retune waits for a real play, then moves to the new pitches on the sa
     (event) => event.method === 'linear' && event.value === 0,
   );
   assert.equal(faded.gain.events[fadeIndex - 1]?.method, 'set');
-  assert.ok((faded.gain.events[fadeIndex - 1]?.value ?? 0) > 0.5);
+  assert.equal(faded.gain.events[fadeIndex - 1]?.value, REED_GAINS.silence);
   assert.throws(() =>
     engine.retune({ root: 'H', modeId: 'dorian', octave: 'low' }),
   );
@@ -624,8 +632,16 @@ void test('dispose closes a context the reed created and leaves a passed-in cont
   passed.engine.dispose();
   assert.equal(passed.context.closed, 0);
   assert.equal(passed.context.stateListenerCount(), 0);
+  assert.equal(sharedMaster.disconnected, false);
+  assert.equal(sharedLimiter.disconnected, false);
+  assert.equal(
+    sharedLimiter.connections.includes(passed.context.destination),
+    true,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(sharedMaster.disconnected, true);
   assert.equal(sharedLimiter.disconnected, true);
+  assert.equal(passed.context.closed, 0);
   assert.equal(
     sharedLimiter.connections.includes(passed.context.destination),
     false,
@@ -645,11 +661,204 @@ void test('dispose closes a context the reed created and leaves a passed-in cont
     await until(() => states.at(-1) === 'playing');
     assert.equal(owned.closed, 0);
     engine.dispose();
-    assert.equal(owned.closed, 1);
+    assert.equal(owned.closed, 0);
     assert.equal(owned.stateListenerCount(), 0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(owned.closed, 1);
   } finally {
     globalThis.AudioContext = previous;
   }
+});
+
+function envelopeGains(context: FakeContext) {
+  return context.gains.filter((gain) =>
+    gain.gain.events.some(
+      (event) =>
+        event.method === 'exponential' && event.value === REED_GAINS.envelope,
+    ),
+  );
+}
+
+function rampOf(param: Param): GainRamp {
+  const set = param.events.find((event) => event.method === 'set');
+  const exponential = param.events.find(
+    (event) => event.method === 'exponential',
+  );
+  assert.ok(set);
+  assert.ok(exponential);
+  return {
+    start: set.value,
+    target: exponential.value,
+    startTime: set.time,
+    endTime: exponential.time,
+  };
+}
+
+/** Sample the scheduled envelope. A future cancelScheduledValues snaps back to the ramp start. */
+function maxSampleStep(param: Param, now: number): number {
+  const ramp = rampOf(param);
+  const hold = param.events.find((event) => event.method === 'hold');
+  const cancel = param.events.find((event) => event.method === 'cancel');
+  const linear = [...param.events]
+    .reverse()
+    .find((event) => event.method === 'linear' && event.value === 0);
+  const anchor = [...param.events]
+    .reverse()
+    .find((event) => event.method === 'set');
+  assert.ok(linear);
+  const sampleRate = 48000;
+  const from = now - 0.01;
+  const to = linear.time + 0.005;
+  const at = (time: number) => {
+    if (hold) {
+      if (time <= hold.time) return exponentialRampValue(ramp, time);
+      const held = exponentialRampValue(ramp, hold.time);
+      if (time >= linear.time) return linear.value;
+      const progress = (time - hold.time) / (linear.time - hold.time);
+      return held + (linear.value - held) * progress;
+    }
+    assert.ok(cancel);
+    assert.ok(anchor);
+    if (time < now) return exponentialRampValue(ramp, time);
+    if (time < anchor.time) return ramp.start;
+    if (time >= linear.time) return linear.value;
+    const progress = (time - anchor.time) / (linear.time - anchor.time);
+    return anchor.value + (linear.value - anchor.value) * progress;
+  };
+  let previous = at(from);
+  let max = 0;
+  for (let time = from + 1 / sampleRate; time <= to; time += 1 / sampleRate) {
+    const value = at(time);
+    max = Math.max(max, Math.abs(value - previous));
+    previous = value;
+  }
+  return max;
+}
+
+async function assertMidSwellKeyChange(firefox: boolean) {
+  const holdKey = 'cancelAndHoldAtTime';
+  const descriptor = Object.getOwnPropertyDescriptor(Param.prototype, holdKey);
+  if (firefox) {
+    delete (Param.prototype as unknown as Record<string, unknown>)[holdKey];
+  }
+  try {
+    const { engine, context, states } = setup();
+    engine.play(lowRequest);
+    await until(() => states.at(-1) === 'playing');
+    const swell = envelopeGains(context);
+    assert.equal(swell.length, 1);
+    context.currentTime = 4.02 + 1.5;
+    const duringSwell = context.currentTime;
+    const swellRamp = rampOf(swell[0].gain);
+    const swellValue = exponentialRampValue(swellRamp, duringSwell);
+    assert.ok(swellValue > 0.45 && swellValue < 0.6);
+    swell[0].gain.value = REED_GAINS.silence;
+    engine.retune({ root: 'E', modeId: 'ionian', octave: 'low' });
+    await until(
+      () => states.at(-1) === 'playing' && envelopeGains(context).length === 2,
+    );
+    const swellStop = swell[0].gain.events;
+    if (firefox) {
+      const anchor = swellStop.filter((event) => event.method === 'set').at(-1);
+      const cancel = swellStop.find((event) => event.method === 'cancel');
+      assert.ok(anchor);
+      assert.ok(cancel);
+      assert.equal(cancel.time, duringSwell);
+      assert.equal(anchor.time, duringSwell);
+      assert.equal(anchor.value, swellValue);
+    } else {
+      const hold = swellStop.find((event) => event.method === 'hold');
+      assert.ok(hold);
+      assert.equal(hold.time, duringSwell + 0.02);
+      assert.equal(
+        swellStop.filter((event) => event.method === 'set').length,
+        1,
+      );
+    }
+    assert.ok(maxSampleStep(swell[0].gain, duringSwell) < 0.01);
+
+    const switched = envelopeGains(context).find((gain) => {
+      const ramp = rampOf(gain.gain);
+      return (
+        Math.abs(ramp.endTime - ramp.startTime - REED_TIMING.switchAttack) <
+        1e-9
+      );
+    });
+    assert.ok(switched);
+    context.currentTime = duringSwell + 0.02 + 0.1;
+    const duringSwitch = context.currentTime;
+    const switchValue = exponentialRampValue(
+      rampOf(switched.gain),
+      duringSwitch,
+    );
+    switched.gain.value = REED_GAINS.silence;
+    engine.retune({ root: 'D', modeId: 'dorian', octave: 'low' });
+    await until(
+      () => states.at(-1) === 'playing' && envelopeGains(context).length === 3,
+    );
+    if (firefox) {
+      const anchor = switched.gain.events
+        .filter((event) => event.method === 'set')
+        .at(-1);
+      assert.ok(anchor);
+      assert.equal(anchor.time, duringSwitch);
+      assert.equal(anchor.value, switchValue);
+    }
+    assert.ok(maxSampleStep(switched.gain, duringSwitch) < 0.01);
+    engine.dispose();
+  } finally {
+    if (firefox && descriptor) {
+      Object.defineProperty(Param.prototype, holdKey, descriptor);
+    }
+  }
+}
+
+void test('a mid-swell key change holds the ramp when cancelAndHoldAtTime exists', async () => {
+  await assertMidSwellKeyChange(false);
+});
+
+void test('a mid-swell key change computes the ramp when cancelAndHoldAtTime is missing', async () => {
+  await assertMidSwellKeyChange(true);
+});
+
+void test('a stop before the swell anchor writes silence instead of holding unity gain', async () => {
+  const { engine, context, states } = setup();
+  engine.play(lowRequest);
+  await until(() => states.at(-1) === 'playing');
+  assert.equal(context.currentTime, 4);
+  engine.stop(REED_TIMING.hideFade);
+  const envelope = envelopeGains(context)[0]?.gain;
+  assert.ok(envelope);
+  assert.equal(
+    envelope.events.some((event) => event.method === 'hold'),
+    false,
+  );
+  const anchor = envelope.events
+    .filter((event) => event.method === 'set')
+    .at(-1);
+  assert.ok(anchor);
+  assert.equal(anchor.time, 4);
+  assert.equal(anchor.value, REED_GAINS.silence);
+  engine.dispose();
+});
+
+void test('dispose waits out a fade that is already running', async () => {
+  const { engine, context, states } = setup();
+  engine.play(lowRequest);
+  await until(() => states.at(-1) === 'playing');
+  const master = masterGain(context);
+  const limiter = context.compressors[0];
+  engine.stop();
+  engine.dispose();
+  assert.equal(master.disconnected, false);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(master.disconnected, false);
+  assert.equal(limiter.disconnected, false);
+  assert.equal(context.closed, 0);
+  await new Promise((resolve) => setTimeout(resolve, 560));
+  assert.equal(master.disconnected, true);
+  assert.equal(limiter.disconnected, true);
+  assert.equal(context.closed, 0);
 });
 
 void test('an unknown root throws before a context is created', () => {
