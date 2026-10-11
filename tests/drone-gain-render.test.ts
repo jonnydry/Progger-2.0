@@ -6,23 +6,20 @@ import {
   REED_TIMING,
   exponentialRampValue,
   holdGainThenFade,
+  scheduleSwell,
   type GainRamp,
 } from '../lib/drone-audio.ts';
 
 const SAMPLE_RATE = 48000;
 const LEAD = 0.05;
+const STEP_LIMIT = 1e-3;
 
 type GainParam = Parameters<typeof holdGainThenFade>[0] & {
   setValueAtTime: (value: number, startTime: number) => unknown;
   exponentialRampToValueAtTime: (value: number, endTime: number) => unknown;
 };
 
-function renderGain(
-  duration: number,
-  schedule: (param: GainParam) => void,
-): Promise<Float32Array> {
-  const length = Math.ceil(duration * SAMPLE_RATE);
-  const context = new OfflineAudioContext(1, length, SAMPLE_RATE);
+function addVoice(context: OfflineAudioContext, start: number): GainParam {
   const buffer = context.createBuffer(1, 1, SAMPLE_RATE);
   buffer.getChannelData(0)[0] = 1;
   const source = context.createBufferSource();
@@ -31,11 +28,21 @@ function renderGain(
   const gain = context.createGain();
   source.connect(gain);
   gain.connect(context.destination);
-  schedule(gain.gain as GainParam);
-  source.start(0);
-  return context
-    .startRendering()
-    .then((rendered) => rendered.getChannelData(0));
+  source.start(start);
+  return gain.gain as GainParam;
+}
+
+function render(
+  duration: number,
+  schedule: (context: OfflineAudioContext) => void,
+): Promise<Float32Array> {
+  const length = Math.ceil(duration * SAMPLE_RATE);
+  const context = new OfflineAudioContext(1, length, SAMPLE_RATE);
+  schedule(context);
+  return context.startRendering().then((rendered) => {
+    const channel = rendered.getChannelData(0);
+    return channel.slice();
+  });
 }
 
 function maxAbsStep(data: Float32Array, from: number, to: number): number {
@@ -64,24 +71,28 @@ const cases = [
     into: 1.5,
     stopDelay: 0.02,
     fade: REED_TIMING.switchFade,
+    next: true,
   },
   {
     name: 'settled key change',
     into: REED_TIMING.playAttack + 0.75,
     stopDelay: 0.02,
     fade: REED_TIMING.switchFade,
+    next: true,
   },
   {
     name: 'settled toggle off',
     into: REED_TIMING.playAttack + 0.75,
     stopDelay: 0,
     fade: REED_TIMING.stopFade,
+    next: false,
   },
   {
     name: 'settled view leave',
     into: REED_TIMING.playAttack + 0.75,
     stopDelay: 0,
     fade: REED_TIMING.hideFade,
+    next: false,
   },
 ] as const;
 
@@ -97,14 +108,17 @@ void test('a rendered stop stays continuous through the swell and after it', asy
       startTime: LEAD,
       endTime: LEAD + REED_TIMING.playAttack,
     };
-    const scheduleRamp = (param: GainParam) => {
-      param.setValueAtTime(ramp.start, ramp.startTime);
-      param.exponentialRampToValueAtTime(ramp.target, ramp.endTime);
-    };
-    const clean = await renderGain(duration, scheduleRamp);
-    const stopped = await renderGain(duration, (param) => {
-      scheduleRamp(param);
-      holdGainThenFade(param, ramp, stopAt, release, now);
+    const clean = await render(duration, (context) => {
+      const voice = addVoice(context, LEAD);
+      scheduleSwell(voice, LEAD, REED_TIMING.playAttack);
+    });
+    const stopped = await render(duration, (context) => {
+      const voice = addVoice(context, LEAD);
+      scheduleSwell(voice, LEAD, REED_TIMING.playAttack);
+      holdGainThenFade(voice, ramp, stopAt, release, now, SAMPLE_RATE);
+      if (!item.next) return;
+      const next = addVoice(context, stopAt);
+      scheduleSwell(next, stopAt, REED_TIMING.switchAttack);
     });
     const cut = Math.round(now * SAMPLE_RATE);
     const end = Math.round((stopAt + release) * SAMPLE_RATE);
@@ -114,11 +128,110 @@ void test('a rendered stop stays continuous through the swell and after it', asy
     }
     const step = maxAbsStep(spliced, cut - Math.floor(SAMPLE_RATE * 0.02), end);
     const expected = exponentialRampValue(ramp, now);
-    assert.ok(step < 0.01, `${item.name} max step ${step}`);
+    assert.ok(step < STEP_LIMIT, `${item.name} max step ${step}`);
     assert.ok(
-      closest(stopped, cut, expected) < 0.03,
+      closest(stopped, cut, expected) < STEP_LIMIT,
       `${item.name} anchor ${stopped[cut]} expected ${expected}`,
     );
     if (now >= ramp.endTime) assert.equal(expected, REED_GAINS.envelope);
+  }
+});
+
+function spliceAt(
+  clean: Float32Array,
+  stopped: Float32Array,
+  cut: number,
+): Float32Array {
+  const out = new Float32Array(stopped.length);
+  for (let index = 0; index < out.length; index += 1) {
+    out[index] = index < cut ? clean[index] : stopped[index];
+  }
+  return out;
+}
+
+function addBuffers(parts: Float32Array[]): Float32Array {
+  const out = new Float32Array(parts[0].length);
+  for (const part of parts) {
+    for (let index = 0; index < out.length; index += 1)
+      out[index] += part[index];
+  }
+  return out;
+}
+
+void test('repeated crossfades stay within one thousandth, including both voices', async () => {
+  const release = Math.max(REED_TIMING.switchFade, 0.015);
+  for (let index = 0; index < 200; index += 1) {
+    const chained = index < 128;
+    const align = chained ? index : index - 128;
+    const lead = (64 + align) / SAMPLE_RATE;
+    const into = 0.18;
+    const now = lead + into;
+    const stopAt = now + 0.02;
+    const secondNow = stopAt + into;
+    const secondStop = secondNow + 0.02;
+    const end = (chained ? secondStop : stopAt) + release + 0.05;
+    const ramp: GainRamp = {
+      start: REED_GAINS.silence,
+      target: REED_GAINS.envelope,
+      startTime: lead,
+      endTime: lead + REED_TIMING.playAttack,
+    };
+    const cleanOld = await render(end, (context) => {
+      scheduleSwell(addVoice(context, lead), lead, REED_TIMING.playAttack);
+    });
+    const stoppedOld = await render(end, (context) => {
+      const voice = addVoice(context, lead);
+      scheduleSwell(voice, lead, REED_TIMING.playAttack);
+      holdGainThenFade(voice, ramp, stopAt, release, now, SAMPLE_RATE);
+    });
+    const cleanYoung = await render(end, (context) => {
+      scheduleSwell(
+        addVoice(context, stopAt),
+        stopAt,
+        REED_TIMING.switchAttack,
+      );
+    });
+    const parts = [
+      spliceAt(cleanOld, stoppedOld, Math.round(now * SAMPLE_RATE)),
+    ];
+    if (chained) {
+      const youngRamp: GainRamp = {
+        start: REED_GAINS.silence,
+        target: REED_GAINS.envelope,
+        startTime: stopAt,
+        endTime: stopAt + REED_TIMING.switchAttack,
+      };
+      const stoppedYoung = await render(end, (context) => {
+        const voice = addVoice(context, stopAt);
+        scheduleSwell(voice, stopAt, REED_TIMING.switchAttack);
+        holdGainThenFade(
+          voice,
+          youngRamp,
+          secondStop,
+          release,
+          secondNow,
+          SAMPLE_RATE,
+        );
+      });
+      const next = await render(end, (context) => {
+        scheduleSwell(
+          addVoice(context, secondStop),
+          secondStop,
+          REED_TIMING.switchAttack,
+        );
+      });
+      parts.push(
+        spliceAt(cleanYoung, stoppedYoung, Math.round(secondNow * SAMPLE_RATE)),
+        next,
+      );
+    } else {
+      parts.push(cleanYoung);
+    }
+    const sum = addBuffers(parts);
+    const step = maxAbsStep(sum, 1, sum.length - 1);
+    const label = chained
+      ? `key change 0.18s into a later swell, align ${align}`
+      : `key change 0.18s into the swell, align ${align}`;
+    assert.ok(step < STEP_LIMIT, `${label} max step ${step}`);
   }
 });

@@ -272,7 +272,13 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   assert.match(view, /min=\{0\}/);
   assert.match(view, /max=\{1\}/);
   assert.doesNotMatch(view, /aria-modal/);
-  assert.doesNotMatch(view, /setTimeout/);
+  assert.doesNotMatch(view, /createPortal/);
+  assert.match(
+    view,
+    /id="drone-volume-trigger"[\s\S]*<DroneVolumePopover[\s\S]*id="drone-toggle"/,
+  );
+  assert.match(view, /setTimeout\(\(\) => \{\s*leaveTimer\.current = null;/);
+  assert.match(view, /setTimeout\(\(\) => \{\s*returnTimer\.current = null;/);
   assert.ok(VOLUME_POPOVER_OBSTACLE_SELECTORS.includes('.scale-caption'));
   assert.ok(VOLUME_POPOVER_OBSTACLE_SELECTORS.includes('.palette-note small'));
 });

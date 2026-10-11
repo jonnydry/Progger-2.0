@@ -51,6 +51,20 @@ import {
   type Candidate,
 } from '@/lib/harmony';
 
+function wrappedTitleClass(kind: string, scaleId: string): string {
+  if (kind !== 'scales') return '';
+  if (
+    scaleId === 'half-whole-diminished' ||
+    scaleId === 'whole-half-diminished'
+  )
+    return 'wrap-wide';
+  if (scaleId === 'phrygian-dominant') return 'wrap-mid';
+  if (scaleId === 'melodic-minor') return 'wrap-jazz';
+  if (scaleId === 'major-pentatonic' || scaleId === 'lydian-augmented')
+    return 'wrap-brief';
+  return '';
+}
+
 export default function Home() {
   const [page, setPage] = useState('explore'),
     [kind, setKind] = useState('scales');
@@ -614,7 +628,7 @@ export default function Home() {
                   </label>
                   <label
                     htmlFor="explore-type"
-                    className={`scale-select ${title.length > 11 ? 'long-title' : ''}`}
+                    className={`scale-select ${title.length > 11 ? 'long-title' : ''} ${wrappedTitleClass(kind, scaleId)}`}
                   >
                     <span className="sr-only">
                       {kind === 'scales' ? 'Scale / mode' : 'Chord quality'}

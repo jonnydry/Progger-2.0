@@ -12,6 +12,8 @@ import {
   type ReedRequest,
 } from '../lib/drone-audio.ts';
 import { midiHz } from '../lib/drone.ts';
+import { droneControlName } from '../lib/drone-controls.ts';
+import { ExploreDrone } from '../lib/drone-session.ts';
 
 class Param {
   value = 0;
@@ -695,7 +697,7 @@ function rampOf(param: Param): GainRamp {
   };
 }
 
-/** Sample the scheduled envelope. A future cancelScheduledValues snaps back to the ramp start. */
+/** Sample the scheduled envelope. The fade holds the anchor for one sample. */
 function maxSampleStep(param: Param, now: number): number {
   const ramp = rampOf(param);
   const hold = param.events.find((event) => event.method === 'hold');
@@ -703,11 +705,12 @@ function maxSampleStep(param: Param, now: number): number {
   const linear = [...param.events]
     .reverse()
     .find((event) => event.method === 'linear' && event.value === 0);
-  const anchor = [...param.events]
-    .reverse()
-    .find((event) => event.method === 'set');
+  const anchor = param.events.find(
+    (event) => event.method === 'set' && Math.abs(event.time - now) < 1e-8,
+  );
   assert.ok(linear);
   const sampleRate = 48000;
+  const fadeAt = now + 1 / sampleRate;
   const from = now - 0.01;
   const to = linear.time + 0.005;
   const at = (time: number) => {
@@ -721,9 +724,9 @@ function maxSampleStep(param: Param, now: number): number {
     assert.ok(cancel);
     assert.ok(anchor);
     if (time < now) return exponentialRampValue(ramp, time);
-    if (time < anchor.time) return ramp.start;
+    if (time < fadeAt) return anchor.value;
     if (time >= linear.time) return linear.value;
-    const progress = (time - anchor.time) / (linear.time - anchor.time);
+    const progress = (time - fadeAt) / (linear.time - fadeAt);
     return anchor.value + (linear.value - anchor.value) * progress;
   };
   let previous = at(from);
@@ -747,18 +750,25 @@ function assertAnchored(
     false,
   );
   const cancel = param.events.find((event) => event.method === 'cancel');
-  const anchor = param.events.filter((event) => event.method === 'set').at(-1);
+  const anchor = param.events.find(
+    (event) => event.method === 'set' && Math.abs(event.time - now) < 1e-8,
+  );
+  const fadeAt = now + 1 / 48000;
+  const fade = param.events.find(
+    (event) => event.method === 'set' && Math.abs(event.time - fadeAt) < 1e-8,
+  );
   const linear = [...param.events]
     .reverse()
     .find((event) => event.method === 'linear' && event.value === 0);
   assert.ok(cancel);
   assert.ok(anchor);
+  assert.ok(fade);
   assert.ok(linear);
   assert.equal(cancel.time, now);
-  assert.equal(anchor.time, now);
   assert.equal(anchor.value, expected);
+  assert.equal(fade.value, expected);
   assert.ok(Math.abs(linear.time - releaseEnd) < 1e-9);
-  assert.ok(maxSampleStep(param, now) < 0.01);
+  assert.ok(maxSampleStep(param, now) < 1e-3);
 }
 
 async function assertMidSwellKeyChange(removeHold: boolean) {
@@ -894,12 +904,17 @@ void test('a stop before the swell anchor writes silence instead of holding unit
     envelope.events.some((event) => event.method === 'hold'),
     false,
   );
-  const anchor = envelope.events
-    .filter((event) => event.method === 'set')
-    .at(-1);
+  const anchor = envelope.events.find(
+    (event) => event.method === 'set' && Math.abs(event.time - 4) < 1e-8,
+  );
+  const fade = envelope.events.find(
+    (event) =>
+      event.method === 'set' && Math.abs(event.time - (4 + 1 / 48000)) < 1e-8,
+  );
   assert.ok(anchor);
-  assert.equal(anchor.time, 4);
+  assert.ok(fade);
   assert.equal(anchor.value, REED_GAINS.silence);
+  assert.equal(fade.value, REED_GAINS.silence);
   engine.dispose();
 });
 
@@ -930,4 +945,153 @@ void test('an unknown root throws before a context is created', () => {
   assert.equal(created(), 0);
   assert.deepEqual(states, []);
   engine.dispose();
+});
+
+function sessionRig() {
+  const context = new FakeContext();
+  let resumes = 0;
+  const original = context.resume;
+  context.resume = () => {
+    resumes += 1;
+    return original();
+  };
+  let created = 0;
+  const documentTarget = new FakeDocument();
+  const windowTarget = new FakeDocument();
+  const controller = new ExploreDrone(
+    (onStatus) =>
+      new ReedDrone(onStatus, {
+        createContext: () => {
+          created += 1;
+          return context as unknown as AudioContext;
+        },
+        document: documentTarget,
+        windowTarget,
+      }),
+    lowRequest,
+  );
+  controller.setActive(true);
+  return {
+    context,
+    controller,
+    documentTarget,
+    windowTarget,
+    created: () => created,
+    resumes: () => resumes,
+  };
+}
+
+async function hear(controller: ExploreDrone, context: FakeContext) {
+  controller.toggle();
+  await until(
+    () => controller.snapshot().pressed && context.oscillators.length > 0,
+  );
+}
+
+function assertOff(
+  controller: ExploreDrone,
+  context: FakeContext,
+  resumeCount: number,
+  oscillators: number,
+  resumes: () => number,
+) {
+  const shot = controller.snapshot();
+  assert.equal(shot.pressed, false);
+  assert.equal(droneControlName(shot.pressed), 'Drone, off');
+  assert.equal(context.oscillators.length, oscillators);
+  assert.equal(
+    context.oscillators.every((node) => node.stops.length > 0),
+    true,
+  );
+  assert.equal(resumes(), resumeCount);
+}
+
+async function assertTapStarts(
+  controller: ExploreDrone,
+  context: FakeContext,
+  resumes: () => number,
+) {
+  const before = context.oscillators.length;
+  const heard = resumes();
+  controller.toggle();
+  await until(() => context.oscillators.length > before);
+  assert.equal(controller.snapshot().pressed, true);
+  assert.equal(droneControlName(true), 'Drone, on');
+  assert.ok(resumes() > heard);
+}
+
+void test('leaving Explore and coming back leaves the drone off until a tap', async () => {
+  const { controller, context, resumes } = sessionRig();
+  await hear(controller, context);
+  const oscillators = context.oscillators.length;
+  const heard = resumes();
+  controller.setActive(false);
+  controller.setActive(true);
+  assertOff(controller, context, heard, oscillators, resumes);
+  await assertTapStarts(controller, context, resumes);
+  controller.dispose();
+});
+
+void test('hiding the tab and showing it leaves the drone off until a tap', async () => {
+  const { controller, context, documentTarget, resumes } = sessionRig();
+  await hear(controller, context);
+  const oscillators = context.oscillators.length;
+  const heard = resumes();
+  documentTarget.hidden = true;
+  controller.setHidden(true);
+  documentTarget.emit('visibilitychange');
+  documentTarget.hidden = false;
+  documentTarget.emit('visibilitychange');
+  controller.setHidden(false);
+  assertOff(controller, context, heard, oscillators, resumes);
+  await assertTapStarts(controller, context, resumes);
+  controller.dispose();
+});
+
+void test('an interrupted context leaves the drone off, and a scale change stays silent', async () => {
+  const { controller, context, resumes } = sessionRig();
+  await hear(controller, context);
+  const oscillators = context.oscillators.length;
+  const heard = resumes();
+  context.state = 'suspended';
+  context.emitState();
+  assertOff(controller, context, heard, oscillators, resumes);
+  controller.setRequest({ root: 'C', modeId: 'ionian', octave: 'low' });
+  assertOff(controller, context, heard, oscillators, resumes);
+  await assertTapStarts(controller, context, resumes);
+  controller.dispose();
+});
+
+void test('a failed start stays off, and a scale change does not retry it', async () => {
+  const { controller, context } = sessionRig();
+  context.resume = () => Promise.reject(new Error('blocked'));
+  controller.toggle();
+  await until(() => (controller.snapshot().message ?? '').includes('Tap play'));
+  assert.equal(controller.snapshot().pressed, false);
+  assert.equal(droneControlName(false), 'Drone, off');
+  const oscillators = context.oscillators.length;
+  controller.setRequest({ root: 'C', modeId: 'ionian', octave: 'low' });
+  assert.equal(context.oscillators.length, oscillators);
+  assert.equal(controller.snapshot().pressed, false);
+  context.resume = () => Promise.resolve();
+  controller.toggle();
+  await until(
+    () =>
+      context.oscillators.length > oscillators && controller.snapshot().pressed,
+  );
+  assert.equal(droneControlName(true), 'Drone, on');
+  controller.dispose();
+});
+
+void test('a bfcache restore leaves the drone off until a tap', async () => {
+  const { controller, context, windowTarget, resumes } = sessionRig();
+  await hear(controller, context);
+  const oscillators = context.oscillators.length;
+  const heard = resumes();
+  windowTarget.emit('pagehide');
+  controller.restoreFromCache();
+  controller.setActive(true);
+  assertOff(controller, context, heard, oscillators, resumes);
+  await assertTapStarts(controller, context, resumes);
+  controller.dispose();
 });

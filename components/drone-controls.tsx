@@ -8,14 +8,9 @@ import {
   useState,
   type RefObject,
 } from 'react';
-import { createPortal } from 'react-dom';
 import { AudioLines, ChevronDown } from 'lucide-react';
 import { reedRequestForScale } from '@/lib/drone';
-import {
-  ReedDrone,
-  clampDroneVolume,
-  type DroneStatus,
-} from '@/lib/drone-audio';
+import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
 import {
   DRONE_ICON_PX,
   VOLUME_POPOVER_OBSTACLE_SELECTORS,
@@ -26,94 +21,63 @@ import {
   volumePopoverKey,
   volumePopoverOrigin,
 } from '@/lib/drone-controls';
-import {
-  droneCommand,
-  droneStopFade,
-  type DronePhase,
-} from '@/lib/drone-session';
+import { ExploreDrone } from '@/lib/drone-session';
 
 export function useReedDrone(input: {
   active: boolean;
   root: string;
   scaleId: string;
 }) {
-  const [enabled, setEnabled] = useState(false);
-  const [volume, setVolumeState] = useState(1);
-  const [status, setStatus] = useState<DroneStatus>('idle');
-  const [message, setMessage] = useState<string | undefined>();
-  const [attempt, setAttempt] = useState(0);
-  const engineRef = useRef<ReedDrone | null>(null);
-  const phaseRef = useRef<DronePhase>('unstarted');
-  const currentRef = useRef<ReturnType<typeof reedRequestForScale> | null>(
-    null,
+  const [controller] = useState(
+    () =>
+      new ExploreDrone(
+        (onStatus) => new ReedDrone(onStatus),
+        reedRequestForScale(input.root, input.scaleId),
+      ),
+  );
+  const [snapshot, setSnapshot] = useState(() => controller.snapshot());
+
+  useEffect(
+    () => controller.subscribe(() => setSnapshot(controller.snapshot())),
+    [controller],
   );
 
   useEffect(() => {
-    return () => {
-      engineRef.current?.dispose();
-      engineRef.current = null;
-      phaseRef.current = 'unstarted';
-    };
-  }, []);
+    const request = reedRequestForScale(input.root, input.scaleId);
+    if (!input.active) {
+      controller.setActive(false);
+      controller.setRequest(request);
+      return;
+    }
+    controller.setRequest(request);
+    controller.setActive(true);
+  }, [controller, input.active, input.root, input.scaleId]);
 
   useEffect(() => {
-    const sync = () => {
-      const request = reedRequestForScale(input.root, input.scaleId);
-      const hidden = document.visibilityState === 'hidden';
-      const place = input.active && !hidden ? 'scales' : 'away';
-      const command = droneCommand({
-        enabled,
-        place,
-        phase: phaseRef.current,
-        current: currentRef.current,
-        request,
-      });
-      if (command.type === 'silent') return;
-      if (command.type === 'hold') {
-        engineRef.current?.setVolume(volume);
-        return;
-      }
-      if (command.type === 'stop') {
-        engineRef.current?.stop(droneStopFade(place));
-        phaseRef.current = 'idle';
-        currentRef.current = null;
-        return;
-      }
-      const engine =
-        engineRef.current ??
-        new ReedDrone((next, detail) => {
-          phaseRef.current = next;
-          setStatus(next);
-          setMessage(detail);
-        });
-      engineRef.current = engine;
-      engine.setVolume(volume);
-      phaseRef.current = 'starting';
-      currentRef.current = command.request;
-      if (command.type === 'play') engine.play(command.request);
-      else engine.retune(command.request);
+    const onVisibility = () => {
+      controller.setHidden(document.visibilityState === 'hidden');
     };
-    sync();
-    document.addEventListener('visibilitychange', sync);
-    return () => document.removeEventListener('visibilitychange', sync);
-  }, [input.active, input.root, input.scaleId, enabled, volume, attempt]);
-
-  const live = enabled && status !== 'error';
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) controller.restoreFromCache();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onPageShow);
+      controller.dispose();
+    };
+  }, [controller]);
 
   return {
-    enabled: live,
-    volume,
-    message,
+    enabled: snapshot.pressed,
+    volume: snapshot.volume,
+    message: snapshot.message,
     toggle() {
-      if (enabled && status === 'error') {
-        phaseRef.current = 'idle';
-        setAttempt((value) => value + 1);
-        return;
-      }
-      setEnabled((value) => !value);
+      controller.toggle();
     },
     setVolume(next: number) {
-      setVolumeState(clampDroneVolume(next));
+      controller.setVolume(next);
     },
   };
 }
@@ -151,6 +115,7 @@ function DroneVolumePopover({
   const panelRef = useRef<HTMLDialogElement>(null);
   const sliderRef = useRef<HTMLInputElement>(null);
   const didFocus = useRef(false);
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [origin, setOrigin] = useState<{ x: number; y: number } | null>(null);
 
   useLayoutEffect(() => {
@@ -198,7 +163,13 @@ function DroneVolumePopover({
         }).open
       )
         return;
-      onFocusLeave();
+      // The outside click focuses its target in this same turn. Close on the
+      // next tick so that click can record the toggle return first.
+      if (leaveTimer.current !== null) clearTimeout(leaveTimer.current);
+      leaveTimer.current = setTimeout(() => {
+        leaveTimer.current = null;
+        onFocusLeave();
+      }, 0);
     };
     panel?.addEventListener('cancel', onCancel);
     panel?.addEventListener('focusout', onFocusOut);
@@ -206,6 +177,7 @@ function DroneVolumePopover({
     window.addEventListener('resize', place);
     window.addEventListener('scroll', onScroll, true);
     return () => {
+      if (leaveTimer.current !== null) clearTimeout(leaveTimer.current);
       panel?.removeEventListener('cancel', onCancel);
       panel?.removeEventListener('focusout', onFocusOut);
       window.removeEventListener('resize', place);
@@ -269,6 +241,7 @@ export function DroneControls({
   const restoreToggleFocus = useRef(false);
   const dismissing = useRef(false);
   const pointerOnTrigger = useRef(false);
+  const returnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dismissVolume = useCallback(() => {
     restoreToggleFocus.current = true;
     dismissing.current = true;
@@ -311,8 +284,12 @@ export function DroneControls({
       event.preventDefault();
       dismissing.current = true;
       restoreToggleFocus.current = true;
-      setVolumeOpen(false);
-      toggleRef.current?.focus({ preventScroll: true });
+      if (returnTimer.current !== null) clearTimeout(returnTimer.current);
+      returnTimer.current = setTimeout(() => {
+        returnTimer.current = null;
+        setVolumeOpen(false);
+        toggleRef.current?.focus({ preventScroll: true });
+      }, 0);
     };
     const onPointerUp = (event: PointerEvent) => {
       const target = event.target;
@@ -336,6 +313,7 @@ export function DroneControls({
     document.addEventListener('mousedown', onMouseDown, true);
     document.addEventListener('focusin', onFocusIn, true);
     return () => {
+      if (returnTimer.current !== null) clearTimeout(returnTimer.current);
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('pointerup', onPointerUp);
@@ -346,6 +324,40 @@ export function DroneControls({
 
   return (
     <div className="drone-controls">
+      <button
+        type="button"
+        id="drone-volume-trigger"
+        className="drone-volume-trigger"
+        ref={volumeRef}
+        aria-label="Drone volume"
+        aria-haspopup="dialog"
+        aria-expanded={volumeOpen}
+        aria-controls="drone-volume-popover"
+        onPointerDown={() => {
+          pointerOnTrigger.current = true;
+        }}
+        onPointerCancel={() => {
+          pointerOnTrigger.current = false;
+        }}
+        onClick={() => {
+          pointerOnTrigger.current = false;
+          if (!droneVolumeOpens({ kind: 'click' })) return;
+          anchorRef.current = volumeRef.current;
+          setVolumeOpen((open) => !open);
+        }}
+      >
+        <ChevronDown size={DRONE_ICON_PX} aria-hidden="true" />
+      </button>
+      {volumeOpen ? (
+        <DroneVolumePopover
+          volume={volume}
+          onVolume={onVolume}
+          onDismiss={dismissVolume}
+          onFocusLeave={leaveVolume}
+          pointerOnTrigger={pointerOnTrigger}
+          anchorRef={anchorRef}
+        />
+      ) : null}
       <button
         type="button"
         id="drone-toggle"
@@ -373,46 +385,9 @@ export function DroneControls({
       >
         <AudioLines size={DRONE_ICON_PX} aria-hidden="true" />
       </button>
-      <button
-        type="button"
-        id="drone-volume-trigger"
-        className="drone-volume-trigger"
-        ref={volumeRef}
-        aria-label="Drone volume"
-        aria-haspopup="dialog"
-        aria-expanded={volumeOpen}
-        aria-controls="drone-volume-popover"
-        onPointerDown={() => {
-          pointerOnTrigger.current = true;
-        }}
-        onPointerCancel={() => {
-          pointerOnTrigger.current = false;
-        }}
-        onClick={() => {
-          pointerOnTrigger.current = false;
-          if (!droneVolumeOpens({ kind: 'click' })) return;
-          anchorRef.current = volumeRef.current;
-          setVolumeOpen((open) => !open);
-        }}
-      >
-        <ChevronDown size={DRONE_ICON_PX} aria-hidden="true" />
-      </button>
       {message ? (
         <output className="drone-status sr-only">{message}</output>
       ) : null}
-      {volumeOpen
-        ? createPortal(
-            <DroneVolumePopover
-              volume={volume}
-              onVolume={onVolume}
-              onDismiss={dismissVolume}
-              onFocusLeave={leaveVolume}
-              pointerOnTrigger={pointerOnTrigger}
-              anchorRef={anchorRef}
-            />,
-            document.body,
-          )
-        : null}
     </div>
   );
 }

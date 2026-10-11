@@ -99,15 +99,56 @@
   overflow: hidden;
 }
 
-/* From 501px to 599px a long title wraps to two line boxes on the
-   unpadded row, 0.78px past the 76px minimum. Keep that height. */
-@media (min-width: 501px) and (max-width: 599px) {
+/* The ellipsis keeps the title on one line. A wrapped title on the unpadded
+   row is two line boxes, 0.78px past the 76px minimum. Hold that height only
+   while the unpadded title still wraps.
+   Major pentatonic and Lydian augmented wrap through 502px.
+   Jazz melodic minor wraps through 526px.
+   Phrygian dominant wraps through 530px.
+   Half-whole and Whole-half diminished wrap through 590px. */
+@media (min-width: 501px) and (max-width: 502px) {
   .night-swim
     .selection-bar:has(.drone-controls)
-    .scale-select.long-title
+    .scale-select:is(.wrap-brief, .wrap-jazz, .wrap-mid, .wrap-wide)
     .music-select-trigger,
   .selection-bar:has(.drone-controls)
-    .scale-select.long-title
+    .scale-select:is(.wrap-brief, .wrap-jazz, .wrap-mid, .wrap-wide)
+    .music-select-trigger {
+    min-height: max(var(--reference-height), 2lh);
+  }
+}
+
+@media (min-width: 503px) and (max-width: 526px) {
+  .night-swim
+    .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-jazz, .wrap-mid, .wrap-wide)
+    .music-select-trigger,
+  .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-jazz, .wrap-mid, .wrap-wide)
+    .music-select-trigger {
+    min-height: max(var(--reference-height), 2lh);
+  }
+}
+
+@media (min-width: 527px) and (max-width: 530px) {
+  .night-swim
+    .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-mid, .wrap-wide)
+    .music-select-trigger,
+  .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-mid, .wrap-wide)
+    .music-select-trigger {
+    min-height: max(var(--reference-height), 2lh);
+  }
+}
+
+@media (min-width: 531px) and (max-width: 590px) {
+  .night-swim
+    .selection-bar:has(.drone-controls)
+    .scale-select.wrap-wide
+    .music-select-trigger,
+  .selection-bar:has(.drone-controls)
+    .scale-select.wrap-wide
     .music-select-trigger {
     min-height: max(var(--reference-height), 2lh);
   }

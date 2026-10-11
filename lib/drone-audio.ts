@@ -69,6 +69,7 @@ export type GainRamp = {
 };
 
 type GainAutomation = {
+  value: number;
   cancelScheduledValues: (cancelTime: number) => unknown;
   setValueAtTime: (value: number, startTime: number) => unknown;
   linearRampToValueAtTime: (value: number, endTime: number) => unknown;
@@ -94,6 +95,9 @@ export function exponentialRampValue(ramp: GainRamp, time: number): number {
  * cancelAndHoldAtTime is not used: after the swell it drops a steady 0.9.
  * gain.value is stale mid-ramp, so the anchor is the computed curve, or the
  * steady target once that curve has ended.
+ * The fade ramp starts one sample later. cancelScheduledValues and
+ * setValueAtTime in the same render quantum otherwise drop the old voice to
+ * the 0.0001 floor for one sample.
  */
 export function holdGainThenFade(
   param: GainAutomation,
@@ -101,11 +105,37 @@ export function holdGainThenFade(
   stopAt: number,
   release: number,
   now = stopAt,
+  sampleRate = 48000,
 ): void {
   const time = Math.min(now, stopAt);
+  const anchor = exponentialRampValue(ramp, time);
+  const rate = sampleRate > 0 ? sampleRate : 48000;
+  const fadeAt = time + 1 / rate;
+  const end = Math.max(stopAt + release, fadeAt);
   param.cancelScheduledValues(time);
-  param.setValueAtTime(exponentialRampValue(ramp, time), time);
-  param.linearRampToValueAtTime(0, stopAt + release);
+  param.setValueAtTime(anchor, time);
+  param.setValueAtTime(anchor, fadeAt);
+  param.linearRampToValueAtTime(0, end);
+}
+
+/** A new voice starts at silence, then swells. The intrinsic gain is 1. */
+export function scheduleSwell(
+  param: GainAutomation & {
+    exponentialRampToValueAtTime: (value: number, endTime: number) => unknown;
+  },
+  when: number,
+  attack: number,
+): GainRamp {
+  const ramp: GainRamp = {
+    start: REED_GAINS.silence,
+    target: REED_GAINS.envelope,
+    startTime: when,
+    endTime: when + attack,
+  };
+  param.value = ramp.start;
+  param.setValueAtTime(ramp.start, ramp.startTime);
+  param.exponentialRampToValueAtTime(ramp.target, ramp.endTime);
+  return ramp;
 }
 
 const REED_CENTS = [-3.5, 3.5] as const;
@@ -242,6 +272,7 @@ function createReedVoice(
         stopAt,
         release,
         context.currentTime,
+        context.sampleRate,
       );
       for (const source of sources)
         source.stop(stopAt + release + REED_TIMING.stopTail);
@@ -330,14 +361,7 @@ function buildReed(
   noise.start(when);
 
   const envelope = kit.gain();
-  const ramp: GainRamp = {
-    start: REED_GAINS.silence,
-    target: REED_GAINS.envelope,
-    startTime: when,
-    endTime: when + attack,
-  };
-  envelope.gain.setValueAtTime(ramp.start, ramp.startTime);
-  envelope.gain.exponentialRampToValueAtTime(ramp.target, ramp.endTime);
+  const ramp = scheduleSwell(envelope.gain, when, attack);
   sum.connect(envelope);
 
   const bellows = kit.osc();
