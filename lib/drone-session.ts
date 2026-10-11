@@ -76,6 +76,7 @@ export type DroneSnapshot = {
   sound: DroneSoundId;
   walking: boolean;
   walkPc: number | null;
+  celloAvailable: boolean;
   message?: string;
 };
 
@@ -97,13 +98,34 @@ export class ExploreDrone {
   private walkPc: number | null = null;
   private status: DroneStatus = 'idle';
   private message: string | undefined;
+  private celloAvailable = true;
   private engine: ReedDrone | null = null;
   private disposed = false;
   private readonly listeners = new Set<() => void>();
+  private readonly onCelloUnavailable = (mode: 'hold' | 'fallback') => {
+    this.celloAvailable = false;
+    this.message = 'Cello is unavailable.';
+    if (mode === 'hold') return;
+    this.sound = 'reed';
+    this.request = { ...this.request, sound: 'reed' };
+    try {
+      localStorage.setItem(SOUND_KEY, 'reed');
+    } catch {
+      // The heard sound still applies for this visit.
+    }
+    this.phase = 'idle';
+    this.current = null;
+    if (this.enabled) {
+      this.reconcile();
+      return;
+    }
+    this.emit();
+  };
   private readonly createEngine: (
     onStatus: (status: DroneStatus, message?: string) => void,
     onWalk: (index: number | null) => void,
     onHeld: (heard: ReedRequest, attempted: ReedRequest) => void,
+    onCelloUnavailable: (mode: 'hold' | 'fallback') => void,
   ) => ReedDrone;
   private readonly onWalkIndex = (index: number | null) => {
     if (index === null) {
@@ -122,7 +144,7 @@ export class ExploreDrone {
   private readonly onStatus = (status: DroneStatus, detail?: string) => {
     this.phase = status;
     this.status = status;
-    this.message = detail;
+    this.message = this.celloAvailable ? detail : 'Cello is unavailable.';
     // An interruption or a failed start is not a tap. The toggle goes off,
     // and a later scale change must not start the sound.
     if (status === 'idle' || status === 'error') this.enabled = false;
@@ -140,7 +162,7 @@ export class ExploreDrone {
     }
     this.phase = 'playing';
     this.status = 'playing';
-    this.message = undefined;
+    this.message = this.celloAvailable ? undefined : 'Cello is unavailable.';
     const keyMoved =
       heard.root !== this.request.root ||
       heard.modeId !== this.request.modeId ||
@@ -157,8 +179,9 @@ export class ExploreDrone {
   constructor(
     createEngine: (
       onStatus: (status: DroneStatus, message?: string) => void,
-      onWalk?: (index: number | null) => void,
-      onHeld?: (heard: ReedRequest, attempted: ReedRequest) => void,
+      onWalk: (index: number | null) => void,
+      onHeld: (heard: ReedRequest, attempted: ReedRequest) => void,
+      onCelloUnavailable: (mode: 'hold' | 'fallback') => void,
     ) => ReedDrone,
     request: ReedRequest,
   ) {
@@ -173,6 +196,7 @@ export class ExploreDrone {
       sound: this.sound,
       walking: this.walking,
       walkPc: this.walkPc,
+      celloAvailable: this.celloAvailable,
       message: this.message,
     };
   }
@@ -197,6 +221,7 @@ export class ExploreDrone {
   }
 
   setSound(sound: DroneSoundId): void {
+    if (sound === 'cello' && !this.celloAvailable) return;
     this.sound = sound;
     this.request = { ...this.request, sound };
     try {
@@ -282,6 +307,7 @@ export class ExploreDrone {
       this.onStatus,
       this.onWalkIndex,
       this.onHeld,
+      this.onCelloUnavailable,
     );
     this.engine = engine;
     return engine;
@@ -312,7 +338,12 @@ export class ExploreDrone {
     }
     const engine =
       this.engine ??
-      this.createEngine(this.onStatus, this.onWalkIndex, this.onHeld);
+      this.createEngine(
+        this.onStatus,
+        this.onWalkIndex,
+        this.onHeld,
+        this.onCelloUnavailable,
+      );
     this.engine = engine;
     engine.setVolume(this.volume);
     this.phase = 'starting';

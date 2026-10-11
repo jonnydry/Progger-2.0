@@ -260,6 +260,11 @@
   border-color: var(--green);
 }
 
+.drone-sound-options label:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .drone-sound-options label:has(input:focus-visible) {
   outline: 2px solid var(--green);
   outline-offset: 1px;

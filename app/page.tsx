@@ -684,6 +684,7 @@ export default function Home() {
                       enabled={drone.enabled}
                       volume={drone.volume}
                       sound={drone.sound}
+                      celloAvailable={drone.celloAvailable}
                       walking={drone.walking}
                       message={drone.message}
                       onToggle={() => drone.toggle()}

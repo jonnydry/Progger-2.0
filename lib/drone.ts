@@ -258,6 +258,44 @@ export const CELLO_SAMPLES = [
   { file: 'cello-f4.m4a', midi: 65, href: '/audio/drone/cello-f4.m4a' },
 ] as const;
 
+export const CELLO_FORMATS = [
+  { id: 'm4a', mime: 'audio/mp4; codecs="mp4a.40.2"', extension: 'm4a' },
+  { id: 'opus', mime: 'audio/webm; codecs="opus"', extension: 'webm' },
+] as const;
+
+export type CelloFormatId = (typeof CELLO_FORMATS)[number]['id'];
+
+/** AAC when it is at least as likely to play as Opus. Opus moves ahead when the browser says so. */
+export function celloFormatOrder(
+  canPlay: (mime: string) => string,
+): readonly CelloFormatId[] {
+  const rank = (mime: string) => {
+    const value = canPlay(mime).trim().toLowerCase();
+    if (value === 'probably') return 2;
+    if (value === 'maybe') return 1;
+    return 0;
+  };
+  const aac = rank(CELLO_FORMATS[0].mime);
+  const opus = rank(CELLO_FORMATS[1].mime);
+  if (opus > aac) return ['opus', 'm4a'];
+  return ['m4a', 'opus'];
+}
+
+/** One container for every loop. `id` is the sample key playback already uses. */
+export function celloSources(format: CelloFormatId): readonly {
+  id: string;
+  href: string;
+  midi: number;
+}[] {
+  const extension = CELLO_FORMATS.find((item) => item.id === format)?.extension;
+  if (!extension) throw new Error(`Unknown cello format ${format}.`);
+  return CELLO_SAMPLES.map((sample) => ({
+    id: sample.file,
+    href: `/audio/drone/${sample.file.replace(/\.m4a$/, '')}.${extension}`,
+    midi: sample.midi,
+  }));
+}
+
 export function sampleForMidi(midi: number): {
   file: string;
   href: string;

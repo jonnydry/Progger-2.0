@@ -230,6 +230,8 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   );
   assert.match(view, /min=\{0\}/);
   assert.match(view, /max=\{1\}/);
+  assert.match(view, /disabled=\{unavailable\}/);
+  assert.match(view, /, unavailable/);
   assert.doesNotMatch(view, /aria-modal/);
   assert.doesNotMatch(view, /createPortal/);
   assert.match(

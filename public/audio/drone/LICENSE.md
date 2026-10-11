@@ -20,9 +20,12 @@ distributed with that repository follows.
 
 ## Files in this directory
 
-Each file is a mono AAC-LC `.m4a` (96 kbps, 44.1 kHz) cut from the quiet
-`susvib` v1 layer. Originals are 24-bit stereo WAV at 44.1 kHz. They are not
-committed. The processed loops total 137447 bytes.
+Each loop is cut from the quiet `susvib` v1 layer and stored twice. The
+`.m4a` files are mono AAC-LC at 96 kbps, 44.1 kHz. The `.webm` files are mono
+Opus at 64 kbps in WebM, from the same cut, so a browser that cannot decode
+AAC can play Opus. Originals are 24-bit stereo WAV at 44.1 kHz. They are not
+committed. The AAC loops total 137447 bytes. The Opus loops total 109551
+bytes. Together they are 246998 bytes. Playback fetches one format.
 
 | File | Source | Source MIDI | Source bytes | Source SHA-256 | Loop bytes | Loop SHA-256 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -31,6 +34,11 @@ committed. The processed loops total 137447 bytes.
 | cello-e3.m4a | `Strings/Cello Section/susvib/susvib_E3_v1_1.wav` | 52 | 2456672 | `d2f961e30bf64021cf4acbd88e0e7a1fd1840943ae78c62a711bcce3d109216e` | 27442 | `e078f2d668d463026088f1d97e79dcc4a5863aab3f658ca27d96df76f4309f25` |
 | cello-b3.m4a | `Strings/Cello Section/susvib/susvib_B3_v1_1.wav` | 59 | 1690082 | `bd25d66c1c4e73f5827bf3b931244e51ec8388594d8004529a762be81258097f` | 27454 | `aef1f3ab1f77b185f6c76bab6475237082965cfb734be3bfb367bab620d97925` |
 | cello-f4.m4a | `Strings/Cello Section/susvib/susvib_F4_v1_1.wav` | 65 | 1922948 | `a9888547b4b684c7649a882e693d61964848f18401a18e4646a8449b40c08bad` | 27508 | `d81dbab9c21d616d3cacc73bb576678bd424dee1149c2879d19b724f509db230` |
+| cello-d2.webm | `Strings/Cello Section/susvib/susvib_D2_v1_1.wav` | 38 | 2550956 | `e8640dec9febc6e39fcf06b19d2c95a85d5ff8c38f13c9879e69f551eaf38ab8` | 19643 | `c7412cb41aecfd2574f48b0ad70d7abc999e1173a03979d02b86d2c66189226c` |
+| cello-a2.webm | `Strings/Cello Section/susvib/susvib_A2_v1_1.wav` | 45 | 2336738 | `c97a003184fdcb153d6b6c0bae8d82a90592a1b04b06bd7caaeda8b9776d5284` | 21040 | `a42410012b3957ca5b7e885e9a7a77d78fb76d525a9d00eeb2e0f9d808f68fa1` |
+| cello-e3.webm | `Strings/Cello Section/susvib/susvib_E3_v1_1.wav` | 52 | 2456672 | `d2f961e30bf64021cf4acbd88e0e7a1fd1840943ae78c62a711bcce3d109216e` | 23257 | `8765e418c038c6b4ae6f6ecf5db50e39566feccc9521edbe91fcde2ffc22261b` |
+| cello-b3.webm | `Strings/Cello Section/susvib/susvib_B3_v1_1.wav` | 59 | 1690082 | `bd25d66c1c4e73f5827bf3b931244e51ec8388594d8004529a762be81258097f` | 22763 | `32abb6a7868bd6082a9c8b7d8e7a9ec23e35001f0668dd6455f9d0af7d1d0b6e` |
+| cello-f4.webm | `Strings/Cello Section/susvib/susvib_F4_v1_1.wav` | 65 | 1922948 | `a9888547b4b684c7649a882e693d61964848f18401a18e4646a8449b40c08bad` | 22848 | `023bf9dabb6ac786c3dd3b9357ce8bde80a1ab7dee6092f1bdf775e228495b3c` |
 
 Raw source URLs:
 
@@ -44,7 +52,8 @@ Raw source URLs:
 
 Each loop starts 0.55 seconds into the sustain, keeps 2.15 seconds plus a
 90 ms tail, and uses an equal-power crossfade so the loop junction is two
-consecutive source samples. Peak level is normalized to 0.5 before encoding.
+consecutive source samples. Peak level is normalized to 0.5 before encoding. The Opus files are that
+same normalized loop, encoded with libopus.
 Playback trims encoder padding at the edges and applies a 60 ms equal-power
 crossfade. Viola samples from the same library were not used.
 

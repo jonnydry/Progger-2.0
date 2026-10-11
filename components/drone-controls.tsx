@@ -31,8 +31,8 @@ export function useReedDrone(input: {
   const [controller] = useState(
     () =>
       new ExploreDrone(
-        (onStatus, onWalk, onHeld) =>
-          new ReedDrone(onStatus, { onWalk, onHeld }),
+        (onStatus, onWalk, onHeld, onCelloUnavailable) =>
+          new ReedDrone(onStatus, { onWalk, onHeld, onCelloUnavailable }),
         reedRequestForScale(input.root, input.scaleId),
       ),
   );
@@ -81,6 +81,7 @@ export function useReedDrone(input: {
       controller.setVolume(next);
     },
     sound: snapshot.sound,
+    celloAvailable: snapshot.celloAvailable,
     walking: snapshot.walking,
     walkPc: snapshot.walkPc,
     setSound(next: DroneSoundId) {
@@ -110,6 +111,7 @@ function obstacleBoxes(): DroneBox[] {
 function DroneVolumePopover({
   volume,
   sound,
+  celloAvailable,
   onVolume,
   onSound,
   onDismiss,
@@ -119,6 +121,7 @@ function DroneVolumePopover({
 }: {
   volume: number;
   sound: DroneSoundId;
+  celloAvailable: boolean;
   onVolume: (volume: number) => void;
   onSound: (sound: DroneSoundId) => void;
   onDismiss: () => void;
@@ -234,18 +237,25 @@ function DroneVolumePopover({
       <fieldset className="drone-sound-field">
         <legend>Sound</legend>
         <div className="drone-sound-options" role="radiogroup" aria-label="Drone sound">
-          {DRONE_SOUNDS.map((choice) => (
-            <label key={choice.id}>
-              <input
-                type="radio"
-                name="drone-sound"
-                value={choice.id}
-                checked={sound === choice.id}
-                onChange={() => onSound(choice.id)}
-              />
-              {choice.label}
-            </label>
-          ))}
+          {DRONE_SOUNDS.map((choice) => {
+            const unavailable = choice.id === 'cello' && !celloAvailable;
+            return (
+              <label key={choice.id}>
+                <input
+                  type="radio"
+                  name="drone-sound"
+                  value={choice.id}
+                  checked={sound === choice.id}
+                  disabled={unavailable}
+                  onChange={() => onSound(choice.id)}
+                />
+                {choice.label}
+                {unavailable ? (
+                  <span className="sr-only">, unavailable</span>
+                ) : null}
+              </label>
+            );
+          })}
         </div>
       </fieldset>
     </dialog>
@@ -256,6 +266,7 @@ export function DroneControls({
   enabled,
   volume,
   sound,
+  celloAvailable,
   walking,
   message,
   onToggle,
@@ -266,6 +277,7 @@ export function DroneControls({
   enabled: boolean;
   volume: number;
   sound: DroneSoundId;
+  celloAvailable: boolean;
   walking: boolean;
   message?: string;
   onToggle: () => void;
@@ -397,6 +409,7 @@ export function DroneControls({
           volume={volume}
           onVolume={onVolume}
           sound={sound}
+          celloAvailable={celloAvailable}
           onSound={onSound}
           onDismiss={dismissVolume}
           onFocusLeave={leaveVolume}

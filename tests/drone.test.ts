@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   DRONE_MODES,
@@ -15,6 +16,8 @@ import {
   midiHz,
   modeIntervals,
   sampleForMidi,
+  celloFormatOrder,
+  celloSources,
   scaleWalk,
   scientificPitch,
   symmetricDetuneCents,
@@ -273,6 +276,52 @@ void test('detune pairs stay centred on the root and cello picks the nearest loo
   assert.equal(sampleForMidi(45).file, 'cello-a2.m4a');
   assert.equal(sampleForMidi(45).playbackRate, 1);
   assert.equal(sampleForMidi(50).file, 'cello-e3.m4a');
+});
+
+void test('cello format order follows canPlayType and keeps a decode fallback', () => {
+  assert.deepEqual(
+    celloFormatOrder(() => 'probably'),
+    ['m4a', 'opus'],
+  );
+  assert.deepEqual(
+    celloFormatOrder((mime) => (mime.includes('webm') ? 'probably' : 'maybe')),
+    ['opus', 'm4a'],
+  );
+  assert.deepEqual(celloFormatOrder(() => ''), ['m4a', 'opus']);
+  assert.deepEqual(
+    celloSources('opus').map((source) => source.href),
+    [
+      '/audio/drone/cello-d2.webm',
+      '/audio/drone/cello-a2.webm',
+      '/audio/drone/cello-e3.webm',
+      '/audio/drone/cello-b3.webm',
+      '/audio/drone/cello-f4.webm',
+    ],
+  );
+  assert.deepEqual(
+    celloSources('m4a').map((source) => source.id),
+    celloSources('opus').map((source) => source.id),
+  );
+});
+
+void test('committed cello loops match the license hashes', () => {
+  const license = readFileSync('public/audio/drone/LICENSE.md', 'utf8');
+  const names = ['cello-d2', 'cello-a2', 'cello-e3', 'cello-b3', 'cello-f4'];
+  let total = 0;
+  for (const stem of names) {
+    for (const extension of ['m4a', 'webm']) {
+      const file = `${stem}.${extension}`;
+      const bytes = readFileSync(`public/audio/drone/${file}`);
+      total += bytes.length;
+      const hash = createHash('sha256').update(bytes).digest('hex');
+      const line = license
+        .split('\n')
+        .find((item) => item.startsWith(`| ${file} |`));
+      assert.ok(line, file);
+      assert.match(line, new RegExp(`\\| ${bytes.length} \\| \`${hash}\` \\|`));
+    }
+  }
+  assert.match(license, new RegExp(`Together they are ${total} bytes`));
 });
 
 void test('the note module does not mention an audio context', () => {
