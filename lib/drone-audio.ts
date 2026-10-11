@@ -27,13 +27,63 @@ export const DRONE_LIMITER = {
   release: 0.08,
 } as const;
 
-const PLAY_ATTACK = 1.6;
-const SWITCH_ATTACK = 0.2;
-const STOP_FADE = 0.55;
-const HIDE_FADE = 0.02;
-const PLAY_FADE = 0.04;
-const SWITCH_FADE = 0.16;
+/** Gains the reed graph and the headroom calculation both read. */
+export const REED_GAINS = {
+  pitch: 0.1,
+  other: 0.7,
+  upper: 0.58,
+  body: 0.8,
+  formantBus: 0.62,
+  formants: [0.72, 0.48, 0.3],
+  noise: 0.012,
+  envelope: 0.9,
+  bellows: 0.055,
+  dry: 0.86,
+  wet: 0.16,
+  impulse: 0.28,
+  early: 0.35,
+  silence: 0.0001,
+  oddPartial: 0.85,
+  evenPartial: 0.18,
+  partialSlope: 1.08,
+  partials: 24,
+} as const;
+
+export const REED_TIMING = {
+  playAttack: 1.6,
+  switchAttack: 0.2,
+  stopFade: 0.55,
+  hideFade: 0.02,
+  playFade: 0.04,
+  switchFade: 0.16,
+  bellowsRise: 0.15,
+  stopTail: 0.02,
+} as const;
+
 const REED_CENTS = [-3.5, 3.5] as const;
+
+export function clampDroneVolume(volume: number): number {
+  if (!Number.isFinite(volume)) return 0;
+  return Math.min(1, Math.max(0, volume));
+}
+
+export function droneMasterGain(volume: number): number {
+  return clampDroneVolume(volume) * DRONE_MAX_LINEAR_GAIN;
+}
+
+export function reedHarmonicAmplitudeSum(
+  frequency: number,
+  sampleRate: number,
+): number {
+  let sum = 0;
+  for (let harmonic = 1; harmonic < REED_GAINS.partials; harmonic += 1) {
+    if (frequency * harmonic >= sampleRate / 2) break;
+    const coefficient =
+      harmonic % 2 === 1 ? REED_GAINS.oddPartial : REED_GAINS.evenPartial;
+    sum += coefficient / harmonic ** REED_GAINS.partialSlope;
+  }
+  return sum;
+}
 
 const impulses = new WeakMap<BaseAudioContext, AudioBuffer>();
 const noises = new WeakMap<BaseAudioContext, AudioBuffer>();
@@ -73,13 +123,11 @@ type ReedOptions = {
   windowTarget?: WindowTarget | null;
 };
 
-function pitchWeight(role: DroneRole, layer: DroneLayer): number {
-  return (role === 'root' ? 1 : 0.7) * (layer === 'upper' ? 0.58 : 1);
-}
-
-function clampVolume(volume: number): number {
-  if (!Number.isFinite(volume)) return 0;
-  return Math.min(1, Math.max(0, volume));
+export function reedPitchGain(role: DroneRole, layer: DroneLayer): number {
+  const weight =
+    (role === 'root' ? 1 : REED_GAINS.other) *
+    (layer === 'upper' ? REED_GAINS.upper : 1);
+  return weight * REED_GAINS.pitch;
 }
 
 function createReedVoice(
@@ -138,13 +186,20 @@ function createReedVoice(
     stop(stopAt: number, fade: number) {
       const release = Math.max(fade, 0.015);
       envelope.gain.cancelScheduledValues(stopAt);
-      envelope.gain.setValueAtTime(Math.max(envelope.gain.value, 0.0001), stopAt);
+      envelope.gain.setValueAtTime(
+        Math.max(envelope.gain.value, REED_GAINS.silence),
+        stopAt,
+      );
       envelope.gain.linearRampToValueAtTime(0, stopAt + release);
-      for (const source of sources) source.stop(stopAt + release + 0.02);
+      for (const source of sources)
+        source.stop(stopAt + release + REED_TIMING.stopTail);
       const leftover = nodes;
-      setTimeout(() => {
-        for (const node of leftover) node.disconnect();
-      }, (release + 0.05) * 1000);
+      setTimeout(
+        () => {
+          for (const node of leftover) node.disconnect();
+        },
+        (release + 0.05) * 1000,
+      );
     },
   };
 }
@@ -163,7 +218,7 @@ function buildReed(
     const frequency = midiHz(pitch.midi);
     const wave = reedWave(context, frequency);
     const pitchGain = kit.gain();
-    pitchGain.gain.value = pitchWeight(pitch.role, pitch.layer) * 0.1;
+    pitchGain.gain.value = reedPitchGain(pitch.role, pitch.layer);
     for (const detune of REED_CENTS) {
       const voice = kit.osc();
       voice.setPeriodicWave(wave);
@@ -180,17 +235,17 @@ function buildReed(
   body.frequency.value = 740;
   body.Q.value = 0.45;
   const bodyGain = kit.gain();
-  bodyGain.gain.value = 0.8;
+  bodyGain.gain.value = REED_GAINS.body;
   mixer.connect(body);
   body.connect(bodyGain);
 
   const formants = [
-    { frequency: 620, q: 6.2, amount: 0.72 },
-    { frequency: 1280, q: 5.4, amount: 0.48 },
-    { frequency: 2140, q: 4.4, amount: 0.3 },
+    { frequency: 620, q: 6.2, amount: REED_GAINS.formants[0] },
+    { frequency: 1280, q: 5.4, amount: REED_GAINS.formants[1] },
+    { frequency: 2140, q: 4.4, amount: REED_GAINS.formants[2] },
   ];
   const formantBus = kit.gain();
-  formantBus.gain.value = 0.62;
+  formantBus.gain.value = REED_GAINS.formantBus;
   for (const formant of formants) {
     const band = kit.filter();
     band.type = 'bandpass';
@@ -216,15 +271,18 @@ function buildReed(
   noiseFilter.frequency.value = 1800;
   noiseFilter.Q.value = 0.5;
   const noiseGain = kit.gain();
-  noiseGain.gain.value = 0.012;
+  noiseGain.gain.value = REED_GAINS.noise;
   noise.connect(noiseFilter);
   noiseFilter.connect(noiseGain);
   noiseGain.connect(sum);
   noise.start(when);
 
   const envelope = kit.gain();
-  envelope.gain.setValueAtTime(0.0001, when);
-  envelope.gain.exponentialRampToValueAtTime(0.9, when + attack);
+  envelope.gain.setValueAtTime(REED_GAINS.silence, when);
+  envelope.gain.exponentialRampToValueAtTime(
+    REED_GAINS.envelope,
+    when + attack,
+  );
   sum.connect(envelope);
 
   const bellows = kit.osc();
@@ -232,12 +290,22 @@ function buildReed(
   bellows.frequency.value = 0.16;
   const depth = kit.gain();
   depth.gain.setValueAtTime(0, when);
-  depth.gain.linearRampToValueAtTime(0.055, when + attack + 0.15);
+  depth.gain.linearRampToValueAtTime(
+    REED_GAINS.bellows,
+    when + attack + REED_TIMING.bellowsRise,
+  );
   bellows.connect(depth);
   depth.connect(envelope.gain);
   bellows.start(when);
 
-  connectRoom(context, kit, envelope, destination, 0.16, 0.86);
+  connectRoom(
+    context,
+    kit,
+    envelope,
+    destination,
+    REED_GAINS.wet,
+    REED_GAINS.dry,
+  );
   return envelope;
 }
 
@@ -277,9 +345,10 @@ function roomImpulse(context: BaseAudioContext): AudioBuffer {
       const early =
         i === Math.floor(0.011 * context.sampleRate) ||
         i === Math.floor(0.019 * context.sampleRate)
-          ? 0.35
+          ? REED_GAINS.early
           : 0;
-      data[i] = ((random() * 2 - 1) * (1 - t) ** 2.8 + early) * 0.28;
+      data[i] =
+        ((random() * 2 - 1) * (1 - t) ** 2.8 + early) * REED_GAINS.impulse;
     }
   }
   impulses.set(context, buffer);
@@ -309,12 +378,13 @@ function noiseBuffer(context: BaseAudioContext): AudioBuffer {
 }
 
 function reedWave(context: BaseAudioContext, frequency: number): PeriodicWave {
-  const real = new Float32Array(24);
-  const imaginary = new Float32Array(24);
+  const real = new Float32Array(REED_GAINS.partials);
+  const imaginary = new Float32Array(REED_GAINS.partials);
   for (let harmonic = 1; harmonic < imaginary.length; harmonic += 1) {
     if (frequency * harmonic >= context.sampleRate / 2) break;
-    const odd = harmonic % 2 === 1;
-    imaginary[harmonic] = (odd ? 0.85 : 0.18) / harmonic ** 1.08;
+    const coefficient =
+      harmonic % 2 === 1 ? REED_GAINS.oddPartial : REED_GAINS.evenPartial;
+    imaginary[harmonic] = coefficient / harmonic ** REED_GAINS.partialSlope;
   }
   return context.createPeriodicWave(real, imaginary);
 }
@@ -324,6 +394,7 @@ const AUDIO_ERROR = 'Audio didn\u2019t start. Tap play to try again.';
 export class ReedDrone {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
+  private limiter: DynamicsCompressorNode | null = null;
   private voices: ReedVoice[] = [];
   private voiceNodes = 0;
   private generation = 0;
@@ -340,10 +411,10 @@ export class ReedDrone {
   private readonly documentTarget: VisibilityTarget | null;
   private readonly windowTarget: WindowTarget | null;
   private readonly onVisibility = () => {
-    if (this.documentTarget?.hidden) this.halt(HIDE_FADE);
+    if (this.documentTarget?.hidden) this.halt(REED_TIMING.hideFade);
   };
   private readonly onPageHide = () => {
-    this.halt(HIDE_FADE);
+    this.halt(REED_TIMING.hideFade);
   };
 
   constructor(
@@ -365,7 +436,10 @@ export class ReedDrone {
           ? null
           : window
         : options.windowTarget;
-    this.documentTarget?.addEventListener('visibilitychange', this.onVisibility);
+    this.documentTarget?.addEventListener(
+      'visibilitychange',
+      this.onVisibility,
+    );
     this.windowTarget?.addEventListener('pagehide', this.onPageHide);
   }
 
@@ -376,7 +450,12 @@ export class ReedDrone {
   play(request: ReedRequest): void {
     if (this.disposed) return;
     const pitches = dronePitches(request.root, request.modeId, request.octave);
-    void this.start(request, pitches, PLAY_ATTACK, PLAY_FADE);
+    void this.start(
+      request,
+      pitches,
+      REED_TIMING.playAttack,
+      REED_TIMING.playFade,
+    );
   }
 
   retune(request: ReedRequest): void {
@@ -391,17 +470,22 @@ export class ReedDrone {
     ) {
       return;
     }
-    void this.start(request, pitches, SWITCH_ATTACK, SWITCH_FADE);
+    void this.start(
+      request,
+      pitches,
+      REED_TIMING.switchAttack,
+      REED_TIMING.switchFade,
+    );
   }
 
   setVolume(volume: number): void {
     if (this.disposed) return;
-    this.volume = clampVolume(volume);
+    this.volume = clampDroneVolume(volume);
     this.applyVolume();
   }
 
   stop(): void {
-    this.halt(STOP_FADE);
+    this.halt(REED_TIMING.stopFade);
   }
 
   private halt(fade: number): void {
@@ -410,7 +494,8 @@ export class ReedDrone {
     this.cancelResume?.();
     this.cancelResume = null;
     clearTimeout(this.resumeTimer);
-    if (this.context && this.voices.length) this.fadeVoices(this.context.currentTime, fade);
+    if (this.context && this.voices.length)
+      this.fadeVoices(this.context.currentTime, fade);
     else this.voices = [];
     this.voiceNodes = 0;
     this.phase = 'idle';
@@ -424,18 +509,26 @@ export class ReedDrone {
     this.cancelResume?.();
     this.cancelResume = null;
     clearTimeout(this.resumeTimer);
-    this.documentTarget?.removeEventListener('visibilitychange', this.onVisibility);
+    this.documentTarget?.removeEventListener(
+      'visibilitychange',
+      this.onVisibility,
+    );
     this.windowTarget?.removeEventListener('pagehide', this.onPageHide);
     if (this.context) {
       if (this.onContextState) {
         this.context.removeEventListener('statechange', this.onContextState);
         this.onContextState = null;
       }
-      this.fadeVoices(this.context.currentTime, HIDE_FADE);
+      this.fadeVoices(this.context.currentTime, REED_TIMING.hideFade);
+      // A shared context outlives the drone, so the output nodes have to leave
+      // its destination or the next owner inherits this graph.
+      this.master?.disconnect();
+      this.limiter?.disconnect();
       if (this.ownsContext) void this.context.close().catch(() => {});
       this.context = null;
     }
     this.master = null;
+    this.limiter = null;
     this.voices = [];
     this.voiceNodes = 0;
   }
@@ -459,10 +552,17 @@ export class ReedDrone {
       const opened = this.unlock();
       await this.waitUntilRunning(opened.context, generation);
       if (generation !== this.generation || this.disposed) return;
-      if (opened.context.state !== 'running') throw new Error('Audio is unavailable.');
+      if (opened.context.state !== 'running')
+        throw new Error('Audio is unavailable.');
       const when = opened.context.currentTime + 0.02;
       this.fadeVoices(when, fade);
-      const voice = createReedVoice(opened.context, opened.master, pitches, when, attack);
+      const voice = createReedVoice(
+        opened.context,
+        opened.master,
+        pitches,
+        when,
+        attack,
+      );
       this.voices = [voice];
       this.voiceNodes = voice.nodeCount;
       this.phase = 'playing';
@@ -470,7 +570,7 @@ export class ReedDrone {
     } catch {
       if (generation !== this.generation || this.disposed) return;
       if (this.context) {
-        this.fadeVoices(this.context.currentTime, HIDE_FADE);
+        this.fadeVoices(this.context.currentTime, REED_TIMING.hideFade);
         this.voiceNodes = 0;
       }
       this.phase = 'error';
@@ -486,7 +586,7 @@ export class ReedDrone {
     }
     const context = this.createContext();
     const master = context.createGain();
-    master.gain.value = this.volume * DRONE_MAX_LINEAR_GAIN;
+    master.gain.value = droneMasterGain(this.volume);
     const limiter = context.createDynamicsCompressor();
     limiter.threshold.value = DRONE_LIMITER.threshold;
     limiter.knee.value = DRONE_LIMITER.knee;
@@ -498,23 +598,30 @@ export class ReedDrone {
     this.onContextState = () => {
       if (this.phase !== 'playing') return;
       if (context.state === 'running' || context.state === 'closed') return;
-      this.halt(HIDE_FADE);
+      this.halt(REED_TIMING.hideFade);
     };
     context.addEventListener('statechange', this.onContextState);
     this.context = context;
     this.master = master;
+    this.limiter = limiter;
     void context.resume().catch(() => {});
     return { context, master };
   }
 
-  private waitUntilRunning(context: AudioContext, generation: number): Promise<void> {
+  private waitUntilRunning(
+    context: AudioContext,
+    generation: number,
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       const resume = context.resume();
       let rejectTimeout: (error: Error) => void = () => {};
       const timeout = new Promise<never>((_, rejectRace) => {
         rejectTimeout = rejectRace;
       });
-      const timer = setTimeout(() => rejectTimeout(new Error('Audio did not start.')), 2000);
+      const timer = setTimeout(
+        () => rejectTimeout(new Error('Audio did not start.')),
+        2000,
+      );
       this.resumeTimer = timer;
       let cancel = () => {};
       const cancelled = new Promise<void>((resolveCancel) => {
@@ -547,7 +654,7 @@ export class ReedDrone {
   private applyVolume(): void {
     if (!this.master || !this.context) return;
     const now = this.context.currentTime;
-    const next = this.volume * DRONE_MAX_LINEAR_GAIN;
+    const next = droneMasterGain(this.volume);
     this.master.gain.cancelScheduledValues(now);
     this.master.gain.setValueAtTime(this.master.gain.value, now);
     this.master.gain.linearRampToValueAtTime(next, now + 0.03);

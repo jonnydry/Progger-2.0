@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ReedDrone, type DroneStatus, type ReedRequest } from '../lib/drone-audio.ts';
+import {
+  ReedDrone,
+  droneMasterGain,
+  type DroneStatus,
+  type ReedRequest,
+} from '../lib/drone-audio.ts';
 import { midiHz } from '../lib/drone.ts';
 
 class Param {
@@ -72,7 +77,10 @@ class FakeBuffer {
     this.numberOfChannels = channels;
     this.length = length;
     this.sampleRate = sampleRate;
-    this.channels = Array.from({ length: channels }, () => new Float32Array(length));
+    this.channels = Array.from(
+      { length: channels },
+      () => new Float32Array(length),
+    );
   }
   getChannelData(channel: number) {
     return this.channels[channel];
@@ -86,11 +94,15 @@ class Compressor {
   attack = new Param();
   release = new Param();
   connections: unknown[] = [];
+  disconnected = false;
   connect(next: unknown) {
     this.connections.push(next);
     return next;
   }
-  disconnect() {}
+  disconnect() {
+    this.disconnected = true;
+    this.connections = [];
+  }
 }
 
 class FakeContext {
@@ -105,7 +117,8 @@ class FakeContext {
   compressors: Compressor[] = [];
   gains: (FakeNode & { gain: Param })[] = [];
   filters: (FakeNode & { frequency: Param; Q: Param; type: string })[] = [];
-  convolvers: (FakeNode & { normalize: boolean; buffer: FakeBuffer | null })[] = [];
+  convolvers: (FakeNode & { normalize: boolean; buffer: FakeBuffer | null })[] =
+    [];
   params: Param[] = [];
   resume = () => {
     this.state = 'running';
@@ -244,7 +257,9 @@ function createdNodes(context: FakeContext): number {
 
 function masterGain(context: FakeContext) {
   const limiter = context.compressors[0];
-  const master = context.gains.find((gain) => gain.connections.includes(limiter));
+  const master = context.gains.find((gain) =>
+    gain.connections.includes(limiter),
+  );
   assert.ok(master);
   return master;
 }
@@ -299,7 +314,8 @@ void test('a low reed starts on one context and centers the root', async () => {
     [-3.5, 3.5],
   );
   assert.equal(
-    root.reduce((sum, oscillator) => sum + oscillator.detune.value, 0) / root.length,
+    root.reduce((sum, oscillator) => sum + oscillator.detune.value, 0) /
+      root.length,
     0,
   );
   const fifth = context.oscillators.filter(
@@ -312,7 +328,9 @@ void test('a low reed starts on one context and centers the root', async () => {
   );
   assert.equal(
     context.params.some((param) =>
-      param.events.some((event) => event.method === 'exponential' && event.value === 0.9),
+      param.events.some(
+        (event) => event.method === 'exponential' && event.value === 0.9,
+      ),
     ),
     true,
   );
@@ -325,13 +343,21 @@ void test('a low reed starts on one context and centers the root', async () => {
   assert.equal(context.convolvers[0].normalize, false);
   assert.ok(context.convolvers[0].buffer);
   assert.equal(context.convolvers[0].buffer.numberOfChannels, 2);
-  assert.equal(context.convolvers[0].buffer.length, Math.floor(context.sampleRate * 0.8));
-  assert.deepEqual(
-    context.filters.map((filter) => filter.type).sort(),
-    ['bandpass', 'bandpass', 'bandpass', 'highpass', 'lowpass'],
+  assert.equal(
+    context.convolvers[0].buffer.length,
+    Math.floor(context.sampleRate * 0.8),
   );
+  assert.deepEqual(context.filters.map((filter) => filter.type).sort(), [
+    'bandpass',
+    'bandpass',
+    'bandpass',
+    'highpass',
+    'lowpass',
+  ]);
   assert.deepEqual(
-    context.filters.map((filter) => filter.frequency.value).sort((a, b) => a - b),
+    context.filters
+      .map((filter) => filter.frequency.value)
+      .sort((a, b) => a - b),
     [620, 740, 1280, 1800, 2140],
   );
   assert.deepEqual(
@@ -378,7 +404,9 @@ void test('Locrian drones the octave with the same reed pair', async () => {
   await until(() => states.at(-1) === 'playing');
   assert.equal(engine.nodeCount(), 28);
   assert.equal(createdNodes(context), 28);
-  const frequencies = context.oscillators.map((oscillator) => oscillator.frequency.value);
+  const frequencies = context.oscillators.map(
+    (oscillator) => oscillator.frequency.value,
+  );
   assert.equal(frequencies.includes(midiHz(45)), true);
   assert.equal(frequencies.includes(midiHz(57)), true);
   assert.equal(frequencies.includes(midiHz(52)), false);
@@ -404,7 +432,9 @@ void test('retune waits for a real play, then moves to the new pitches on the sa
   assert.equal(createdNodes(context), nodes);
   assert.equal(states.at(-1), 'playing');
   engine.retune({ root: 'E', modeId: 'ionian', octave: 'low' });
-  await until(() => states.at(-1) === 'playing' && createdNodes(context) > nodes);
+  await until(
+    () => states.at(-1) === 'playing' && createdNodes(context) > nodes,
+  );
   assert.equal(created(), 1);
   const live = context.oscillators
     .filter((oscillator) => oscillator.stops.length === 0)
@@ -413,8 +443,35 @@ void test('retune waits for a real play, then moves to the new pitches on the sa
   assert.equal(live.filter((frequency) => frequency === midiHz(47)).length, 2);
   assert.equal(live.includes(midiHz(45)), false);
   assert.equal(live.includes(midiHz(52)), false);
-  const stops = context.oscillators.map((oscillator) => oscillator.stops.length);
-  assert.throws(() => engine.retune({ root: 'H', modeId: 'dorian', octave: 'low' }));
+  const stops = context.oscillators.map(
+    (oscillator) => oscillator.stops.length,
+  );
+  const oldOscillators = context.oscillators.slice(0, 4);
+  assert.ok(
+    oldOscillators.every(
+      (oscillator) => oscillator.stops[0] > oscillator.starts[0] + 0.1,
+    ),
+  );
+  const envelopes = context.gains.filter((gain) =>
+    gain.gain.events.some(
+      (event) => event.method === 'exponential' && event.value === 0.9,
+    ),
+  );
+  assert.equal(envelopes.length, 2);
+  const faded = envelopes.find((gain) =>
+    gain.gain.events.some(
+      (event) => event.method === 'linear' && event.value === 0,
+    ),
+  );
+  assert.ok(faded);
+  const fadeIndex = faded.gain.events.findIndex(
+    (event) => event.method === 'linear' && event.value === 0,
+  );
+  assert.equal(faded.gain.events[fadeIndex - 1]?.method, 'set');
+  assert.ok((faded.gain.events[fadeIndex - 1]?.value ?? 0) > 0.5);
+  assert.throws(() =>
+    engine.retune({ root: 'H', modeId: 'dorian', octave: 'low' }),
+  );
   assert.deepEqual(
     context.oscillators.map((oscillator) => oscillator.stops.length),
     stops,
@@ -432,14 +489,19 @@ void test('volume is stored before a context exists and clamps on the master ram
   assert.equal(master.gain.value, 0.075);
   engine.setVolume(2);
   assert.equal(
-    master.gain.events.filter((event) => event.method === 'linear').at(-1)?.value,
+    master.gain.events.filter((event) => event.method === 'linear').at(-1)
+      ?.value,
     0.15,
   );
   engine.setVolume(Number.NaN);
   assert.equal(
-    master.gain.events.filter((event) => event.method === 'linear').at(-1)?.value,
+    master.gain.events.filter((event) => event.method === 'linear').at(-1)
+      ?.value,
     0,
   );
+  assert.equal(droneMasterGain(1), 0.15);
+  assert.equal(droneMasterGain(100), 0.15);
+  assert.equal(droneMasterGain(-4), 0);
   engine.dispose();
 });
 
@@ -452,7 +514,9 @@ void test('hiding the document stops the reed and the next play resumes the same
   documentTarget.hidden = true;
   documentTarget.emit('visibilitychange');
   assert.equal(states.at(-1), 'idle');
-  assert.ok(context.oscillators.every((oscillator) => oscillator.stops.length > 0));
+  assert.ok(
+    context.oscillators.every((oscillator) => oscillator.stops.length > 0),
+  );
   assert.equal(created(), 1);
   assert.equal(context.closed, 0);
   engine.play(lowRequest);
@@ -496,7 +560,10 @@ void test('a rejected resume can be retried on the next play', async () => {
   harness.context.resume = () => Promise.reject(new Error('blocked'));
   harness.engine.play(lowRequest);
   await until(() => harness.states.at(-1) === 'error');
-  assert.equal(harness.messages.at(-1), 'Audio didn\u2019t start. Tap play to try again.');
+  assert.equal(
+    harness.messages.at(-1),
+    'Audio didn\u2019t start. Tap play to try again.',
+  );
   assert.equal(harness.created(), 1);
   harness.context.resume = () => Promise.resolve();
   harness.engine.play(lowRequest);
@@ -522,7 +589,9 @@ void test('stop goes idle without closing, and stop before play creates nothing'
   assert.equal(created(), 1);
   assert.equal(
     context.params.some((param) =>
-      param.events.some((event) => event.method === 'linear' && event.value === 0),
+      param.events.some(
+        (event) => event.method === 'linear' && event.value === 0,
+      ),
     ),
     true,
   );
@@ -536,9 +605,17 @@ void test('dispose closes a context the reed created and leaves a passed-in cont
   const passed = setup();
   passed.engine.play(lowRequest);
   await until(() => passed.states.at(-1) === 'playing');
+  const sharedMaster = masterGain(passed.context);
+  const sharedLimiter = passed.context.compressors[0];
   passed.engine.dispose();
   assert.equal(passed.context.closed, 0);
   assert.equal(passed.context.stateListenerCount(), 0);
+  assert.equal(sharedMaster.disconnected, true);
+  assert.equal(sharedLimiter.disconnected, true);
+  assert.equal(
+    sharedLimiter.connections.includes(passed.context.destination),
+    false,
+  );
 
   const owned = new FakeContext();
   const previous = globalThis.AudioContext;
@@ -563,7 +640,9 @@ void test('dispose closes a context the reed created and leaves a passed-in cont
 
 void test('an unknown root throws before a context is created', () => {
   const { engine, states, created } = setup();
-  assert.throws(() => engine.play({ root: 'H', modeId: 'dorian', octave: 'low' }));
+  assert.throws(() =>
+    engine.play({ root: 'H', modeId: 'dorian', octave: 'low' }),
+  );
   assert.equal(created(), 0);
   assert.deepEqual(states, []);
   engine.dispose();
