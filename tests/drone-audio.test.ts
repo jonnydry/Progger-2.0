@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -735,10 +736,35 @@ function maxSampleStep(param: Param, now: number): number {
   return max;
 }
 
-async function assertMidSwellKeyChange(firefox: boolean) {
+function assertAnchored(
+  param: Param,
+  now: number,
+  expected: number,
+  releaseEnd: number,
+) {
+  assert.equal(
+    param.events.some((event) => event.method === 'hold'),
+    false,
+  );
+  const cancel = param.events.find((event) => event.method === 'cancel');
+  const anchor = param.events.filter((event) => event.method === 'set').at(-1);
+  const linear = [...param.events]
+    .reverse()
+    .find((event) => event.method === 'linear' && event.value === 0);
+  assert.ok(cancel);
+  assert.ok(anchor);
+  assert.ok(linear);
+  assert.equal(cancel.time, now);
+  assert.equal(anchor.time, now);
+  assert.equal(anchor.value, expected);
+  assert.ok(Math.abs(linear.time - releaseEnd) < 1e-9);
+  assert.ok(maxSampleStep(param, now) < 0.01);
+}
+
+async function assertMidSwellKeyChange(removeHold: boolean) {
   const holdKey = 'cancelAndHoldAtTime';
   const descriptor = Object.getOwnPropertyDescriptor(Param.prototype, holdKey);
-  if (firefox) {
+  if (removeHold) {
     delete (Param.prototype as unknown as Record<string, unknown>)[holdKey];
   }
   try {
@@ -757,25 +783,12 @@ async function assertMidSwellKeyChange(firefox: boolean) {
     await until(
       () => states.at(-1) === 'playing' && envelopeGains(context).length === 2,
     );
-    const swellStop = swell[0].gain.events;
-    if (firefox) {
-      const anchor = swellStop.filter((event) => event.method === 'set').at(-1);
-      const cancel = swellStop.find((event) => event.method === 'cancel');
-      assert.ok(anchor);
-      assert.ok(cancel);
-      assert.equal(cancel.time, duringSwell);
-      assert.equal(anchor.time, duringSwell);
-      assert.equal(anchor.value, swellValue);
-    } else {
-      const hold = swellStop.find((event) => event.method === 'hold');
-      assert.ok(hold);
-      assert.equal(hold.time, duringSwell + 0.02);
-      assert.equal(
-        swellStop.filter((event) => event.method === 'set').length,
-        1,
-      );
-    }
-    assert.ok(maxSampleStep(swell[0].gain, duringSwell) < 0.01);
+    assertAnchored(
+      swell[0].gain,
+      duringSwell,
+      swellValue,
+      duringSwell + 0.02 + Math.max(REED_TIMING.switchFade, 0.015),
+    );
 
     const switched = envelopeGains(context).find((gain) => {
       const ramp = rampOf(gain.gain);
@@ -796,29 +809,77 @@ async function assertMidSwellKeyChange(firefox: boolean) {
     await until(
       () => states.at(-1) === 'playing' && envelopeGains(context).length === 3,
     );
-    if (firefox) {
-      const anchor = switched.gain.events
-        .filter((event) => event.method === 'set')
-        .at(-1);
-      assert.ok(anchor);
-      assert.equal(anchor.time, duringSwitch);
-      assert.equal(anchor.value, switchValue);
-    }
-    assert.ok(maxSampleStep(switched.gain, duringSwitch) < 0.01);
+    assertAnchored(
+      switched.gain,
+      duringSwitch,
+      switchValue,
+      duringSwitch + 0.02 + Math.max(REED_TIMING.switchFade, 0.015),
+    );
     engine.dispose();
   } finally {
-    if (firefox && descriptor) {
+    if (removeHold && descriptor) {
       Object.defineProperty(Param.prototype, holdKey, descriptor);
     }
   }
 }
 
-void test('a mid-swell key change holds the ramp when cancelAndHoldAtTime exists', async () => {
+void test('a mid-swell key change anchors the computed ramp when cancelAndHoldAtTime exists', async () => {
   await assertMidSwellKeyChange(false);
 });
 
-void test('a mid-swell key change computes the ramp when cancelAndHoldAtTime is missing', async () => {
+void test('a mid-swell key change anchors the computed ramp when cancelAndHoldAtTime is missing', async () => {
   await assertMidSwellKeyChange(true);
+});
+
+void test('the reed fade never calls cancelAndHoldAtTime', () => {
+  const source = readFileSync(
+    new URL('../lib/drone-audio.ts', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(source, /cancelAndHoldAtTime\s*\(/);
+});
+
+void test('the computed envelope stays at the steady level after the swell', () => {
+  const ramp: GainRamp = {
+    start: REED_GAINS.silence,
+    target: REED_GAINS.envelope,
+    startTime: 1,
+    endTime: 1 + REED_TIMING.playAttack,
+  };
+  const later = ramp.endTime + 2;
+  const progress = (later - ramp.startTime) / (ramp.endTime - ramp.startTime);
+  const extrapolated = ramp.start * (ramp.target / ramp.start) ** progress;
+  assert.ok(extrapolated > ramp.target);
+  assert.equal(exponentialRampValue(ramp, later), ramp.target);
+  assert.equal(exponentialRampValue(ramp, ramp.endTime), ramp.target);
+  assert.equal(exponentialRampValue(ramp, ramp.startTime), ramp.start);
+});
+
+void test('a stop after the swell anchors the steady level for key change, toggle off, and view leave', async () => {
+  const cases: { fade: number; stopDelay: number }[] = [
+    { fade: REED_TIMING.switchFade, stopDelay: 0.02 },
+    { fade: REED_TIMING.stopFade, stopDelay: 0 },
+    { fade: REED_TIMING.hideFade, stopDelay: 0 },
+  ];
+  for (const item of cases) {
+    const { engine, context, states } = setup();
+    engine.play(lowRequest);
+    await until(() => states.at(-1) === 'playing');
+    const swell = envelopeGains(context);
+    assert.equal(swell.length, 1);
+    const ramp = rampOf(swell[0].gain);
+    const past = ramp.endTime + 0.75;
+    context.currentTime = past;
+    assert.equal(exponentialRampValue(ramp, past), REED_GAINS.envelope);
+    swell[0].gain.value = REED_GAINS.silence;
+    if (item.stopDelay > 0) {
+      engine.retune({ root: 'E', modeId: 'ionian', octave: 'low' });
+      await until(() => envelopeGains(context).length === 2);
+    } else engine.stop(item.fade);
+    const releaseEnd = past + item.stopDelay + Math.max(item.fade, 0.015);
+    assertAnchored(swell[0].gain, past, REED_GAINS.envelope, releaseEnd);
+    engine.dispose();
+  }
 });
 
 void test('a stop before the swell anchor writes silence instead of holding unity gain', async () => {

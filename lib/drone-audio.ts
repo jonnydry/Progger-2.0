@@ -68,41 +68,43 @@ export type GainRamp = {
   endTime: number;
 };
 
-type HoldParam = Omit<AudioParam, 'cancelAndHoldAtTime'> & {
-  cancelAndHoldAtTime?: (cancelTime: number) => AudioParam;
+type GainAutomation = {
+  cancelScheduledValues: (cancelTime: number) => unknown;
+  setValueAtTime: (value: number, startTime: number) => unknown;
+  linearRampToValueAtTime: (value: number, endTime: number) => unknown;
 };
 
-/** Value of an exponential ramp at `time`. Web Audio uses v(t) = start * (target/start) ^ progress. */
+/**
+ * Intrinsic envelope at `time`.
+ * During the swell this is the exponential curve.
+ * Once the swell has finished it is the ramp target, the steady level.
+ * The curve is not extrapolated past `endTime`.
+ */
 export function exponentialRampValue(ramp: GainRamp, time: number): number {
-  if (!(ramp.start > 0) || !(ramp.target > 0)) return ramp.target;
   if (ramp.endTime <= ramp.startTime || time <= ramp.startTime)
     return ramp.start;
   if (time >= ramp.endTime) return ramp.target;
+  if (!(ramp.start > 0) || !(ramp.target > 0)) return ramp.target;
   const progress = (time - ramp.startTime) / (ramp.endTime - ramp.startTime);
   return ramp.start * (ramp.target / ramp.start) ** progress;
 }
 
 /**
- * Hold the in-progress swell, then fade to silence.
- * Chrome has cancelAndHoldAtTime. Firefox does not, and gain.value is stale mid-ramp,
- * so the fallback cancels at `now` and writes the ramp value at that instant.
+ * Anchor the envelope, then fade to silence.
+ * cancelAndHoldAtTime is not used: after the swell it drops a steady 0.9.
+ * gain.value is stale mid-ramp, so the anchor is the computed curve, or the
+ * steady target once that curve has ended.
  */
 export function holdGainThenFade(
-  param: HoldParam,
+  param: GainAutomation,
   ramp: GainRamp,
   stopAt: number,
   release: number,
   now = stopAt,
 ): void {
   const time = Math.min(now, stopAt);
-  // Before the swell's setValueAtTime, Chrome's hold keeps the default gain of 1.
-  const rampStarted = time >= ramp.startTime;
-  if (rampStarted && typeof param.cancelAndHoldAtTime === 'function') {
-    param.cancelAndHoldAtTime(stopAt);
-  } else {
-    param.cancelScheduledValues(time);
-    param.setValueAtTime(exponentialRampValue(ramp, time), time);
-  }
+  param.cancelScheduledValues(time);
+  param.setValueAtTime(exponentialRampValue(ramp, time), time);
   param.linearRampToValueAtTime(0, stopAt + release);
 }
 

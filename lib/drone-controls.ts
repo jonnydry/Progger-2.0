@@ -42,6 +42,22 @@ export function droneVolumeOpens(input: {
   return false;
 }
 
+/**
+ * Close when focus moves outside the popover.
+ * A press on the volume button toggles instead. The pointer flag has to
+ * still be set after pointerup, because a touch moves focus after pointerup
+ * and before click.
+ */
+export function droneVolumeFocusOut(input: {
+  relatedInside: boolean;
+  relatedTrigger: boolean;
+  pointerOnTrigger: boolean;
+}): { open: boolean } {
+  if (input.relatedInside) return { open: true };
+  if (input.relatedTrigger && input.pointerOnTrigger) return { open: true };
+  return { open: false };
+}
+
 export function volumePopoverKey(input: {
   open: boolean;
   key: string;
@@ -54,6 +70,7 @@ export function volumePopoverKey(input: {
     return { open: false, focus: input.focus };
   }
   if (input.key === 'Escape') return { open: false, focus: 'toggle' };
+  // Tab is not trapped. focusout closes once focus has actually left.
   if (input.key === 'Tab') return { open: true, focus: 'outside' };
   return { open: true, focus: input.focus };
 }

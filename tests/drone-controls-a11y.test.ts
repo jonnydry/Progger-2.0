@@ -7,6 +7,7 @@ import {
   VOLUME_POPOVER_OBSTACLE_SELECTORS,
   boxesOverlap,
   droneControlName,
+  droneVolumeFocusOut,
   droneVolumeOpens,
   volumePopoverKey,
   volumePopoverOrigin,
@@ -23,6 +24,41 @@ void test('the toggle name says drone and whether it is on', () => {
   assert.ok(DRONE_ICON_PX < DRONE_TAP_TARGET_PX);
 });
 
+void test('focus leaving the volume popover closes it, and a press on the volume button does not', () => {
+  assert.deepEqual(
+    droneVolumeFocusOut({
+      relatedInside: true,
+      relatedTrigger: false,
+      pointerOnTrigger: false,
+    }),
+    { open: true },
+  );
+  assert.deepEqual(
+    droneVolumeFocusOut({
+      relatedInside: false,
+      relatedTrigger: true,
+      pointerOnTrigger: true,
+    }),
+    { open: true },
+  );
+  assert.deepEqual(
+    droneVolumeFocusOut({
+      relatedInside: false,
+      relatedTrigger: true,
+      pointerOnTrigger: false,
+    }),
+    { open: false },
+  );
+  assert.deepEqual(
+    droneVolumeFocusOut({
+      relatedInside: false,
+      relatedTrigger: false,
+      pointerOnTrigger: false,
+    }),
+    { open: false },
+  );
+});
+
 void test('volume opens from a click or an arrow key, and a long-press is not required', () => {
   assert.equal(droneVolumeOpens({ kind: 'click' }), true);
   assert.equal(droneVolumeOpens({ kind: 'keydown', key: 'ArrowDown' }), true);
@@ -32,7 +68,7 @@ void test('volume opens from a click or an arrow key, and a long-press is not re
   assert.equal(droneVolumeOpens({ kind: 'longpress' }), false);
 });
 
-void test('escape returns focus to the toggle and tab leaves the popover open', () => {
+void test('escape closes toward the toggle and tab is not trapped', () => {
   assert.deepEqual(
     volumePopoverKey({ open: false, key: 'ArrowDown', focus: 'toggle' }),
     { open: true, focus: 'slider' },
@@ -213,6 +249,11 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   assert.match(css, /border:\s*1px solid var\(--border\)/);
   assert.match(css, /outline:\s*2px solid var\(--green\)/);
   assert.match(css, /display:\s*contents/);
+  assert.match(css, /flex:\s*0 0 44px/);
+  assert.match(css, /text-overflow:\s*ellipsis/);
+  assert.match(css, /min-width:\s*0/);
+  assert.doesNotMatch(css, /calc\(100% \+ 8px\)/);
+  assert.doesNotMatch(css, /left:\s*-52px/);
   assert.doesNotMatch(css, /flex-wrap:\s*wrap/);
   assert.doesNotMatch(css, /flex:\s*1\s*0\s*100%/);
   assert.match(view, /aria-pressed=\{enabled\}/);
@@ -220,6 +261,8 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   assert.match(view, /ChevronDown/);
   assert.match(view, /droneVolumeOpens\(\{ kind: 'click' \}\)/);
   assert.match(view, /volumePopoverKey/);
+  assert.match(view, /droneVolumeFocusOut/);
+  assert.match(view, /addEventListener\('focusout', onFocusOut\)/);
   assert.match(view, /VOLUME_POPOVER_OBSTACLE_SELECTORS/);
   assert.match(view, /addEventListener\('scroll', onScroll, true\)/);
   assert.match(
