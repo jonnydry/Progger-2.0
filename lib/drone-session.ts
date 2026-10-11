@@ -103,6 +103,7 @@ export class ExploreDrone {
   private readonly createEngine: (
     onStatus: (status: DroneStatus, message?: string) => void,
     onWalk: (index: number | null) => void,
+    onHeld: (request: ReedRequest) => void,
   ) => ReedDrone;
   private readonly onWalkIndex = (index: number | null) => {
     if (index === null) {
@@ -127,11 +128,27 @@ export class ExploreDrone {
     if (status === 'idle' || status === 'error') this.enabled = false;
     this.emit();
   };
+  private readonly onHeld = (heard: ReedRequest) => {
+    const sound = requestSound(heard);
+    this.sound = sound;
+    this.current = { ...heard, sound };
+    this.request = { ...this.request, sound };
+    try {
+      localStorage.setItem(SOUND_KEY, sound);
+    } catch {
+      // The heard sound still applies for this visit.
+    }
+    this.phase = 'playing';
+    this.status = 'playing';
+    this.message = undefined;
+    this.emit();
+  };
 
   constructor(
     createEngine: (
       onStatus: (status: DroneStatus, message?: string) => void,
       onWalk?: (index: number | null) => void,
+      onHeld?: (request: ReedRequest) => void,
     ) => ReedDrone,
     request: ReedRequest,
   ) {
@@ -251,7 +268,11 @@ export class ExploreDrone {
 
   private engineOrCreate(): ReedDrone {
     if (this.engine) return this.engine;
-    const engine = this.createEngine(this.onStatus, this.onWalkIndex);
+    const engine = this.createEngine(
+      this.onStatus,
+      this.onWalkIndex,
+      this.onHeld,
+    );
     this.engine = engine;
     return engine;
   }
@@ -279,7 +300,9 @@ export class ExploreDrone {
       this.emit();
       return;
     }
-    const engine = this.engine ?? this.createEngine(this.onStatus, this.onWalkIndex);
+    const engine =
+      this.engine ??
+      this.createEngine(this.onStatus, this.onWalkIndex, this.onHeld);
     this.engine = engine;
     engine.setVolume(this.volume);
     this.phase = 'starting';

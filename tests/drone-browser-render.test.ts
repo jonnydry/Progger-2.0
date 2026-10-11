@@ -9,7 +9,9 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 const STEP_LIMIT = 1e-3;
-const CASES = 96 * 3;
+const DRONE_CASES = 96;
+const WALK_CASES = 48;
+const CASES = DRONE_CASES * 3 + WALK_CASES;
 
 const chromeBin = [
   '/usr/bin/google-chrome-stable',
@@ -23,10 +25,19 @@ const playwrightEntry = [
   '/tmp/pw/node_modules/playwright/index.mjs',
 ].find((path) => existsSync(path));
 
+type TailResult = {
+  name: string;
+  fade: number;
+  early: number;
+  mid: number;
+  late: number;
+};
+
 type RenderResult = {
   ua: string;
   count: number;
   failureCount: number;
+  tails?: TailResult[];
   bySound?: Record<
     string,
     {
@@ -57,7 +68,7 @@ function bundleProbe(): string {
   const root = process.cwd();
   writeFileSync(
     entry,
-    `export { startMeasuredReed, REED_TIMING } from '${root}/lib/drone-audio.ts';
+    `export { startMeasuredReed, startMeasuredWalk, startLiveVoice, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN } from '${root}/lib/drone-audio.ts';
 export { dronePitches } from '${root}/lib/drone.ts';
 `,
   );
@@ -79,7 +90,7 @@ function page(): string {
   return `<!doctype html>
 <meta charset="utf-8" />
 <script type="module">
-import { startMeasuredReed, REED_TIMING, dronePitches } from '/probe.js';
+import { startMeasuredReed, startMeasuredWalk, startLiveVoice, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN, dronePitches } from '/probe.js';
 const SOUNDS = ['reed', 'bow', 'cello'];
 
 const SAMPLE_RATE = 48000;
@@ -95,10 +106,10 @@ function cases() {
   return list;
 }
 
-function analyze(data) {
+function analyze(data, from) {
   let max = 0;
-  let at = 1;
-  for (let index = 1; index < data.length; index += 1) {
+  let at = from || 1;
+  for (let index = from || 1; index < data.length; index += 1) {
     const step = Math.abs(data[index] - data[index - 1]);
     if (step > max) {
       max = step;
@@ -248,6 +259,86 @@ async function render(item, sound) {
   };
 }
 
+function walkCases() {
+  const list = [];
+  for (let align = 0; align < ${WALK_CASES}; align += 1) list.push({ align });
+  return list;
+}
+
+async function renderWalk(item) {
+  const start = 128;
+  const attackEnd = start + Math.round(0.006 * SAMPLE_RATE);
+  const interesting = attackEnd + 64 + item.align;
+  const release = Math.max(WALK_STOP_FADE, 0.015);
+  const releaseSamples = Math.ceil(release * SAMPLE_RATE);
+  const end = interesting + releaseSamples;
+  const length = end + 256;
+  const context = new OfflineAudioContext(2, length, SAMPLE_RATE);
+  const voice = startMeasuredWalk(context, context.destination, at(start));
+  const run = () => voice.stop(at(interesting), WALK_STOP_FADE, at(interesting));
+  if (typeof context.suspend === 'function') {
+    context.suspend(at(interesting)).then(() => {
+      run();
+      return context.resume();
+    });
+  } else run();
+  const rendered = await context.startRendering();
+  const data = rendered.getChannelData(0);
+  const step = analyze(data, attackEnd + 2);
+  const silenceAt = end + 8;
+  let tail = 0;
+  for (let index = Math.min(data.length - 1, silenceAt); index < data.length; index += 1) {
+    tail = Math.max(tail, Math.abs(data[index]));
+  }
+  return {
+    name: 'walk mid-note stop',
+    sound: 'walk',
+    align: item.align,
+    max: step.max,
+    prev: step.prev,
+    cur: step.cur,
+    next: step.next,
+    tailMax: tail,
+    fail: step.max > STEP_LIMIT || tail > STEP_LIMIT,
+    window: Array.from(data.slice(Math.max(0, interesting - 1), interesting + 3)),
+  };
+}
+
+function peakBetween(data, from, to) {
+  let peak = 0;
+  const start = Math.max(0, Math.floor(from));
+  const end = Math.min(data.length, Math.ceil(to));
+  for (let index = start; index < end; index += 1) {
+    peak = Math.max(peak, Math.abs(data[index]));
+  }
+  return peak;
+}
+
+async function renderTail(name, fade) {
+  const release = Math.max(fade, 0.015);
+  const start = 0.05;
+  const stopAt = 0.5;
+  const dryEnd = stopAt + release;
+  const tailEnd = dryEnd + ROOM_SECONDS + TAIL_MARGIN;
+  const seconds = tailEnd + 0.08;
+  const context = new OfflineAudioContext(2, Math.ceil(SAMPLE_RATE * seconds), SAMPLE_RATE);
+  const voice = startLiveVoice(
+    context,
+    context.destination,
+    dronePitches('C', 'ionian', 'low'),
+    start,
+    0.2,
+    'reed',
+  );
+  voice.stop(stopAt, fade, stopAt);
+  const rendered = await context.startRendering();
+  const data = rendered.getChannelData(0);
+  const early = peakBetween(data, (dryEnd + 0.02) * SAMPLE_RATE, (dryEnd + 0.1) * SAMPLE_RATE);
+  const mid = peakBetween(data, (dryEnd + 0.25) * SAMPLE_RATE, (dryEnd + 0.45) * SAMPLE_RATE);
+  const late = peakBetween(data, tailEnd * SAMPLE_RATE, seconds * SAMPLE_RATE);
+  return { name, fade, early, mid, late, dryEnd, tailEnd };
+}
+
 const rows = [];
 for (const sound of SOUNDS) {
   for (const item of cases()) {
@@ -264,11 +355,32 @@ for (const sound of SOUNDS) {
     }
   }
 }
+for (const item of walkCases()) {
+  try {
+    rows.push(await renderWalk(item));
+  } catch (error) {
+    rows.push({
+      name: 'walk mid-note stop',
+      sound: 'walk',
+      align: item.align,
+      fail: true,
+      error: String(error && error.message ? error.message : error),
+    });
+  }
+}
+const tails = [];
+for (const item of [
+  ['leave', REED_TIMING.hideFade],
+  ['toggle off', REED_TIMING.stopFade],
+  ['key change', REED_TIMING.switchFade],
+]) {
+  tails.push(await renderTail(item[0], item[1]));
+}
 let worst = rows[0];
 for (const row of rows) if ((row.max ?? 0) > (worst.max ?? 0)) worst = row;
 const failing = rows.filter((row) => row.fail);
 const bySound = {};
-for (const sound of SOUNDS) {
+for (const sound of SOUNDS.concat(['walk'])) {
   const group = rows.filter((row) => row.sound === sound);
   let soundWorst = group[0];
   for (const row of group) {
@@ -291,6 +403,7 @@ const result = {
   failureCount: failing.length,
   worst,
   bySound,
+  tails,
   errors: failing.slice(0, 3).map((row) => row.error).filter(Boolean),
 };
 window.__RESULT = result;
@@ -447,10 +560,25 @@ function assertContinuous(result: RenderResult) {
   for (const sound of ['reed', 'bow', 'cello']) {
     const row = result.bySound?.[sound];
     assert.ok(row, sound);
-    assert.equal(row.count, 96, sound);
+    assert.equal(row.count, DRONE_CASES, sound);
     assert.equal(row.failureCount, 0, JSON.stringify(row));
     assert.ok((row.max ?? 1) < STEP_LIMIT, JSON.stringify(row));
     assert.equal(row.tail, 0, JSON.stringify(row));
+  }
+  const walk = result.bySound?.walk;
+  assert.ok(walk, 'walk');
+  assert.equal(walk.count, WALK_CASES);
+  assert.equal(walk.failureCount, 0, JSON.stringify(walk));
+  assert.ok((walk.max ?? 1) < STEP_LIMIT, JSON.stringify(walk));
+  assert.equal(walk.tail, 0, JSON.stringify(walk));
+  assert.equal(result.tails?.length, 3);
+  for (const tail of result.tails ?? []) {
+    assert.ok(tail.early > 1e-4, `${tail.name} early tail ${tail.early}`);
+    assert.ok(tail.mid > 1e-5, `${tail.name} mid tail ${tail.mid}`);
+    assert.ok(tail.late === 0, `${tail.name} late tail ${tail.late}`);
+    console.log(
+      `${tail.name} fade ${tail.fade} early ${tail.early} mid ${tail.mid} late ${tail.late}`,
+    );
   }
 }
 

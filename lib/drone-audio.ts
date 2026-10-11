@@ -29,8 +29,13 @@ export function requestSound(request: ReedRequest): DroneSoundId {
   return request.sound ?? 'reed';
 }
 
-/** Volume 1 stays at least 1 dB under full scale when added to one plucked note. */
-export const DRONE_MAX_LINEAR_GAIN = 0.15;
+/**
+ * Reed cap on the voice fade. The master is volume only.
+ * Chrome 154 renders the drone, one walk note, and the loudest chord
+ * together at volume 1. This cap peaks at 0.88152 on E♭ locrian, layered,
+ * sustain. The mix stays under 0.8913.
+ */
+export const DRONE_MAX_LINEAR_GAIN = 0.063;
 
 export const DRONE_LIMITER = {
   threshold: -1,
@@ -73,12 +78,24 @@ export const REED_TIMING = {
   stopTail: 0.02,
 } as const;
 
+/** Shared room length. Voice and dispose disconnects wait this out. */
+export const ROOM_SECONDS = 0.8;
+
+/** Hold after the impulse so the last wet sample is not cut. */
+export const TAIL_MARGIN = 0.05;
+
+/** Wall-clock wait from a fade's start until that voice may disconnect. */
+export function voiceTailHold(fade: number): number {
+  return Math.max(fade, 0.015) + ROOM_SECONDS + TAIL_MARGIN;
+}
+
 /**
- * Bow and cello caps are set from a Chrome limiter render, not the
- * analytical sum. Makeup gain lifts a full voice. The loud bow is two
- * key changes on E♭ locrian, layered, 0.254s apart, while the detuned saws
- * are still in phase. The fade starts 20ms before the new voice. Caps keep
- * that peak, plus the loudest pluck, at or under -1 dBFS.
+ * Bow and cello caps come from the same Chrome three-way render.
+ * Makeup gain lifts a full voice, so the analytical sum is not the cap.
+ * Bow peaks at 0.87813 on F♯ ionian, layered, a crossfade. Cello peaks
+ * at 0.88509 on A locrian, layered, a key change, the tightest of the
+ * three. The cap is the voice fade's resting level, so a sample that is
+ * still loading does not retarget the voice that is already sounding.
  */
 export const BOW_GAINS = {
   pitch: 0.055,
@@ -86,7 +103,7 @@ export const BOW_GAINS = {
   envelope: 1,
   dry: 0.8,
   wet: 0.22,
-  cap: 0.168,
+  cap: 0.072,
   voices: 4,
 } as const;
 
@@ -96,7 +113,7 @@ export const CELLO_GAINS = {
   dry: 0.9,
   wet: 0.12,
   samplePeak: 0.5,
-  cap: 0.202,
+  cap: 0.078,
 } as const;
 
 export const WALK_GAINS = {
@@ -108,6 +125,19 @@ export const WALK_GAINS = {
 } as const;
 
 export const WALK_STEP_MS = 800;
+
+/** First walk note, after the gesture, on the audio clock. */
+export const WALK_LEAD_SECONDS = 0.08;
+
+/** Highlight timer horizon. Note starts are not driven by this timer. */
+export const WALK_LOOKAHEAD_SECONDS = 0.2;
+
+/** Walk stop fade. Long enough that a mid-note ramp stays under one thousandth per sample. */
+export const WALK_STOP_FADE = 0.04;
+
+export function walkNoteTime(origin: number, index: number): number {
+  return origin + index * (WALK_STEP_MS / 1000);
+}
 
 /** The pluck envelope at `time`, from the breakpoints scheduled in `pluck`. */
 export function walkPluckLevel(start: number, time: number): number {
@@ -193,13 +223,33 @@ type FadeRamp = {
 };
 
 /** The fade gain's own ramp. gain.value stays stale, so a second stop reads this. */
-function fadeLevel(ramp: FadeRamp | null, time: number): number {
-  if (!ramp) return 1;
+function fadeLevel(
+  ramp: FadeRamp | null,
+  time: number,
+  resting: number = 1,
+): number {
+  if (!ramp) return resting;
   if (!(ramp.endTime > ramp.startTime) || time <= ramp.startTime)
     return ramp.from;
   if (time >= ramp.endTime) return ramp.to;
   const progress = (time - ramp.startTime) / (ramp.endTime - ramp.startTime);
   return ramp.from + (ramp.to - ramp.from) * progress;
+}
+
+function rampFade(
+  fade: GainNode,
+  ramp: FadeRamp | null,
+  resting: number,
+  stopAt: number,
+  fadeTime: number,
+  now: number,
+): FadeRamp {
+  const release = Math.max(fadeTime, 0.015);
+  const time = Math.min(now, stopAt);
+  const end = time + release;
+  const level = fadeLevel(ramp, time, resting);
+  scheduleFade(fade.gain, time, end, level);
+  return { from: level, to: 0, startTime: time, endTime: end };
 }
 
 /**
@@ -244,6 +294,7 @@ export function clampDroneVolume(volume: number): number {
   return Math.min(1, Math.max(0, volume));
 }
 
+/** Analytical product of volume and the sound cap. The live master is volume only. */
 export function droneMasterGain(
   volume: number,
   sound: DroneSoundId = 'reed',
@@ -315,6 +366,8 @@ type ReedOptions = {
   windowTarget?: WindowTarget | null;
   fetchImpl?: typeof fetch;
   onWalk?: (index: number | null) => void;
+  /** The voice that is still sounding after a new one fails to start. */
+  onHeld?: (request: ReedRequest) => void;
 };
 
 export function reedPitchGain(role: DroneRole, layer: DroneLayer): number {
@@ -333,6 +386,7 @@ function createReedVoice(
   probe = false,
   sound: DroneSoundId = 'reed',
   buffers: ReadonlyMap<string, AudioBuffer> | null = null,
+  resting: number = 1,
 ): ReedVoice {
   const nodes: AudioNode[] = [];
   const sources: Scheduled[] = [];
@@ -378,6 +432,7 @@ function createReedVoice(
       probe,
       buffers,
     ).fade;
+    fade.gain.value = resting;
   } catch (error) {
     for (const source of sources) {
       try {
@@ -392,21 +447,14 @@ function createReedVoice(
   return {
     nodeCount: nodes.length,
     stop(stopAt: number, fadeTime: number, now = context.currentTime) {
-      const release = Math.max(fadeTime, 0.015);
-      const time = Math.min(now, stopAt);
-      const end = time + release;
-      const level = fadeLevel(fadeRamp, time);
-      scheduleFade(fade.gain, time, end, level);
-      fadeRamp = { from: level, to: 0, startTime: time, endTime: end };
+      fadeRamp = rampFade(fade, fadeRamp, resting, stopAt, fadeTime, now);
       const rate = context.sampleRate > 0 ? context.sampleRate : 48000;
-      for (const source of sources) source.stop(end + 1 / rate);
+      for (const source of sources) source.stop(fadeRamp.endTime + 1 / rate);
       const leftover = nodes;
-      setTimeout(
-        () => {
-          for (const node of leftover) node.disconnect();
-        },
-        (release + 0.05) * 1000,
-      );
+      // The convolver keeps sounding for ROOM_SECONDS after the dry fade.
+      setTimeout(() => {
+        for (const node of leftover) node.disconnect();
+      }, voiceTailHold(fadeTime) * 1000);
     },
   };
 }
@@ -823,7 +871,7 @@ function connectRoom(
 function roomImpulse(context: BaseAudioContext): AudioBuffer {
   const cached = impulses.get(context);
   if (cached) return cached;
-  const seconds = 0.8;
+  const seconds = ROOM_SECONDS;
   const length = Math.max(1, Math.floor(context.sampleRate * seconds));
   const buffer = context.createBuffer(2, length, context.sampleRate);
   const random = noiseSource(0x51eed);
@@ -900,6 +948,8 @@ export class ReedDrone {
   private plucks: {
     oscillator: OscillatorNode;
     envelope: GainNode;
+    fade: GainNode;
+    fadeRamp: FadeRamp | null;
     started: number;
   }[] = [];
   private celloBytes = new Map<string, ArrayBuffer>();
@@ -910,6 +960,7 @@ export class ReedDrone {
   private resumeTimer: ReturnType<typeof setTimeout> | undefined;
   private cancelResume: (() => void) | null = null;
   private readonly onStatus: (status: DroneStatus, message?: string) => void;
+  private readonly onHeld: (request: ReedRequest) => void;
   private readonly createContext: () => AudioContext;
   private readonly ownsContext: boolean;
   private onContextState: (() => void) | null = null;
@@ -930,6 +981,7 @@ export class ReedDrone {
     options: ReedOptions = {},
   ) {
     this.onStatus = onStatus;
+    this.onHeld = options.onHeld ?? (() => {});
     this.onWalk = options.onWalk ?? (() => {});
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.ownsContext = options.createContext === undefined;
@@ -959,13 +1011,13 @@ export class ReedDrone {
 
   play(request: ReedRequest): void {
     if (this.disposed) return;
-    this.sound = requestSound(request);
     const pitches = dronePitches(request.root, request.modeId, request.octave);
     void this.start(
       request,
       pitches,
       REED_TIMING.playAttack,
       REED_TIMING.playFade,
+      requestSound(request),
     );
   }
 
@@ -983,12 +1035,12 @@ export class ReedDrone {
     ) {
       return;
     }
-    this.sound = nextSound;
     void this.start(
       request,
       pitches,
       REED_TIMING.switchAttack,
       REED_TIMING.switchFade,
+      nextSound,
     );
   }
 
@@ -1008,7 +1060,6 @@ export class ReedDrone {
       return;
     }
     this.walking = true;
-    this.sound = requestSound(request);
     const context = this.unlock().context;
     void context.resume().catch(() => {});
     this.runWalk(scaleWalk(request.root, request.scaleId ?? request.modeId));
@@ -1068,12 +1119,12 @@ export class ReedDrone {
         context.removeEventListener('statechange', this.onContextState);
         this.onContextState = null;
       }
-      const release = Math.max(REED_TIMING.hideFade, 0.015);
       const now = context.currentTime;
       this.fadeVoices(now, REED_TIMING.hideFade);
-      // A fade that is already running may outlast the hide cut. Keep the
-      // master connected until the later of the two reaches silence.
-      const wait = Math.max(release, this.outputUntil - now);
+      // The dry fade is the short part. The room keeps ringing for
+      // ROOM_SECONDS, and a fade that was already running can be longer
+      // than the hide cut. The master stays up through the later tail.
+      const wait = Math.max(0, this.outputUntil - now);
       setTimeout(() => {
         master?.disconnect();
         limiter?.disconnect();
@@ -1092,15 +1143,11 @@ export class ReedDrone {
     pitches: readonly DronePitch[],
     attack: number,
     fade: number,
+    sound: DroneSoundId,
   ): Promise<void> {
     if (this.disposed) return;
     const generation = ++this.generation;
     this.phase = 'starting';
-    this.current = {
-      root: request.root,
-      modeId: request.modeId,
-      octave: request.octave,
-    };
     this.onStatus('starting');
     try {
       const opened = this.unlock();
@@ -1108,10 +1155,11 @@ export class ReedDrone {
       if (generation !== this.generation || this.disposed) return;
       if (opened.context.state !== 'running')
         throw new Error('Audio is unavailable.');
-      if (this.sound === 'cello') await this.decodeCello(opened.context);
+      // A sample that is still loading must not cut or retarget the voice
+      // that is already sounding. The crossfade starts after decode.
+      if (sound === 'cello') await this.decodeCello(opened.context);
       if (generation !== this.generation || this.disposed) return;
       const when = opened.context.currentTime + 0.02;
-      this.fadeVoices(when, fade);
       const voice = createReedVoice(
         opened.context,
         opened.master,
@@ -1119,18 +1167,32 @@ export class ReedDrone {
         when,
         attack,
         false,
-        this.sound,
-        this.sound === 'cello' ? this.celloBuffers : null,
+        sound,
+        sound === 'cello' ? this.celloBuffers : null,
+        soundLinearCap(sound),
       );
+      this.sound = sound;
+      this.current = {
+        root: request.root,
+        modeId: request.modeId,
+        octave: request.octave,
+        sound,
+      };
+      this.fadeVoices(when, fade);
       this.voices = [voice];
       this.voiceNodes = voice.nodeCount;
       this.phase = 'playing';
       this.onStatus('playing');
     } catch {
       if (generation !== this.generation || this.disposed) return;
-      if (this.context) {
-        this.fadeVoices(this.context.currentTime, REED_TIMING.hideFade);
-        this.voiceNodes = 0;
+      if (this.voices.length && this.current) {
+        // The new sound never started. The voice already in the room stays,
+        // and the control is told which request is actually heard.
+        this.onHeld({ ...this.current, sound: this.sound });
+        if (generation !== this.generation || this.disposed) return;
+        this.phase = 'playing';
+        this.onStatus('playing');
+        return;
       }
       this.phase = 'error';
       this.onStatus('error', AUDIO_ERROR);
@@ -1145,7 +1207,7 @@ export class ReedDrone {
     }
     const context = this.createContext();
     const master = context.createGain();
-    master.gain.value = droneMasterGain(this.volume, this.sound);
+    master.gain.value = this.volume;
     const limiter = context.createDynamicsCompressor();
     limiter.threshold.value = DRONE_LIMITER.threshold;
     limiter.knee.value = DRONE_LIMITER.knee;
@@ -1214,7 +1276,7 @@ export class ReedDrone {
   private applyVolume(): void {
     if (!this.master || !this.context) return;
     const now = this.context.currentTime;
-    const next = droneMasterGain(this.volume, this.sound);
+    const next = this.volume;
     this.master.gain.cancelScheduledValues(now);
     this.master.gain.setValueAtTime(this.master.gain.value, now);
     this.master.gain.linearRampToValueAtTime(next, now + 0.03);
@@ -1222,8 +1284,7 @@ export class ReedDrone {
 
   private fadeVoices(when: number, fade: number): void {
     if (this.voices.length) {
-      const release = Math.max(fade, 0.015);
-      this.outputUntil = Math.max(this.outputUntil, when + release);
+      this.outputUntil = Math.max(this.outputUntil, when + voiceTailHold(fade));
     }
     for (const voice of this.voices) voice.stop(when, fade);
     this.voices = [];
@@ -1254,33 +1315,59 @@ export class ReedDrone {
 
   private runWalk(notes: ReturnType<typeof scaleWalk>): void {
     const generation = (this.walkGeneration += 1);
-    let index = 0;
-    const tick = () => {
+    const context = this.context;
+    if (!context || notes.length === 0) {
+      this.walking = false;
+      this.onWalk(null);
+      return;
+    }
+    const origin = context.currentTime + WALK_LEAD_SECONDS;
+    const step = WALK_STEP_MS / 1000;
+    // Every start() is booked now, at origin + index * step. A timer that
+    // wakes late, including a throttled background tab, only moves the
+    // highlight. It cannot slide a note onto currentTime or fire a burst.
+    for (let index = 0; index < notes.length; index += 1) {
+      const when = walkNoteTime(origin, index);
+      if (when < context.currentTime) continue;
+      this.pluckAt(notes[index].midi, when);
+    }
+    let shown = -1;
+    const pump = () => {
       if (!this.walking || generation !== this.walkGeneration || !this.context)
         return;
-      this.onWalk(index);
-      this.pluck(notes[index].midi);
-      index += 1;
-      if (index < notes.length) this.walkTimer = setTimeout(tick, WALK_STEP_MS);
-      else {
-        this.walkTimer = setTimeout(() => {
-          if (generation !== this.walkGeneration) return;
-          this.walking = false;
-          this.onWalk(null);
-        }, WALK_STEP_MS);
+      const now = this.context.currentTime;
+      let heard = -1;
+      for (let index = 0; index < notes.length; index += 1) {
+        if (walkNoteTime(origin, index) <= now + 0.02) heard = index;
       }
+      if (heard !== shown) {
+        shown = heard;
+        if (heard >= 0) this.onWalk(heard);
+      }
+      const endAt = origin + notes.length * step;
+      if (now >= endAt) {
+        this.walking = false;
+        this.onWalk(null);
+        return;
+      }
+      const nextAt = walkNoteTime(origin, heard + 1);
+      const delay = Math.min(
+        WALK_LOOKAHEAD_SECONDS,
+        Math.max(0.025, nextAt - now),
+      );
+      this.walkTimer = setTimeout(pump, delay * 1000);
     };
-    this.walkTimer = setTimeout(tick, 80);
+    pump();
   }
 
-  private pluck(midi: number): void {
+  private pluckAt(midi: number, when: number): void {
     if (!this.context || !this.limiter) return;
-    const now = this.context.currentTime + 0.02;
+    if (when < this.context.currentTime) return;
     const plucked = startWalkPluck(
       this.context,
       this.limiter,
       midi,
-      now,
+      when,
       this.volume,
     );
     plucked.oscillator.onended = () => {
@@ -1289,25 +1376,51 @@ export class ReedDrone {
     this.plucks.push({
       oscillator: plucked.oscillator,
       envelope: plucked.envelope,
-      started: now,
+      fade: plucked.fade,
+      fadeRamp: null,
+      started: when,
     });
   }
 
   private stopPlucks(): void {
     const now = this.context?.currentTime ?? 0;
+    const rate =
+      this.context && this.context.sampleRate > 0 ? this.context.sampleRate : 48000;
     for (const pluck of this.plucks) {
       try {
-        const level = walkPluckLevel(pluck.started, now);
-        pluck.envelope.gain.cancelScheduledValues(now);
-        pluck.envelope.gain.setValueAtTime(level, now);
-        pluck.envelope.gain.linearRampToValueAtTime(0, now + 0.02);
-        pluck.oscillator.stop(now + 0.03);
+        if (now < pluck.started) {
+          pluck.fade.gain.setValueAtTime(0, pluck.started);
+          pluck.oscillator.stop(pluck.started + 1 / rate);
+          continue;
+        }
+        pluck.fadeRamp = rampFade(
+          pluck.fade,
+          pluck.fadeRamp,
+          1,
+          now,
+          WALK_STOP_FADE,
+          now,
+        );
+        pluck.oscillator.stop(pluck.fadeRamp.endTime + 1 / rate);
       } catch {
         // Already stopped.
       }
     }
     this.plucks = [];
   }
+}
+
+function scheduleWalkEnvelope(
+  param: GainAutomation & {
+    exponentialRampToValueAtTime: (value: number, endTime: number) => unknown;
+  },
+  when: number,
+): void {
+  param.setValueAtTime(WALK_GAINS.decay, when);
+  param.linearRampToValueAtTime(WALK_GAINS.attack, when + 0.006);
+  param.exponentialRampToValueAtTime(WALK_GAINS.body, when + 0.65);
+  param.exponentialRampToValueAtTime(WALK_GAINS.decay, when + 2.5);
+  param.linearRampToValueAtTime(0, when + 2.52);
 }
 
 /** The walk pluck: its own periodic wave, into the limiter, scaled by volume. */
@@ -1317,7 +1430,12 @@ export function startWalkPluck(
   midi: number,
   when: number,
   volume: number,
-): { oscillator: OscillatorNode; envelope: GainNode; nodes: AudioNode[] } {
+): {
+  oscillator: OscillatorNode;
+  envelope: GainNode;
+  fade: GainNode;
+  nodes: AudioNode[];
+} {
   const oscillator = context.createOscillator();
   const frequency = midiHz(midi);
   oscillator.setPeriodicWave(pluckWave(context, frequency));
@@ -1331,21 +1449,52 @@ export function startWalkPluck(
     when + 1.3,
   );
   const envelope = context.createGain();
-  envelope.gain.setValueAtTime(WALK_GAINS.decay, when);
-  envelope.gain.linearRampToValueAtTime(WALK_GAINS.attack, when + 0.006);
-  envelope.gain.exponentialRampToValueAtTime(WALK_GAINS.body, when + 0.65);
-  envelope.gain.exponentialRampToValueAtTime(WALK_GAINS.decay, when + 2.5);
-  envelope.gain.linearRampToValueAtTime(0, when + 2.52);
+  scheduleWalkEnvelope(envelope.gain, when);
+  const fade = context.createGain();
+  fade.gain.value = 1;
   const trim = context.createGain();
   trim.gain.value = WALK_GAINS.trim * clampDroneVolume(volume);
   oscillator.connect(filter);
   filter.connect(envelope);
-  envelope.connect(trim);
+  envelope.connect(fade);
+  fade.connect(trim);
   trim.connect(destination);
-  const nodes: AudioNode[] = [oscillator, filter, envelope, trim];
+  const nodes: AudioNode[] = [oscillator, filter, envelope, fade, trim];
   oscillator.start(when);
   oscillator.stop(when + 2.55);
-  return { oscillator, envelope, nodes };
+  return { oscillator, envelope, fade, nodes };
+}
+
+/**
+ * Unity loop through the walk envelope and fade, so a render is the gain.
+ * Stop ramps the fade gain and leaves the envelope scheduled.
+ */
+export function startMeasuredWalk(
+  context: BaseAudioContext,
+  destination: AudioNode,
+  when: number,
+): { stop: (stopAt: number, fade: number, now?: number) => void } {
+  const envelope = context.createGain();
+  scheduleWalkEnvelope(envelope.gain, when);
+  const fade = context.createGain();
+  fade.gain.value = 1;
+  envelope.connect(fade);
+  fade.connect(destination);
+  const source = context.createBufferSource();
+  const unity = context.createBuffer(1, 1, context.sampleRate);
+  unity.getChannelData(0)[0] = 1;
+  source.buffer = unity;
+  source.loop = true;
+  source.connect(envelope);
+  source.start(when);
+  let ramp: FadeRamp | null = null;
+  return {
+    stop(stopAt: number, fadeTime: number, now = context.currentTime) {
+      ramp = rampFade(fade, ramp, 1, stopAt, fadeTime, now);
+      const rate = context.sampleRate > 0 ? context.sampleRate : 48000;
+      source.stop(ramp.endTime + 1 / rate);
+    },
+  };
 }
 
 /** Trim, loop, and crossfade a decoded cello sample the way playback does. */

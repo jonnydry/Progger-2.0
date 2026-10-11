@@ -9,6 +9,9 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { FULL_SCALE_MARGIN } from '../lib/drone-levels.ts';
 
+/** Drone, one walk note, and the loudest chord, summed at volume 1. */
+const MIX_CEILING = 0.8913;
+
 const chromeBin = [
   '/usr/bin/google-chrome-stable',
   '/usr/bin/google-chrome',
@@ -29,6 +32,7 @@ type PeakRow = {
   limited: number;
   via: string;
   gap: number;
+  mix: number;
 };
 
 type PeakReport = {
@@ -36,8 +40,12 @@ type PeakReport = {
   error?: string;
   walkPeak: number;
   walkMidi: number;
+  walkAt: number;
+  chordPeak: number;
+  chordAt: number;
   rows: PeakRow[];
   together: Record<string, number>;
+  swept: Record<string, number>;
 };
 
 function pluckAttackLevel(): number {
@@ -103,13 +111,54 @@ const files = [
 
 function peakOf(rendered) {
   let peak = 0;
+  let at = 0;
   for (let channel = 0; channel < rendered.numberOfChannels; channel += 1) {
     const data = rendered.getChannelData(channel);
     for (let index = 0; index < data.length; index += 1) {
-      peak = Math.max(peak, Math.abs(data[index]));
+      const value = Math.abs(data[index]);
+      if (value > peak) {
+        peak = value;
+        at = index / rendered.sampleRate;
+      }
     }
   }
-  return peak;
+  return { peak, at };
+}
+
+function startChord(context, midis, when) {
+  const bus = context.createGain();
+  bus.gain.value = 0.75 / midis.length;
+  bus.connect(context.destination);
+  midis.forEach((midi, index) => {
+    const oscillator = context.createOscillator();
+    const envelope = context.createGain();
+    const filter = context.createBiquadFilter();
+    const frequency = 440 * 2 ** ((midi - 69) / 12);
+    const real = new Float32Array(25);
+    const imaginary = new Float32Array(25);
+    for (let harmonic = 1; harmonic < imaginary.length; harmonic += 1) {
+      if (frequency * harmonic < context.sampleRate / 2) {
+        imaginary[harmonic] = Math.sin(harmonic * Math.PI * 0.23) / harmonic ** 1.35;
+      }
+    }
+    oscillator.setPeriodicWave(context.createPeriodicWave(real, imaginary));
+    oscillator.frequency.value = frequency;
+    const at = when + index * 0.045;
+    filter.type = 'lowpass';
+    filter.Q.value = 0.45;
+    filter.frequency.setValueAtTime(Math.min(5500, frequency * 12), at);
+    filter.frequency.exponentialRampToValueAtTime(Math.max(600, frequency * 2), at + 1.3);
+    envelope.gain.setValueAtTime(0, at);
+    envelope.gain.linearRampToValueAtTime(0.85, at + 0.006);
+    envelope.gain.exponentialRampToValueAtTime(0.12, at + 0.65);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, at + 2.5);
+    envelope.gain.linearRampToValueAtTime(0, at + 2.52);
+    oscillator.connect(filter);
+    filter.connect(envelope);
+    envelope.connect(bus);
+    oscillator.start(at);
+    oscillator.stop(at + 2.525);
+  });
 }
 
 function graph(context, sound) {
@@ -139,7 +188,8 @@ async function renderOverlap(buffers, root, mode, octave, sound, gap, walk) {
   const first = startLiveVoice(context, master, pitches, start, 0.2, sound, cello);
   first.stop(when, 0.16, now);
   startLiveVoice(context, master, pitches, when, 0.2, sound, cello);
-  if (walk) startWalkPluck(context, limiter, walk.midi, when + 0.2, 1);
+  if (walk) startWalkPluck(context, limiter, walk.midi, walk.at, 1);
+  if (walk && walk.chord) startChord(context, walk.chord, walk.chordAt);
   return peakOf(await context.startRendering());
 }
 
@@ -157,8 +207,8 @@ async function renderVoice(buffers, root, mode, octave, sound, attack, seconds, 
     sound === 'cello' ? buffers : null,
   );
   if (walk) startWalkPluck(context, limiter, walk.midi, walk.at, 1);
-  const peak = peakOf(await context.startRendering());
-  return { peak, voice };
+  if (walk && walk.chord) startChord(context, walk.chord, walk.chordAt);
+  return peakOf(await context.startRendering());
 }
 
 try {
@@ -168,6 +218,43 @@ try {
     const bytes = await (await fetch('/audio/' + file)).arrayBuffer();
     const decoded = await decodeCtx.decodeAudioData(bytes.slice(0));
     buffers.set(file, prepareCelloBuffer(decodeCtx, decoded));
+  }
+  let walkPeak = 0;
+  let walkMidi = 60;
+  let walkAt = 0;
+  for (let midi = 40; midi <= 84; midi += 1) {
+    const rate = 48000;
+    const context = new OfflineAudioContext(2, Math.ceil(rate * 0.12), rate);
+    const { limiter } = graph(context, 'reed');
+    startWalkPluck(context, limiter, midi, 0.01, 1);
+    const value = peakOf(await context.startRendering());
+    if (value.peak > walkPeak) {
+      walkPeak = value.peak;
+      walkMidi = midi;
+      walkAt = value.at - 0.01;
+    }
+  }
+  const chordCandidates = [];
+  for (let midi = 40; midi <= 84; midi += 2) chordCandidates.push([midi]);
+  chordCandidates.push(
+    [40, 45, 50, 55, 59, 64],
+    [40, 45, 50],
+    [52, 55, 59],
+    [64, 69, 74],
+  );
+  let chordPeak = 0;
+  let chordMidis = [60];
+  let chordAt = 0;
+  for (const midis of chordCandidates) {
+    const rate = 48000;
+    const context = new OfflineAudioContext(2, Math.ceil(rate * 0.12), rate);
+    startChord(context, midis, 0.01);
+    const value = peakOf(await context.startRendering());
+    if (value.peak > chordPeak) {
+      chordPeak = value.peak;
+      chordMidis = midis;
+      chordAt = value.at - 0.01;
+    }
   }
   const roots = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
   const rows = [];
@@ -179,6 +266,7 @@ try {
           const switched = await renderVoice(buffers, root, mode, octave, sound, 0.2, 1.2);
           const gaps = [0.232, 0.252, 0.254, 0.278, 0.28];
           let crossed = 0;
+          let crossAt = 0;
           let crossGap = gaps[0];
           for (const gap of gaps) {
             const value = await renderOverlap(
@@ -189,8 +277,9 @@ try {
               sound,
               gap,
             );
-            if (value > crossed) {
-              crossed = value;
+            if (value.peak > crossed) {
+              crossed = value.peak;
+              crossAt = value.at;
               crossGap = gap;
             }
           }
@@ -201,57 +290,102 @@ try {
               : switched.peak >= sustained.peak
                 ? 'switch'
                 : 'sustain';
-          rows.push({ root, mode, octave, sound, limited, via, gap: crossGap });
+          const peakAt =
+            via === 'crossfade' ? crossAt : via === 'switch' ? switched.at : sustained.at;
+          const attack = via === 'sustain' ? 1.6 : 0.2;
+          const mixSeconds = via === 'sustain' ? 3.6 : via === 'switch' ? 1.2 : 0.05 + crossGap + 0.9;
+          const aligned = {
+            midi: walkMidi,
+            at: Math.max(0.001, peakAt - walkAt),
+            chord: chordMidis,
+            chordAt: Math.max(0.001, peakAt - chordAt),
+          };
+          const mixed =
+            via === 'crossfade'
+              ? await renderOverlap(buffers, root, mode, octave, sound, crossGap, aligned)
+              : await renderVoice(
+                  buffers,
+                  root,
+                  mode,
+                  octave,
+                  sound,
+                  attack,
+                  mixSeconds,
+                  aligned,
+                );
+          rows.push({
+            root,
+            mode,
+            octave,
+            sound,
+            limited,
+            via,
+            gap: crossGap,
+            peakAt,
+            mix: mixed.peak,
+          });
           if (rows.length % 12 === 0) console.log('measured ' + rows.length);
         }
       }
     }
   }
-  let walkPeak = 0;
-  let walkMidi = 60;
-  for (let midi = 60; midi <= 83; midi += 1) {
-    const rate = 48000;
-    const context = new OfflineAudioContext(2, Math.ceil(rate * 0.08), rate);
-    const { limiter } = graph(context, 'reed');
-    startWalkPluck(context, limiter, midi, 0.01, 1);
-    const value = peakOf(await context.startRendering());
-    if (value > walkPeak) {
-      walkPeak = value;
-      walkMidi = midi;
-    }
-  }
   const together = {};
+  const swept = {};
   for (const sound of ['reed', 'bow', 'cello']) {
-    const row = rows
-      .filter((item) => item.sound === sound)
-      .reduce((best, item) => (item.limited > best.limited ? item : best));
+    const ofSound = rows.filter((item) => item.sound === sound);
+    const row = ofSound.reduce((best, item) => (item.mix > best.mix ? item : best));
     const withWalk =
       row.via === 'crossfade'
-        ? await renderOverlap(
+        ? await renderOverlap(buffers, row.root, row.mode, row.octave, sound, row.gap, {
+            midi: walkMidi,
+            at: Math.max(0.001, row.peakAt - walkAt),
+          })
+        : await renderVoice(
             buffers,
             row.root,
             row.mode,
             row.octave,
             sound,
-            row.gap,
-            { midi: walkMidi },
-          )
-        : (
-            await renderVoice(
+            row.via === 'sustain' ? 1.6 : 0.2,
+            row.via === 'sustain' ? 3.6 : 1.2,
+            {
+              midi: walkMidi,
+              at: Math.max(0.001, row.peakAt - walkAt),
+            },
+          );
+    together[sound] = withWalk.peak;
+    let sweep = row.mix;
+    for (let shift = -0.02; shift <= 0.02; shift += 0.004) {
+      const aligned = {
+        midi: walkMidi,
+        at: Math.max(0.001, row.peakAt - walkAt + shift),
+        chord: chordMidis,
+        chordAt: Math.max(0.001, row.peakAt - chordAt + shift),
+      };
+      const found =
+        row.via === 'crossfade'
+          ? await renderOverlap(
+              buffers,
+              row.root,
+              row.mode,
+              row.octave,
+              sound,
+              row.gap,
+              aligned,
+            )
+          : await renderVoice(
               buffers,
               row.root,
               row.mode,
               row.octave,
               sound,
               row.via === 'sustain' ? 1.6 : 0.2,
-              (row.via === 'sustain' ? 1.6 : 0.2) + 1.4,
-              {
-                midi: walkMidi,
-                at: 0.05 + (row.via === 'sustain' ? 1.6 : 0.2),
-              },
-            )
-          ).peak;
-    together[sound] = withWalk;
+              row.via === 'sustain' ? 3.6 : 1.2,
+              aligned,
+            );
+      if (found.peak > sweep) sweep = found.peak;
+    }
+    swept[sound] = sweep;
   }
   await fetch('/result', {
     method: 'POST',
@@ -259,8 +393,12 @@ try {
       ua: navigator.userAgent,
       walkPeak,
       walkMidi,
+      walkAt,
+      chordPeak,
+      chordAt,
       rows,
       together,
+      swept,
     }),
   });
   document.title = 'done';
@@ -340,7 +478,7 @@ async function waitForReport(result: Promise<string>): Promise<PeakReport> {
     new Promise<string>((_, reject) => {
       timer = setTimeout(
         () => reject(new Error('Peak render timed out')),
-        240000,
+        340000,
       );
     }),
   ]);
@@ -439,6 +577,8 @@ async function runFirefox(bundlePath: string): Promise<PeakReport> {
 function assertHeadroom(report: PeakReport, pluck: number) {
   assert.equal(report.error, undefined, report.error);
   assert.equal(report.rows.length, 12 * 2 * 2 * 3);
+  assert.ok(report.chordPeak > 0.5, `chord peak ${report.chordPeak}`);
+  assert.ok(report.walkPeak > 0.05, `walk peak ${report.walkPeak}`);
   const worst: Record<string, PeakRow> = {};
   for (const row of report.rows) {
     const sum = row.limited + pluck;
@@ -462,8 +602,26 @@ function assertHeadroom(report: PeakReport, pluck: number) {
       `${sound} drone plus walk ${report.together[sound]}`,
     );
     const sum = row.limited + pluck;
+    const mixes = report.rows.filter((item) => item.sound === sound);
+    const loudestMix = mixes.reduce((best, item) =>
+      item.mix > best.mix ? item : best,
+    );
     console.log(
-      `${sound} ${row.root} ${row.mode} ${row.octave} ${row.via} gap ${row.gap} peak ${row.limited} + pluck ${pluck} = ${sum} walk ${report.walkPeak} (midi ${report.walkMidi}) together ${report.together[sound]}`,
+      `${sound} ${row.root} ${row.mode} ${row.octave} ${row.via} gap ${row.gap} peak ${row.limited} + pluck ${pluck} = ${sum} walk ${report.walkPeak} (midi ${report.walkMidi} at ${report.walkAt}) together ${report.together[sound]} mix ${loudestMix.mix} on ${loudestMix.root} ${loudestMix.mode} ${loudestMix.octave} ${loudestMix.via} swept ${report.swept[sound]} chord ${report.chordPeak} at ${report.chordAt}`,
+    );
+  }
+  for (const sound of ['reed', 'bow', 'cello']) {
+    const mixes = report.rows.filter((item) => item.sound === sound);
+    const loudestMix = mixes.reduce((best, item) =>
+      item.mix > best.mix ? item : best,
+    );
+    assert.ok(
+      loudestMix.mix < MIX_CEILING,
+      `${sound} mix ${loudestMix.mix} on ${loudestMix.root} ${loudestMix.mode} ${loudestMix.octave} ${loudestMix.via}`,
+    );
+    assert.ok(
+      (report.swept[sound] ?? 1) < MIX_CEILING,
+      `${sound} swept mix ${report.swept[sound]}`,
     );
   }
 }
@@ -475,7 +633,7 @@ void test(
       chromeBin && playwrightEntry
         ? false
         : 'Chrome or Playwright is not installed',
-    timeout: 240000,
+    timeout: 360000,
   },
   async () => {
     const pluck = pluckAttackLevel();
@@ -489,7 +647,7 @@ void test(
   'Firefox 157 keeps every drone sound, the loudest pluck, and a walk note at or under -1 dBFS',
   {
     skip: firefoxBin ? false : 'Firefox 157 is not installed',
-    timeout: 240000,
+    timeout: 360000,
   },
   async () => {
     const pluck = pluckAttackLevel();

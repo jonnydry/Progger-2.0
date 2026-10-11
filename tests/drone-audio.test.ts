@@ -4,11 +4,17 @@ import assert from 'node:assert/strict';
 import {
   BOW_GAINS,
   CELLO_GAINS,
+  DRONE_MAX_LINEAR_GAIN,
   ReedDrone,
   REED_GAINS,
   REED_TIMING,
-  WALK_STEP_MS,
+  WALK_GAINS,
+  WALK_LEAD_SECONDS,
+  WALK_STOP_FADE,
   droneMasterGain,
+  soundLinearCap,
+  voiceTailHold,
+  walkNoteTime,
   walkPluckLevel,
   exponentialRampValue,
   type DroneStatus,
@@ -317,7 +323,9 @@ void test('a low reed starts on one context and centers the root', async () => {
   );
   assert.deepEqual(context.sources[0].starts, [4.02]);
   const master = masterGain(context);
-  assert.equal(master.gain.value, 0.15);
+  assert.equal(master.gain.value, 1);
+  const voiceFade = fadeOf(envelopeGains(context)[0]);
+  assert.equal(voiceFade.gain.value, DRONE_MAX_LINEAR_GAIN);
   const root = context.oscillators.filter(
     (oscillator) => oscillator.frequency.value === midiHz(45),
   );
@@ -485,7 +493,7 @@ void test('retune waits for a real play, then moves to the new pitches on the sa
   );
   assert.ok(fadeIndex > 0);
   assert.equal(fade.gain.events[fadeIndex - 1]?.method, 'set');
-  assert.equal(fade.gain.events[fadeIndex - 1]?.value, 1);
+  assert.equal(fade.gain.events[fadeIndex - 1]?.value, DRONE_MAX_LINEAR_GAIN);
   assert.throws(() =>
     engine.retune({ root: 'H', modeId: 'dorian', octave: 'low' }),
   );
@@ -503,12 +511,13 @@ void test('volume is stored before a context exists and clamps on the master ram
   engine.play(lowRequest);
   await until(() => states.at(-1) === 'playing');
   const master = masterGain(context);
-  assert.equal(master.gain.value, 0.075);
+  assert.equal(master.gain.value, 0.5);
+  assert.equal(fadeOf(envelopeGains(context)[0]).gain.value, DRONE_MAX_LINEAR_GAIN);
   engine.setVolume(2);
   assert.equal(
     master.gain.events.filter((event) => event.method === 'linear').at(-1)
       ?.value,
-    0.15,
+    1,
   );
   engine.setVolume(Number.NaN);
   assert.equal(
@@ -516,8 +525,10 @@ void test('volume is stored before a context exists and clamps on the master ram
       ?.value,
     0,
   );
-  assert.equal(droneMasterGain(1), 0.15);
-  assert.equal(droneMasterGain(100), 0.15);
+  assert.equal(droneMasterGain(1), DRONE_MAX_LINEAR_GAIN);
+  assert.equal(droneMasterGain(100), DRONE_MAX_LINEAR_GAIN);
+  assert.equal(droneMasterGain(1, 'bow'), BOW_GAINS.cap);
+  assert.equal(droneMasterGain(1, 'cello'), CELLO_GAINS.cap);
   assert.equal(droneMasterGain(-4), 0);
   engine.dispose();
 });
@@ -648,6 +659,11 @@ void test('dispose closes a context the reed created and leaves a passed-in cont
     true,
   );
   await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sharedMaster.disconnected, false);
+  assert.equal(sharedLimiter.disconnected, false);
+  await new Promise((resolve) =>
+    setTimeout(resolve, voiceTailHold(REED_TIMING.hideFade) * 1000),
+  );
   assert.equal(sharedMaster.disconnected, true);
   assert.equal(sharedLimiter.disconnected, true);
   assert.equal(passed.context.closed, 0);
@@ -672,7 +688,9 @@ void test('dispose closes a context the reed created and leaves a passed-in cont
     engine.dispose();
     assert.equal(owned.closed, 0);
     assert.equal(owned.stateListenerCount(), 0);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) =>
+      setTimeout(resolve, voiceTailHold(REED_TIMING.hideFade) * 1000 + 40),
+    );
     assert.equal(owned.closed, 1);
   } finally {
     globalThis.AudioContext = previous;
@@ -775,6 +793,7 @@ async function assertMidSwellKeyChange(removeHold: boolean) {
       swell[0],
       duringSwell,
       duringSwell + Math.max(REED_TIMING.switchFade, 0.015),
+      DRONE_MAX_LINEAR_GAIN,
     );
 
     const switched = envelopeGains(context).find((gain) => {
@@ -802,6 +821,7 @@ async function assertMidSwellKeyChange(removeHold: boolean) {
       switched,
       duringSwitch,
       duringSwitch + Math.max(REED_TIMING.switchFade, 0.015),
+      DRONE_MAX_LINEAR_GAIN,
     );
     engine.dispose();
   } finally {
@@ -865,7 +885,7 @@ void test('a stop after the swell ramps the fade gain for key change, toggle off
       await until(() => envelopeGains(context).length === 2);
     } else engine.stop(item.fade);
     const releaseEnd = past + Math.max(item.fade, 0.015);
-    assertFadeOnly(swell[0], past, releaseEnd);
+    assertFadeOnly(swell[0], past, releaseEnd, DRONE_MAX_LINEAR_GAIN);
     engine.dispose();
   }
 });
@@ -886,7 +906,12 @@ void test('a stop before the swell ramps the fade gain and leaves the swell in p
   assert.ok(swell);
   assert.equal(swell.value, REED_GAINS.silence);
   assert.ok(Math.abs(swell.time - 4.02) < 1e-8);
-  assertFadeOnly(envelope, 4, 4 + Math.max(REED_TIMING.hideFade, 0.015));
+  assertFadeOnly(
+    envelope,
+    4,
+    4 + Math.max(REED_TIMING.hideFade, 0.015),
+    DRONE_MAX_LINEAR_GAIN,
+  );
   engine.dispose();
 });
 
@@ -899,11 +924,15 @@ void test('dispose waits out a fade that is already running', async () => {
   engine.stop();
   engine.dispose();
   assert.equal(master.disconnected, false);
+  const hold = voiceTailHold(REED_TIMING.stopFade) * 1000;
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(master.disconnected, false);
   assert.equal(limiter.disconnected, false);
   assert.equal(context.closed, 0);
-  await new Promise((resolve) => setTimeout(resolve, 560));
+  await new Promise((resolve) => setTimeout(resolve, hold - 80));
+  assert.equal(master.disconnected, false);
+  assert.equal(limiter.disconnected, false);
+  await new Promise((resolve) => setTimeout(resolve, 160));
   assert.equal(master.disconnected, true);
   assert.equal(limiter.disconnected, true);
   assert.equal(context.closed, 0);
@@ -931,8 +960,10 @@ function sessionRig() {
   const documentTarget = new FakeDocument();
   const windowTarget = new FakeDocument();
   const controller = new ExploreDrone(
-    (onStatus) =>
+    (onStatus, onWalk, onHeld) =>
       new ReedDrone(onStatus, {
+        onWalk,
+        onHeld,
         createContext: () => {
           created += 1;
           return context as unknown as AudioContext;
@@ -1149,7 +1180,13 @@ void test('a sound change while playing ramps the fade gain and leaves the swell
       ),
       false,
     );
-    assertFadeOnly(voice, 4, 4 + Math.max(REED_TIMING.switchFade, 0.015));
+    assertFadeOnly(
+      voice,
+      4,
+      4 + Math.max(REED_TIMING.switchFade, 0.015),
+      soundLinearCap(from),
+    );
+    assert.equal(masterGain(context).gain.value, 1);
   }
   const detune = context.oscillators.reduce(
     (sum, oscillator) => sum + oscillator.detune.value,
@@ -1172,7 +1209,7 @@ void test('a sound change while playing ramps the fade gain and leaves the swell
 
 type WalkTimer = { fn: () => void; ms: number; cleared: boolean; ran: boolean };
 
-void test('a scale walk plays once over a silent drone and never resumes itself', async () => {
+void test('a scale walk is booked on the audio clock and a late timer cannot bunch it', async () => {
   const { engine, context, states } = engineWith();
   const notes = scaleWalk('A', 'dorian');
   const pending: WalkTimer[] = [];
@@ -1198,55 +1235,204 @@ void test('a scale walk plays once over a silent drone and never resumes itself'
   const due = () => pending.filter((timer) => !timer.cleared && !timer.ran);
   try {
     assert.equal(states.length, 0);
+    const origin = context.currentTime + WALK_LEAD_SECONDS;
     engine.walk(lowRequest);
     assert.deepEqual(states, []);
-    assert.equal(context.oscillators.length, 0);
-    for (const note of notes) {
-      const timer = due().at(-1);
-      assert.ok(timer);
-      assert.equal(timer.ms, note === notes[0] ? 80 : WALK_STEP_MS);
+    assert.equal(context.oscillators.length, notes.length);
+    notes.forEach((note, index) => {
+      const oscillator = context.oscillators[index];
+      assert.equal(oscillator.frequency.value, midiHz(note.midi));
+      assert.equal(oscillator.starts[0], walkNoteTime(origin, index));
+    });
+    const booked = context.oscillators.map((oscillator) => oscillator.starts[0]);
+    context.currentTime += 5;
+    for (const timer of due()) {
       timer.ran = true;
       timer.fn();
-      assert.equal(
-        context.oscillators[context.oscillators.length - 1].frequency.value,
-        midiHz(note.midi),
-      );
     }
-    const played = context.oscillators.length;
-    assert.equal(due().at(-1)?.ms, WALK_STEP_MS);
-    context.currentTime = 4.22;
-    engine.stopWalk();
-    assert.equal(context.oscillators.length, played);
-    assert.equal(due().length, 0);
-    const level = walkPluckLevel(4 + 0.02, 4.22);
-    assert.ok(level < 0.85 && level > 0.12);
-    assert.ok(
-      context.gains.some((gain) => {
-        const anchor = gain.gain.events.find(
-          (event) =>
-            event.method === 'set' && Math.abs(event.time - 4.22) < 1e-9,
-        );
-        const cut = gain.gain.events.find(
-          (event) =>
-            event.method === 'linear' &&
-            event.value === 0 &&
-            Math.abs(event.time - (4.22 + 0.02)) < 1e-9,
-        );
-        return (
-          anchor !== undefined &&
-          Math.abs(anchor.value - level) < 1e-9 &&
-          cut !== undefined
-        );
-      }),
+    assert.equal(context.oscillators.length, notes.length);
+    assert.deepEqual(
+      context.oscillators.map((oscillator) => oscillator.starts[0]),
+      booked,
     );
+    const started = walkNoteTime(origin, 0);
+    context.currentTime = started + 0.14;
+    const envelope = context.gains.find((gain) =>
+      gain.gain.events.some(
+        (event) =>
+          event.method === 'linear' &&
+          event.value === WALK_GAINS.attack &&
+          Math.abs(event.time - (started + 0.006)) < 1e-9,
+      ),
+    );
+    assert.ok(envelope);
+    const envelopeEvents = envelope.gain.events.length;
+    const level = walkPluckLevel(started, context.currentTime);
+    assert.ok(level < WALK_GAINS.attack && level > WALK_GAINS.body);
+    engine.stopWalk();
+    assert.equal(envelope.gain.events.length, envelopeEvents);
+    assert.equal(
+      envelope.gain.events.some((event) => event.method === 'cancel'),
+      false,
+    );
+    const release = Math.max(WALK_STOP_FADE, 0.015);
+    const fade = fadeOf(envelope);
+    const anchor = fade.gain.events.find(
+      (event) =>
+        event.method === 'set' &&
+        Math.abs(event.time - context.currentTime) < 1e-9,
+    );
+    const cut = fade.gain.events.find(
+      (event) =>
+        event.method === 'linear' &&
+        event.value === 0 &&
+        Math.abs(event.time - (context.currentTime + release)) < 1e-9,
+    );
+    assert.ok(anchor);
+    assert.equal(anchor.value, 1);
+    assert.ok(cut);
+    const later = context.oscillators[1];
+    assert.equal(
+      later.stops.at(-1),
+      later.starts[0] + 1 / context.sampleRate,
+    );
+    const playing = context.oscillators[0];
+    assert.ok(
+      Math.abs(
+        (playing.stops.at(-1) ?? 0) -
+          (context.currentTime + release + 1 / context.sampleRate),
+      ) < 1e-9,
+    );
+    assert.equal(due().length, 0);
     engine.walk(lowRequest);
-    assert.equal(due().at(-1)?.ms, 80);
+    assert.equal(context.oscillators.length, notes.length * 2);
     engine.walk(lowRequest);
     assert.equal(due().length, 0);
     engine.dispose();
   } finally {
     globalThis.setTimeout = originalSet;
     globalThis.clearTimeout = originalClear;
+  }
+});
+
+void test('a cello that is still loading keeps the current voice, then crossfades', async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const urls: string[] = [];
+  const { engine, context, states } = engineWith(async (input) => {
+    urls.push(fetchUrl(input));
+    await gate;
+    return new Response(new Uint8Array(16));
+  });
+  engine.play({ ...lowRequest, sound: 'reed' });
+  await until(() => states.at(-1) === 'playing');
+  const swell = envelopesTargeting(context, REED_GAINS.envelope);
+  assert.equal(swell.length, 1);
+  const scheduled = swell[0].gain.events.length;
+  const stops = context.oscillators.map((oscillator) => oscillator.stops.length);
+  context.currentTime = 4.02 + 0.7;
+  const during = context.currentTime;
+  engine.retune({ ...lowRequest, sound: 'cello' });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(swell[0].gain.events.length, scheduled);
+  assert.deepEqual(
+    context.oscillators.map((oscillator) => oscillator.stops.length),
+    stops,
+  );
+  assert.equal(masterGain(context).gain.value, 1);
+  assert.equal(
+    masterGain(context).gain.events.some(
+      (event) => event.value === CELLO_GAINS.cap,
+    ),
+    false,
+  );
+  release();
+  await until(() => envelopesTargeting(context, CELLO_GAINS.envelope).length > 0);
+  assertFadeOnly(
+    swell[0],
+    during,
+    during + Math.max(REED_TIMING.switchFade, 0.015),
+    soundLinearCap('reed'),
+  );
+  assert.equal(
+    swell[0].gain.events.some(
+      (event) => event.method === 'cancel' || event.method === 'hold',
+    ),
+    false,
+  );
+  assert.equal(urls.length, CELLO_SAMPLES.length);
+  engine.dispose();
+});
+
+void test('a rejected cello fetch keeps the sounding voice and the next choice retries', async () => {
+  let fail = true;
+  const urls: string[] = [];
+  const rig = sessionSoundRig(async (input) => {
+    urls.push(fetchUrl(input));
+    if (fail) return new Response(null, { status: 404 });
+    return new Response(new Uint8Array(16));
+  });
+  rig.controller.toggle();
+  await until(
+    () => envelopesTargeting(rig.context, REED_GAINS.envelope).length > 0,
+  );
+  const stops = rig.context.oscillators.map((oscillator) => oscillator.stops.length);
+  const swell = envelopesTargeting(rig.context, REED_GAINS.envelope);
+  assert.equal(swell.length, 1);
+  const scheduled = swell[0].gain.events.length;
+  rig.controller.setSound('cello');
+  await until(
+    () =>
+      urls.length >= CELLO_SAMPLES.length &&
+      rig.controller.snapshot().sound === 'reed',
+  );
+  assert.equal(rig.controller.snapshot().pressed, true);
+  assert.equal(envelopesTargeting(rig.context, CELLO_GAINS.envelope).length, 0);
+  assert.deepEqual(
+    rig.context.oscillators.map((oscillator) => oscillator.stops.length),
+    stops,
+  );
+  assert.equal(swell[0].gain.events.length, scheduled);
+  assert.equal(masterGain(rig.context).gain.value, 1);
+  fail = false;
+  rig.controller.setSound('cello');
+  await until(
+    () => envelopesTargeting(rig.context, CELLO_GAINS.envelope).length > 0,
+  );
+  assert.equal(urls.length, CELLO_SAMPLES.length * 2);
+  assert.equal(rig.controller.snapshot().sound, 'cello');
+  assert.equal(rig.controller.snapshot().pressed, true);
+  rig.controller.dispose();
+});
+
+void test('voice and dispose disconnects wait for the room after the dry fade', async () => {
+  const delays: number[] = [];
+  const original = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: TimerHandler, ms?: number) => {
+    delays.push(ms ?? 0);
+    return original(fn, ms);
+  }) as unknown as typeof setTimeout;
+  try {
+    const { engine, states } = setup();
+    engine.play(lowRequest);
+    await until(() => states.at(-1) === 'playing');
+    delays.length = 0;
+    engine.stop(REED_TIMING.hideFade);
+    assert.ok(
+      delays.some(
+        (delay) => Math.abs(delay - voiceTailHold(REED_TIMING.hideFade) * 1000) < 1e-6,
+      ),
+    );
+    engine.dispose();
+    assert.ok(
+      delays.some(
+        (delay) => Math.abs(delay - voiceTailHold(REED_TIMING.hideFade) * 1000) < 1e-6,
+      ),
+    );
+  } finally {
+    globalThis.setTimeout = original;
   }
 });
 
@@ -1260,9 +1446,10 @@ function sessionSoundRig(fetchImpl?: typeof fetch) {
   const documentTarget = new FakeDocument();
   const windowTarget = new FakeDocument();
   const controller = new ExploreDrone(
-    (onStatus, onWalk) =>
+    (onStatus, onWalk, onHeld) =>
       new ReedDrone(onStatus, {
         onWalk,
+        onHeld,
         fetchImpl,
         createContext: () => context as unknown as AudioContext,
         document: documentTarget,

@@ -31,7 +31,8 @@ export function useReedDrone(input: {
   const [controller] = useState(
     () =>
       new ExploreDrone(
-        (onStatus, onWalk) => new ReedDrone(onStatus, { onWalk }),
+        (onStatus, onWalk, onHeld) =>
+          new ReedDrone(onStatus, { onWalk, onHeld }),
         reedRequestForScale(input.root, input.scaleId),
       ),
   );
