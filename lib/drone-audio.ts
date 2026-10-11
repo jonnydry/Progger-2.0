@@ -120,6 +120,11 @@ export const WALK_GAINS = {
   attack: 0.85,
   body: 0.12,
   decay: 0.0001,
+  // Chrome 154, volume 1. The loudest chord and every consecutive scale
+  // step, aligned to the drone peak and swept ±20ms. The loudest mix is
+  // the cello pair E♭ after F on A locrian, at 0.89105. Reed's four-note
+  // window reaches 0.88799. Bow's loudest pair reaches 0.88040.
+  // Each mix stays under 0.8913.
   trim: 0.2,
   partials: 25,
 } as const;
@@ -366,8 +371,11 @@ type ReedOptions = {
   windowTarget?: WindowTarget | null;
   fetchImpl?: typeof fetch;
   onWalk?: (index: number | null) => void;
-  /** The voice that is still sounding after a new one fails to start. */
-  onHeld?: (request: ReedRequest) => void;
+  /**
+   * The voice that is still sounding after a new one fails to start.
+   * The second request is the one that failed.
+   */
+  onHeld?: (heard: ReedRequest, attempted: ReedRequest) => void;
 };
 
 export function reedPitchGain(role: DroneRole, layer: DroneLayer): number {
@@ -960,7 +968,10 @@ export class ReedDrone {
   private resumeTimer: ReturnType<typeof setTimeout> | undefined;
   private cancelResume: (() => void) | null = null;
   private readonly onStatus: (status: DroneStatus, message?: string) => void;
-  private readonly onHeld: (request: ReedRequest) => void;
+  private readonly onHeld: (
+    heard: ReedRequest,
+    attempted: ReedRequest,
+  ) => void;
   private readonly createContext: () => AudioContext;
   private readonly ownsContext: boolean;
   private onContextState: (() => void) | null = null;
@@ -1186,9 +1197,10 @@ export class ReedDrone {
     } catch {
       if (generation !== this.generation || this.disposed) return;
       if (this.voices.length && this.current) {
-        // The new sound never started. The voice already in the room stays,
-        // and the control is told which request is actually heard.
-        this.onHeld({ ...this.current, sound: this.sound });
+        // The new sound never started. The voice already in the room stays.
+        // The second argument is the request that failed, so a key change
+        // made while it was loading can retune the voice that is still heard.
+        this.onHeld({ ...this.current, sound: this.sound }, request);
         if (generation !== this.generation || this.disposed) return;
         this.phase = 'playing';
         this.onStatus('playing');

@@ -103,7 +103,7 @@ export class ExploreDrone {
   private readonly createEngine: (
     onStatus: (status: DroneStatus, message?: string) => void,
     onWalk: (index: number | null) => void,
-    onHeld: (request: ReedRequest) => void,
+    onHeld: (heard: ReedRequest, attempted: ReedRequest) => void,
   ) => ReedDrone;
   private readonly onWalkIndex = (index: number | null) => {
     if (index === null) {
@@ -128,7 +128,7 @@ export class ExploreDrone {
     if (status === 'idle' || status === 'error') this.enabled = false;
     this.emit();
   };
-  private readonly onHeld = (heard: ReedRequest) => {
+  private readonly onHeld = (heard: ReedRequest, attempted: ReedRequest) => {
     const sound = requestSound(heard);
     this.sound = sound;
     this.current = { ...heard, sound };
@@ -141,6 +141,16 @@ export class ExploreDrone {
     this.phase = 'playing';
     this.status = 'playing';
     this.message = undefined;
+    const keyMoved =
+      heard.root !== this.request.root ||
+      heard.modeId !== this.request.modeId ||
+      heard.octave !== this.request.octave;
+    // The voice that stayed plays the key now on screen.
+    // The sound that failed stays unloaded.
+    if (keyMoved && requestSound(attempted) !== sound) {
+      this.reconcile();
+      return;
+    }
     this.emit();
   };
 
@@ -148,7 +158,7 @@ export class ExploreDrone {
     createEngine: (
       onStatus: (status: DroneStatus, message?: string) => void,
       onWalk?: (index: number | null) => void,
-      onHeld?: (request: ReedRequest) => void,
+      onHeld?: (heard: ReedRequest, attempted: ReedRequest) => void,
     ) => ReedDrone,
     request: ReedRequest,
   ) {

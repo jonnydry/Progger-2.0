@@ -1407,6 +1407,55 @@ void test('a rejected cello fetch keeps the sounding voice and the next choice r
   rig.controller.dispose();
 });
 
+void test('a key change during a failed cello switch retunes the voice that stayed', async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const urls: string[] = [];
+  const rig = sessionSoundRig(async (input) => {
+    urls.push(fetchUrl(input));
+    await gate;
+    return new Response(null, { status: 404 });
+  });
+  rig.controller.toggle();
+  await until(
+    () => envelopesTargeting(rig.context, REED_GAINS.envelope).length > 0,
+  );
+  const sounding = rig.context.oscillators.filter(
+    (oscillator) => oscillator.frequency.value === midiHz(45),
+  );
+  assert.ok(sounding.length > 0);
+  rig.controller.setSound('cello');
+  await until(() => urls.length >= CELLO_SAMPLES.length);
+  rig.controller.setRequest({ root: 'C', modeId: 'ionian', octave: 'low' });
+  release();
+  await until(() =>
+    rig.context.oscillators.some(
+      (oscillator) =>
+        oscillator.frequency.value === midiHz(36) &&
+        oscillator.stops.length === 0,
+    ),
+  );
+  assert.equal(rig.controller.snapshot().sound, 'reed');
+  assert.equal(rig.controller.snapshot().pressed, true);
+  assert.ok(
+    rig.context.oscillators.some(
+      (oscillator) =>
+        oscillator.frequency.value === midiHz(43) &&
+        oscillator.stops.length === 0,
+    ),
+  );
+  assert.equal(
+    sounding.every((oscillator) => oscillator.stops.length > 0),
+    true,
+  );
+  assert.equal(envelopesTargeting(rig.context, CELLO_GAINS.envelope).length, 0);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(urls.length, CELLO_SAMPLES.length);
+  rig.controller.dispose();
+});
+
 void test('voice and dispose disconnects wait for the room after the dry fade', async () => {
   const delays: number[] = [];
   const original = globalThis.setTimeout;
