@@ -484,8 +484,8 @@ export class ReedDrone {
     this.applyVolume();
   }
 
-  stop(): void {
-    this.halt(REED_TIMING.stopFade);
+  stop(fade: number = REED_TIMING.stopFade): void {
+    this.halt(fade);
   }
 
   private halt(fade: number): void {

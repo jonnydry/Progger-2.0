@@ -1,5 +1,4 @@
-import type { ReedRequest } from './drone-audio.ts';
-import type { DroneStatus } from './drone-audio.ts';
+import { REED_TIMING, type DroneStatus, type ReedRequest } from './drone-audio.ts';
 
 export type DronePhase = 'unstarted' | DroneStatus;
 
@@ -9,6 +8,11 @@ export type DroneCommand =
   | { type: 'hold' }
   | { type: 'play'; request: ReedRequest }
   | { type: 'retune'; request: ReedRequest };
+
+// A view change cuts the tail. Toggle-off keeps the longer fade on the scale page.
+export function droneStopFade(place: 'scales' | 'away'): number {
+  return place === 'away' ? REED_TIMING.hideFade : REED_TIMING.stopFade;
+}
 
 function sameRequest(current: ReedRequest, request: ReedRequest): boolean {
   return (

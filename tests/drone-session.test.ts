@@ -1,10 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { droneCommand } from '../lib/drone-session.ts';
-import type { ReedRequest } from '../lib/drone-audio.ts';
+import { droneCommand, droneStopFade } from '../lib/drone-session.ts';
+import { REED_TIMING, type ReedRequest } from '../lib/drone-audio.ts';
 
 const aDorian: ReedRequest = { root: 'A', modeId: 'dorian', octave: 'low' };
 const eIonian: ReedRequest = { root: 'E', modeId: 'ionian', octave: 'low' };
+
+void test('leaving the scale view cuts the drone instead of letting the long fade play behind the next view', () => {
+  assert.equal(droneStopFade('away'), REED_TIMING.hideFade);
+  assert.equal(droneStopFade('scales'), REED_TIMING.stopFade);
+  assert.ok(droneStopFade('away') < 0.05);
+  assert.ok(droneStopFade('away') < droneStopFade('scales'));
+});
 
 void test('the drone stays silent until it is turned on', () => {
   assert.deepEqual(

@@ -7,7 +7,11 @@ import {
   clampDroneVolume,
   type DroneStatus,
 } from '@/lib/drone-audio';
-import { droneCommand, type DronePhase } from '@/lib/drone-session';
+import {
+  droneCommand,
+  droneStopFade,
+  type DronePhase,
+} from '@/lib/drone-session';
 
 export function useReedDrone(input: {
   active: boolean;
@@ -51,7 +55,7 @@ export function useReedDrone(input: {
         return;
       }
       if (command.type === 'stop') {
-        engineRef.current?.stop();
+        engineRef.current?.stop(droneStopFade(place));
         phaseRef.current = 'idle';
         currentRef.current = null;
         return;

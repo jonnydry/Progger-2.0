@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ReedDrone,
+  REED_TIMING,
   droneMasterGain,
   type DroneStatus,
   type ReedRequest,
@@ -599,6 +600,19 @@ void test('stop goes idle without closing, and stop before play creates nothing'
   assert.equal(context.closed, 0);
   engine.dispose();
   assert.equal(context.closed, 0);
+});
+
+void test('a short stop schedules the oscillators to end with the cut fade', async () => {
+  const { engine, context, states } = setup();
+  engine.play(lowRequest);
+  await until(() => states.at(-1) === 'playing');
+  engine.stop(REED_TIMING.hideFade);
+  const end = context.currentTime + REED_TIMING.hideFade + REED_TIMING.stopTail;
+  assert.ok(context.oscillators.length > 0);
+  assert.ok(
+    context.oscillators.every((oscillator) => oscillator.stops.includes(end)),
+  );
+  engine.dispose();
 });
 
 void test('dispose closes a context the reed created and leaves a passed-in context open', async () => {
