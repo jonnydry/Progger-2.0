@@ -12,7 +12,6 @@ import {
   midiHz,
   sampleForMidi,
   scaleWalk,
-  seamlessLoop,
   symmetricDetuneCents,
 } from './drone.ts';
 
@@ -117,12 +116,11 @@ export const WALK_GAINS = {
   attack: 0.85,
   body: 0.12,
   decay: 0.0001,
-  // Shared by every sound. Caps stay where they were. Chrome 154,
-  // volume 1: drone, walk window, loudest chord, swept ±20 ms.
-  // Cello's A locrian pair (E♭ after F) is the loudest, at 0.84133.
-  // Reed's four-note window is 0.83811. Bow's pair is 0.83067.
-  // Each is at or below 0.8414, which is also under 0.871.
-  trim: 0.1375,
+  // Shared by every sound. Caps stay put. Dropping the second cello
+  // crossfade lifted Chrome's Eb ionian mix to 0.84779 at 0.1375.
+  // This is 1 dB under that. Chrome 154 cello mix is 0.83631.
+  // Firefox 157 cello mix is 0.83500. Each sound is at or below 0.8414.
+  trim: 0.1225,
   partials: 25,
 } as const;
 
@@ -1600,12 +1598,11 @@ function loopSampleBuffer(
   const body = mixed.slice(range.start, range.end);
   const fade = Math.min(
     Math.round(decoded.sampleRate * 0.06),
-    Math.floor(body.length / 4),
+    Math.max(1, body.length - 1),
   );
-  const looped = closeCelloSeam(
-    seamlessLoop(body, Math.max(8, fade)),
-    Math.max(8, fade),
-  );
+  // The file is already a joined loop. A second equal-power crossfade
+  // notches the start (about 5 dB on the E3). Bend only the end.
+  const looped = closeCelloSeam(body, fade);
   const buffer = context.createBuffer(1, looped.length, decoded.sampleRate);
   buffer.getChannelData(0).set(looped);
   return buffer;

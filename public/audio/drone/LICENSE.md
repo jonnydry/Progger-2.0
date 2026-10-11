@@ -47,7 +47,7 @@ Each loop starts 0.55 seconds into the sustain, keeps 2.15 seconds plus a
 consecutive source samples. Peak level is normalized to 0.5 before encoding.
 Playback sets the loop start and end from the decoded buffer, skipping AAC
 encoder delay and the trailing frame when the decoder leaves them in.
-A 60 ms equal-power crossfade then bends the join onto the first sample.
+A 60 ms ramp then bends that join onto the first sample.
 Viola samples from the same library were not used.
 
 ## CC0 1.0 Universal

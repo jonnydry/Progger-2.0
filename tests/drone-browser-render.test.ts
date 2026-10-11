@@ -38,7 +38,12 @@ type RenderResult = {
   count: number;
   failureCount: number;
   tails?: TailResult[];
-  seams?: { file: string; step: number; bufferStep: number }[];
+  seams?: {
+    file: string;
+    step: number;
+    bufferStep: number;
+    decodedLength?: number;
+  }[];
   bySound?: Record<
     string,
     {
@@ -343,34 +348,39 @@ async function renderTail(name, fade) {
 const CELLO_FILES = ['cello-d2.m4a','cello-a2.m4a','cello-e3.m4a','cello-b3.m4a','cello-f4.m4a'];
 
 async function measureSeam(file) {
-  const decodeContext = new OfflineAudioContext(1, 1, 44100);
-  const bytes = await (await fetch('/audio/drone/' + file)).arrayBuffer();
-  const decoded = await decodeContext.decodeAudioData(bytes.slice(0));
-  const prepared = prepareCelloBuffer(decodeContext, decoded);
-  const channel = prepared.getChannelData(0);
-  const bufferStep = Math.abs(channel[0] - channel[channel.length - 1]);
-  const rate = prepared.sampleRate;
-  const tail = 8;
-  const context = new OfflineAudioContext(1, channel.length + tail, rate);
-  const source = context.createBufferSource();
-  source.buffer = prepared;
-  source.loop = true;
-  source.loopStart = 0;
-  source.loopEnd = channel.length / rate;
-  source.connect(context.destination);
-  source.start(0);
-  const rendered = await context.startRendering();
-  const data = rendered.getChannelData(0);
-  const at = channel.length;
-  const step = Math.abs(data[at] - data[at - 1]);
-  return {
-    file,
-    step,
-    bufferStep,
-    decodedLength: decoded.length,
-    preparedLength: channel.length,
-    around: Array.from(data.slice(at - 2, at + 3)),
-  };
+  const decodeContext = new AudioContext({ sampleRate: 44100 });
+  try {
+    const bytes = await (await fetch('/audio/drone/' + file)).arrayBuffer();
+    const decoded = await decodeContext.decodeAudioData(bytes.slice(0));
+    const prepared = prepareCelloBuffer(decodeContext, decoded);
+    // Firefox can hand back an empty view from getChannelData on this buffer.
+    const channel = new Float32Array(prepared.length);
+    prepared.copyFromChannel(channel, 0);
+    const bufferStep = Math.abs(channel[0] - channel[channel.length - 1]);
+    const rate = prepared.sampleRate;
+    const tail = 8;
+    const context = new OfflineAudioContext(1, channel.length + tail, rate);
+    const source = context.createBufferSource();
+    source.buffer = prepared;
+    source.loop = true;
+    source.loopStart = 0;
+    source.loopEnd = prepared.duration;
+    source.connect(context.destination);
+    source.start(0);
+    const rendered = await context.startRendering();
+    const data = rendered.getChannelData(0);
+    const at = channel.length;
+    const step = Math.abs(data[at] - data[at - 1]);
+    return {
+      file,
+      step,
+      bufferStep,
+      decodedLength: decoded.length,
+      around: Array.from(data.slice(at - 2, at + 3)),
+    };
+  } finally {
+    void decodeContext.close();
+  }
 }
 
 const seams = [];
@@ -632,11 +642,17 @@ function assertContinuous(result: RenderResult) {
   assert.equal(walk.tail, 0, JSON.stringify(walk));
   assert.equal(result.seams?.length, 5);
   for (const seam of result.seams ?? []) {
+    assert.equal(seam.decodedLength, 94815, JSON.stringify(seam));
     assert.ok(
-      seam.bufferStep < STEP_LIMIT && seam.step < STEP_LIMIT,
+      Number.isFinite(seam.bufferStep) &&
+        Number.isFinite(seam.step) &&
+        seam.bufferStep < STEP_LIMIT &&
+        seam.step < STEP_LIMIT,
       JSON.stringify(seam),
     );
-    console.log(`${seam.file} buffer ${seam.bufferStep} wrap ${seam.step}`);
+    console.log(
+      `${seam.file} buffer ${seam.bufferStep} wrap ${seam.step}`,
+    );
   }
   assert.equal(result.tails?.length, 3);
   for (const tail of result.tails ?? []) {

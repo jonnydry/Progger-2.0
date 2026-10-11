@@ -18,7 +18,6 @@ import {
   sampleForMidi,
   celloLoopBounds,
   closeCelloSeam,
-  seamlessLoop,
   scaleWalk,
   scientificPitch,
   symmetricDetuneCents,
@@ -298,11 +297,11 @@ void test('the cello seam bends onto the first sample', () => {
   }
   samples[samples.length - 1] = samples[0] + 0.03;
   const fade = 120;
-  const looped = seamlessLoop(samples, fade);
-  const openStep = Math.abs(looped[0] - looped[looped.length - 1]);
-  const closed = closeCelloSeam(looped, fade);
+  const openStep = Math.abs(samples[0] - samples[samples.length - 1]);
+  const closed = closeCelloSeam(samples, fade);
   assert.ok(openStep > 1e-3, `open seam ${openStep}`);
   assert.ok(Math.abs(closed[0] - closed[closed.length - 1]) < 1e-3);
+  assert.equal(closed[10], samples[10]);
 });
 
 void test('committed cello loops match the license hashes', () => {

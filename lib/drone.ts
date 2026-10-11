@@ -346,30 +346,6 @@ export function sampleForMidi(midi: number): {
   };
 }
 
-/** Equal-power crossfade so the loop junction is two consecutive samples. */
-export function seamlessLoop(
-  samples: Float32Array,
-  fadeSamples: number,
-): Float32Array {
-  if (
-    !Number.isInteger(fadeSamples) ||
-    fadeSamples < 1 ||
-    samples.length <= fadeSamples * 2
-  ) {
-    throw new Error('A loop fade must be shorter than half the buffer.');
-  }
-  const outLength = samples.length - fadeSamples;
-  const out = samples.slice(0, outLength);
-  for (let index = 0; index < fadeSamples; index += 1) {
-    const progress = index / fadeSamples;
-    const head = Math.sin((progress * Math.PI) / 2);
-    const tail = Math.cos((progress * Math.PI) / 2);
-    out[index] =
-      samples[index] * head + samples[outLength + index] * tail;
-  }
-  return out;
-}
-
 export function droneLabel(pitches: readonly DronePitch[]): string {
   const join = (layer: DroneLayer) =>
     pitches
