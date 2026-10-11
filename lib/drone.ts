@@ -207,7 +207,10 @@ export function colourNote(root: string, modeId: DroneModeId): Note {
   return spell(root, [droneMode(modeId).colourDegree])[0];
 }
 
-/** Root up to the octave, once. The descent is not part of the walk. */
+/**
+ * Root up to the octave and back to the root, once.
+ * The octave is the turning note, so it is not played again on the way down.
+ */
 export function scaleWalk(root: string, id: string): WalkNote[] {
   const mode = MODE_SPECS.find((spec) => spec.id === id || spec.scaleId === id);
   const scale = SCALES.find((item) => item.id === id);
@@ -218,13 +221,15 @@ export function scaleWalk(root: string, id: string): WalkNote[] {
   const notes = spell(root, [...formula]);
   const rootPc = pitchClass(root);
   const start = lowRootMidi(root) + 24;
-  const ascent = notes.map((note) => ({
+  const placed = (note: Note, octaveUp = false): WalkNote => ({
     note,
-    midi: start + ((note.pc - rootPc + 12) % 12),
-    colour: colourDegree !== null && note.degree === colourDegree,
-  }));
-  const top = { note: notes[0], midi: start + 12, colour: false };
-  return [...ascent, top];
+    midi: start + ((note.pc - rootPc + 12) % 12) + (octaveUp ? 12 : 0),
+    colour: !octaveUp && colourDegree !== null && note.degree === colourDegree,
+  });
+  const ascent = notes.map((note) => placed(note));
+  const top = placed(notes[0], true);
+  const descent = [...notes].reverse().map((note) => placed(note));
+  return [...ascent, top, ...descent];
 }
 
 export type DroneSoundId = 'reed' | 'bow' | 'cello';

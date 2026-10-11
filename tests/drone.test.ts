@@ -147,38 +147,71 @@ void test('colour notes keep the mode spelling', () => {
   assert.equal(colourNote('C#', 'dorian').name, 'A#');
 });
 
-void test('the scale walk climbs from the root to the octave and does not loop', () => {
+void test('the scale walk climbs to the octave and returns to the root without repeating it', () => {
   const walk = scaleWalk('A', 'dorian');
   assert.deepEqual(
     walk.map((step) => step.note.name),
-    ['A', 'B', 'C', 'D', 'E', 'F#', 'G', 'A'],
+    ['A', 'B', 'C', 'D', 'E', 'F#', 'G', 'A', 'G', 'F#', 'E', 'D', 'C', 'B', 'A'],
   );
   assert.deepEqual(
     walk.map((step) => step.midi),
-    [69, 71, 72, 74, 76, 78, 79, 81],
+    [69, 71, 72, 74, 76, 78, 79, 81, 79, 78, 76, 74, 72, 71, 69],
   );
   assert.deepEqual(
     walk.map((step) => step.colour),
-    [false, false, false, false, false, true, false, false],
+    [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ],
   );
-  assert.equal(walk.at(-1)?.midi, walk[0].midi + 12);
+  const octave = walk.filter((step) => step.midi === walk[0].midi + 12);
+  assert.equal(octave.length, 1);
+  assert.equal(octave[0].note.name, 'A');
+  assert.equal(octave[0].note.degree, '1');
+  assert.equal(octave[0].colour, false);
+  assert.equal(walk[7].midi, walk[8].midi + 2);
+  assert.equal(walk.at(-1)?.midi, walk[0].midi);
+  assert.equal(walk.at(-1)?.note.name, 'A');
   assert.equal(walk[0].midi, lowRootMidi('A') + 24);
   assert.equal(
-    scaleWalk('F#', 'lydian').some(
+    scaleWalk('F#', 'lydian').filter(
       (step) => step.colour && step.note.name === 'B#',
-    ),
-    true,
+    ).length,
+    2,
   );
   const ionian = scaleWalk('A', 'ionian');
   assert.deepEqual(
     ionian.filter((step) => step.colour).map((step) => step.note.name),
-    ['G#'],
+    ['G#', 'G#'],
   );
   assert.equal(ionian[7].note.name, 'A');
   assert.equal(ionian[7].note.degree, '1');
   assert.equal(ionian[7].colour, false);
+  assert.equal(ionian.at(-1)?.midi, ionian[0].midi);
   const locrian = scaleWalk('A', 'locrian');
-  assert.equal(locrian.find((step) => step.colour)?.note.name, 'Eb');
+  assert.deepEqual(
+    locrian.filter((step) => step.colour).map((step) => step.note.name),
+    ['Eb', 'Eb'],
+  );
+  assert.deepEqual(
+    scaleWalk('Bb', 'locrian')
+      .filter((step) => step.colour)
+      .map((step) => step.note.name),
+    ['Fb', 'Fb'],
+  );
   assert.deepEqual(
     dronePitches('A', 'locrian', 'low').map((pitch) => pitch.name),
     ['A', 'A'],
@@ -201,11 +234,11 @@ void test('a catalog scale picks the church-mode voicing, or a fifth unless the 
   });
   assert.deepEqual(
     scaleWalk('A', 'minor-pentatonic').map((step) => step.note.name),
-    ['A', 'C', 'D', 'E', 'G', 'A'],
+    ['A', 'C', 'D', 'E', 'G', 'A', 'G', 'E', 'D', 'C', 'A'],
   );
   assert.deepEqual(
     scaleWalk('A', 'harmonic-minor').map((step) => step.note.name),
-    ['A', 'B', 'C', 'D', 'E', 'F', 'G#', 'A'],
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G#', 'A', 'G#', 'F', 'E', 'D', 'C', 'B', 'A'],
   );
   assert.notDeepEqual(
     scaleWalk('A', 'minor-pentatonic').map((step) => step.note.name),

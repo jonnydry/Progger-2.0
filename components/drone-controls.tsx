@@ -409,7 +409,7 @@ export function DroneControls({
         id="drone-walk"
         className="drone-walk"
         aria-pressed={walking}
-        aria-label={walking ? 'Stop the scale walk' : 'Walk the scale'}
+        aria-label={walking ? 'Stop the scale walk' : 'Walk the scale up and down'}
         onClick={onWalk}
       >
         <Footprints size={DRONE_ICON_PX} aria-hidden="true" />
