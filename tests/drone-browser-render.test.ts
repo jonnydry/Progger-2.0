@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 const STEP_LIMIT = 1e-3;
-const CASES = 96;
+const CASES = 96 * 3;
 
 const chromeBin = [
   '/usr/bin/google-chrome-stable',
@@ -27,8 +27,20 @@ type RenderResult = {
   ua: string;
   count: number;
   failureCount: number;
+  bySound?: Record<
+    string,
+    {
+      count: number;
+      failureCount: number;
+      max?: number;
+      tail?: number;
+      name?: string;
+      align?: number;
+    }
+  >;
   worst: {
     name?: string;
+    sound?: string;
     align?: number;
     max?: number;
     prev?: number;
@@ -68,6 +80,7 @@ function page(): string {
 <meta charset="utf-8" />
 <script type="module">
 import { startMeasuredReed, REED_TIMING, dronePitches } from '/probe.js';
+const SOUNDS = ['reed', 'bow', 'cello'];
 
 const SAMPLE_RATE = 48000;
 const STEP_LIMIT = ${STEP_LIMIT};
@@ -104,7 +117,7 @@ function at(samples) {
   return samples / SAMPLE_RATE;
 }
 
-async function render(item) {
+async function render(item, sound) {
   const stopRelease = Math.max(REED_TIMING.stopFade, 0.015);
   let end = 0;
   let interesting = 0;
@@ -127,6 +140,7 @@ async function render(item) {
           dronePitches('G', 'dorian', 'low'),
           at(stopAt),
           REED_TIMING.switchAttack,
+          sound,
         );
       },
     });
@@ -143,6 +157,7 @@ async function render(item) {
         dronePitches('C', 'ionian', 'low'),
         at(start),
         REED_TIMING.playAttack,
+        sound,
       );
   } else {
     const startA = 128;
@@ -164,6 +179,7 @@ async function render(item) {
           dronePitches('G', 'dorian', 'low'),
           at(startB),
           REED_TIMING.switchAttack,
+          sound,
         );
       },
     });
@@ -177,6 +193,7 @@ async function render(item) {
           dronePitches('D', 'mixolydian', 'low'),
           at(stopAt),
           REED_TIMING.switchAttack,
+          sound,
         );
       },
     });
@@ -193,6 +210,7 @@ async function render(item) {
         dronePitches('C', 'ionian', 'low'),
         at(startA),
         REED_TIMING.playAttack,
+        sound,
       );
   }
   const length = end + Math.ceil((stopRelease + 0.02) * SAMPLE_RATE) + 128;
@@ -218,6 +236,7 @@ async function render(item) {
   }
   return {
     name: item.name,
+    sound,
     align: item.align,
     max: step.max,
     prev: step.prev,
@@ -230,26 +249,48 @@ async function render(item) {
 }
 
 const rows = [];
-for (const item of cases()) {
-  try {
-    rows.push(await render(item));
-  } catch (error) {
-    rows.push({
-      name: item.name,
-      align: item.align,
-      fail: true,
-      error: String(error && error.message ? error.message : error),
-    });
+for (const sound of SOUNDS) {
+  for (const item of cases()) {
+    try {
+      rows.push(await render(item, sound));
+    } catch (error) {
+      rows.push({
+        name: item.name,
+        sound,
+        align: item.align,
+        fail: true,
+        error: String(error && error.message ? error.message : error),
+      });
+    }
   }
 }
 let worst = rows[0];
 for (const row of rows) if ((row.max ?? 0) > (worst.max ?? 0)) worst = row;
 const failing = rows.filter((row) => row.fail);
+const bySound = {};
+for (const sound of SOUNDS) {
+  const group = rows.filter((row) => row.sound === sound);
+  let soundWorst = group[0];
+  for (const row of group) {
+    if ((row.max ?? 0) > (soundWorst.max ?? 0)) soundWorst = row;
+  }
+  let tail = 0;
+  for (const row of group) tail = Math.max(tail, row.tailMax ?? 0);
+  bySound[sound] = {
+    count: group.length,
+    failureCount: group.filter((row) => row.fail).length,
+    max: soundWorst && soundWorst.max,
+    tail,
+    name: soundWorst && soundWorst.name,
+    align: soundWorst && soundWorst.align,
+  };
+}
 const result = {
   ua: navigator.userAgent,
   count: rows.length,
   failureCount: failing.length,
   worst,
+  bySound,
   errors: failing.slice(0, 3).map((row) => row.error).filter(Boolean),
 };
 window.__RESULT = result;
@@ -403,10 +444,18 @@ function assertContinuous(result: RenderResult) {
   assert.equal(result.failureCount, 0, JSON.stringify(result.worst));
   assert.ok((result.worst.max ?? 1) < STEP_LIMIT, JSON.stringify(result.worst));
   assert.ok((result.worst.tailMax ?? 1) <= STEP_LIMIT);
+  for (const sound of ['reed', 'bow', 'cello']) {
+    const row = result.bySound?.[sound];
+    assert.ok(row, sound);
+    assert.equal(row.count, 96, sound);
+    assert.equal(row.failureCount, 0, JSON.stringify(row));
+    assert.ok((row.max ?? 1) < STEP_LIMIT, JSON.stringify(row));
+    assert.equal(row.tail, 0, JSON.stringify(row));
+  }
 }
 
 void test(
-  'Chrome renders the reed graph, including the bellows, without a one-sample dip or a hard tail cut',
+  'Chrome renders every drone sound, including the reed bellows, without a one-sample dip or a hard tail cut',
   {
     skip:
       chromeBin && playwrightEntry
@@ -417,15 +466,16 @@ void test(
   async () => {
     const result = await runChrome(bundleProbe());
     console.log(result.ua);
+    console.log(JSON.stringify(result.bySound));
     console.log(
-      `worst ${result.worst.max} ${result.worst.name} align ${result.worst.align}`,
+      `worst ${result.worst.max} ${result.worst.sound} ${result.worst.name} align ${result.worst.align}`,
     );
     assertContinuous(result);
   },
 );
 
 void test(
-  'Firefox 157 renders the reed graph, including the bellows, without a one-sample dip or a hard tail cut',
+  'Firefox 157 renders every drone sound, including the reed bellows, without a one-sample dip or a hard tail cut',
   {
     skip: firefoxBin ? false : 'Firefox 157 is not installed',
     timeout: 180000,
@@ -433,8 +483,9 @@ void test(
   async () => {
     const result = await runFirefox(bundleProbe());
     console.log(result.ua);
+    console.log(JSON.stringify(result.bySound));
     console.log(
-      `worst ${result.worst.max} ${result.worst.name} align ${result.worst.align}`,
+      `worst ${result.worst.max} ${result.worst.sound} ${result.worst.name} align ${result.worst.align}`,
     );
     assertContinuous(result);
   },

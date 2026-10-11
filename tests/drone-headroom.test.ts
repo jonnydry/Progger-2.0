@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { FULL_SCALE_MARGIN, loudestReedPeaks } from '../lib/drone-levels.ts';
+import {
+  FULL_SCALE_MARGIN,
+  loudestReedPeaks,
+  loudestSoundPeaks,
+} from '../lib/drone-levels.ts';
 
 function pluckAttackLevel(): number {
   const source = readFileSync(
@@ -38,4 +42,14 @@ void test('coherent reed plus a pluck, including a key-change overlap, stays at 
     overlap <= FULL_SCALE_MARGIN,
     `${reed.root} ${reed.modeId} ${reed.octave} overlap ${reed.overlap} + pluck ${pluck} = ${overlap}`,
   );
+  for (const sound of ['reed', 'bow', 'cello'] as const) {
+    const peak = loudestSoundPeaks(sound);
+    const loudestPluck = Math.max(pluck, peak.walk);
+    const sum = peak.overlap + loudestPluck;
+    assert.ok(
+      sum <= FULL_SCALE_MARGIN,
+      `${sound} ${peak.root} ${peak.modeId} ${peak.octave} overlap ${peak.overlap} + loudest pluck ${loudestPluck} (walk ${peak.walk}) = ${sum}`,
+    );
+    assert.ok(peak.overlap + peak.walk <= FULL_SCALE_MARGIN);
+  }
 });

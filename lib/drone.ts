@@ -134,8 +134,13 @@ export function reedRequestForScale(
   root: string,
   scaleId: string,
   octave: DroneOctave = 'low',
-): { root: string; modeId: DroneModeId; octave: DroneOctave } {
-  return { root, modeId: droneModeForScale(scaleId), octave };
+): {
+  root: string;
+  modeId: DroneModeId;
+  octave: DroneOctave;
+  scaleId: string;
+} {
+  return { root, modeId: droneModeForScale(scaleId), octave, scaleId };
 }
 
 export function lowRootMidi(root: string): number {
@@ -202,18 +207,115 @@ export function colourNote(root: string, modeId: DroneModeId): Note {
   return spell(root, [droneMode(modeId).colourDegree])[0];
 }
 
-export function scaleWalk(root: string, modeId: DroneModeId): WalkNote[] {
-  const mode = droneMode(modeId);
-  const notes = spell(root, [...mode.formula]);
+/** Root up to the octave, once. The descent is not part of the walk. */
+export function scaleWalk(root: string, id: string): WalkNote[] {
+  const mode = MODE_SPECS.find((spec) => spec.id === id || spec.scaleId === id);
+  const scale = SCALES.find((item) => item.id === id);
+  const formula = scale?.formula ?? (mode ? droneMode(mode.id).formula : null);
+  if (!formula) throw new Error(`Unknown scale: ${id}`);
+  const colourDegree =
+    mode && (!scale || scale.id === mode.scaleId) ? mode.colourDegree : null;
+  const notes = spell(root, [...formula]);
   const rootPc = pitchClass(root);
   const start = lowRootMidi(root) + 24;
   const ascent = notes.map((note) => ({
     note,
     midi: start + ((note.pc - rootPc + 12) % 12),
-    colour: note.degree === mode.colourDegree,
+    colour: colourDegree !== null && note.degree === colourDegree,
   }));
   const top = { note: notes[0], midi: start + 12, colour: false };
-  return [...ascent, top, ...[...ascent].reverse()];
+  return [...ascent, top];
+}
+
+export type DroneSoundId = 'reed' | 'bow' | 'cello';
+
+export const DRONE_SOUNDS: readonly {
+  id: DroneSoundId;
+  label: string;
+}[] = [
+  { id: 'reed', label: 'Reed' },
+  { id: 'bow', label: 'Bow' },
+  { id: 'cello', label: 'Cello' },
+];
+
+/** Cents that sum to zero, so a detuned stack stays on the written pitch. */
+export function symmetricDetuneCents(
+  sound: 'bow' | 'reed',
+): readonly number[] {
+  return sound === 'bow' ? [-6, -2, 2, 6] : [-3.5, 3.5];
+}
+
+export const CELLO_SAMPLES = [
+  { file: 'cello-d2.m4a', midi: 38, href: '/audio/drone/cello-d2.m4a' },
+  { file: 'cello-a2.m4a', midi: 45, href: '/audio/drone/cello-a2.m4a' },
+  { file: 'cello-e3.m4a', midi: 52, href: '/audio/drone/cello-e3.m4a' },
+  { file: 'cello-b3.m4a', midi: 59, href: '/audio/drone/cello-b3.m4a' },
+  { file: 'cello-f4.m4a', midi: 65, href: '/audio/drone/cello-f4.m4a' },
+] as const;
+
+export function sampleForMidi(midi: number): {
+  file: string;
+  href: string;
+  sourceMidi: number;
+  semitones: number;
+  playbackRate: number;
+} {
+  let best: (typeof CELLO_SAMPLES)[number] = CELLO_SAMPLES[0];
+  let bestDistance = Infinity;
+  for (const sample of CELLO_SAMPLES) {
+    const distance = Math.abs(midi - sample.midi);
+    if (distance < bestDistance) {
+      best = sample;
+      bestDistance = distance;
+    }
+  }
+  const semitones = midi - best.midi;
+  return {
+    file: best.file,
+    href: best.href,
+    sourceMidi: best.midi,
+    semitones,
+    playbackRate: 2 ** (semitones / 12),
+  };
+}
+
+export function trimEdgeSilence(
+  samples: Float32Array,
+  relative = 0.004,
+): Float32Array {
+  let peak = 0;
+  for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
+  const threshold = peak * relative;
+  let start = 0;
+  let end = samples.length;
+  while (start < end && Math.abs(samples[start]) < threshold) start += 1;
+  while (end > start && Math.abs(samples[end - 1]) < threshold) end -= 1;
+  if (end <= start) return samples.slice();
+  return samples.slice(start, end);
+}
+
+/** Equal-power crossfade so the loop junction is two consecutive samples. */
+export function seamlessLoop(
+  samples: Float32Array,
+  fadeSamples: number,
+): Float32Array {
+  if (
+    !Number.isInteger(fadeSamples) ||
+    fadeSamples < 1 ||
+    samples.length <= fadeSamples * 2
+  ) {
+    throw new Error('A loop fade must be shorter than half the buffer.');
+  }
+  const outLength = samples.length - fadeSamples;
+  const out = samples.slice(0, outLength);
+  for (let index = 0; index < fadeSamples; index += 1) {
+    const progress = index / fadeSamples;
+    const head = Math.sin((progress * Math.PI) / 2);
+    const tail = Math.cos((progress * Math.PI) / 2);
+    out[index] =
+      samples[index] * head + samples[outLength + index] * tail;
+  }
+  return out;
 }
 
 export function droneLabel(pitches: readonly DronePitch[]): string {

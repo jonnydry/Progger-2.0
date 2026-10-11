@@ -683,9 +683,13 @@ export default function Home() {
                     <DroneControls
                       enabled={drone.enabled}
                       volume={drone.volume}
+                      sound={drone.sound}
+                      walking={drone.walking}
                       message={drone.message}
                       onToggle={() => drone.toggle()}
                       onVolume={(value) => drone.setVolume(value)}
+                      onSound={(value) => drone.setSound(value)}
+                      onWalk={() => drone.walk()}
                     />
                   )}
                 </div>
@@ -712,7 +716,7 @@ export default function Home() {
                     return (
                       <div
                         key={n.degree}
-                        className={`palette-note ${n.degree === '1' ? 'root-palette' : ''} ${selectedVoicing ? (played ? 'formula-played' : 'formula-omitted') : ''}`}
+                        className={`palette-note ${n.degree === '1' ? 'root-palette' : ''} ${selectedVoicing ? (played ? 'formula-played' : 'formula-omitted') : ''} ${kind === 'scales' && drone.walkPc === n.pc ? 'palette-walking' : ''}`}
                       >
                         <span title={noteDescription(n)}>
                           {pretty(readableNoteName(n))}

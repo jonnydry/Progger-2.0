@@ -1,11 +1,18 @@
 import {
+  CELLO_SAMPLES,
   type DroneLayer,
   type DroneModeId,
   type DroneOctave,
   type DronePitch,
   type DroneRole,
+  type DroneSoundId,
   dronePitches,
   midiHz,
+  sampleForMidi,
+  scaleWalk,
+  seamlessLoop,
+  symmetricDetuneCents,
+  trimEdgeSilence,
 } from './drone.ts';
 
 export type DroneStatus = 'idle' | 'starting' | 'playing' | 'error';
@@ -14,7 +21,13 @@ export type ReedRequest = {
   root: string;
   modeId: DroneModeId;
   octave: DroneOctave;
+  scaleId?: string;
+  sound?: DroneSoundId;
 };
+
+export function requestSound(request: ReedRequest): DroneSoundId {
+  return request.sound ?? 'reed';
+}
 
 /** Volume 1 stays at least 1 dB under full scale when added to one plucked note. */
 export const DRONE_MAX_LINEAR_GAIN = 0.15;
@@ -59,6 +72,88 @@ export const REED_TIMING = {
   bellowsRise: 0.15,
   stopTail: 0.02,
 } as const;
+
+/**
+ * Bow and cello caps are set from a Chrome limiter render, not the
+ * analytical sum. Makeup gain lifts a full voice. The loud bow is two
+ * key changes on E♭ locrian, layered, 0.254s apart, while the detuned saws
+ * are still in phase. The fade starts 20ms before the new voice. Caps keep
+ * that peak, plus the loudest pluck, at or under -1 dBFS.
+ */
+export const BOW_GAINS = {
+  pitch: 0.055,
+  noise: 0.009,
+  envelope: 1,
+  dry: 0.8,
+  wet: 0.22,
+  cap: 0.168,
+  voices: 4,
+} as const;
+
+export const CELLO_GAINS = {
+  pitch: 0.62,
+  envelope: 0.85,
+  dry: 0.9,
+  wet: 0.12,
+  samplePeak: 0.5,
+  cap: 0.202,
+} as const;
+
+export const WALK_GAINS = {
+  attack: 0.85,
+  body: 0.12,
+  decay: 0.0001,
+  trim: 0.2,
+  partials: 25,
+} as const;
+
+export const WALK_STEP_MS = 800;
+
+/** The pluck envelope at `time`, from the breakpoints scheduled in `pluck`. */
+export function walkPluckLevel(start: number, time: number): number {
+  const attackEnd = start + 0.006;
+  const bodyEnd = start + 0.65;
+  const tailEnd = start + 2.5;
+  const zeroEnd = start + 2.52;
+  if (time <= start) return WALK_GAINS.decay;
+  if (time < attackEnd) {
+    const progress = (time - start) / 0.006;
+    return WALK_GAINS.decay + (WALK_GAINS.attack - WALK_GAINS.decay) * progress;
+  }
+  if (time < bodyEnd) {
+    return exponentialRampValue(
+      {
+        start: WALK_GAINS.attack,
+        target: WALK_GAINS.body,
+        startTime: attackEnd,
+        endTime: bodyEnd,
+      },
+      time,
+    );
+  }
+  if (time < tailEnd) {
+    return exponentialRampValue(
+      {
+        start: WALK_GAINS.body,
+        target: WALK_GAINS.decay,
+        startTime: bodyEnd,
+        endTime: tailEnd,
+      },
+      time,
+    );
+  }
+  if (time < zeroEnd) {
+    const progress = (time - tailEnd) / (zeroEnd - tailEnd);
+    return WALK_GAINS.decay * (1 - progress);
+  }
+  return 0;
+}
+
+export function soundLinearCap(sound: DroneSoundId): number {
+  if (sound === 'bow') return BOW_GAINS.cap;
+  if (sound === 'cello') return CELLO_GAINS.cap;
+  return DRONE_MAX_LINEAR_GAIN;
+}
 
 /** The exponential envelope scheduled in buildReed. Stop reads this instead of gain.value. */
 export type GainRamp = {
@@ -128,10 +223,11 @@ export function scheduleSwell(
   },
   when: number,
   attack: number,
+  target: number = REED_GAINS.envelope,
 ): GainRamp {
   const ramp: GainRamp = {
     start: REED_GAINS.silence,
-    target: REED_GAINS.envelope,
+    target,
     startTime: when,
     endTime: when + attack,
   };
@@ -148,8 +244,23 @@ export function clampDroneVolume(volume: number): number {
   return Math.min(1, Math.max(0, volume));
 }
 
-export function droneMasterGain(volume: number): number {
-  return clampDroneVolume(volume) * DRONE_MAX_LINEAR_GAIN;
+export function droneMasterGain(
+  volume: number,
+  sound: DroneSoundId = 'reed',
+): number {
+  return clampDroneVolume(volume) * soundLinearCap(sound);
+}
+
+export function walkHarmonicAmplitudeSum(
+  frequency: number,
+  sampleRate: number,
+): number {
+  let sum = 0;
+  for (let harmonic = 1; harmonic < WALK_GAINS.partials; harmonic += 1) {
+    if (frequency * harmonic >= sampleRate / 2) break;
+    sum += Math.abs(Math.sin(harmonic * Math.PI * 0.23) / harmonic ** 1.35);
+  }
+  return sum;
 }
 
 export function reedHarmonicAmplitudeSum(
@@ -202,6 +313,8 @@ type ReedOptions = {
   createContext?: () => AudioContext;
   document?: VisibilityTarget | null;
   windowTarget?: WindowTarget | null;
+  fetchImpl?: typeof fetch;
+  onWalk?: (index: number | null) => void;
 };
 
 export function reedPitchGain(role: DroneRole, layer: DroneLayer): number {
@@ -218,6 +331,8 @@ function createReedVoice(
   when: number,
   attack: number,
   probe = false,
+  sound: DroneSoundId = 'reed',
+  buffers: ReadonlyMap<string, AudioBuffer> | null = null,
 ): ReedVoice {
   const nodes: AudioNode[] = [];
   const sources: Scheduled[] = [];
@@ -252,7 +367,8 @@ function createReedVoice(
   let fade: GainNode;
   let fadeRamp: FadeRamp | null = null;
   try {
-    fade = buildReed(
+    fade = buildSound(
+      sound,
       context,
       destination,
       pitches,
@@ -260,6 +376,7 @@ function createReedVoice(
       attack,
       kit,
       probe,
+      buffers,
     ).fade;
   } catch (error) {
     for (const source of sources) {
@@ -305,8 +422,264 @@ export function startMeasuredReed(
   pitches: readonly DronePitch[],
   when: number,
   attack: number,
-): { stop: (stopAt: number, fade: number) => void } {
-  return createReedVoice(context, destination, pitches, when, attack, true);
+  sound: DroneSoundId = 'reed',
+): { stop: (stopAt: number, fade: number, now?: number) => void } {
+  return createReedVoice(
+    context,
+    destination,
+    pitches,
+    when,
+    attack,
+    true,
+    sound,
+  );
+}
+
+/** The production voice, waveform included, for a peak measurement. */
+export function startLiveVoice(
+  context: BaseAudioContext,
+  destination: AudioNode,
+  pitches: readonly DronePitch[],
+  when: number,
+  attack: number,
+  sound: DroneSoundId,
+  buffers: ReadonlyMap<string, AudioBuffer> | null = null,
+): { stop: (stopAt: number, fade: number, now?: number) => void } {
+  return createReedVoice(
+    context,
+    destination,
+    pitches,
+    when,
+    attack,
+    false,
+    sound,
+    buffers,
+  );
+}
+
+function fadeToRoom(
+  context: BaseAudioContext,
+  kit: VoiceKit,
+  envelope: GainNode,
+  destination: AudioNode,
+  wet: number,
+  dry: number,
+  probe: boolean,
+): GainNode {
+  const fade = kit.gain();
+  fade.gain.value = 1;
+  envelope.connect(fade);
+  if (probe) {
+    fade.connect(destination);
+    const sink = kit.gain();
+    sink.gain.value = 0;
+    connectRoom(context, kit, fade, sink, wet, dry);
+  } else {
+    connectRoom(context, kit, fade, destination, wet, dry);
+  }
+  return fade;
+}
+
+function probeUnity(
+  context: BaseAudioContext,
+  kit: VoiceKit,
+  envelope: AudioNode,
+  when: number,
+) {
+  const direct = kit.player();
+  const unity = context.createBuffer(1, 1, context.sampleRate);
+  unity.getChannelData(0)[0] = 1;
+  direct.buffer = unity;
+  direct.loop = true;
+  direct.connect(envelope);
+  direct.start(when);
+}
+
+function buildSound(
+  sound: DroneSoundId,
+  context: BaseAudioContext,
+  destination: AudioNode,
+  pitches: readonly DronePitch[],
+  when: number,
+  attack: number,
+  kit: VoiceKit,
+  probe: boolean,
+  buffers: ReadonlyMap<string, AudioBuffer> | null,
+): { envelope: GainNode; ramp: GainRamp; fade: GainNode } {
+  if (sound === 'bow')
+    return buildBow(context, destination, pitches, when, attack, kit, probe);
+  if (sound === 'cello') {
+    return buildCello(
+      context,
+      destination,
+      pitches,
+      when,
+      attack,
+      kit,
+      probe,
+      buffers,
+    );
+  }
+  return buildReed(context, destination, pitches, when, attack, kit, probe);
+}
+
+function buildBow(
+  context: BaseAudioContext,
+  destination: AudioNode,
+  pitches: readonly DronePitch[],
+  when: number,
+  attack: number,
+  kit: VoiceKit,
+  probe: boolean,
+): { envelope: GainNode; ramp: GainRamp; fade: GainNode } {
+  const cents = symmetricDetuneCents('bow');
+  const waves = ['sawtooth', 'triangle', 'triangle', 'sawtooth'] as const;
+  const voiceOscs: OscillatorNode[] = [];
+  const mixer = kit.gain();
+  mixer.gain.value = 1;
+  if (!probe) {
+    for (const pitch of pitches) {
+      const pitchGain = kit.gain();
+      pitchGain.gain.value =
+        (pitch.role === 'root' ? 1 : REED_GAINS.other) *
+        (pitch.layer === 'upper' ? REED_GAINS.upper : 1) *
+        BOW_GAINS.pitch;
+      cents.forEach((detune, index) => {
+        const voice = kit.osc();
+        voice.type = waves[index];
+        voice.frequency.value = midiHz(pitch.midi);
+        voice.detune.value = detune;
+        voice.connect(pitchGain);
+        voiceOscs.push(voice);
+      });
+      pitchGain.connect(mixer);
+    }
+  }
+
+  const lowpass = kit.filter();
+  lowpass.type = 'lowpass';
+  lowpass.Q.value = 0.65;
+  const opened = attack > 0.8;
+  lowpass.frequency.setValueAtTime(opened ? 240 : 880, when);
+  lowpass.frequency.exponentialRampToValueAtTime(
+    1480,
+    when + (opened ? 3.4 : 1.1),
+  );
+  if (!probe) mixer.connect(lowpass);
+
+  const filterLfo = kit.osc();
+  filterLfo.type = 'sine';
+  filterLfo.frequency.value = 0.11;
+  const filterDepth = kit.gain();
+  filterDepth.gain.value = 150;
+  filterLfo.connect(filterDepth);
+  filterDepth.connect(lowpass.frequency);
+
+  const vibrato = kit.osc();
+  vibrato.type = 'sine';
+  vibrato.frequency.value = 4.7;
+  const vibratoDepth = kit.gain();
+  vibratoDepth.gain.setValueAtTime(0, when);
+  vibratoDepth.gain.linearRampToValueAtTime(5.5, when + 2.1);
+  vibrato.connect(vibratoDepth);
+  for (const voice of voiceOscs) vibratoDepth.connect(voice.detune);
+  vibrato.start(when);
+
+  const envelope = kit.gain();
+  const ramp = scheduleSwell(envelope.gain, when, attack, BOW_GAINS.envelope);
+  if (probe) probeUnity(context, kit, envelope, when);
+  else {
+    lowpass.connect(envelope);
+    const noise = kit.player();
+    noise.buffer = noiseBuffer(context);
+    noise.loop = true;
+    const noiseFilter = kit.filter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.value = 1700;
+    noiseFilter.Q.value = 0.55;
+    const noiseGain = kit.gain();
+    noiseGain.gain.value = BOW_GAINS.noise;
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(envelope);
+    noise.start(when);
+    for (const voice of voiceOscs) voice.start(when);
+  }
+  filterLfo.start(when);
+  return {
+    envelope,
+    ramp,
+    fade: fadeToRoom(
+      context,
+      kit,
+      envelope,
+      destination,
+      BOW_GAINS.wet,
+      BOW_GAINS.dry,
+      probe,
+    ),
+  };
+}
+
+function buildCello(
+  context: BaseAudioContext,
+  destination: AudioNode,
+  pitches: readonly DronePitch[],
+  when: number,
+  attack: number,
+  kit: VoiceKit,
+  probe: boolean,
+  buffers: ReadonlyMap<string, AudioBuffer> | null,
+): { envelope: GainNode; ramp: GainRamp; fade: GainNode } {
+  const mixer = kit.gain();
+  mixer.gain.value = 1;
+  if (!probe) {
+    if (!buffers) throw new Error('Cello samples are not loaded.');
+    for (const pitch of pitches) {
+      const choice = sampleForMidi(pitch.midi);
+      const buffer = buffers.get(choice.file);
+      if (!buffer) throw new Error(`Missing cello sample ${choice.file}.`);
+      const source = kit.player();
+      source.buffer = buffer;
+      source.loop = true;
+      source.playbackRate.value = choice.playbackRate;
+      const gain = kit.gain();
+      gain.gain.value =
+        (pitch.role === 'root' ? 1 : REED_GAINS.other) *
+        (pitch.layer === 'upper' ? REED_GAINS.upper : 1) *
+        CELLO_GAINS.pitch;
+      source.connect(gain);
+      gain.connect(mixer);
+      source.start(when);
+    }
+  }
+  const lowpass = kit.filter();
+  lowpass.type = 'lowpass';
+  lowpass.frequency.value = 4200;
+  lowpass.Q.value = 0.4;
+  if (!probe) mixer.connect(lowpass);
+  const envelope = kit.gain();
+  const ramp = scheduleSwell(
+    envelope.gain,
+    when,
+    attack,
+    CELLO_GAINS.envelope,
+  );
+  if (probe) probeUnity(context, kit, envelope, when);
+  else lowpass.connect(envelope);
+  return {
+    envelope,
+    ramp,
+    fade: fadeToRoom(
+      context,
+      kit,
+      envelope,
+      destination,
+      CELLO_GAINS.wet,
+      CELLO_GAINS.dry,
+      probe,
+    ),
+  };
 }
 
 function buildReed(
@@ -410,26 +783,19 @@ function buildReed(
   depth.connect(envelope.gain);
   bellows.start(when);
 
-  const fade = kit.gain();
-  fade.gain.value = 1;
-  envelope.connect(fade);
-
-  if (probe) {
-    fade.connect(destination);
-    const sink = kit.gain();
-    sink.gain.value = 0;
-    connectRoom(context, kit, fade, sink, REED_GAINS.wet, REED_GAINS.dry);
-  } else {
-    connectRoom(
+  return {
+    envelope,
+    ramp,
+    fade: fadeToRoom(
       context,
       kit,
-      fade,
+      envelope,
       destination,
       REED_GAINS.wet,
       REED_GAINS.dry,
-    );
-  }
-  return { envelope, ramp, fade };
+      probe,
+    ),
+  };
 }
 
 function connectRoom(
@@ -525,7 +891,22 @@ export class ReedDrone {
   private phase: DroneStatus = 'idle';
   private disposed = false;
   private volume = 1;
+  private sound: DroneSoundId = 'reed';
   private current: ReedRequest | null = null;
+  private walking = false;
+  private walkIndex = 0;
+  private walkGeneration = 0;
+  private walkTimer: ReturnType<typeof setTimeout> | undefined;
+  private plucks: {
+    oscillator: OscillatorNode;
+    envelope: GainNode;
+    started: number;
+  }[] = [];
+  private celloBytes = new Map<string, ArrayBuffer>();
+  private celloBuffers = new Map<string, AudioBuffer>();
+  private celloLoad: Promise<void> | null = null;
+  private readonly fetchImpl: typeof fetch;
+  private readonly onWalk: (index: number | null) => void;
   private resumeTimer: ReturnType<typeof setTimeout> | undefined;
   private cancelResume: (() => void) | null = null;
   private readonly onStatus: (status: DroneStatus, message?: string) => void;
@@ -535,9 +916,12 @@ export class ReedDrone {
   private readonly documentTarget: VisibilityTarget | null;
   private readonly windowTarget: WindowTarget | null;
   private readonly onVisibility = () => {
-    if (this.documentTarget?.hidden) this.halt(REED_TIMING.hideFade);
+    if (!this.documentTarget?.hidden) return;
+    this.stopWalk();
+    this.halt(REED_TIMING.hideFade);
   };
   private readonly onPageHide = () => {
+    this.stopWalk();
     this.halt(REED_TIMING.hideFade);
   };
 
@@ -546,6 +930,8 @@ export class ReedDrone {
     options: ReedOptions = {},
   ) {
     this.onStatus = onStatus;
+    this.onWalk = options.onWalk ?? (() => {});
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.ownsContext = options.createContext === undefined;
     this.createContext = options.createContext ?? (() => new AudioContext());
     this.documentTarget =
@@ -573,6 +959,7 @@ export class ReedDrone {
 
   play(request: ReedRequest): void {
     if (this.disposed) return;
+    this.sound = requestSound(request);
     const pitches = dronePitches(request.root, request.modeId, request.octave);
     void this.start(
       request,
@@ -586,20 +973,53 @@ export class ReedDrone {
     if (this.disposed) return;
     const pitches = dronePitches(request.root, request.modeId, request.octave);
     if (this.phase === 'idle' || this.phase === 'error') return;
+    const nextSound = requestSound(request);
     if (
       this.current &&
       this.current.root === request.root &&
       this.current.modeId === request.modeId &&
-      this.current.octave === request.octave
+      this.current.octave === request.octave &&
+      this.sound === nextSound
     ) {
       return;
     }
+    this.sound = nextSound;
     void this.start(
       request,
       pitches,
       REED_TIMING.switchAttack,
       REED_TIMING.switchFade,
     );
+  }
+
+  /** Fetch the cello loops. Decode waits until a context exists. */
+  preloadCello(): Promise<void> {
+    this.celloLoad ??= this.fetchCello().catch((error: unknown) => {
+      this.celloLoad = null;
+      throw error;
+    });
+    return this.celloLoad;
+  }
+
+  walk(request: ReedRequest): void {
+    if (this.disposed) return;
+    if (this.walking) {
+      this.stopWalk();
+      return;
+    }
+    this.walking = true;
+    this.sound = requestSound(request);
+    const context = this.unlock().context;
+    void context.resume().catch(() => {});
+    this.runWalk(scaleWalk(request.root, request.scaleId ?? request.modeId));
+  }
+
+  stopWalk(): void {
+    this.walking = false;
+    this.walkGeneration += 1;
+    clearTimeout(this.walkTimer);
+    this.stopPlucks();
+    this.onWalk(null);
   }
 
   setVolume(volume: number): void {
@@ -629,6 +1049,7 @@ export class ReedDrone {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.stopWalk();
     this.generation += 1;
     this.cancelResume?.();
     this.cancelResume = null;
@@ -687,6 +1108,8 @@ export class ReedDrone {
       if (generation !== this.generation || this.disposed) return;
       if (opened.context.state !== 'running')
         throw new Error('Audio is unavailable.');
+      if (this.sound === 'cello') await this.decodeCello(opened.context);
+      if (generation !== this.generation || this.disposed) return;
       const when = opened.context.currentTime + 0.02;
       this.fadeVoices(when, fade);
       const voice = createReedVoice(
@@ -695,6 +1118,9 @@ export class ReedDrone {
         pitches,
         when,
         attack,
+        false,
+        this.sound,
+        this.sound === 'cello' ? this.celloBuffers : null,
       );
       this.voices = [voice];
       this.voiceNodes = voice.nodeCount;
@@ -719,7 +1145,7 @@ export class ReedDrone {
     }
     const context = this.createContext();
     const master = context.createGain();
-    master.gain.value = droneMasterGain(this.volume);
+    master.gain.value = droneMasterGain(this.volume, this.sound);
     const limiter = context.createDynamicsCompressor();
     limiter.threshold.value = DRONE_LIMITER.threshold;
     limiter.knee.value = DRONE_LIMITER.knee;
@@ -729,8 +1155,9 @@ export class ReedDrone {
     master.connect(limiter);
     limiter.connect(context.destination);
     this.onContextState = () => {
-      if (this.phase !== 'playing') return;
       if (context.state === 'running' || context.state === 'closed') return;
+      this.stopWalk();
+      if (this.phase !== 'playing') return;
       this.halt(REED_TIMING.hideFade);
     };
     context.addEventListener('statechange', this.onContextState);
@@ -787,7 +1214,7 @@ export class ReedDrone {
   private applyVolume(): void {
     if (!this.master || !this.context) return;
     const now = this.context.currentTime;
-    const next = droneMasterGain(this.volume);
+    const next = droneMasterGain(this.volume, this.sound);
     this.master.gain.cancelScheduledValues(now);
     this.master.gain.setValueAtTime(this.master.gain.value, now);
     this.master.gain.linearRampToValueAtTime(next, now + 0.03);
@@ -801,4 +1228,168 @@ export class ReedDrone {
     for (const voice of this.voices) voice.stop(when, fade);
     this.voices = [];
   }
+
+  private async fetchCello(): Promise<void> {
+    await Promise.all(
+      CELLO_SAMPLES.map(async (sample) => {
+        if (this.celloBytes.has(sample.file)) return;
+        const response = await this.fetchImpl(sample.href);
+        if (!response.ok)
+          throw new Error(`Cello sample failed (${response.status}).`);
+        this.celloBytes.set(sample.file, await response.arrayBuffer());
+      }),
+    );
+  }
+
+  private async decodeCello(context: BaseAudioContext): Promise<void> {
+    await this.preloadCello();
+    for (const sample of CELLO_SAMPLES) {
+      if (this.celloBuffers.has(sample.file)) continue;
+      const bytes = this.celloBytes.get(sample.file);
+      if (!bytes) throw new Error(`Missing cello sample ${sample.file}.`);
+      const decoded = await context.decodeAudioData(bytes.slice(0));
+      this.celloBuffers.set(sample.file, loopSampleBuffer(context, decoded));
+    }
+  }
+
+  private runWalk(notes: ReturnType<typeof scaleWalk>): void {
+    const generation = (this.walkGeneration += 1);
+    let index = 0;
+    const tick = () => {
+      if (!this.walking || generation !== this.walkGeneration || !this.context)
+        return;
+      this.onWalk(index);
+      this.pluck(notes[index].midi);
+      index += 1;
+      if (index < notes.length) this.walkTimer = setTimeout(tick, WALK_STEP_MS);
+      else {
+        this.walkTimer = setTimeout(() => {
+          if (generation !== this.walkGeneration) return;
+          this.walking = false;
+          this.onWalk(null);
+        }, WALK_STEP_MS);
+      }
+    };
+    this.walkTimer = setTimeout(tick, 80);
+  }
+
+  private pluck(midi: number): void {
+    if (!this.context || !this.limiter) return;
+    const now = this.context.currentTime + 0.02;
+    const plucked = startWalkPluck(
+      this.context,
+      this.limiter,
+      midi,
+      now,
+      this.volume,
+    );
+    plucked.oscillator.onended = () => {
+      for (const node of plucked.nodes) node.disconnect();
+    };
+    this.plucks.push({
+      oscillator: plucked.oscillator,
+      envelope: plucked.envelope,
+      started: now,
+    });
+  }
+
+  private stopPlucks(): void {
+    const now = this.context?.currentTime ?? 0;
+    for (const pluck of this.plucks) {
+      try {
+        const level = walkPluckLevel(pluck.started, now);
+        pluck.envelope.gain.cancelScheduledValues(now);
+        pluck.envelope.gain.setValueAtTime(level, now);
+        pluck.envelope.gain.linearRampToValueAtTime(0, now + 0.02);
+        pluck.oscillator.stop(now + 0.03);
+      } catch {
+        // Already stopped.
+      }
+    }
+    this.plucks = [];
+  }
+}
+
+/** The walk pluck: its own periodic wave, into the limiter, scaled by volume. */
+export function startWalkPluck(
+  context: BaseAudioContext,
+  destination: AudioNode,
+  midi: number,
+  when: number,
+  volume: number,
+): { oscillator: OscillatorNode; envelope: GainNode; nodes: AudioNode[] } {
+  const oscillator = context.createOscillator();
+  const frequency = midiHz(midi);
+  oscillator.setPeriodicWave(pluckWave(context, frequency));
+  oscillator.frequency.value = frequency;
+  const filter = context.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.Q.value = 0.45;
+  filter.frequency.setValueAtTime(Math.min(5500, frequency * 12), when);
+  filter.frequency.exponentialRampToValueAtTime(
+    Math.max(600, frequency * 2),
+    when + 1.3,
+  );
+  const envelope = context.createGain();
+  envelope.gain.setValueAtTime(WALK_GAINS.decay, when);
+  envelope.gain.linearRampToValueAtTime(WALK_GAINS.attack, when + 0.006);
+  envelope.gain.exponentialRampToValueAtTime(WALK_GAINS.body, when + 0.65);
+  envelope.gain.exponentialRampToValueAtTime(WALK_GAINS.decay, when + 2.5);
+  envelope.gain.linearRampToValueAtTime(0, when + 2.52);
+  const trim = context.createGain();
+  trim.gain.value = WALK_GAINS.trim * clampDroneVolume(volume);
+  oscillator.connect(filter);
+  filter.connect(envelope);
+  envelope.connect(trim);
+  trim.connect(destination);
+  const nodes: AudioNode[] = [oscillator, filter, envelope, trim];
+  oscillator.start(when);
+  oscillator.stop(when + 2.55);
+  return { oscillator, envelope, nodes };
+}
+
+/** Trim, loop, and crossfade a decoded cello sample the way playback does. */
+export function prepareCelloBuffer(
+  context: BaseAudioContext,
+  decoded: AudioBuffer,
+): AudioBuffer {
+  return loopSampleBuffer(context, decoded);
+}
+
+function loopSampleBuffer(
+  context: BaseAudioContext,
+  decoded: AudioBuffer,
+): AudioBuffer {
+  const mixed = mixdown(decoded);
+  const trimmed = trimEdgeSilence(mixed);
+  const fade = Math.min(
+    Math.round(decoded.sampleRate * 0.06),
+    Math.floor(trimmed.length / 4),
+  );
+  const looped = seamlessLoop(trimmed, Math.max(8, fade));
+  const buffer = context.createBuffer(1, looped.length, decoded.sampleRate);
+  buffer.getChannelData(0).set(looped);
+  return buffer;
+}
+
+function mixdown(buffer: AudioBuffer): Float32Array {
+  const mixed = new Float32Array(buffer.length);
+  const channels = buffer.numberOfChannels;
+  for (let channel = 0; channel < channels; channel += 1) {
+    const data = buffer.getChannelData(channel);
+    for (let index = 0; index < data.length; index += 1)
+      mixed[index] += data[index] / channels;
+  }
+  return mixed;
+}
+
+function pluckWave(context: BaseAudioContext, frequency: number): PeriodicWave {
+  const real = new Float32Array(WALK_GAINS.partials);
+  const imaginary = new Float32Array(WALK_GAINS.partials);
+  for (let harmonic = 1; harmonic < imaginary.length; harmonic += 1) {
+    if (frequency * harmonic >= context.sampleRate / 2) break;
+    imaginary[harmonic] =
+      Math.sin(harmonic * Math.PI * 0.23) / harmonic ** 1.35;
+  }
+  return context.createPeriodicWave(real, imaginary);
 }

@@ -2,16 +2,20 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  BOW_GAINS,
+  CELLO_GAINS,
   ReedDrone,
   REED_GAINS,
   REED_TIMING,
+  WALK_STEP_MS,
   droneMasterGain,
+  walkPluckLevel,
   exponentialRampValue,
   type DroneStatus,
   type GainRamp,
   type ReedRequest,
 } from '../lib/drone-audio.ts';
-import { midiHz } from '../lib/drone.ts';
+import { CELLO_SAMPLES, midiHz, scaleWalk } from '../lib/drone.ts';
 import { droneControlName } from '../lib/drone-controls.ts';
 import { ExploreDrone } from '../lib/drone-session.ts';
 
@@ -1068,4 +1072,302 @@ void test('a bfcache restore leaves the drone off until a tap', async () => {
   assertOff(controller, context, heard, oscillators, resumes);
   await assertTapStarts(controller, context, resumes);
   controller.dispose();
+});
+
+function envelopesTargeting(context: FakeContext, target: number) {
+  return context.gains.filter((gain) =>
+    gain.gain.events.some(
+      (event) => event.method === 'exponential' && event.value === target,
+    ),
+  );
+}
+
+function soundTarget(sound: 'reed' | 'bow' | 'cello'): number {
+  if (sound === 'bow') return BOW_GAINS.envelope;
+  if (sound === 'cello') return CELLO_GAINS.envelope;
+  return REED_GAINS.envelope;
+}
+
+function celloBuffer(context: FakeContext) {
+  const buffer = context.createBuffer(1, 8000, 48000);
+  const data = buffer.getChannelData(0);
+  for (let index = 1000; index < 7000; index += 1) data[index] = 0.2;
+  return buffer;
+}
+
+function fetchUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+function engineWith(fetchImpl?: typeof fetch) {
+  const context = new FakeContext();
+  (
+    context as FakeContext & {
+      decodeAudioData: (bytes: ArrayBuffer) => Promise<FakeBuffer>;
+    }
+  ).decodeAudioData = () => Promise.resolve(celloBuffer(context));
+  const states: DroneStatus[] = [];
+  const documentTarget = new FakeDocument();
+  const windowTarget = new FakeDocument();
+  const engine = new ReedDrone((status) => states.push(status), {
+    createContext: () => context as unknown as AudioContext,
+    document: documentTarget,
+    windowTarget,
+    fetchImpl,
+  });
+  return { engine, context, states, documentTarget, windowTarget };
+}
+
+void test('a sound change while playing ramps the fade gain and leaves the swell scheduled', async () => {
+  const urls: string[] = [];
+  const { engine, context, states } = engineWith(async (input) => {
+    urls.push(fetchUrl(input));
+    return new Response(new Uint8Array(16));
+  });
+  const order = ['reed', 'bow', 'cello', 'reed'] as const;
+  engine.play({ ...lowRequest, sound: 'reed' });
+  await until(() => states.at(-1) === 'playing');
+  for (let index = 0; index < order.length - 1; index += 1) {
+    const from = order[index];
+    const next = order[index + 1];
+    const swell = envelopesTargeting(context, soundTarget(from));
+    const voice = swell[swell.length - 1];
+    assert.ok(voice, from);
+    const scheduled = voice.gain.events.length;
+    engine.retune({ ...lowRequest, sound: next });
+    await until(
+      () =>
+        states.at(-1) === 'playing' &&
+        envelopesTargeting(context, soundTarget(next)).length > 0,
+    );
+    assert.equal(voice.gain.events.length, scheduled);
+    assert.equal(
+      voice.gain.events.some(
+        (event) => event.method === 'cancel' || event.method === 'hold',
+      ),
+      false,
+    );
+    assertFadeOnly(voice, 4, 4 + Math.max(REED_TIMING.switchFade, 0.015));
+  }
+  const detune = context.oscillators.reduce(
+    (sum, oscillator) => sum + oscillator.detune.value,
+    0,
+  );
+  assert.equal(detune, 0);
+  const rates = context.sources
+    .map((source) => source.playbackRate.value)
+    .filter((rate) => rate > 0);
+  assert.deepEqual(rates, [1, 1]);
+  assert.deepEqual(
+    [...urls].sort(),
+    CELLO_SAMPLES.map((sample) => sample.href).sort(),
+  );
+  engine.retune({ ...lowRequest, sound: 'cello' });
+  await until(() => states.at(-1) === 'playing');
+  assert.equal(urls.length, CELLO_SAMPLES.length);
+  engine.dispose();
+});
+
+type WalkTimer = { fn: () => void; ms: number; cleared: boolean; ran: boolean };
+
+void test('a scale walk plays once over a silent drone and never resumes itself', async () => {
+  const { engine, context, states } = engineWith();
+  const notes = scaleWalk('A', 'dorian');
+  const pending: WalkTimer[] = [];
+  const originalSet = globalThis.setTimeout;
+  const originalClear = globalThis.clearTimeout;
+  globalThis.setTimeout = ((fn: TimerHandler, ms?: number) => {
+    const handle: WalkTimer = {
+      fn: () => {
+        if (typeof fn === 'function') fn();
+      },
+      ms: ms ?? 0,
+      cleared: false,
+      ran: false,
+    };
+    pending.push(handle);
+    return handle as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((handle?: unknown) => {
+    if (handle && typeof handle === 'object' && 'cleared' in handle) {
+      (handle as WalkTimer).cleared = true;
+    }
+  }) as typeof clearTimeout;
+  const due = () => pending.filter((timer) => !timer.cleared && !timer.ran);
+  try {
+    assert.equal(states.length, 0);
+    engine.walk(lowRequest);
+    assert.deepEqual(states, []);
+    assert.equal(context.oscillators.length, 0);
+    for (const note of notes) {
+      const timer = due().at(-1);
+      assert.ok(timer);
+      assert.equal(timer.ms, note === notes[0] ? 80 : WALK_STEP_MS);
+      timer.ran = true;
+      timer.fn();
+      assert.equal(
+        context.oscillators[context.oscillators.length - 1].frequency.value,
+        midiHz(note.midi),
+      );
+    }
+    const played = context.oscillators.length;
+    assert.equal(due().at(-1)?.ms, WALK_STEP_MS);
+    context.currentTime = 4.22;
+    engine.stopWalk();
+    assert.equal(context.oscillators.length, played);
+    assert.equal(due().length, 0);
+    const level = walkPluckLevel(4 + 0.02, 4.22);
+    assert.ok(level < 0.85 && level > 0.12);
+    assert.ok(
+      context.gains.some((gain) => {
+        const anchor = gain.gain.events.find(
+          (event) =>
+            event.method === 'set' && Math.abs(event.time - 4.22) < 1e-9,
+        );
+        const cut = gain.gain.events.find(
+          (event) =>
+            event.method === 'linear' &&
+            event.value === 0 &&
+            Math.abs(event.time - (4.22 + 0.02)) < 1e-9,
+        );
+        return (
+          anchor !== undefined &&
+          Math.abs(anchor.value - level) < 1e-9 &&
+          cut !== undefined
+        );
+      }),
+    );
+    engine.walk(lowRequest);
+    assert.equal(due().at(-1)?.ms, 80);
+    engine.walk(lowRequest);
+    assert.equal(due().length, 0);
+    engine.dispose();
+  } finally {
+    globalThis.setTimeout = originalSet;
+    globalThis.clearTimeout = originalClear;
+  }
+});
+
+function sessionSoundRig(fetchImpl?: typeof fetch) {
+  const context = new FakeContext();
+  (
+    context as FakeContext & {
+      decodeAudioData: (bytes: ArrayBuffer) => Promise<FakeBuffer>;
+    }
+  ).decodeAudioData = () => Promise.resolve(celloBuffer(context));
+  const documentTarget = new FakeDocument();
+  const windowTarget = new FakeDocument();
+  const controller = new ExploreDrone(
+    (onStatus, onWalk) =>
+      new ReedDrone(onStatus, {
+        onWalk,
+        fetchImpl,
+        createContext: () => context as unknown as AudioContext,
+        document: documentTarget,
+        windowTarget,
+      }),
+    lowRequest,
+  );
+  controller.setActive(true);
+  return { context, controller, documentTarget, windowTarget };
+}
+
+void test('leave, a hidden tab, bfcache, and a scale change stop the walk and every sound stays silent', async () => {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, String(value));
+      },
+    },
+    configurable: true,
+  });
+  try {
+    for (const sound of ['reed', 'bow', 'cello'] as const) {
+      const urls: string[] = [];
+      const rig = sessionSoundRig(async (input) => {
+        urls.push(fetchUrl(input));
+        return new Response(new Uint8Array(16));
+      });
+      rig.controller.setSound(sound);
+      if (sound === 'cello') await until(() => urls.length === CELLO_SAMPLES.length);
+      else assert.equal(urls.length, 0);
+      assert.equal(rig.controller.snapshot().sound, sound);
+      assert.equal(rig.controller.snapshot().pressed, false);
+      rig.controller.walk();
+      assert.equal(rig.controller.snapshot().walking, true);
+      assert.equal(rig.controller.snapshot().pressed, false);
+      rig.controller.setRequest({ root: 'C', modeId: 'ionian', octave: 'low' });
+      assert.equal(rig.controller.snapshot().walking, false);
+      assert.equal(rig.controller.snapshot().pressed, false);
+
+      rig.controller.walk();
+      rig.controller.setHidden(true);
+      rig.controller.setHidden(false);
+      assert.equal(rig.controller.snapshot().walking, false);
+      assert.equal(rig.controller.snapshot().pressed, false);
+
+      rig.controller.walk();
+      rig.windowTarget.emit('pagehide');
+      rig.controller.restoreFromCache();
+      rig.controller.setActive(true);
+      assert.equal(rig.controller.snapshot().walking, false);
+      assert.equal(rig.controller.snapshot().pressed, false);
+
+      rig.controller.walk();
+      rig.controller.setActive(false);
+      rig.controller.setActive(true);
+      assert.equal(rig.controller.snapshot().walking, false);
+      rig.controller.setRequest({ root: 'D', modeId: 'dorian', octave: 'low' });
+      assert.equal(rig.controller.snapshot().pressed, false);
+      assert.equal(rig.controller.snapshot().walking, false);
+
+      if (sound === 'cello') {
+        rig.controller.toggle();
+        await until(() =>
+          rig.context.sources.some((source) => source.playbackRate.value === 1),
+        );
+        const sources = rig.context.sources.length;
+        assert.equal(rig.controller.snapshot().pressed, true);
+        rig.controller.setHidden(true);
+        rig.controller.setHidden(false);
+        assert.equal(rig.controller.snapshot().pressed, false);
+        rig.controller.setRequest({
+          root: 'E',
+          modeId: 'mixolydian',
+          octave: 'low',
+        });
+        assert.equal(rig.controller.snapshot().pressed, false);
+        assert.equal(rig.context.sources.length, sources);
+      } else {
+        await hear(rig.controller, rig.context);
+        rig.controller.setHidden(true);
+        rig.controller.setHidden(false);
+        assert.equal(rig.controller.snapshot().pressed, false);
+        rig.controller.setRequest({
+          root: 'E',
+          modeId: 'mixolydian',
+          octave: 'low',
+        });
+        assert.equal(rig.controller.snapshot().pressed, false);
+      }
+      rig.controller.dispose();
+    }
+    const remembered = sessionSoundRig();
+    remembered.controller.setActive(true);
+    assert.equal(remembered.controller.snapshot().sound, 'cello');
+    assert.equal(remembered.controller.snapshot().pressed, false);
+    remembered.controller.setRequest({
+      root: 'G',
+      modeId: 'aeolian',
+      octave: 'low',
+    });
+    assert.equal(remembered.controller.snapshot().pressed, false);
+    remembered.controller.dispose();
+  } finally {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
 });

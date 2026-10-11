@@ -14,7 +14,7 @@ import {
   type DroneBox,
 } from '../lib/drone-controls.ts';
 
-const popover = { width: 168, height: 88 };
+const popover = { width: 220, height: 120 };
 
 void test('the toggle name says drone and whether it is on', () => {
   assert.equal(droneControlName(true), 'Drone, on');
@@ -68,7 +68,7 @@ void test('volume opens from a click or an arrow key, and a long-press is not re
   assert.equal(droneVolumeOpens({ kind: 'longpress' }), false);
 });
 
-void test('escape closes toward the toggle and tab is not trapped', () => {
+void test('escape returns focus to the volume button and tab is not trapped', () => {
   assert.deepEqual(
     volumePopoverKey({ open: false, key: 'ArrowDown', focus: 'toggle' }),
     { open: true, focus: 'slider' },
@@ -83,7 +83,7 @@ void test('escape closes toward the toggle and tab is not trapped', () => {
   );
   assert.deepEqual(
     volumePopoverKey({ open: true, key: 'Escape', focus: 'slider' }),
-    { open: false, focus: 'toggle' },
+    { open: false, focus: 'volume' },
   );
   assert.deepEqual(
     volumePopoverKey({ open: true, key: 'Tab', focus: 'slider' }),
@@ -96,101 +96,38 @@ function placed(origin: { x: number; y: number } | null): DroneBox {
   return { ...origin, width: popover.width, height: popover.height };
 }
 
-function misses(box: DroneBox, obstacles: DroneBox[]) {
-  for (const obstacle of obstacles) {
-    assert.equal(boxesOverlap(box, obstacle), false);
-  }
-}
-
-void test('the volume popover opens above the caption and degree letters', () => {
+void test('the volume popover misses the scales tab, the pickers, the caption, and the letters', () => {
+  const grown = { width: 220, height: 100 };
   const scenes: {
     viewport: { width: number; height: number };
     trigger: DroneBox;
-    caption: DroneBox;
-    letters: DroneBox[];
-    blocked: DroneBox[];
+    tab: DroneBox;
+    obstacles: (DroneBox & { selector: string })[];
     origin: { x: number; y: number };
-  }[] = [
-    {
-      viewport: { width: 390, height: 844 },
-      trigger: { x: 322, y: 335.38, width: 44, height: 44 },
-      caption: { x: 85.8, y: 395.38, width: 218.41, height: 19.5 },
-      letters: [
-        { x: 23.89, y: 469.38, width: 7.2, height: 18 },
-        { x: 355.3, y: 469.38, width: 14.41, height: 18 },
-      ],
-      blocked: [
-        { x: 21.8, y: 435.88, width: 11.41, height: 28.5 },
-        { x: 356.8, y: 435.88, width: 11.41, height: 28.5 },
-        { x: 18, y: 18, width: 130, height: 44 },
-        { x: 18, y: 62, width: 354, height: 48 },
-        { x: 16, y: 223.38, width: 358, height: 44 },
-        { x: 16, y: 275.38, width: 358, height: 44 },
-        { x: 16, y: 536.38, width: 358, height: 53 },
-        { x: -187, y: 625.38, width: 1200, height: 305 },
-      ],
-      origin: { x: 198, y: 239.38 },
-    },
-    {
-      viewport: { width: 501, height: 900 },
-      trigger: { x: 371.52, y: 408.39, width: 44, height: 44 },
-      caption: { x: 132.89, y: 470.39, width: 235.2, height: 21 },
-      letters: [
-        { x: 81.3, y: 554.89, width: 8.41, height: 21 },
-        { x: 407.09, y: 554.89, width: 16.81, height: 21 },
-      ],
-      blocked: [
-        { x: 78.59, y: 511.39, width: 13.81, height: 34.5 },
-        { x: 408.59, y: 511.39, width: 13.81, height: 34.5 },
-        { x: 24, y: 20, width: 135.14, height: 37.5 },
-        { x: 24, y: 64, width: 453, height: 48 },
-        { x: 24, y: 290.39, width: 453, height: 44 },
-        { x: 24, y: 338.39, width: 453, height: 44 },
-        { x: 24, y: 628.89, width: 453, height: 34.5 },
-        { x: -143, y: 1008.58, width: 1200, height: 305 },
-      ],
-      origin: { x: 247.52, y: 312.39 },
-    },
-    {
-      viewport: { width: 1440, height: 900 },
-      trigger: { x: 893.5, y: 628, width: 44, height: 44 },
-      caption: { x: 569.69, y: 690, width: 285.61, height: 25.5 },
-      letters: [
-        { x: 511.08, y: 777.5, width: 9.61, height: 24 },
-        { x: 899.48, y: 777.5, width: 19.2, height: 24 },
-      ],
-      blocked: [
-        { x: 508.08, y: 729.5, width: 15.61, height: 39 },
-        { x: 826.89, y: 729.5, width: 31.2, height: 39 },
-        { x: 901.28, y: 729.5, width: 15.61, height: 39 },
-        { x: 28, y: 26, width: 171.02, height: 48 },
-        { x: 247.02, y: 26, width: 225.81, height: 44 },
-        { x: 56, y: 520, width: 1313, height: 44 },
-        { x: 56, y: 568, width: 1313, height: 44 },
-        { x: 56, y: 848.5, width: 1313, height: 31.5 },
-        { x: -407, y: 1129.69, width: 3182.5, height: 293 },
-      ],
-      origin: { x: 769.5, y: 532 },
-    },
-  ];
+  }[] = [{"viewport":{"width":390,"height":844},"trigger":{"x":16,"y":335.375,"width":44,"height":44},"tab":{"x":110.59375,"y":275.375,"width":100.8125,"height":44},"obstacles":[{"selector":".brand","x":18,"y":18,"width":130,"height":44},{"selector":".site-header nav","x":18,"y":62,"width":354,"height":48},{"selector":".workspace-tools","x":16,"y":223.375,"width":358,"height":44},{"selector":".reference-tabs","x":16,"y":275.375,"width":358,"height":44},{"selector":".root-select","x":108.5,"y":323.375,"width":44,"height":68},{"selector":".scale-select","x":160.5,"y":323.375,"width":121,"height":68},{"selector":".scale-caption","x":85.796875,"y":395.375,"width":218.40625,"height":19.5},{"selector":".palette-note > span","x":21.796875,"y":435.875,"width":11.40625,"height":28.5},{"selector":".palette-note > span","x":77.625,"y":435.875,"width":11.40625,"height":28.5},{"selector":".palette-note > span","x":133.46875,"y":435.875,"width":11.40625,"height":28.5},{"selector":".palette-note > span","x":189.296875,"y":435.875,"width":11.40625,"height":28.5},{"selector":".palette-note > span","x":245.125,"y":435.875,"width":11.40625,"height":28.5},{"selector":".palette-note > span","x":295.265625,"y":435.875,"width":22.8125,"height":28.5},{"selector":".palette-note > span","x":356.796875,"y":435.875,"width":11.40625,"height":28.5},{"selector":".palette-note small","x":23.890625,"y":469.375,"width":7.203125,"height":18},{"selector":".palette-note small","x":79.71875,"y":469.375,"width":7.203125,"height":18},{"selector":".palette-note small","x":131.96875,"y":469.375,"width":14.40625,"height":18},{"selector":".palette-note small","x":191.390625,"y":469.375,"width":7.203125,"height":18},{"selector":".palette-note small","x":247.21875,"y":469.375,"width":7.203125,"height":18},{"selector":".palette-note small","x":303.0625,"y":469.375,"width":7.203125,"height":18},{"selector":".palette-note small","x":355.296875,"y":469.375,"width":14.40625,"height":18},{"selector":".neck-meta","x":16,"y":536.375,"width":358,"height":53},{"selector":".fret-grid","x":41,"y":625.375,"width":1200,"height":305}],"origin":{"x":8,"y":123}},{"viewport":{"width":501,"height":900},"trigger":{"x":24,"y":408.390625,"width":44,"height":44},"tab":{"x":160.484375,"y":338.390625,"width":109.203125,"height":44},"obstacles":[{"selector":".brand","x":24,"y":20,"width":135.140625,"height":37.5},{"selector":".site-header nav","x":24,"y":64,"width":453,"height":48},{"selector":".workspace-tools","x":24,"y":290.390625,"width":453,"height":44},{"selector":".reference-tabs","x":24,"y":338.390625,"width":453,"height":44},{"selector":".root-select","x":137.484375,"y":392.390625,"width":51.015625,"height":76},{"selector":".scale-select","x":200.5,"y":392.390625,"width":163.015625,"height":76},{"selector":".scale-caption","x":132.890625,"y":470.390625,"width":235.203125,"height":21},{"selector":".palette-note > span","x":78.59375,"y":511.390625,"width":13.8125,"height":34.5},{"selector":".palette-note > span","x":133.59375,"y":511.390625,"width":13.8125,"height":34.5},{"selector":".palette-note > span","x":188.59375,"y":511.390625,"width":13.8125,"height":34.5},{"selector":".palette-note > span","x":243.59375,"y":511.390625,"width":13.8125,"height":34.5},{"selector":".palette-note > span","x":298.59375,"y":511.390625,"width":13.8125,"height":34.5},{"selector":".palette-note > span","x":346.6875,"y":511.390625,"width":27.609375,"height":34.5},{"selector":".palette-note > span","x":408.59375,"y":511.390625,"width":13.8125,"height":34.5},{"selector":".palette-note small","x":81.296875,"y":554.890625,"width":8.40625,"height":21},{"selector":".palette-note small","x":136.296875,"y":554.890625,"width":8.40625,"height":21},{"selector":".palette-note small","x":187.09375,"y":554.890625,"width":16.8125,"height":21},{"selector":".palette-note small","x":246.296875,"y":554.890625,"width":8.40625,"height":21},{"selector":".palette-note small","x":301.296875,"y":554.890625,"width":8.40625,"height":21},{"selector":".palette-note small","x":356.296875,"y":554.890625,"width":8.40625,"height":21},{"selector":".palette-note small","x":407.09375,"y":554.890625,"width":16.8125,"height":21},{"selector":".neck-meta","x":24,"y":628.890625,"width":453,"height":34.5},{"selector":".fret-grid","x":64,"y":1008.578125,"width":1200,"height":305}],"origin":{"x":8,"y":190}},{"viewport":{"width":1440,"height":900},"trigger":{"x":56,"y":628,"width":44,"height":44},"tab":{"x":629.984375,"y":568,"width":109.203125,"height":44},"obstacles":[{"selector":".brand","x":28,"y":26,"width":171.015625,"height":48},{"selector":".site-header nav","x":247.015625,"y":26,"width":225.8125,"height":44},{"selector":".workspace-tools","x":56,"y":520,"width":1328,"height":44},{"selector":".reference-tabs","x":56,"y":568,"width":1328,"height":44},{"selector":".root-select","x":547,"y":612,"width":69,"height":76},{"selector":".scale-select","x":628,"y":612,"width":265,"height":76},{"selector":".scale-caption","x":577.1875,"y":690,"width":285.609375,"height":25.5},{"selector":".palette-note > span","x":515.578125,"y":729.5,"width":15.609375,"height":39},{"selector":".palette-note > span","x":580.578125,"y":729.5,"width":15.609375,"height":39},{"selector":".palette-note > span","x":645.578125,"y":729.5,"width":15.609375,"height":39},{"selector":".palette-note > span","x":710.578125,"y":729.5,"width":15.609375,"height":39},{"selector":".palette-note > span","x":775.578125,"y":729.5,"width":15.609375,"height":39},{"selector":".palette-note > span","x":834.390625,"y":729.5,"width":31.203125,"height":39},{"selector":".palette-note > span","x":908.78125,"y":729.5,"width":15.609375,"height":39},{"selector":".palette-note small","x":518.578125,"y":777.5,"width":9.609375,"height":24},{"selector":".palette-note small","x":583.578125,"y":777.5,"width":9.609375,"height":24},{"selector":".palette-note small","x":643.78125,"y":777.5,"width":19.203125,"height":24},{"selector":".palette-note small","x":713.578125,"y":777.5,"width":9.609375,"height":24},{"selector":".palette-note small","x":778.578125,"y":777.5,"width":9.609375,"height":24},{"selector":".palette-note small","x":845.1875,"y":777.5,"width":9.609375,"height":24},{"selector":".palette-note small","x":906.984375,"y":777.5,"width":19.203125,"height":24},{"selector":".neck-meta","x":56,"y":848.5,"width":1328,"height":31.5},{"selector":".fret-grid","x":96,"y":1129.6875,"width":1200,"height":293}],"origin":{"x":8,"y":680}}];
   for (const scene of scenes) {
-    const obstacles = [scene.caption, ...scene.letters, ...scene.blocked];
     const origin = volumePopoverOrigin({
       trigger: scene.trigger,
-      popover,
+      popover: grown,
       viewport: scene.viewport,
-      obstacles,
+      obstacles: scene.obstacles,
     });
-    assert.ok(origin);
-    assert.ok(Math.abs(origin.x - scene.origin.x) < 0.001);
-    assert.ok(Math.abs(origin.y - scene.origin.y) < 0.001);
-    const box = placed(origin);
-    misses(box, [scene.caption, ...scene.letters]);
-    const gap = scene.trigger.y - (box.y + box.height);
-    assert.ok(Math.abs(gap - 8) < 0.001);
+    assert.deepEqual(origin, scene.origin);
+    const box = { ...origin!, width: grown.width, height: grown.height };
+    const root = scene.obstacles.find((item) => item.selector === '.root-select');
+    const type = scene.obstacles.find((item) => item.selector === '.scale-select');
+    const caption = scene.obstacles.find((item) => item.selector === '.scale-caption');
+    const letters = scene.obstacles.filter((item) => item.selector.startsWith('.palette-note'));
+    assert.ok(root && type && caption && letters.length > 0);
+    for (const obstacle of [scene.tab, root, type, caption, ...letters]) {
+      assert.equal(
+        boxesOverlap(box, obstacle),
+        false,
+        `${scene.viewport.width}px popover overlaps a reserved box`,
+      );
+    }
     assert.ok(box.x < scene.trigger.x + scene.trigger.width);
     assert.ok(box.x + box.width > scene.trigger.x);
-    assert.ok(box.y + box.height <= scene.caption.y);
     assert.ok(box.x >= 8);
     assert.ok(box.y >= 8);
     assert.ok(box.x + box.width <= scene.viewport.width - 8);
@@ -218,7 +155,7 @@ void test('a popover that would cover the neck opens above it and stays on scree
     viewport: { width: 390, height: 844 },
     neck,
   });
-  assert.deepEqual(origin, { x: 176, y: 604 });
+  assert.deepEqual(origin, { x: 124, y: 572 });
   assert.equal(boxesOverlap(placed(origin), neck), false);
   assert.deepEqual(
     volumePopoverOrigin({
@@ -227,7 +164,7 @@ void test('a popover that would cover the neck opens above it and stays on scree
       viewport: { width: 390, height: 844 },
       neck: null,
     }),
-    { x: 214, y: 152 },
+    { x: 162, y: 152 },
   );
 });
 
@@ -242,16 +179,20 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   );
   assert.match(
     css,
-    /\.drone-toggle,\n\.drone-volume-trigger \{[^}]*min-width:\s*44px/,
+    /\.drone-toggle,\n\.drone-volume-trigger,\n\.drone-walk \{[^}]*min-width:\s*44px/,
   );
   assert.match(css, /min-height:\s*44px/);
   assert.match(
     css,
-    /\.drone-toggle svg,\n\.drone-volume-trigger svg \{[^}]*width:\s*18px/,
+    /\.drone-toggle svg,\n\.drone-volume-trigger svg,\n\.drone-walk svg \{[^}]*width:\s*18px/,
   );
   assert.match(css, /height:\s*18px/);
   assert.match(css, /border:\s*1px solid var\(--border\)/);
   assert.match(css, /outline:\s*2px solid var\(--green\)/);
+  assert.match(
+    css,
+    /\.drone-sound-options label:has\(input:focus-visible\)/,
+  );
   assert.match(css, /display:\s*contents/);
   assert.match(css, /flex:\s*0 0 44px/);
   assert.match(css, /text-overflow:\s*ellipsis/);

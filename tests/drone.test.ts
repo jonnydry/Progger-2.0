@@ -14,8 +14,10 @@ import {
   lowRootMidi,
   midiHz,
   modeIntervals,
+  sampleForMidi,
   scaleWalk,
   scientificPitch,
+  symmetricDetuneCents,
 } from '../lib/drone.ts';
 import { SCALES } from '../lib/music.ts';
 
@@ -145,52 +147,21 @@ void test('colour notes keep the mode spelling', () => {
   assert.equal(colourNote('C#', 'dorian').name, 'A#');
 });
 
-void test('the scale walk climbs two octaves above the low drone and colours the characteristic degree both ways', () => {
+void test('the scale walk climbs from the root to the octave and does not loop', () => {
   const walk = scaleWalk('A', 'dorian');
   assert.deepEqual(
     walk.map((step) => step.note.name),
-    [
-      'A',
-      'B',
-      'C',
-      'D',
-      'E',
-      'F#',
-      'G',
-      'A',
-      'G',
-      'F#',
-      'E',
-      'D',
-      'C',
-      'B',
-      'A',
-    ],
+    ['A', 'B', 'C', 'D', 'E', 'F#', 'G', 'A'],
   );
   assert.deepEqual(
     walk.map((step) => step.midi),
-    [69, 71, 72, 74, 76, 78, 79, 81, 79, 78, 76, 74, 72, 71, 69],
+    [69, 71, 72, 74, 76, 78, 79, 81],
   );
   assert.deepEqual(
     walk.map((step) => step.colour),
-    [
-      false,
-      false,
-      false,
-      false,
-      false,
-      true,
-      false,
-      false,
-      false,
-      true,
-      false,
-      false,
-      false,
-      false,
-      false,
-    ],
+    [false, false, false, false, false, true, false, false],
   );
+  assert.equal(walk.at(-1)?.midi, walk[0].midi + 12);
   assert.equal(walk[0].midi, lowRootMidi('A') + 24);
   assert.equal(
     scaleWalk('F#', 'lydian').some(
@@ -201,7 +172,7 @@ void test('the scale walk climbs two octaves above the low drone and colours the
   const ionian = scaleWalk('A', 'ionian');
   assert.deepEqual(
     ionian.filter((step) => step.colour).map((step) => step.note.name),
-    ['G#', 'G#'],
+    ['G#'],
   );
   assert.equal(ionian[7].note.name, 'A');
   assert.equal(ionian[7].note.degree, '1');
@@ -226,7 +197,20 @@ void test('a catalog scale picks the church-mode voicing, or a fifth unless the 
     root: 'Bb',
     modeId: 'dorian',
     octave: 'low',
+    scaleId: 'dorian',
   });
+  assert.deepEqual(
+    scaleWalk('A', 'minor-pentatonic').map((step) => step.note.name),
+    ['A', 'C', 'D', 'E', 'G', 'A'],
+  );
+  assert.deepEqual(
+    scaleWalk('A', 'harmonic-minor').map((step) => step.note.name),
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G#', 'A'],
+  );
+  assert.notDeepEqual(
+    scaleWalk('A', 'minor-pentatonic').map((step) => step.note.name),
+    scaleWalk('A', 'ionian').map((step) => step.note.name),
+  );
   assert.deepEqual(
     dronePitches('A', droneModeForScale('minor-pentatonic'), 'low').map(
       (pitch) => pitch.degree,
@@ -243,6 +227,19 @@ void test('a catalog scale picks the church-mode voicing, or a fifth unless the 
     () => droneModeForScale('hypodorian'),
     /Unknown scale: hypodorian/,
   );
+});
+
+void test('detune pairs stay centred on the root and cello picks the nearest loop', () => {
+  for (const sound of ['reed', 'bow'] as const) {
+    const cents = symmetricDetuneCents(sound);
+    assert.equal(
+      cents.reduce((sum, value) => sum + value, 0),
+      0,
+    );
+  }
+  assert.equal(sampleForMidi(45).file, 'cello-a2.m4a');
+  assert.equal(sampleForMidi(45).playbackRate, 1);
+  assert.equal(sampleForMidi(50).file, 'cello-e3.m4a');
 });
 
 void test('the note module does not mention an audio context', () => {

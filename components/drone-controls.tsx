@@ -8,8 +8,8 @@ import {
   useState,
   type RefObject,
 } from 'react';
-import { AudioLines, ChevronDown } from 'lucide-react';
-import { reedRequestForScale } from '@/lib/drone';
+import { AudioLines, ChevronDown, Footprints } from 'lucide-react';
+import { DRONE_SOUNDS, reedRequestForScale, type DroneSoundId } from '@/lib/drone';
 import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
 import {
   DRONE_ICON_PX,
@@ -31,7 +31,7 @@ export function useReedDrone(input: {
   const [controller] = useState(
     () =>
       new ExploreDrone(
-        (onStatus) => new ReedDrone(onStatus),
+        (onStatus, onWalk) => new ReedDrone(onStatus, { onWalk }),
         reedRequestForScale(input.root, input.scaleId),
       ),
   );
@@ -79,6 +79,15 @@ export function useReedDrone(input: {
     setVolume(next: number) {
       controller.setVolume(next);
     },
+    sound: snapshot.sound,
+    walking: snapshot.walking,
+    walkPc: snapshot.walkPc,
+    setSound(next: DroneSoundId) {
+      controller.setSound(next);
+    },
+    walk() {
+      controller.walk();
+    },
   };
 }
 
@@ -99,14 +108,18 @@ function obstacleBoxes(): DroneBox[] {
 
 function DroneVolumePopover({
   volume,
+  sound,
   onVolume,
+  onSound,
   onDismiss,
   onFocusLeave,
   pointerOnTrigger,
   anchorRef,
 }: {
   volume: number;
+  sound: DroneSoundId;
   onVolume: (volume: number) => void;
+  onSound: (sound: DroneSoundId) => void;
   onDismiss: () => void;
   onFocusLeave: () => void;
   pointerOnTrigger: RefObject<boolean>;
@@ -217,6 +230,23 @@ function DroneVolumePopover({
           }
         />
       </label>
+      <fieldset className="drone-sound-field">
+        <legend>Sound</legend>
+        <div className="drone-sound-options" role="radiogroup" aria-label="Drone sound">
+          {DRONE_SOUNDS.map((choice) => (
+            <label key={choice.id}>
+              <input
+                type="radio"
+                name="drone-sound"
+                value={choice.id}
+                checked={sound === choice.id}
+                onChange={() => onSound(choice.id)}
+              />
+              {choice.label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
     </dialog>
   );
 }
@@ -224,15 +254,23 @@ function DroneVolumePopover({
 export function DroneControls({
   enabled,
   volume,
+  sound,
+  walking,
   message,
   onToggle,
   onVolume,
+  onSound,
+  onWalk,
 }: {
   enabled: boolean;
   volume: number;
+  sound: DroneSoundId;
+  walking: boolean;
   message?: string;
   onToggle: () => void;
   onVolume: (volume: number) => void;
+  onSound: (sound: DroneSoundId) => void;
+  onWalk: () => void;
 }) {
   const [volumeOpen, setVolumeOpen] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -269,7 +307,14 @@ export function DroneControls({
         key: event.key,
         focus: 'slider',
       });
-      if (next.open || next.focus !== 'toggle') return;
+      if (next.open) return;
+      if (next.focus === 'volume') {
+        event.preventDefault();
+        setVolumeOpen(false);
+        volumeRef.current?.focus({ preventScroll: true });
+        return;
+      }
+      if (next.focus !== 'toggle') return;
       event.preventDefault();
       restoreToggleFocus.current = true;
       setVolumeOpen(false);
@@ -350,12 +395,24 @@ export function DroneControls({
         <DroneVolumePopover
           volume={volume}
           onVolume={onVolume}
+          sound={sound}
+          onSound={onSound}
           onDismiss={dismissVolume}
           onFocusLeave={leaveVolume}
           pointerOnTrigger={pointerOnTrigger}
           anchorRef={volumeRef}
         />
       ) : null}
+      <button
+        type="button"
+        id="drone-walk"
+        className="drone-walk"
+        aria-pressed={walking}
+        aria-label={walking ? 'Stop the scale walk' : 'Walk the scale'}
+        onClick={onWalk}
+      >
+        <Footprints size={DRONE_ICON_PX} aria-hidden="true" />
+      </button>
       <button
         type="button"
         id="drone-toggle"

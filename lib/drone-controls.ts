@@ -61,15 +61,15 @@ export function droneVolumeFocusOut(input: {
 export function volumePopoverKey(input: {
   open: boolean;
   key: string;
-  focus: 'toggle' | 'slider' | 'outside';
-}): { open: boolean; focus: 'toggle' | 'slider' | 'outside' } {
+  focus: 'toggle' | 'slider' | 'outside' | 'volume';
+}): { open: boolean; focus: 'toggle' | 'slider' | 'outside' | 'volume' } {
   if (!input.open) {
     if (input.focus === 'toggle' && droneVolumeKeyOpens(input.key)) {
       return { open: true, focus: 'slider' };
     }
     return { open: false, focus: input.focus };
   }
-  if (input.key === 'Escape') return { open: false, focus: 'toggle' };
+  if (input.key === 'Escape') return { open: false, focus: 'volume' };
   // Tab is not trapped. focusout closes once focus has actually left.
   if (input.key === 'Tab') return { open: true, focus: 'outside' };
   return { open: true, focus: input.focus };
@@ -119,9 +119,17 @@ export function volumePopoverOrigin(input: {
 
   if (clear(aboveY)) return { x, y: aboveY };
   if (clear(belowY)) return { x, y: belowY };
-  if (onScreen(aboveY) && !(neck && hits(aboveY, [neck])))
-    return { x, y: aboveY };
-  if (onScreen(belowY) && !(neck && hits(belowY, [neck])))
-    return { x, y: belowY };
-  return null;
+
+  let best: { x: number; y: number; distance: number } | null = null;
+  const steps = Math.ceil(maxY - minY);
+  for (let step = 0; step <= steps; step += 1) {
+    const y = minY + step;
+    if (!clear(y)) continue;
+    const distance = Math.min(
+      Math.abs(y - aboveY),
+      Math.abs(y - belowY),
+    );
+    if (!best || distance < best.distance) best = { x, y, distance };
+  }
+  return best ? { x: best.x, y: best.y } : null;
 }

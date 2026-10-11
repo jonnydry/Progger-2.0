@@ -2,9 +2,24 @@ import {
   REED_TIMING,
   ReedDrone,
   clampDroneVolume,
+  requestSound,
   type DroneStatus,
   type ReedRequest,
 } from './drone-audio.ts';
+import { scaleWalk, type DroneSoundId } from './drone.ts';
+
+const SOUND_KEY = 'progger.drone-sound';
+
+function storedSound(): DroneSoundId {
+  try {
+    if (typeof localStorage === 'undefined') return 'reed';
+    const value = localStorage.getItem(SOUND_KEY);
+    if (value === 'reed' || value === 'bow' || value === 'cello') return value;
+  } catch {
+    // Private mode can refuse storage. The choice stays for this visit.
+  }
+  return 'reed';
+}
 
 export type DronePhase = 'unstarted' | DroneStatus;
 
@@ -24,7 +39,8 @@ function sameRequest(current: ReedRequest, request: ReedRequest): boolean {
   return (
     current.root === request.root &&
     current.modeId === request.modeId &&
-    current.octave === request.octave
+    current.octave === request.octave &&
+    requestSound(current) === requestSound(request)
   );
 }
 
@@ -57,6 +73,9 @@ export function droneCommand(input: {
 export type DroneSnapshot = {
   pressed: boolean;
   volume: number;
+  sound: DroneSoundId;
+  walking: boolean;
+  walkPc: number | null;
   message?: string;
 };
 
@@ -73,6 +92,9 @@ export class ExploreDrone {
   private current: ReedRequest | null = null;
   private request: ReedRequest;
   private volume = 1;
+  private sound: DroneSoundId = storedSound();
+  private walking = false;
+  private walkPc: number | null = null;
   private status: DroneStatus = 'idle';
   private message: string | undefined;
   private engine: ReedDrone | null = null;
@@ -80,7 +102,22 @@ export class ExploreDrone {
   private readonly listeners = new Set<() => void>();
   private readonly createEngine: (
     onStatus: (status: DroneStatus, message?: string) => void,
+    onWalk: (index: number | null) => void,
   ) => ReedDrone;
+  private readonly onWalkIndex = (index: number | null) => {
+    if (index === null) {
+      this.walking = false;
+      this.walkPc = null;
+    } else {
+      const notes = scaleWalk(
+        this.request.root,
+        this.request.scaleId ?? this.request.modeId,
+      );
+      this.walking = true;
+      this.walkPc = notes[index]?.note.pc ?? null;
+    }
+    this.emit();
+  };
   private readonly onStatus = (status: DroneStatus, detail?: string) => {
     this.phase = status;
     this.status = status;
@@ -94,17 +131,21 @@ export class ExploreDrone {
   constructor(
     createEngine: (
       onStatus: (status: DroneStatus, message?: string) => void,
+      onWalk?: (index: number | null) => void,
     ) => ReedDrone,
     request: ReedRequest,
   ) {
     this.createEngine = createEngine;
-    this.request = request;
+    this.request = { ...request, sound: this.sound };
   }
 
   snapshot(): DroneSnapshot {
     return {
       pressed: this.enabled && this.status !== 'error',
       volume: this.volume,
+      sound: this.sound,
+      walking: this.walking,
+      walkPc: this.walkPc,
       message: this.message,
     };
   }
@@ -123,8 +164,32 @@ export class ExploreDrone {
   }
 
   setRequest(request: ReedRequest): void {
-    this.request = request;
+    this.stopWalking();
+    this.request = { ...request, sound: this.sound };
     this.reconcile();
+  }
+
+  setSound(sound: DroneSoundId): void {
+    this.sound = sound;
+    this.request = { ...this.request, sound };
+    try {
+      localStorage.setItem(SOUND_KEY, sound);
+    } catch {
+      // The choice still applies for this visit.
+    }
+    if (sound === 'cello') void this.engineOrCreate().preloadCello();
+    this.reconcile();
+  }
+
+  walk(): void {
+    if (this.walking) {
+      this.stopWalking();
+      this.emit();
+      return;
+    }
+    this.walking = true;
+    this.emit();
+    this.engineOrCreate().walk({ ...this.request, sound: this.sound });
   }
 
   setHidden(hidden: boolean): void {
@@ -168,12 +233,27 @@ export class ExploreDrone {
 
   private disarm(): void {
     this.enabled = false;
+    this.stopWalking();
     if (this.phase === 'playing' || this.phase === 'starting') {
       this.engine?.stop(droneStopFade('away'));
       this.phase = 'idle';
       this.current = null;
     }
     this.emit();
+  }
+
+  private stopWalking(): void {
+    if (!this.walking && this.walkPc === null) return;
+    this.walking = false;
+    this.walkPc = null;
+    this.engine?.stopWalk();
+  }
+
+  private engineOrCreate(): ReedDrone {
+    if (this.engine) return this.engine;
+    const engine = this.createEngine(this.onStatus, this.onWalkIndex);
+    this.engine = engine;
+    return engine;
   }
 
   private reconcile(): void {
@@ -199,7 +279,7 @@ export class ExploreDrone {
       this.emit();
       return;
     }
-    const engine = this.engine ?? this.createEngine(this.onStatus);
+    const engine = this.engine ?? this.createEngine(this.onStatus, this.onWalkIndex);
     this.engine = engine;
     engine.setVolume(this.volume);
     this.phase = 'starting';

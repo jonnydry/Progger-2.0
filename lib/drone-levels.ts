@@ -7,12 +7,18 @@ import {
   type DroneOctave,
 } from './drone.ts';
 import {
+  BOW_GAINS,
+  CELLO_GAINS,
   DRONE_MAX_LINEAR_GAIN,
   REED_GAINS,
   REED_TIMING,
+  WALK_GAINS,
   reedHarmonicAmplitudeSum,
   reedPitchGain,
+  soundLinearCap,
+  walkHarmonicAmplitudeSum,
 } from './drone-audio.ts';
+import type { DroneSoundId } from './drone.ts';
 
 export const FULL_SCALE_MARGIN = 10 ** (-1 / 20);
 
@@ -76,6 +82,95 @@ export type LoudestReed = {
   steady: number;
   overlap: number;
 };
+
+export function walkPluckPeak(sampleRate = 48000): number {
+  let peak = 0;
+  for (let midi = 36; midi <= 96; midi += 1) {
+    const sum = walkHarmonicAmplitudeSum(midiHz(midi), sampleRate);
+    peak = Math.max(peak, sum * WALK_GAINS.attack * WALK_GAINS.trim);
+  }
+  return peak;
+}
+
+function pitchWeight(role: 'root' | 'fifth' | 'octave', layer: 'low' | 'upper') {
+  return (
+    (role === 'root' ? 1 : REED_GAINS.other) *
+    (layer === 'upper' ? REED_GAINS.upper : 1)
+  );
+}
+
+function roomFactor(dry: number, wet: number): number {
+  const wetPeak = REED_GAINS.impulse * (1 + REED_GAINS.early);
+  return dry + wet * wetPeak;
+}
+
+export function bowLinearPeak(
+  root: string,
+  modeId: DroneModeId,
+  octave: DroneOctave,
+): number {
+  const pitches = dronePitches(root, modeId, octave);
+  let mixer = BOW_GAINS.noise;
+  for (const pitch of pitches) {
+    mixer += BOW_GAINS.voices * BOW_GAINS.pitch * pitchWeight(pitch.role, pitch.layer);
+  }
+  return (
+    mixer *
+    BOW_GAINS.envelope *
+    roomFactor(BOW_GAINS.dry, BOW_GAINS.wet) *
+    soundLinearCap('bow')
+  );
+}
+
+export function celloLinearPeak(
+  root: string,
+  modeId: DroneModeId,
+  octave: DroneOctave,
+): number {
+  const pitches = dronePitches(root, modeId, octave);
+  let mixer = 0;
+  for (const pitch of pitches) {
+    mixer +=
+      CELLO_GAINS.samplePeak *
+      CELLO_GAINS.pitch *
+      pitchWeight(pitch.role, pitch.layer);
+  }
+  return (
+    mixer *
+    CELLO_GAINS.envelope *
+    roomFactor(CELLO_GAINS.dry, CELLO_GAINS.wet) *
+    soundLinearCap('cello')
+  );
+}
+
+export type LoudestSound = LoudestReed & { sound: DroneSoundId; walk: number };
+
+export function loudestSoundPeaks(
+  sound: DroneSoundId,
+  sampleRate = 48000,
+): LoudestSound {
+  const walk = walkPluckPeak(sampleRate);
+  if (sound === 'reed') {
+    const reed = loudestReedPeaks(sampleRate);
+    return { ...reed, sound, walk };
+  }
+  const ratio = 1.0001;
+  let best: LoudestSound | null = null;
+  const measure = sound === 'bow' ? bowLinearPeak : celloLinearPeak;
+  for (const octave of ['low', 'layered'] as const) {
+    for (const mode of DRONE_MODES) {
+      for (const root of DRONE_ROOTS) {
+        const steady = measure(root, mode.id, octave);
+        const overlap = steady * ratio;
+        if (!best || overlap > best.overlap) {
+          best = { root, modeId: mode.id, octave, steady, overlap, sound, walk };
+        }
+      }
+    }
+  }
+  if (!best) throw new Error(`No ${sound} voicing to measure.`);
+  return best;
+}
 
 export function loudestReedPeaks(sampleRate = 48000): LoudestReed {
   const ratio = crossfadeEnvelopePeak() / steadyEnvelope();
