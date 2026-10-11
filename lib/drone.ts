@@ -121,6 +121,23 @@ export function droneMode(id: DroneModeId): DroneMode {
   return mode;
 }
 
+export function droneModeForScale(scaleId: string): DroneModeId {
+  const known = MODE_SPECS.find((spec) => spec.scaleId === scaleId);
+  if (known) return known.id;
+  const scale = SCALES.find((item) => item.id === scaleId);
+  if (!scale) throw new Error(`Unknown scale: ${scaleId}`);
+  // The reed has two voicings. A perfect fifth, or the octave when the scale has none.
+  return scale.formula.includes('5') ? 'ionian' : 'locrian';
+}
+
+export function reedRequestForScale(
+  root: string,
+  scaleId: string,
+  octave: DroneOctave = 'low',
+): { root: string; modeId: DroneModeId; octave: DroneOctave } {
+  return { root, modeId: droneModeForScale(scaleId), octave };
+}
+
 export function lowRootMidi(root: string): number {
   return LOW_DRONE_C2 + pitchClass(root);
 }

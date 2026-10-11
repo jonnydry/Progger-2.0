@@ -8,7 +8,9 @@ import {
   colourNote,
   droneLabel,
   droneMode,
+  droneModeForScale,
   dronePitches,
+  reedRequestForScale,
   lowRootMidi,
   midiHz,
   modeIntervals,
@@ -115,7 +117,10 @@ void test('every root drones a fifth, except Locrian which drones the octave', (
 
 void test('drone labels spell the low dyad and the phone octave', () => {
   assert.equal(droneLabel(dronePitches('A', 'dorian', 'low')), 'A2 + E3');
-  assert.equal(droneLabel(dronePitches('A', 'dorian', 'layered')), 'A2 + E3, with A3 + E4');
+  assert.equal(
+    droneLabel(dronePitches('A', 'dorian', 'layered')),
+    'A2 + E3, with A3 + E4',
+  );
   assert.equal(droneLabel(dronePitches('A', 'locrian', 'low')), 'A2 + A3');
   assert.equal(droneLabel(dronePitches('E', 'ionian', 'low')), 'E2 + B2');
   assert.equal(droneLabel(dronePitches('Gb', 'ionian', 'low')), 'G♭2 + D♭3');
@@ -144,7 +149,23 @@ void test('the scale walk climbs two octaves above the low drone and colours the
   const walk = scaleWalk('A', 'dorian');
   assert.deepEqual(
     walk.map((step) => step.note.name),
-    ['A', 'B', 'C', 'D', 'E', 'F#', 'G', 'A', 'G', 'F#', 'E', 'D', 'C', 'B', 'A'],
+    [
+      'A',
+      'B',
+      'C',
+      'D',
+      'E',
+      'F#',
+      'G',
+      'A',
+      'G',
+      'F#',
+      'E',
+      'D',
+      'C',
+      'B',
+      'A',
+    ],
   );
   assert.deepEqual(
     walk.map((step) => step.midi),
@@ -172,7 +193,9 @@ void test('the scale walk climbs two octaves above the low drone and colours the
   );
   assert.equal(walk[0].midi, lowRootMidi('A') + 24);
   assert.equal(
-    scaleWalk('F#', 'lydian').some((step) => step.colour && step.note.name === 'B#'),
+    scaleWalk('F#', 'lydian').some(
+      (step) => step.colour && step.note.name === 'B#',
+    ),
     true,
   );
   const ionian = scaleWalk('A', 'ionian');
@@ -188,6 +211,37 @@ void test('the scale walk climbs two octaves above the low drone and colours the
   assert.deepEqual(
     dronePitches('A', 'locrian', 'low').map((pitch) => pitch.name),
     ['A', 'A'],
+  );
+});
+
+void test('a catalog scale picks the church-mode voicing, or a fifth unless the scale has none', () => {
+  assert.equal(droneModeForScale('dorian'), 'dorian');
+  assert.equal(droneModeForScale('major'), 'ionian');
+  assert.equal(droneModeForScale('minor'), 'aeolian');
+  assert.equal(droneModeForScale('locrian'), 'locrian');
+  assert.equal(droneModeForScale('minor-pentatonic'), 'ionian');
+  assert.equal(droneModeForScale('whole-tone'), 'locrian');
+  assert.equal(droneModeForScale('altered'), 'locrian');
+  assert.deepEqual(reedRequestForScale('Bb', 'dorian'), {
+    root: 'Bb',
+    modeId: 'dorian',
+    octave: 'low',
+  });
+  assert.deepEqual(
+    dronePitches('A', droneModeForScale('minor-pentatonic'), 'low').map(
+      (pitch) => pitch.degree,
+    ),
+    ['1', '5'],
+  );
+  assert.deepEqual(
+    dronePitches('A', droneModeForScale('whole-tone'), 'low').map(
+      (pitch) => pitch.degree,
+    ),
+    ['1', '8'],
+  );
+  assert.throws(
+    () => droneModeForScale('hypodorian'),
+    /Unknown scale: hypodorian/,
   );
 });
 
