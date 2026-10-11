@@ -16,6 +16,9 @@ import {
   midiHz,
   modeIntervals,
   sampleForMidi,
+  celloLoopBounds,
+  closeCelloSeam,
+  seamlessLoop,
   scaleWalk,
   scientificPitch,
   symmetricDetuneCents,
@@ -274,6 +277,32 @@ void test('detune pairs stay centred on the root and cello picks the nearest loo
   assert.equal(sampleForMidi(45).file, 'cello-a2.m4a');
   assert.equal(sampleForMidi(45).playbackRate, 1);
   assert.equal(sampleForMidi(50).file, 'cello-e3.m4a');
+});
+
+void test('cello loop bounds follow the AAC packet the decoder returned', () => {
+  assert.deepEqual(celloLoopBounds(94815, 44100), { start: 0, end: 94815 });
+  assert.deepEqual(celloLoopBounds(96256, 44100), { start: 1024, end: 95839 });
+  assert.deepEqual(celloLoopBounds(95232, 44100), { start: 0, end: 94815 });
+  assert.deepEqual(celloLoopBounds(103200, 48000), { start: 0, end: 103200 });
+  assert.deepEqual(celloLoopBounds(104769, 48000), {
+    start: 1115,
+    end: 104315,
+  });
+  assert.deepEqual(celloLoopBounds(100, 44100), { start: 0, end: 100 });
+});
+
+void test('the cello seam bends onto the first sample', () => {
+  const samples = new Float32Array(4000);
+  for (let index = 0; index < samples.length; index += 1) {
+    samples[index] = Math.sin(index / 12) * 0.4;
+  }
+  samples[samples.length - 1] = samples[0] + 0.03;
+  const fade = 120;
+  const looped = seamlessLoop(samples, fade);
+  const openStep = Math.abs(looped[0] - looped[looped.length - 1]);
+  const closed = closeCelloSeam(looped, fade);
+  assert.ok(openStep > 1e-3, `open seam ${openStep}`);
+  assert.ok(Math.abs(closed[0] - closed[closed.length - 1]) < 1e-3);
 });
 
 void test('committed cello loops match the license hashes', () => {

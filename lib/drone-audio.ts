@@ -1,5 +1,7 @@
 import {
   CELLO_SAMPLES,
+  celloLoopBounds,
+  closeCelloSeam,
   type DroneLayer,
   type DroneModeId,
   type DroneOctave,
@@ -12,7 +14,6 @@ import {
   scaleWalk,
   seamlessLoop,
   symmetricDetuneCents,
-  trimEdgeSilence,
 } from './drone.ts';
 
 export type DroneStatus = 'idle' | 'starting' | 'playing' | 'error';
@@ -703,6 +704,8 @@ function buildCello(
       const source = kit.player();
       source.buffer = buffer;
       source.loop = true;
+      source.loopStart = 0;
+      source.loopEnd = buffer.duration;
       source.playbackRate.value = choice.playbackRate;
       const gain = kit.gain();
       gain.gain.value =
@@ -1580,7 +1583,7 @@ export function startMeasuredWalk(
   };
 }
 
-/** Trim, loop, and crossfade a decoded cello sample the way playback does. */
+/** Loop the musical range of a decoded cello sample the way playback does. */
 export function prepareCelloBuffer(
   context: BaseAudioContext,
   decoded: AudioBuffer,
@@ -1593,12 +1596,16 @@ function loopSampleBuffer(
   decoded: AudioBuffer,
 ): AudioBuffer {
   const mixed = mixdown(decoded);
-  const trimmed = trimEdgeSilence(mixed);
+  const range = celloLoopBounds(mixed.length, decoded.sampleRate);
+  const body = mixed.slice(range.start, range.end);
   const fade = Math.min(
     Math.round(decoded.sampleRate * 0.06),
-    Math.floor(trimmed.length / 4),
+    Math.floor(body.length / 4),
   );
-  const looped = seamlessLoop(trimmed, Math.max(8, fade));
+  const looped = closeCelloSeam(
+    seamlessLoop(body, Math.max(8, fade)),
+    Math.max(8, fade),
+  );
   const buffer = context.createBuffer(1, looped.length, decoded.sampleRate);
   buffer.getChannelData(0).set(looped);
   return buffer;

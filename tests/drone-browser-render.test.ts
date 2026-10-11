@@ -38,6 +38,7 @@ type RenderResult = {
   count: number;
   failureCount: number;
   tails?: TailResult[];
+  seams?: { file: string; step: number; bufferStep: number }[];
   bySound?: Record<
     string,
     {
@@ -68,7 +69,7 @@ function bundleProbe(): string {
   const root = process.cwd();
   writeFileSync(
     entry,
-    `export { startMeasuredReed, startMeasuredWalk, startLiveVoice, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN } from '${root}/lib/drone-audio.ts';
+    `export { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN } from '${root}/lib/drone-audio.ts';
 export { dronePitches } from '${root}/lib/drone.ts';
 `,
   );
@@ -90,7 +91,7 @@ function page(): string {
   return `<!doctype html>
 <meta charset="utf-8" />
 <script type="module">
-import { startMeasuredReed, startMeasuredWalk, startLiveVoice, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN, dronePitches } from '/probe.js';
+import { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN, dronePitches } from '/probe.js';
 const SOUNDS = ['reed', 'bow', 'cello'];
 
 const SAMPLE_RATE = 48000;
@@ -339,6 +340,42 @@ async function renderTail(name, fade) {
   return { name, fade, early, mid, late, dryEnd, tailEnd };
 }
 
+const CELLO_FILES = ['cello-d2.m4a','cello-a2.m4a','cello-e3.m4a','cello-b3.m4a','cello-f4.m4a'];
+
+async function measureSeam(file) {
+  const decodeContext = new OfflineAudioContext(1, 1, 44100);
+  const bytes = await (await fetch('/audio/drone/' + file)).arrayBuffer();
+  const decoded = await decodeContext.decodeAudioData(bytes.slice(0));
+  const prepared = prepareCelloBuffer(decodeContext, decoded);
+  const channel = prepared.getChannelData(0);
+  const bufferStep = Math.abs(channel[0] - channel[channel.length - 1]);
+  const rate = prepared.sampleRate;
+  const tail = 8;
+  const context = new OfflineAudioContext(1, channel.length + tail, rate);
+  const source = context.createBufferSource();
+  source.buffer = prepared;
+  source.loop = true;
+  source.loopStart = 0;
+  source.loopEnd = channel.length / rate;
+  source.connect(context.destination);
+  source.start(0);
+  const rendered = await context.startRendering();
+  const data = rendered.getChannelData(0);
+  const at = channel.length;
+  const step = Math.abs(data[at] - data[at - 1]);
+  return {
+    file,
+    step,
+    bufferStep,
+    decodedLength: decoded.length,
+    preparedLength: channel.length,
+    around: Array.from(data.slice(at - 2, at + 3)),
+  };
+}
+
+const seams = [];
+for (const file of CELLO_FILES) seams.push(await measureSeam(file));
+
 const rows = [];
 for (const sound of SOUNDS) {
   for (const item of cases()) {
@@ -404,6 +441,7 @@ const result = {
   worst,
   bySound,
   tails,
+  seams,
   errors: failing.slice(0, 3).map((row) => row.error).filter(Boolean),
 };
 window.__RESULT = result;
@@ -425,6 +463,27 @@ function serve(
     if (url.startsWith('/probe.js')) {
       res.setHeader('content-type', 'text/javascript');
       res.end(readFileSync(bundlePath));
+      return;
+    }
+    if (url.startsWith('/audio/drone/')) {
+      const file = decodeURIComponent(
+        url.slice('/audio/drone/'.length).split('?')[0] ?? '',
+      );
+      const audioDir = join(process.cwd(), 'public/audio/drone');
+      const path = join(audioDir, file);
+      if (
+        file.length === 0 ||
+        file !== file.split('/').pop() ||
+        file.includes('..') ||
+        !path.startsWith(`${audioDir}/`) ||
+        !existsSync(path)
+      ) {
+        res.statusCode = 404;
+        res.end('missing');
+        return;
+      }
+      res.setHeader('content-type', 'audio/mp4');
+      res.end(readFileSync(path));
       return;
     }
     if (url.startsWith('/result') && req.method === 'POST') {
@@ -571,6 +630,14 @@ function assertContinuous(result: RenderResult) {
   assert.equal(walk.failureCount, 0, JSON.stringify(walk));
   assert.ok((walk.max ?? 1) < STEP_LIMIT, JSON.stringify(walk));
   assert.equal(walk.tail, 0, JSON.stringify(walk));
+  assert.equal(result.seams?.length, 5);
+  for (const seam of result.seams ?? []) {
+    assert.ok(
+      seam.bufferStep < STEP_LIMIT && seam.step < STEP_LIMIT,
+      JSON.stringify(seam),
+    );
+    console.log(`${seam.file} buffer ${seam.bufferStep} wrap ${seam.step}`);
+  }
   assert.equal(result.tails?.length, 3);
   for (const tail of result.tails ?? []) {
     assert.ok(tail.early > 1e-4, `${tail.name} early tail ${tail.early}`);

@@ -258,6 +258,68 @@ export const CELLO_SAMPLES = [
   { file: 'cello-f4.m4a', midi: 65, href: '/audio/drone/cello-f4.m4a' },
 ] as const;
 
+/** AAC-LC packet layout of the committed loops, at the file rate. */
+const CELLO_AAC_RATE = 44100;
+const CELLO_AAC_PRIMING = 1024;
+const CELLO_AAC_CONTENT = 94815;
+const CELLO_AAC_PACKETS = 96256;
+
+/**
+ * Sample range to loop. A decoder that honors the edit list returns the
+ * musical 2.15 s. One that leaves the encoder delay and the trailing
+ * frame in the buffer is trimmed back to that same range.
+ */
+export function celloLoopBounds(
+  length: number,
+  sampleRate: number,
+): { start: number; end: number } {
+  if (length < 2 || !(sampleRate > 0))
+    return { start: 0, end: Math.max(0, length) };
+  const scale = sampleRate / CELLO_AAC_RATE;
+  const priming = Math.round(CELLO_AAC_PRIMING * scale);
+  const content = Math.round(CELLO_AAC_CONTENT * scale);
+  const packets = Math.round(CELLO_AAC_PACKETS * scale);
+  const choices = [
+    { length: packets, start: priming, end: priming + content },
+    { length: packets - priming, start: 0, end: content },
+    { length: content, start: 0, end: content },
+  ];
+  let best = choices[2];
+  let bestDistance = Math.abs(length - best.length);
+  for (const choice of choices) {
+    const distance = Math.abs(length - choice.length);
+    if (distance < bestDistance) {
+      best = choice;
+      bestDistance = distance;
+    }
+  }
+  if (bestDistance > 8) return { start: 0, end: length };
+  const start = Math.min(best.start, length - 2);
+  const end = Math.min(length, Math.max(start + 2, best.end));
+  return { start, end };
+}
+
+/**
+ * Bend the end of a loop onto its first sample. The AAC join is a step
+ * of a few hundredths; spreading that error across the fade leaves the
+ * wrap under a one-thousandth.
+ */
+export function closeCelloSeam(
+  samples: Float32Array,
+  fadeSamples: number,
+): Float32Array {
+  const out = samples.slice();
+  if (out.length < 2) return out;
+  const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
+  const delta = out[0] - out[out.length - 1];
+  for (let index = 0; index < fade; index += 1) {
+    const progress = (index + 1) / fade;
+    const weight = Math.sin((progress * Math.PI) / 2);
+    out[out.length - fade + index] += delta * weight;
+  }
+  return out;
+}
+
 export function sampleForMidi(midi: number): {
   file: string;
   href: string;
@@ -282,21 +344,6 @@ export function sampleForMidi(midi: number): {
     semitones,
     playbackRate: 2 ** (semitones / 12),
   };
-}
-
-export function trimEdgeSilence(
-  samples: Float32Array,
-  relative = 0.004,
-): Float32Array {
-  let peak = 0;
-  for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
-  const threshold = peak * relative;
-  let start = 0;
-  let end = samples.length;
-  while (start < end && Math.abs(samples[start]) < threshold) start += 1;
-  while (end > start && Math.abs(samples[end - 1]) < threshold) end -= 1;
-  if (end <= start) return samples.slice();
-  return samples.slice(start, end);
 }
 
 /** Equal-power crossfade so the loop junction is two consecutive samples. */

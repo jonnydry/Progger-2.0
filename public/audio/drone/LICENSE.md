@@ -45,8 +45,10 @@ Raw source URLs:
 Each loop starts 0.55 seconds into the sustain, keeps 2.15 seconds plus a
 90 ms tail, and uses an equal-power crossfade so the loop junction is two
 consecutive source samples. Peak level is normalized to 0.5 before encoding.
-Playback trims encoder padding at the edges and applies a 60 ms equal-power
-crossfade. Viola samples from the same library were not used.
+Playback sets the loop start and end from the decoded buffer, skipping AAC
+encoder delay and the trailing frame when the decoder leaves them in.
+A 60 ms equal-power crossfade then bends the join onto the first sample.
+Viola samples from the same library were not used.
 
 ## CC0 1.0 Universal
 
