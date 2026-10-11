@@ -54,7 +54,8 @@ void test('escape returns focus to the toggle and tab leaves the popover open', 
   );
 });
 
-function placed(origin: { x: number; y: number }): DroneBox {
+function placed(origin: { x: number; y: number } | null): DroneBox {
+  if (!origin) throw new Error('popover origin missing');
   return { ...origin, width: popover.width, height: popover.height };
 }
 
@@ -102,6 +103,18 @@ void test('the volume popover stays clear of the neck at 501 and 1440', () => {
   assert.equal(
     boxesOverlap(placed(desk), { x: 0, y: 1130, width: 1440, height: 293 }),
     false,
+  );
+});
+
+void test('a popover that cannot miss the neck stays closed', () => {
+  assert.equal(
+    volumePopoverOrigin({
+      trigger: { x: 300, y: 40, width: 44, height: 44 },
+      popover,
+      viewport: { width: 390, height: 844 },
+      neck: { x: 0, y: 0, width: 390, height: 844 },
+    }),
+    null,
   );
 });
 

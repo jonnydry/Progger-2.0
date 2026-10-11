@@ -130,27 +130,40 @@ function visibleNeck(): DroneBox | null {
 function DroneVolumePopover({
   volume,
   onVolume,
+  onDismiss,
   anchorRef,
 }: {
   volume: number;
   onVolume: (volume: number) => void;
+  onDismiss: () => void;
   anchorRef: RefObject<HTMLButtonElement | null>;
 }) {
   const panelRef = useRef<HTMLDialogElement>(null);
   const sliderRef = useRef<HTMLInputElement>(null);
+  const didFocus = useRef(false);
   const [origin, setOrigin] = useState<{ x: number; y: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!origin || didFocus.current) return;
+    didFocus.current = true;
+    sliderRef.current?.focus({ preventScroll: true });
+  }, [origin]);
 
   useLayoutEffect(() => {
     const place = () => {
       const trigger = anchorRef.current?.getBoundingClientRect();
       const panel = panelRef.current;
-      if (!trigger || !panel) return;
+      if (!trigger || !panel || panel.offsetWidth < 1) return;
       const next = volumePopoverOrigin({
         trigger: toBox(trigger),
         popover: { width: panel.offsetWidth, height: panel.offsetHeight },
         viewport: { width: window.innerWidth, height: window.innerHeight },
         neck: visibleNeck(),
       });
+      if (!next) {
+        onDismiss();
+        return;
+      }
       setOrigin((current) =>
         current && current.x === next.x && current.y === next.y
           ? current
@@ -163,7 +176,6 @@ function DroneVolumePopover({
     };
     panel?.addEventListener('cancel', onCancel);
     place();
-    sliderRef.current?.focus({ preventScroll: true });
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
     return () => {
@@ -171,7 +183,7 @@ function DroneVolumePopover({
       window.removeEventListener('resize', place);
       window.removeEventListener('scroll', place, true);
     };
-  }, [anchorRef]);
+  }, [anchorRef, onDismiss]);
 
   return (
     <dialog
@@ -225,6 +237,9 @@ export function DroneControls({
   const [volumeOpen, setVolumeOpen] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const restoreToggleFocus = useRef(false);
+  const dismissVolume = () => {
+    setVolumeOpen(false);
+  };
 
   useLayoutEffect(() => {
     if (volumeOpen || !restoreToggleFocus.current) return;
@@ -313,6 +328,7 @@ export function DroneControls({
             <DroneVolumePopover
               volume={volume}
               onVolume={onVolume}
+              onDismiss={dismissVolume}
               anchorRef={toggleRef}
             />,
             document.body,

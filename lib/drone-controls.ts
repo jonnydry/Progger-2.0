@@ -73,7 +73,7 @@ export function volumePopoverOrigin(input: {
   viewport: { width: number; height: number };
   neck: DroneBox | null;
   margin?: number;
-}): { x: number; y: number } {
+}): { x: number; y: number } | null {
   const margin = input.margin ?? DRONE_POPOVER_MARGIN_PX;
   const alignRight =
     input.trigger.x + input.trigger.width - input.popover.width;
@@ -104,6 +104,6 @@ export function volumePopoverOrigin(input: {
   return (
     placed.find((origin) => missesNeck(origin) && inside(origin)) ??
     placed.find((origin) => missesNeck(origin)) ??
-    placed[1]
+    null
   );
 }
