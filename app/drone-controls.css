@@ -1,30 +1,42 @@
-.selection-bar {
-  flex-wrap: wrap;
+/* Out of the flex row, so the root, mode, and neck stay put. */
+.selection-bar:has(.drone-controls) {
+  position: relative;
 }
 
 .drone-controls {
-  display: flex;
-  align-items: center;
-  flex: 1 1 220px;
-  gap: 8px 12px;
+  display: contents;
+}
+
+.drone-toggle,
+.drone-volume-trigger {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
   min-height: 44px;
-  min-width: 0;
+  margin: 0;
+  padding: 0;
 }
 
 .drone-toggle {
+  right: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
-  min-width: 44px;
-  padding: 8px 12px;
   color: var(--quiet);
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 5px;
-  font: inherit;
-  font-size: 13px;
   cursor: pointer;
+}
+
+.drone-toggle svg {
+  display: block;
+  width: 18px;
+  height: 18px;
 }
 
 .drone-toggle[aria-pressed='true'] {
@@ -33,44 +45,57 @@
   border-color: var(--green);
 }
 
-.drone-toggle:focus-visible,
-.drone-volume input:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 3px;
+.drone-volume-trigger {
+  left: 8px;
+  border: 0;
+  background: transparent;
+  appearance: none;
+  box-shadow: none;
+  color: transparent;
+  cursor: pointer;
 }
 
-.drone-volume {
+.drone-volume-popover {
+  position: fixed;
+  inset: auto;
+  z-index: 30;
+  box-sizing: border-box;
+  width: 168px;
+  max-width: none;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+}
+
+.drone-volume-field {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1 1 140px;
-  min-height: 44px;
-  min-width: 44px;
+  flex-direction: column;
+  gap: 4px;
   color: var(--quiet);
   font-size: 13px;
+  line-height: 16px;
 }
 
-.drone-volume span {
-  white-space: nowrap;
-}
-
-.drone-volume input {
-  flex: 1 1 88px;
-  min-width: 88px;
+.drone-volume-popover input[type='range'] {
+  width: 100%;
   height: 44px;
+  min-height: 44px;
   margin: 0;
   accent-color: var(--green);
   cursor: pointer;
 }
 
-.drone-status {
-  flex: 1 0 100%;
-  color: var(--amber);
-  font-size: 12px;
-}
+@media (min-width: 501px) {
+  .drone-toggle {
+    right: auto;
+    left: calc(100% + 8px);
+  }
 
-@media (max-width: 750px) {
-  .selection-bar .drone-controls {
-    flex: 1 0 100%;
+  .drone-volume-trigger {
+    left: -52px;
   }
 }
