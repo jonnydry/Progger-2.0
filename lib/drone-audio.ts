@@ -90,31 +90,34 @@ export function exponentialRampValue(ramp: GainRamp, time: number): number {
   return ramp.start * (ramp.target / ramp.start) ** progress;
 }
 
+type FadeRamp = {
+  from: number;
+  to: number;
+  startTime: number;
+  endTime: number;
+};
+
+/** The fade gain's own ramp. gain.value stays stale, so a second stop reads this. */
+function fadeLevel(ramp: FadeRamp | null, time: number): number {
+  if (!ramp) return 1;
+  if (!(ramp.endTime > ramp.startTime) || time <= ramp.startTime)
+    return ramp.from;
+  if (time >= ramp.endTime) return ramp.to;
+  const progress = (time - ramp.startTime) / (ramp.endTime - ramp.startTime);
+  return ramp.from + (ramp.to - ramp.from) * progress;
+}
+
 /**
- * Anchor the envelope, then fade to silence.
- * cancelAndHoldAtTime is not used: after the swell it drops a steady 0.9.
- * gain.value is stale mid-ramp, so the anchor is the computed curve, or the
- * steady target once that curve has ended.
- * The fade ramp starts one sample later. cancelScheduledValues and
- * setValueAtTime in the same render quantum otherwise drop the old voice to
- * the 0.0001 floor for one sample.
+ * Silence one voice by ramping its fade gain.
+ * The swell envelope, including the bellows on that gain, is not touched.
  */
-export function holdGainThenFade(
+export function scheduleFade(
   param: GainAutomation,
-  ramp: GainRamp,
-  stopAt: number,
-  release: number,
-  now = stopAt,
-  sampleRate = 48000,
+  time: number,
+  end: number,
+  level: number,
 ): void {
-  const time = Math.min(now, stopAt);
-  const anchor = exponentialRampValue(ramp, time);
-  const rate = sampleRate > 0 ? sampleRate : 48000;
-  const fadeAt = time + 1 / rate;
-  const end = Math.max(stopAt + release, fadeAt);
-  param.cancelScheduledValues(time);
-  param.setValueAtTime(anchor, time);
-  param.setValueAtTime(anchor, fadeAt);
+  param.setValueAtTime(level, time);
   param.linearRampToValueAtTime(0, end);
 }
 
@@ -214,6 +217,7 @@ function createReedVoice(
   pitches: readonly DronePitch[],
   when: number,
   attack: number,
+  probe = false,
 ): ReedVoice {
   const nodes: AudioNode[] = [];
   const sources: Scheduled[] = [];
@@ -245,12 +249,18 @@ function createReedVoice(
     return node;
   };
   const kit: VoiceKit = { gain, osc, filter, player, convolver };
-  let envelope: GainNode;
-  let ramp: GainRamp;
+  let fade: GainNode;
+  let fadeRamp: FadeRamp | null = null;
   try {
-    const built = buildReed(context, destination, pitches, when, attack, kit);
-    envelope = built.envelope;
-    ramp = built.ramp;
+    fade = buildReed(
+      context,
+      destination,
+      pitches,
+      when,
+      attack,
+      kit,
+      probe,
+    ).fade;
   } catch (error) {
     for (const source of sources) {
       try {
@@ -264,18 +274,15 @@ function createReedVoice(
   }
   return {
     nodeCount: nodes.length,
-    stop(stopAt: number, fade: number) {
-      const release = Math.max(fade, 0.015);
-      holdGainThenFade(
-        envelope.gain,
-        ramp,
-        stopAt,
-        release,
-        context.currentTime,
-        context.sampleRate,
-      );
-      for (const source of sources)
-        source.stop(stopAt + release + REED_TIMING.stopTail);
+    stop(stopAt: number, fadeTime: number, now = context.currentTime) {
+      const release = Math.max(fadeTime, 0.015);
+      const time = Math.min(now, stopAt);
+      const end = time + release;
+      const level = fadeLevel(fadeRamp, time);
+      scheduleFade(fade.gain, time, end, level);
+      fadeRamp = { from: level, to: 0, startTime: time, endTime: end };
+      const rate = context.sampleRate > 0 ? context.sampleRate : 48000;
+      for (const source of sources) source.stop(end + 1 / rate);
       const leftover = nodes;
       setTimeout(
         () => {
@@ -287,6 +294,21 @@ function createReedVoice(
   };
 }
 
+/**
+ * The measured voice is the production reed, including the bellows on the
+ * envelope. A unity loop replaces the reed sum so the rendered samples are
+ * the gain. The room is still built and fed; its bus is silent.
+ */
+export function startMeasuredReed(
+  context: BaseAudioContext,
+  destination: AudioNode,
+  pitches: readonly DronePitch[],
+  when: number,
+  attack: number,
+): { stop: (stopAt: number, fade: number) => void } {
+  return createReedVoice(context, destination, pitches, when, attack, true);
+}
+
 function buildReed(
   context: BaseAudioContext,
   destination: AudioNode,
@@ -294,7 +316,8 @@ function buildReed(
   when: number,
   attack: number,
   kit: VoiceKit,
-): { envelope: GainNode; ramp: GainRamp } {
+  probe = false,
+): { envelope: GainNode; ramp: GainRamp; fade: GainNode } {
   const mixer = kit.gain();
   mixer.gain.value = 1;
   for (const pitch of pitches) {
@@ -362,7 +385,17 @@ function buildReed(
 
   const envelope = kit.gain();
   const ramp = scheduleSwell(envelope.gain, when, attack);
-  sum.connect(envelope);
+  if (probe) {
+    const direct = kit.player();
+    const unity = context.createBuffer(1, 1, context.sampleRate);
+    unity.getChannelData(0)[0] = 1;
+    direct.buffer = unity;
+    direct.loop = true;
+    direct.connect(envelope);
+    direct.start(when);
+  } else {
+    sum.connect(envelope);
+  }
 
   const bellows = kit.osc();
   bellows.type = 'sine';
@@ -377,15 +410,26 @@ function buildReed(
   depth.connect(envelope.gain);
   bellows.start(when);
 
-  connectRoom(
-    context,
-    kit,
-    envelope,
-    destination,
-    REED_GAINS.wet,
-    REED_GAINS.dry,
-  );
-  return { envelope, ramp };
+  const fade = kit.gain();
+  fade.gain.value = 1;
+  envelope.connect(fade);
+
+  if (probe) {
+    fade.connect(destination);
+    const sink = kit.gain();
+    sink.gain.value = 0;
+    connectRoom(context, kit, fade, sink, REED_GAINS.wet, REED_GAINS.dry);
+  } else {
+    connectRoom(
+      context,
+      kit,
+      fade,
+      destination,
+      REED_GAINS.wet,
+      REED_GAINS.dry,
+    );
+  }
+  return { envelope, ramp, fade };
 }
 
 function connectRoom(

@@ -84,20 +84,8 @@ export function boxesOverlap(a: DroneBox, b: DroneBox): boolean {
   );
 }
 
-function uniqueXs(values: number[]): number[] {
-  const seen = new Set<string>();
-  const result: number[] = [];
-  for (const value of values) {
-    const key = value.toFixed(3);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(value);
-  }
-  return result;
-}
-
-// Open above the trigger when that box is clear. Otherwise walk away until the
-// popover misses every obstacle. Never slide a candidate onto an obstacle.
+// Sit against the volume button. Prefer the side that misses every obstacle.
+// A clear cell further up the page is not a place to open.
 export function volumePopoverOrigin(input: {
   trigger: DroneBox;
   popover: { width: number; height: number };
@@ -107,58 +95,33 @@ export function volumePopoverOrigin(input: {
   margin?: number;
 }): { x: number; y: number } | null {
   const margin = input.margin ?? DRONE_POPOVER_MARGIN_PX;
-  const obstacles = [
-    ...(input.obstacles ?? []),
-    ...(input.neck ? [input.neck] : []),
-  ];
+  const obstacles = input.obstacles ?? [];
+  const neck = input.neck ?? null;
   const { width, height } = input.popover;
-  const preferredX = input.trigger.x + input.trigger.width - width;
-  const xs = uniqueXs([
-    preferredX,
-    input.trigger.x,
-    input.trigger.x + (input.trigger.width - width) / 2,
-    input.viewport.width - width - margin,
-    margin,
-  ]).sort((a, b) => Math.abs(a - preferredX) - Math.abs(b - preferredX));
+  const minX = margin;
+  const maxX = input.viewport.width - width - margin;
+  const minY = margin;
+  const maxY = input.viewport.height - height - margin;
+  if (maxX < minX - 0.01 || maxY < minY - 0.01) return null;
 
-  const clear = (x: number, y: number) => {
-    if (x < margin - 0.01 || y < margin - 0.01) return false;
-    if (x + width > input.viewport.width - margin + 0.01) return false;
-    if (y + height > input.viewport.height - margin + 0.01) return false;
-    const padded: DroneBox = {
-      x: x - margin,
-      y: y - margin,
-      width: width + margin * 2,
-      height: height + margin * 2,
-    };
-    return obstacles.every((obstacle) => !boxesOverlap(padded, obstacle));
-  };
+  let x = input.trigger.x + input.trigger.width - width;
+  if (x < minX) x = minX;
+  if (x > maxX) x = maxX;
 
-  const aligned = (x: number) =>
-    x < input.trigger.x + input.trigger.width && x + width > input.trigger.x;
-  const groups = [xs.filter(aligned), xs.filter((x) => !aligned(x))];
   const aboveY = input.trigger.y - height - margin;
   const belowY = input.trigger.y + input.trigger.height + margin;
-  const limit = Math.ceil(
-    Math.max(input.viewport.width, input.viewport.height),
-  );
-  for (const group of groups) {
-    for (const x of group) {
-      if (clear(x, aboveY)) return { x, y: aboveY };
-    }
-    for (const x of group) {
-      if (clear(x, belowY)) return { x, y: belowY };
-    }
-    for (let step = margin + 1; step <= limit; step += 1) {
-      const yAbove = input.trigger.y - height - step;
-      const yBelow = input.trigger.y + input.trigger.height + step;
-      for (const x of group) {
-        if (clear(x, yAbove)) return { x, y: yAbove };
-      }
-      for (const x of group) {
-        if (clear(x, yBelow)) return { x, y: yBelow };
-      }
-    }
-  }
+  const boxAt = (y: number): DroneBox => ({ x, y, width, height });
+  const onScreen = (y: number) => y >= minY - 0.01 && y <= maxY + 0.01;
+  const hits = (y: number, regions: readonly DroneBox[]) =>
+    regions.some((region) => boxesOverlap(boxAt(y), region));
+  const clear = (y: number) =>
+    onScreen(y) && !hits(y, obstacles) && !(neck && hits(y, [neck]));
+
+  if (clear(aboveY)) return { x, y: aboveY };
+  if (clear(belowY)) return { x, y: belowY };
+  if (onScreen(aboveY) && !(neck && hits(aboveY, [neck])))
+    return { x, y: aboveY };
+  if (onScreen(belowY) && !(neck && hits(belowY, [neck])))
+    return { x, y: belowY };
   return null;
 }

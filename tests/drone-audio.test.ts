@@ -305,8 +305,8 @@ void test('a low reed starts on one context and centers the root', async () => {
   assert.equal(limiter.attack.value, 0.003);
   assert.equal(limiter.release.value, 0.08);
   assert.ok(limiter.connections.includes(context.destination));
-  assert.equal(engine.nodeCount(), 28);
-  assert.equal(createdNodes(context), 28);
+  assert.equal(engine.nodeCount(), 29);
+  assert.equal(createdNodes(context), 29);
   assert.deepEqual(
     context.oscillators.map((oscillator) => oscillator.starts),
     context.oscillators.map(() => [4.02]),
@@ -404,9 +404,9 @@ void test('playing again with the upper octave reuses the context', async () => 
   await until(() => states.at(-1) === 'playing');
   const before = createdNodes(context);
   engine.play({ root: 'A', modeId: 'dorian', octave: 'layered' });
-  await until(() => engine.nodeCount() === 34 && states.at(-1) === 'playing');
+  await until(() => engine.nodeCount() === 35 && states.at(-1) === 'playing');
   assert.equal(created(), 1);
-  assert.equal(createdNodes(context) - before, 32);
+  assert.equal(createdNodes(context) - before, 33);
   engine.dispose();
 });
 
@@ -414,8 +414,8 @@ void test('Locrian drones the octave with the same reed pair', async () => {
   const { engine, context, states } = setup();
   engine.play({ root: 'A', modeId: 'locrian', octave: 'low' });
   await until(() => states.at(-1) === 'playing');
-  assert.equal(engine.nodeCount(), 28);
-  assert.equal(createdNodes(context), 28);
+  assert.equal(engine.nodeCount(), 29);
+  assert.equal(createdNodes(context), 29);
   const frequencies = context.oscillators.map(
     (oscillator) => oscillator.frequency.value,
   );
@@ -470,17 +470,18 @@ void test('retune waits for a real play, then moves to the new pitches on the sa
     ),
   );
   assert.equal(envelopes.length, 2);
-  const faded = envelopes.find((gain) =>
-    gain.gain.events.some(
-      (event) => event.method === 'linear' && event.value === 0,
+  assert.ok(
+    envelopes.every(
+      (gain) => !gain.gain.events.some((event) => event.method === 'cancel'),
     ),
   );
-  assert.ok(faded);
-  const fadeIndex = faded.gain.events.findIndex(
+  const fade = fadeOf(envelopes[0]);
+  const fadeIndex = fade.gain.events.findIndex(
     (event) => event.method === 'linear' && event.value === 0,
   );
-  assert.equal(faded.gain.events[fadeIndex - 1]?.method, 'set');
-  assert.equal(faded.gain.events[fadeIndex - 1]?.value, REED_GAINS.silence);
+  assert.ok(fadeIndex > 0);
+  assert.equal(fade.gain.events[fadeIndex - 1]?.method, 'set');
+  assert.equal(fade.gain.events[fadeIndex - 1]?.value, 1);
   assert.throws(() =>
     engine.retune({ root: 'H', modeId: 'dorian', octave: 'low' }),
   );
@@ -618,7 +619,8 @@ void test('a short stop schedules the oscillators to end with the cut fade', asy
   engine.play(lowRequest);
   await until(() => states.at(-1) === 'playing');
   engine.stop(REED_TIMING.hideFade);
-  const end = context.currentTime + REED_TIMING.hideFade + REED_TIMING.stopTail;
+  const end =
+    context.currentTime + Math.max(REED_TIMING.hideFade, 0.015) + 1 / 48000;
   assert.ok(context.oscillators.length > 0);
   assert.ok(
     context.oscillators.every((oscillator) => oscillator.stops.includes(end)),
@@ -697,78 +699,50 @@ function rampOf(param: Param): GainRamp {
   };
 }
 
-/** Sample the scheduled envelope. The fade holds the anchor for one sample. */
-function maxSampleStep(param: Param, now: number): number {
-  const ramp = rampOf(param);
-  const hold = param.events.find((event) => event.method === 'hold');
-  const cancel = param.events.find((event) => event.method === 'cancel');
-  const linear = [...param.events]
-    .reverse()
-    .find((event) => event.method === 'linear' && event.value === 0);
-  const anchor = param.events.find(
-    (event) => event.method === 'set' && Math.abs(event.time - now) < 1e-8,
+function fadeOf(envelope: { connections: unknown[] }) {
+  const fade = envelope.connections.find(
+    (node): node is { gain: Param } =>
+      typeof node === 'object' &&
+      node !== null &&
+      'gain' in node &&
+      (node as { gain?: Param }).gain instanceof Param,
   );
-  assert.ok(linear);
-  const sampleRate = 48000;
-  const fadeAt = now + 1 / sampleRate;
-  const from = now - 0.01;
-  const to = linear.time + 0.005;
-  const at = (time: number) => {
-    if (hold) {
-      if (time <= hold.time) return exponentialRampValue(ramp, time);
-      const held = exponentialRampValue(ramp, hold.time);
-      if (time >= linear.time) return linear.value;
-      const progress = (time - hold.time) / (linear.time - hold.time);
-      return held + (linear.value - held) * progress;
-    }
-    assert.ok(cancel);
-    assert.ok(anchor);
-    if (time < now) return exponentialRampValue(ramp, time);
-    if (time < fadeAt) return anchor.value;
-    if (time >= linear.time) return linear.value;
-    const progress = (time - fadeAt) / (linear.time - fadeAt);
-    return anchor.value + (linear.value - anchor.value) * progress;
-  };
-  let previous = at(from);
-  let max = 0;
-  for (let time = from + 1 / sampleRate; time <= to; time += 1 / sampleRate) {
-    const value = at(time);
-    max = Math.max(max, Math.abs(value - previous));
-    previous = value;
-  }
-  return max;
+  assert.ok(fade);
+  return fade;
 }
 
-function assertAnchored(
-  param: Param,
-  now: number,
-  expected: number,
+/** The swell stays scheduled. Only the fade gain ramps from its current level. */
+function assertFadeOnly(
+  envelope: { gain: Param; connections: unknown[] },
+  time: number,
   releaseEnd: number,
+  level = 1,
 ) {
   assert.equal(
-    param.events.some((event) => event.method === 'hold'),
+    envelope.gain.events.some((event) => event.method === 'cancel'),
     false,
   );
-  const cancel = param.events.find((event) => event.method === 'cancel');
-  const anchor = param.events.find(
-    (event) => event.method === 'set' && Math.abs(event.time - now) < 1e-8,
+  assert.equal(
+    envelope.gain.events.some((event) => event.method === 'hold'),
+    false,
   );
-  const fadeAt = now + 1 / 48000;
-  const fade = param.events.find(
-    (event) => event.method === 'set' && Math.abs(event.time - fadeAt) < 1e-8,
+  assert.equal(
+    envelope.gain.events.some(
+      (event) => event.method === 'linear' && event.value === 0,
+    ),
+    false,
   );
-  const linear = [...param.events]
+  const fade = fadeOf(envelope);
+  const anchor = fade.gain.events.find(
+    (event) => event.method === 'set' && Math.abs(event.time - time) < 1e-8,
+  );
+  const linear = [...fade.gain.events]
     .reverse()
     .find((event) => event.method === 'linear' && event.value === 0);
-  assert.ok(cancel);
   assert.ok(anchor);
-  assert.ok(fade);
   assert.ok(linear);
-  assert.equal(cancel.time, now);
-  assert.equal(anchor.value, expected);
-  assert.equal(fade.value, expected);
+  assert.equal(anchor.value, level);
   assert.ok(Math.abs(linear.time - releaseEnd) < 1e-9);
-  assert.ok(maxSampleStep(param, now) < 1e-3);
 }
 
 async function assertMidSwellKeyChange(removeHold: boolean) {
@@ -793,11 +767,10 @@ async function assertMidSwellKeyChange(removeHold: boolean) {
     await until(
       () => states.at(-1) === 'playing' && envelopeGains(context).length === 2,
     );
-    assertAnchored(
-      swell[0].gain,
+    assertFadeOnly(
+      swell[0],
       duringSwell,
-      swellValue,
-      duringSwell + 0.02 + Math.max(REED_TIMING.switchFade, 0.015),
+      duringSwell + Math.max(REED_TIMING.switchFade, 0.015),
     );
 
     const switched = envelopeGains(context).find((gain) => {
@@ -814,16 +787,17 @@ async function assertMidSwellKeyChange(removeHold: boolean) {
       rampOf(switched.gain),
       duringSwitch,
     );
+    assert.ok(switchValue > REED_GAINS.silence);
+    assert.ok(switchValue < REED_GAINS.envelope);
     switched.gain.value = REED_GAINS.silence;
     engine.retune({ root: 'D', modeId: 'dorian', octave: 'low' });
     await until(
       () => states.at(-1) === 'playing' && envelopeGains(context).length === 3,
     );
-    assertAnchored(
-      switched.gain,
+    assertFadeOnly(
+      switched,
       duringSwitch,
-      switchValue,
-      duringSwitch + 0.02 + Math.max(REED_TIMING.switchFade, 0.015),
+      duringSwitch + Math.max(REED_TIMING.switchFade, 0.015),
     );
     engine.dispose();
   } finally {
@@ -833,11 +807,11 @@ async function assertMidSwellKeyChange(removeHold: boolean) {
   }
 }
 
-void test('a mid-swell key change anchors the computed ramp when cancelAndHoldAtTime exists', async () => {
+void test('a mid-swell key change fades only the fade gain when cancelAndHoldAtTime exists', async () => {
   await assertMidSwellKeyChange(false);
 });
 
-void test('a mid-swell key change anchors the computed ramp when cancelAndHoldAtTime is missing', async () => {
+void test('a mid-swell key change fades only the fade gain when cancelAndHoldAtTime is missing', async () => {
   await assertMidSwellKeyChange(true);
 });
 
@@ -865,7 +839,7 @@ void test('the computed envelope stays at the steady level after the swell', () 
   assert.equal(exponentialRampValue(ramp, ramp.startTime), ramp.start);
 });
 
-void test('a stop after the swell anchors the steady level for key change, toggle off, and view leave', async () => {
+void test('a stop after the swell ramps the fade gain for key change, toggle off, and view leave', async () => {
   const cases: { fade: number; stopDelay: number }[] = [
     { fade: REED_TIMING.switchFade, stopDelay: 0.02 },
     { fade: REED_TIMING.stopFade, stopDelay: 0 },
@@ -886,35 +860,29 @@ void test('a stop after the swell anchors the steady level for key change, toggl
       engine.retune({ root: 'E', modeId: 'ionian', octave: 'low' });
       await until(() => envelopeGains(context).length === 2);
     } else engine.stop(item.fade);
-    const releaseEnd = past + item.stopDelay + Math.max(item.fade, 0.015);
-    assertAnchored(swell[0].gain, past, REED_GAINS.envelope, releaseEnd);
+    const releaseEnd = past + Math.max(item.fade, 0.015);
+    assertFadeOnly(swell[0], past, releaseEnd);
     engine.dispose();
   }
 });
 
-void test('a stop before the swell anchor writes silence instead of holding unity gain', async () => {
+void test('a stop before the swell ramps the fade gain and leaves the swell in place', async () => {
   const { engine, context, states } = setup();
   engine.play(lowRequest);
   await until(() => states.at(-1) === 'playing');
   assert.equal(context.currentTime, 4);
   engine.stop(REED_TIMING.hideFade);
-  const envelope = envelopeGains(context)[0]?.gain;
+  const envelope = envelopeGains(context)[0];
   assert.ok(envelope);
   assert.equal(
-    envelope.events.some((event) => event.method === 'hold'),
+    envelope.gain.events.some((event) => event.method === 'cancel'),
     false,
   );
-  const anchor = envelope.events.find(
-    (event) => event.method === 'set' && Math.abs(event.time - 4) < 1e-8,
-  );
-  const fade = envelope.events.find(
-    (event) =>
-      event.method === 'set' && Math.abs(event.time - (4 + 1 / 48000)) < 1e-8,
-  );
-  assert.ok(anchor);
-  assert.ok(fade);
-  assert.equal(anchor.value, REED_GAINS.silence);
-  assert.equal(fade.value, REED_GAINS.silence);
+  const swell = envelope.gain.events.find((event) => event.method === 'set');
+  assert.ok(swell);
+  assert.equal(swell.value, REED_GAINS.silence);
+  assert.ok(Math.abs(swell.time - 4.02) < 1e-8);
+  assertFadeOnly(envelope, 4, 4 + Math.max(REED_TIMING.hideFade, 0.015));
   engine.dispose();
 });
 
@@ -1028,6 +996,8 @@ void test('leaving Explore and coming back leaves the drone off until a tap', as
   controller.setActive(false);
   controller.setActive(true);
   assertOff(controller, context, heard, oscillators, resumes);
+  controller.setRequest({ root: 'C', modeId: 'ionian', octave: 'low' });
+  assertOff(controller, context, heard, oscillators, resumes);
   await assertTapStarts(controller, context, resumes);
   controller.dispose();
 });
@@ -1043,6 +1013,8 @@ void test('hiding the tab and showing it leaves the drone off until a tap', asyn
   documentTarget.hidden = false;
   documentTarget.emit('visibilitychange');
   controller.setHidden(false);
+  assertOff(controller, context, heard, oscillators, resumes);
+  controller.setRequest({ root: 'C', modeId: 'ionian', octave: 'low' });
   assertOff(controller, context, heard, oscillators, resumes);
   await assertTapStarts(controller, context, resumes);
   controller.dispose();
@@ -1091,6 +1063,8 @@ void test('a bfcache restore leaves the drone off until a tap', async () => {
   windowTarget.emit('pagehide');
   controller.restoreFromCache();
   controller.setActive(true);
+  assertOff(controller, context, heard, oscillators, resumes);
+  controller.setRequest({ root: 'C', modeId: 'ionian', octave: 'low' });
   assertOff(controller, context, heard, oscillators, resumes);
   await assertTapStarts(controller, context, resumes);
   controller.dispose();

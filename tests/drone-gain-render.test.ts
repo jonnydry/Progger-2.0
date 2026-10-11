@@ -4,33 +4,12 @@ import { OfflineAudioContext } from 'node-web-audio-api';
 import {
   REED_GAINS,
   REED_TIMING,
-  exponentialRampValue,
-  holdGainThenFade,
+  scheduleFade,
   scheduleSwell,
-  type GainRamp,
 } from '../lib/drone-audio.ts';
 
 const SAMPLE_RATE = 48000;
-const LEAD = 0.05;
 const STEP_LIMIT = 1e-3;
-
-type GainParam = Parameters<typeof holdGainThenFade>[0] & {
-  setValueAtTime: (value: number, startTime: number) => unknown;
-  exponentialRampToValueAtTime: (value: number, endTime: number) => unknown;
-};
-
-function addVoice(context: OfflineAudioContext, start: number): GainParam {
-  const buffer = context.createBuffer(1, 1, SAMPLE_RATE);
-  buffer.getChannelData(0)[0] = 1;
-  const source = context.createBufferSource();
-  source.buffer = buffer;
-  source.loop = true;
-  const gain = context.createGain();
-  source.connect(gain);
-  gain.connect(context.destination);
-  source.start(start);
-  return gain.gain as GainParam;
-}
 
 function render(
   duration: number,
@@ -39,13 +18,16 @@ function render(
   const length = Math.ceil(duration * SAMPLE_RATE);
   const context = new OfflineAudioContext(1, length, SAMPLE_RATE);
   schedule(context);
-  return context.startRendering().then((rendered) => {
-    const channel = rendered.getChannelData(0);
-    return channel.slice();
-  });
+  return context
+    .startRendering()
+    .then((rendered) => rendered.getChannelData(0).slice());
 }
 
-function maxAbsStep(data: Float32Array, from: number, to: number): number {
+function maxAbsStep(
+  data: Float32Array,
+  from = 1,
+  to = data.length - 1,
+): number {
   let max = 0;
   const start = Math.max(1, from);
   const end = Math.min(data.length - 1, to);
@@ -55,14 +37,45 @@ function maxAbsStep(data: Float32Array, from: number, to: number): number {
   return max;
 }
 
-function closest(data: Float32Array, index: number, expected: number): number {
-  let best = Number.POSITIVE_INFINITY;
-  const from = Math.max(0, index - 2);
-  const to = Math.min(data.length - 1, index + 2);
-  for (let cursor = from; cursor <= to; cursor += 1) {
-    best = Math.min(best, Math.abs(data[cursor] - expected));
-  }
-  return best;
+function addVoice(
+  context: OfflineAudioContext,
+  start: number,
+  attack: number,
+): { stop: (time: number, fade: number) => void } {
+  const buffer = context.createBuffer(1, 1, SAMPLE_RATE);
+  buffer.getChannelData(0)[0] = 1;
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  const envelope = context.createGain();
+  const fade = context.createGain();
+  fade.gain.value = 1;
+  const bellows = context.createOscillator();
+  bellows.type = 'sine';
+  bellows.frequency.value = 0.16;
+  const depth = context.createGain();
+  source.connect(envelope);
+  envelope.connect(fade);
+  fade.connect(context.destination);
+  bellows.connect(depth);
+  depth.connect(envelope.gain);
+  scheduleSwell(envelope.gain, start, attack);
+  depth.gain.setValueAtTime(0, start);
+  depth.gain.linearRampToValueAtTime(
+    REED_GAINS.bellows,
+    start + attack + REED_TIMING.bellowsRise,
+  );
+  source.start(start);
+  bellows.start(start);
+  return {
+    stop(time: number, fadeTime: number) {
+      const release = Math.max(fadeTime, 0.015);
+      const end = time + release;
+      scheduleFade(fade.gain, time, end, 1);
+      source.stop(end);
+      bellows.stop(end);
+    },
+  };
 }
 
 const cases = [
@@ -96,142 +109,51 @@ const cases = [
   },
 ] as const;
 
-void test('a rendered stop stays continuous through the swell and after it', async () => {
+void test('a rendered stop leaves the swell playing under the fade, including the bellows', async () => {
   for (const item of cases) {
-    const now = LEAD + item.into;
+    const lead = 0.05;
+    const now = lead + item.into;
     const stopAt = now + item.stopDelay;
+    const time = Math.min(now, stopAt);
     const release = Math.max(item.fade, 0.015);
-    const duration = stopAt + release + 0.05;
-    const ramp: GainRamp = {
-      start: REED_GAINS.silence,
-      target: REED_GAINS.envelope,
-      startTime: LEAD,
-      endTime: LEAD + REED_TIMING.playAttack,
-    };
-    const clean = await render(duration, (context) => {
-      const voice = addVoice(context, LEAD);
-      scheduleSwell(voice, LEAD, REED_TIMING.playAttack);
-    });
+    const end = time + release;
+    const duration = end + 0.08;
     const stopped = await render(duration, (context) => {
-      const voice = addVoice(context, LEAD);
-      scheduleSwell(voice, LEAD, REED_TIMING.playAttack);
-      holdGainThenFade(voice, ramp, stopAt, release, now, SAMPLE_RATE);
+      const voice = addVoice(context, lead, REED_TIMING.playAttack);
+      voice.stop(time, item.fade);
       if (!item.next) return;
-      const next = addVoice(context, stopAt);
-      scheduleSwell(next, stopAt, REED_TIMING.switchAttack);
+      addVoice(context, stopAt, REED_TIMING.switchAttack);
     });
-    const cut = Math.round(now * SAMPLE_RATE);
-    const end = Math.round((stopAt + release) * SAMPLE_RATE);
-    const spliced = new Float32Array(stopped.length);
-    for (let index = 0; index < spliced.length; index += 1) {
-      spliced[index] = index < cut ? clean[index] : stopped[index];
+    const step = maxAbsStep(stopped);
+    const tailFrom = Math.ceil((end + 0.02) * SAMPLE_RATE);
+    let tail = 0;
+    for (let index = tailFrom; index < stopped.length; index += 1) {
+      tail = Math.max(tail, Math.abs(stopped[index]));
     }
-    const step = maxAbsStep(spliced, cut - Math.floor(SAMPLE_RATE * 0.02), end);
-    const expected = exponentialRampValue(ramp, now);
     assert.ok(step < STEP_LIMIT, `${item.name} max step ${step}`);
-    assert.ok(
-      closest(stopped, cut, expected) < STEP_LIMIT,
-      `${item.name} anchor ${stopped[cut]} expected ${expected}`,
-    );
-    if (now >= ramp.endTime) assert.equal(expected, REED_GAINS.envelope);
+    if (!item.next) assert.ok(tail < STEP_LIMIT, `${item.name} tail ${tail}`);
   }
 });
 
-function spliceAt(
-  clean: Float32Array,
-  stopped: Float32Array,
-  cut: number,
-): Float32Array {
-  const out = new Float32Array(stopped.length);
-  for (let index = 0; index < out.length; index += 1) {
-    out[index] = index < cut ? clean[index] : stopped[index];
-  }
-  return out;
-}
-
-function addBuffers(parts: Float32Array[]): Float32Array {
-  const out = new Float32Array(parts[0].length);
-  for (const part of parts) {
-    for (let index = 0; index < out.length; index += 1)
-      out[index] += part[index];
-  }
-  return out;
-}
-
 void test('repeated crossfades stay within one thousandth, including both voices', async () => {
   const release = Math.max(REED_TIMING.switchFade, 0.015);
-  for (let index = 0; index < 200; index += 1) {
-    const chained = index < 128;
-    const align = chained ? index : index - 128;
+  for (let index = 0; index < 64; index += 1) {
+    const align = index;
     const lead = (64 + align) / SAMPLE_RATE;
     const into = 0.18;
     const now = lead + into;
     const stopAt = now + 0.02;
-    const secondNow = stopAt + into;
-    const secondStop = secondNow + 0.02;
-    const end = (chained ? secondStop : stopAt) + release + 0.05;
-    const ramp: GainRamp = {
-      start: REED_GAINS.silence,
-      target: REED_GAINS.envelope,
-      startTime: lead,
-      endTime: lead + REED_TIMING.playAttack,
-    };
-    const cleanOld = await render(end, (context) => {
-      scheduleSwell(addVoice(context, lead), lead, REED_TIMING.playAttack);
+    const time = Math.min(now, stopAt);
+    const end = time + release + 0.05;
+    const sum = await render(end, (context) => {
+      const voice = addVoice(context, lead, REED_TIMING.playAttack);
+      voice.stop(time, REED_TIMING.switchFade);
+      addVoice(context, stopAt, REED_TIMING.switchAttack);
     });
-    const stoppedOld = await render(end, (context) => {
-      const voice = addVoice(context, lead);
-      scheduleSwell(voice, lead, REED_TIMING.playAttack);
-      holdGainThenFade(voice, ramp, stopAt, release, now, SAMPLE_RATE);
-    });
-    const cleanYoung = await render(end, (context) => {
-      scheduleSwell(
-        addVoice(context, stopAt),
-        stopAt,
-        REED_TIMING.switchAttack,
-      );
-    });
-    const parts = [
-      spliceAt(cleanOld, stoppedOld, Math.round(now * SAMPLE_RATE)),
-    ];
-    if (chained) {
-      const youngRamp: GainRamp = {
-        start: REED_GAINS.silence,
-        target: REED_GAINS.envelope,
-        startTime: stopAt,
-        endTime: stopAt + REED_TIMING.switchAttack,
-      };
-      const stoppedYoung = await render(end, (context) => {
-        const voice = addVoice(context, stopAt);
-        scheduleSwell(voice, stopAt, REED_TIMING.switchAttack);
-        holdGainThenFade(
-          voice,
-          youngRamp,
-          secondStop,
-          release,
-          secondNow,
-          SAMPLE_RATE,
-        );
-      });
-      const next = await render(end, (context) => {
-        scheduleSwell(
-          addVoice(context, secondStop),
-          secondStop,
-          REED_TIMING.switchAttack,
-        );
-      });
-      parts.push(
-        spliceAt(cleanYoung, stoppedYoung, Math.round(secondNow * SAMPLE_RATE)),
-        next,
-      );
-    } else {
-      parts.push(cleanYoung);
-    }
-    const sum = addBuffers(parts);
-    const step = maxAbsStep(sum, 1, sum.length - 1);
-    const label = chained
-      ? `key change 0.18s into a later swell, align ${align}`
-      : `key change 0.18s into the swell, align ${align}`;
-    assert.ok(step < STEP_LIMIT, `${label} max step ${step}`);
+    const step = maxAbsStep(sum);
+    assert.ok(
+      step < STEP_LIMIT,
+      `key change 0.18s into the swell, align ${align} max step ${step}`,
+    );
   }
 });

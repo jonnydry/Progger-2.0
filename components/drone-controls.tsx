@@ -237,7 +237,6 @@ export function DroneControls({
   const [volumeOpen, setVolumeOpen] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const volumeRef = useRef<HTMLButtonElement>(null);
-  const anchorRef = useRef<HTMLButtonElement | null>(null);
   const restoreToggleFocus = useRef(false);
   const dismissing = useRef(false);
   const pointerOnTrigger = useRef(false);
@@ -342,7 +341,6 @@ export function DroneControls({
         onClick={() => {
           pointerOnTrigger.current = false;
           if (!droneVolumeOpens({ kind: 'click' })) return;
-          anchorRef.current = volumeRef.current;
           setVolumeOpen((open) => !open);
         }}
       >
@@ -355,7 +353,7 @@ export function DroneControls({
           onDismiss={dismissVolume}
           onFocusLeave={leaveVolume}
           pointerOnTrigger={pointerOnTrigger}
-          anchorRef={anchorRef}
+          anchorRef={volumeRef}
         />
       ) : null}
       <button
@@ -366,9 +364,6 @@ export function DroneControls({
         aria-pressed={enabled}
         aria-label={droneControlName(enabled)}
         aria-keyshortcuts="ArrowDown ArrowUp"
-        aria-haspopup="dialog"
-        aria-expanded={volumeOpen}
-        aria-controls="drone-volume-popover"
         onClick={onToggle}
         onKeyDown={(event) => {
           const next = volumePopoverKey({
@@ -379,7 +374,6 @@ export function DroneControls({
           if (!droneVolumeOpens({ kind: 'keydown', key: event.key })) return;
           if (!next.open || next.focus !== 'slider') return;
           event.preventDefault();
-          anchorRef.current = toggleRef.current;
           setVolumeOpen(true);
         }}
       >

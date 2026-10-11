@@ -129,7 +129,7 @@ void test('the volume popover opens above the caption and degree letters', () =>
         { x: 16, y: 536.38, width: 358, height: 53 },
         { x: -187, y: 625.38, width: 1200, height: 305 },
       ],
-      origin: { x: 198, y: 127.38 },
+      origin: { x: 198, y: 239.38 },
     },
     {
       viewport: { width: 501, height: 900 },
@@ -149,7 +149,7 @@ void test('the volume popover opens above the caption and degree letters', () =>
         { x: 24, y: 628.89, width: 453, height: 34.5 },
         { x: -143, y: 1008.58, width: 1200, height: 305 },
       ],
-      origin: { x: 247.52, y: 194.39 },
+      origin: { x: 247.52, y: 312.39 },
     },
     {
       viewport: { width: 1440, height: 900 },
@@ -170,7 +170,7 @@ void test('the volume popover opens above the caption and degree letters', () =>
         { x: 56, y: 848.5, width: 1313, height: 31.5 },
         { x: -407, y: 1129.69, width: 3182.5, height: 293 },
       ],
-      origin: { x: 769.5, y: 424 },
+      origin: { x: 769.5, y: 532 },
     },
   ];
   for (const scene of scenes) {
@@ -185,7 +185,11 @@ void test('the volume popover opens above the caption and degree letters', () =>
     assert.ok(Math.abs(origin.x - scene.origin.x) < 0.001);
     assert.ok(Math.abs(origin.y - scene.origin.y) < 0.001);
     const box = placed(origin);
-    misses(box, obstacles);
+    misses(box, [scene.caption, ...scene.letters]);
+    const gap = scene.trigger.y - (box.y + box.height);
+    assert.ok(Math.abs(gap - 8) < 0.001);
+    assert.ok(box.x < scene.trigger.x + scene.trigger.width);
+    assert.ok(box.x + box.width > scene.trigger.x);
     assert.ok(box.y + box.height <= scene.caption.y);
     assert.ok(box.x >= 8);
     assert.ok(box.y >= 8);
@@ -258,6 +262,20 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   assert.doesNotMatch(css, /flex:\s*1\s*0\s*100%/);
   assert.match(view, /aria-pressed=\{enabled\}/);
   assert.match(view, /aria-label=\{droneControlName\(enabled\)\}/);
+  const volumeButton = view.slice(
+    view.indexOf('id="drone-volume-trigger"'),
+    view.indexOf('id="drone-toggle"'),
+  );
+  const toggle = view.slice(view.indexOf('id="drone-toggle"'));
+  assert.match(volumeButton, /aria-haspopup="dialog"/);
+  assert.match(volumeButton, /aria-expanded=\{volumeOpen\}/);
+  assert.match(volumeButton, /aria-controls="drone-volume-popover"/);
+  assert.doesNotMatch(toggle, /aria-haspopup/);
+  assert.doesNotMatch(toggle, /aria-expanded/);
+  assert.doesNotMatch(toggle, /aria-controls/);
+  assert.match(view, /anchorRef=\{volumeRef\}/);
+  assert.doesNotMatch(view, /anchorRef=\{toggleRef\}/);
+  assert.doesNotMatch(view, /anchorRef\.current = toggleRef\.current/);
   assert.match(view, /ChevronDown/);
   assert.match(view, /droneVolumeOpens\(\{ kind: 'click' \}\)/);
   assert.match(view, /volumePopoverKey/);
