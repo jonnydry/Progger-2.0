@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   DRONE_ICON_PX,
   DRONE_TAP_TARGET_PX,
+  VOLUME_POPOVER_OBSTACLE_SELECTORS,
   boxesOverlap,
   droneControlName,
   droneVolumeOpens,
@@ -59,51 +60,102 @@ function placed(origin: { x: number; y: number } | null): DroneBox {
   return { ...origin, width: popover.width, height: popover.height };
 }
 
-void test('the volume popover stays on a 390 screen and misses the neck', () => {
-  const neck: DroneBox = { x: -187, y: 625, width: 1200, height: 305 };
-  const origin = volumePopoverOrigin({
-    trigger: { x: 322, y: 335, width: 44, height: 44 },
-    popover,
-    viewport: { width: 390, height: 844 },
-    neck,
-  });
-  const box = placed(origin);
-  assert.deepEqual(origin, { x: 198, y: 387 });
-  assert.ok(box.x >= 8);
-  assert.ok(box.y >= 8);
-  assert.ok(box.x + box.width <= 382);
-  assert.ok(box.y + box.height <= 836);
-  assert.equal(boxesOverlap(box, neck), false);
-});
+function misses(box: DroneBox, obstacles: DroneBox[]) {
+  for (const obstacle of obstacles) {
+    assert.equal(boxesOverlap(box, obstacle), false);
+  }
+}
 
-void test('the volume popover stays clear of the neck at 501 and 1440', () => {
-  const phone = volumePopoverOrigin({
-    trigger: { x: 371, y: 408, width: 44, height: 44 },
-    popover,
-    viewport: { width: 501, height: 900 },
-    neck: { x: 0, y: 1009, width: 1200, height: 400 },
-  });
-  const desk = volumePopoverOrigin({
-    trigger: { x: 894, y: 628, width: 44, height: 44 },
-    popover,
-    viewport: { width: 1440, height: 900 },
-    neck: { x: 0, y: 1130, width: 1440, height: 293 },
-  });
-  assert.deepEqual(phone, { x: 247, y: 460 });
-  assert.deepEqual(desk, { x: 770, y: 680 });
-  assert.equal(
-    boxesOverlap(placed(phone), {
-      x: 0,
-      y: 1009,
-      width: 1200,
-      height: 400,
-    }),
-    false,
-  );
-  assert.equal(
-    boxesOverlap(placed(desk), { x: 0, y: 1130, width: 1440, height: 293 }),
-    false,
-  );
+void test('the volume popover opens above the caption and degree letters', () => {
+  const scenes: {
+    viewport: { width: number; height: number };
+    trigger: DroneBox;
+    caption: DroneBox;
+    letters: DroneBox[];
+    blocked: DroneBox[];
+    origin: { x: number; y: number };
+  }[] = [
+    {
+      viewport: { width: 390, height: 844 },
+      trigger: { x: 322, y: 335.38, width: 44, height: 44 },
+      caption: { x: 85.8, y: 395.38, width: 218.41, height: 19.5 },
+      letters: [
+        { x: 23.89, y: 469.38, width: 7.2, height: 18 },
+        { x: 355.3, y: 469.38, width: 14.41, height: 18 },
+      ],
+      blocked: [
+        { x: 21.8, y: 435.88, width: 11.41, height: 28.5 },
+        { x: 356.8, y: 435.88, width: 11.41, height: 28.5 },
+        { x: 18, y: 18, width: 130, height: 44 },
+        { x: 18, y: 62, width: 354, height: 48 },
+        { x: 16, y: 223.38, width: 358, height: 44 },
+        { x: 16, y: 275.38, width: 358, height: 44 },
+        { x: 16, y: 536.38, width: 358, height: 53 },
+        { x: -187, y: 625.38, width: 1200, height: 305 },
+      ],
+      origin: { x: 198, y: 127.38 },
+    },
+    {
+      viewport: { width: 501, height: 900 },
+      trigger: { x: 371.52, y: 408.39, width: 44, height: 44 },
+      caption: { x: 132.89, y: 470.39, width: 235.2, height: 21 },
+      letters: [
+        { x: 81.3, y: 554.89, width: 8.41, height: 21 },
+        { x: 407.09, y: 554.89, width: 16.81, height: 21 },
+      ],
+      blocked: [
+        { x: 78.59, y: 511.39, width: 13.81, height: 34.5 },
+        { x: 408.59, y: 511.39, width: 13.81, height: 34.5 },
+        { x: 24, y: 20, width: 135.14, height: 37.5 },
+        { x: 24, y: 64, width: 453, height: 48 },
+        { x: 24, y: 290.39, width: 453, height: 44 },
+        { x: 24, y: 338.39, width: 453, height: 44 },
+        { x: 24, y: 628.89, width: 453, height: 34.5 },
+        { x: -143, y: 1008.58, width: 1200, height: 305 },
+      ],
+      origin: { x: 247.52, y: 194.39 },
+    },
+    {
+      viewport: { width: 1440, height: 900 },
+      trigger: { x: 893.5, y: 628, width: 44, height: 44 },
+      caption: { x: 569.69, y: 690, width: 285.61, height: 25.5 },
+      letters: [
+        { x: 511.08, y: 777.5, width: 9.61, height: 24 },
+        { x: 899.48, y: 777.5, width: 19.2, height: 24 },
+      ],
+      blocked: [
+        { x: 508.08, y: 729.5, width: 15.61, height: 39 },
+        { x: 826.89, y: 729.5, width: 31.2, height: 39 },
+        { x: 901.28, y: 729.5, width: 15.61, height: 39 },
+        { x: 28, y: 26, width: 171.02, height: 48 },
+        { x: 247.02, y: 26, width: 225.81, height: 44 },
+        { x: 56, y: 520, width: 1313, height: 44 },
+        { x: 56, y: 568, width: 1313, height: 44 },
+        { x: 56, y: 848.5, width: 1313, height: 31.5 },
+        { x: -407, y: 1129.69, width: 3182.5, height: 293 },
+      ],
+      origin: { x: 769.5, y: 424 },
+    },
+  ];
+  for (const scene of scenes) {
+    const obstacles = [scene.caption, ...scene.letters, ...scene.blocked];
+    const origin = volumePopoverOrigin({
+      trigger: scene.trigger,
+      popover,
+      viewport: scene.viewport,
+      obstacles,
+    });
+    assert.ok(origin);
+    assert.ok(Math.abs(origin.x - scene.origin.x) < 0.001);
+    assert.ok(Math.abs(origin.y - scene.origin.y) < 0.001);
+    const box = placed(origin);
+    misses(box, obstacles);
+    assert.ok(box.y + box.height <= scene.caption.y);
+    assert.ok(box.x >= 8);
+    assert.ok(box.y >= 8);
+    assert.ok(box.x + box.width <= scene.viewport.width - 8);
+    assert.ok(box.y + box.height <= scene.viewport.height - 8);
+  }
 });
 
 void test('a popover that cannot miss the neck stays closed', () => {
@@ -118,7 +170,7 @@ void test('a popover that cannot miss the neck stays closed', () => {
   );
 });
 
-void test('a popover that would cover the neck flips above it and stays on screen', () => {
+void test('a popover that would cover the neck opens above it and stays on screen', () => {
   const neck: DroneBox = { x: 0, y: 760, width: 390, height: 200 };
   const origin = volumePopoverOrigin({
     trigger: { x: 300, y: 700, width: 44, height: 44 },
@@ -153,17 +205,31 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
     /\.drone-toggle,\n\.drone-volume-trigger \{[^}]*min-width:\s*44px/,
   );
   assert.match(css, /min-height:\s*44px/);
-  assert.match(css, /\.drone-toggle svg \{[^}]*width:\s*18px/);
+  assert.match(
+    css,
+    /\.drone-toggle svg,\n\.drone-volume-trigger svg \{[^}]*width:\s*18px/,
+  );
   assert.match(css, /height:\s*18px/);
+  assert.match(css, /border:\s*1px solid var\(--border\)/);
+  assert.match(css, /outline:\s*2px solid var\(--green\)/);
   assert.match(css, /display:\s*contents/);
   assert.doesNotMatch(css, /flex-wrap:\s*wrap/);
   assert.doesNotMatch(css, /flex:\s*1\s*0\s*100%/);
   assert.match(view, /aria-pressed=\{enabled\}/);
   assert.match(view, /aria-label=\{droneControlName\(enabled\)\}/);
+  assert.match(view, /ChevronDown/);
   assert.match(view, /droneVolumeOpens\(\{ kind: 'click' \}\)/);
   assert.match(view, /volumePopoverKey/);
+  assert.match(view, /VOLUME_POPOVER_OBSTACLE_SELECTORS/);
+  assert.match(view, /addEventListener\('scroll', onScroll, true\)/);
+  assert.match(
+    view,
+    /closest\(\s*'#drone-volume-popover, #drone-volume-trigger'\s*\)/,
+  );
   assert.match(view, /min=\{0\}/);
   assert.match(view, /max=\{1\}/);
   assert.doesNotMatch(view, /aria-modal/);
   assert.doesNotMatch(view, /setTimeout/);
+  assert.ok(VOLUME_POPOVER_OBSTACLE_SELECTORS.includes('.scale-caption'));
+  assert.ok(VOLUME_POPOVER_OBSTACLE_SELECTORS.includes('.palette-note small'));
 });

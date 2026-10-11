@@ -13,19 +13,15 @@
   top: 50%;
   transform: translateY(-50%);
   box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 44px;
   height: 44px;
   min-width: 44px;
   min-height: 44px;
   margin: 0;
   padding: 0;
-}
-
-.drone-toggle {
-  right: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   color: var(--quiet);
   background: transparent;
   border: 1px solid var(--border);
@@ -33,26 +29,32 @@
   cursor: pointer;
 }
 
-.drone-toggle svg {
+.drone-toggle {
+  right: 8px;
+}
+
+.drone-volume-trigger {
+  left: 8px;
+}
+
+.drone-toggle svg,
+.drone-volume-trigger svg {
   display: block;
   width: 18px;
   height: 18px;
 }
 
-.drone-toggle[aria-pressed='true'] {
+.drone-toggle[aria-pressed='true'],
+.drone-volume-trigger[aria-expanded='true'] {
   color: var(--green);
   background: var(--accent);
   border-color: var(--green);
 }
 
-.drone-volume-trigger {
-  left: 8px;
-  border: 0;
-  background: transparent;
-  appearance: none;
-  box-shadow: none;
-  color: transparent;
-  cursor: pointer;
+.drone-toggle:focus-visible,
+.drone-volume-trigger:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 4px;
 }
 
 .drone-volume-popover {

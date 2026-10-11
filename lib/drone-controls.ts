@@ -2,6 +2,21 @@ export const DRONE_TAP_TARGET_PX = 44;
 export const DRONE_ICON_PX = 18;
 export const DRONE_POPOVER_MARGIN_PX = 8;
 
+/** Regions the volume popover must miss. Caption and degree letters are required. */
+export const VOLUME_POPOVER_OBSTACLE_SELECTORS = [
+  '.brand',
+  '.site-header nav',
+  '.workspace-tools',
+  '.reference-tabs',
+  '.root-select',
+  '.scale-select',
+  '.scale-caption',
+  '.palette-note > span',
+  '.palette-note small',
+  '.neck-meta',
+  '.fret-grid',
+] as const;
+
 export type DroneBox = {
   x: number;
   y: number;
@@ -52,58 +67,81 @@ export function boxesOverlap(a: DroneBox, b: DroneBox): boolean {
   );
 }
 
-function clampOrigin(
-  origin: { x: number; y: number },
-  popover: { width: number; height: number },
-  viewport: { width: number; height: number },
-  margin: number,
-): { x: number; y: number } {
-  const maxX = Math.max(margin, viewport.width - popover.width - margin);
-  const maxY = Math.max(margin, viewport.height - popover.height - margin);
-  return {
-    x: Math.min(Math.max(margin, origin.x), maxX),
-    y: Math.min(Math.max(margin, origin.y), maxY),
-  };
+function uniqueXs(values: number[]): number[] {
+  const seen = new Set<string>();
+  const result: number[] = [];
+  for (const value of values) {
+    const key = value.toFixed(3);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
 }
 
-// Prefer below the trigger, right-aligned. Flip above when that box would cover the neck.
+// Open above the trigger when that box is clear. Otherwise walk away until the
+// popover misses every obstacle. Never slide a candidate onto an obstacle.
 export function volumePopoverOrigin(input: {
   trigger: DroneBox;
   popover: { width: number; height: number };
   viewport: { width: number; height: number };
-  neck: DroneBox | null;
+  obstacles?: readonly DroneBox[];
+  neck?: DroneBox | null;
   margin?: number;
 }): { x: number; y: number } | null {
   const margin = input.margin ?? DRONE_POPOVER_MARGIN_PX;
-  const alignRight =
-    input.trigger.x + input.trigger.width - input.popover.width;
-  const candidates = [
-    {
-      x: alignRight,
-      y: input.trigger.y + input.trigger.height + margin,
-    },
-    { x: alignRight, y: input.trigger.y - input.popover.height - margin },
+  const obstacles = [
+    ...(input.obstacles ?? []),
+    ...(input.neck ? [input.neck] : []),
   ];
-  const placed = candidates.map((origin) =>
-    clampOrigin(origin, input.popover, input.viewport, margin),
-  );
-  const missesNeck = (origin: { x: number; y: number }) => {
-    if (!input.neck) return true;
-    return !boxesOverlap(
-      {
-        ...origin,
-        width: input.popover.width,
-        height: input.popover.height,
-      },
-      input.neck,
-    );
+  const { width, height } = input.popover;
+  const preferredX = input.trigger.x + input.trigger.width - width;
+  const xs = uniqueXs([
+    preferredX,
+    input.trigger.x,
+    input.trigger.x + (input.trigger.width - width) / 2,
+    input.viewport.width - width - margin,
+    margin,
+  ]).sort((a, b) => Math.abs(a - preferredX) - Math.abs(b - preferredX));
+
+  const clear = (x: number, y: number) => {
+    if (x < margin - 0.01 || y < margin - 0.01) return false;
+    if (x + width > input.viewport.width - margin + 0.01) return false;
+    if (y + height > input.viewport.height - margin + 0.01) return false;
+    const padded: DroneBox = {
+      x: x - margin,
+      y: y - margin,
+      width: width + margin * 2,
+      height: height + margin * 2,
+    };
+    return obstacles.every((obstacle) => !boxesOverlap(padded, obstacle));
   };
-  const inside = (origin: { x: number; y: number }) =>
-    origin.y + input.popover.height <= input.viewport.height - margin + 0.01 &&
-    origin.x + input.popover.width <= input.viewport.width - margin + 0.01;
-  return (
-    placed.find((origin) => missesNeck(origin) && inside(origin)) ??
-    placed.find((origin) => missesNeck(origin)) ??
-    null
+
+  const aligned = (x: number) =>
+    x < input.trigger.x + input.trigger.width && x + width > input.trigger.x;
+  const groups = [xs.filter(aligned), xs.filter((x) => !aligned(x))];
+  const aboveY = input.trigger.y - height - margin;
+  const belowY = input.trigger.y + input.trigger.height + margin;
+  const limit = Math.ceil(
+    Math.max(input.viewport.width, input.viewport.height),
   );
+  for (const group of groups) {
+    for (const x of group) {
+      if (clear(x, aboveY)) return { x, y: aboveY };
+    }
+    for (const x of group) {
+      if (clear(x, belowY)) return { x, y: belowY };
+    }
+    for (let step = margin + 1; step <= limit; step += 1) {
+      const yAbove = input.trigger.y - height - step;
+      const yBelow = input.trigger.y + input.trigger.height + step;
+      for (const x of group) {
+        if (clear(x, yAbove)) return { x, y: yAbove };
+      }
+      for (const x of group) {
+        if (clear(x, yBelow)) return { x, y: yBelow };
+      }
+    }
+  }
+  return null;
 }
