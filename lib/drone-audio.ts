@@ -31,9 +31,7 @@ export function requestSound(request: ReedRequest): DroneSoundId {
 
 /**
  * Reed cap on the voice fade. The master is volume only.
- * Chrome 154 renders the drone, one walk note, and the loudest chord
- * together at volume 1. This cap peaks at 0.88152 on E♭ locrian, layered,
- * sustain. The mix stays under 0.8913.
+ * The cap is unchanged. Headroom comes from the shared walk trim.
  */
 export const DRONE_MAX_LINEAR_GAIN = 0.063;
 
@@ -90,12 +88,10 @@ export function voiceTailHold(fade: number): number {
 }
 
 /**
- * Bow and cello caps come from the same Chrome three-way render.
- * Makeup gain lifts a full voice, so the analytical sum is not the cap.
- * Bow peaks at 0.87813 on F♯ ionian, layered, a crossfade. Cello peaks
- * at 0.88509 on A locrian, layered, a key change, the tightest of the
- * three. The cap is the voice fade's resting level, so a sample that is
- * still loading does not retarget the voice that is already sounding.
+ * Bow and cello caps are the voice fade's resting level, so a sample that
+ * is still loading does not retarget the voice that is already sounding.
+ * Both caps are unchanged: bow 0.072, cello 0.078. Makeup gain lifts a
+ * full voice, so the analytical sum is not the cap.
  */
 export const BOW_GAINS = {
   pitch: 0.055,
@@ -120,12 +116,12 @@ export const WALK_GAINS = {
   attack: 0.85,
   body: 0.12,
   decay: 0.0001,
-  // Chrome 154, volume 1. The loudest chord and every consecutive scale
-  // step, aligned to the drone peak and swept ±20ms. The loudest mix is
-  // the cello pair E♭ after F on A locrian, at 0.89105. Reed's four-note
-  // window reaches 0.88799. Bow's loudest pair reaches 0.88040.
-  // Each mix stays under 0.8913.
-  trim: 0.2,
+  // Shared by every sound. Caps stay where they were. Chrome 154,
+  // volume 1: drone, walk window, loudest chord, swept ±20 ms.
+  // Cello's A locrian pair (E♭ after F) is the loudest, at 0.84133.
+  // Reed's four-note window is 0.83811. Bow's pair is 0.83067.
+  // Each is at or below 0.8414, which is also under 0.871.
+  trim: 0.1375,
   partials: 25,
 } as const;
 

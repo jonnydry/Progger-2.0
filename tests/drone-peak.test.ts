@@ -12,6 +12,13 @@ import { FULL_SCALE_MARGIN } from '../lib/drone-levels.ts';
 /** Drone, one walk note, and the loudest chord, summed at volume 1. */
 const MIX_CEILING = 0.8913;
 
+/**
+ * Each sound's worst rendered mix: drone, a walk window of up to four
+ * notes, and the loudest chord, swept ±20 ms. −1.5 dBFS. Under the 0.8913
+ * ceiling, and under 0.871.
+ */
+const SOUND_LIMIT = 0.8414;
+
 const chromeBin = [
   '/usr/bin/google-chrome-stable',
   '/usr/bin/google-chrome',
@@ -859,13 +866,23 @@ function assertHeadroom(report: PeakReport, pluck: number) {
     const loudestMix = mixes.reduce((best, item) =>
       item.mix > best.mix ? item : best,
     );
+    const swept = report.swept[sound];
+    assert.ok(
+      typeof swept === 'number' && Number.isFinite(swept) && swept > 0,
+      `${sound} swept mix ${swept}`,
+    );
     assert.ok(
       loudestMix.mix < MIX_CEILING,
       `${sound} mix ${loudestMix.mix} on ${loudestMix.root} ${loudestMix.mode} ${loudestMix.octave} ${loudestMix.via}`,
     );
     assert.ok(
-      (report.swept[sound] ?? 1) < MIX_CEILING,
-      `${sound} swept mix ${report.swept[sound]}`,
+      swept < MIX_CEILING,
+      `${sound} swept mix ${swept}`,
+    );
+    const worstCase = Math.max(loudestMix.mix, swept);
+    assert.ok(
+      worstCase <= SOUND_LIMIT,
+      `${sound} worst case ${worstCase} vs ${SOUND_LIMIT}`,
     );
   }
 }
@@ -913,11 +930,15 @@ function assertOverlap(report: OverlapReport) {
       row.peak < FULL_SCALE_MARGIN,
       `${row.sound} ${row.kind} overlap ${row.peak} vs ${FULL_SCALE_MARGIN}`,
     );
+    assert.ok(
+      row.peak <= SOUND_LIMIT,
+      `${row.sound} worst case ${row.peak} vs ${SOUND_LIMIT}`,
+    );
   }
 }
 
 void test(
-  'Chrome keeps a consecutive scale-walk window under -1 dBFS on the loudest mixes',
+  'Chrome keeps a consecutive scale-walk window at or below -1.5 dBFS on the loudest mixes',
   {
     skip:
       chromeBin && playwrightEntry
@@ -936,7 +957,7 @@ void test(
 );
 
 void test(
-  'Firefox 157 keeps a consecutive scale-walk window under -1 dBFS on the loudest mixes',
+  'Firefox 157 keeps a consecutive scale-walk window at or below -1.5 dBFS on the loudest mixes',
   {
     skip: firefoxBin ? false : 'Firefox 157 is not installed',
     timeout: 300000,
