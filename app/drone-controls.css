@@ -1,0 +1,76 @@
+.selection-bar {
+  flex-wrap: wrap;
+}
+
+.drone-controls {
+  display: flex;
+  align-items: center;
+  flex: 1 1 220px;
+  gap: 8px 12px;
+  min-height: 44px;
+  min-width: 0;
+}
+
+.drone-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
+  color: var(--quiet);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.drone-toggle[aria-pressed='true'] {
+  color: var(--green);
+  background: var(--accent);
+  border-color: var(--green);
+}
+
+.drone-toggle:focus-visible,
+.drone-volume input:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+
+.drone-volume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 140px;
+  min-height: 44px;
+  min-width: 44px;
+  color: var(--quiet);
+  font-size: 13px;
+}
+
+.drone-volume span {
+  white-space: nowrap;
+}
+
+.drone-volume input {
+  flex: 1 1 88px;
+  min-width: 88px;
+  height: 44px;
+  margin: 0;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+.drone-status {
+  flex: 1 0 100%;
+  color: var(--amber);
+  font-size: 12px;
+}
+
+@media (max-width: 750px) {
+  .selection-bar .drone-controls {
+    flex: 1 0 100%;
+  }
+}

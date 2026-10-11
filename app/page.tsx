@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { flushSync } from 'react-dom';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { DroneControls, useReedDrone } from '@/components/drone-controls';
 import { PondScene } from '@/components/pond-scene';
 import {
   ArrowLeft,
@@ -59,6 +60,11 @@ export default function Home() {
   const setRoot = kind === 'scales' ? setScaleRoot : setChordRoot;
   const [scaleId, setScaleId] = useState('dorian'),
     [qualityId, setQualityId] = useState('major');
+  const drone = useReedDrone({
+    active: page === 'explore' && kind === 'scales',
+    root: scaleRoot,
+    scaleId,
+  });
   const [chordView, setChordView] = useState<'shape' | 'tones'>('shape');
   const [voicingIndex, setVoicingIndex] = useState(0);
   const [voicingBass, setVoicingBass] = useState('all');
@@ -659,6 +665,15 @@ export default function Home() {
                       }
                     />
                   </label>
+                  {kind === 'scales' && (
+                    <DroneControls
+                      enabled={drone.enabled}
+                      volume={drone.volume}
+                      message={drone.message}
+                      onToggle={() => drone.toggle()}
+                      onVolume={(value) => drone.setVolume(value)}
+                    />
+                  )}
                 </div>
                 <p className="scale-caption">
                   {kind === 'scales'
