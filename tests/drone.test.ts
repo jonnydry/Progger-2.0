@@ -365,6 +365,27 @@ void test('the cello seam keeps the slope across the wrap', () => {
     afterWrap <= afterBody + 1e-6,
     `seam bend ${afterWrap} body ${afterBody}`,
   );
+  const sourcePeak = (data: ArrayLike<number>) => {
+    let max = 0;
+    for (let index = 0; index < data.length; index += 1) {
+      max = Math.max(max, Math.abs(data[index] ?? 0));
+    }
+    return max;
+  };
+  assert.ok(sourcePeak(closed) <= sourcePeak(samples) + 1e-7);
+  assert.ok(sourcePeak(after) <= sourcePeak(flat) + 1e-7);
+  const steep = new Float32Array(4000);
+  steep[0] = 0.2;
+  steep[1] = 0.5;
+  const steepClosed = closeCelloSeam(steep, fade);
+  assert.ok(
+    sourcePeak(steepClosed) <= sourcePeak(steep) + 1e-7,
+    `steep peak ${sourcePeak(steepClosed)}`,
+  );
+  assert.ok(
+    Math.abs(celloWrapSlopeChange(steepClosed)) < slopeLimit,
+    `steep slope ${celloWrapSlopeChange(steepClosed)}`,
+  );
   console.log(
     `synthetic seam before ${beforeWrap} body ${beforeBody} after ${afterWrap} body ${afterBody}`,
   );

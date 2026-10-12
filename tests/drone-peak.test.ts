@@ -825,7 +825,7 @@ function assertGrid(report: HeadroomReport) {
   assert.equal(rows.length, DRONE_ROOTS.length * DRONE_MODES.length * 3 * 4);
   assert.equal(report.caps?.reed, 0.063);
   assert.equal(report.caps?.bow, 0.072);
-  assert.equal(report.caps?.cello, 0.0736);
+  assert.equal(report.caps?.cello, 0.0695);
   assert.ok((report.chord?.peak ?? 0) > 0.5, JSON.stringify(report.chord));
   assert.equal(report.rev?.frets, REV_FRET_KEY);
   assert.deepEqual(report.rev?.midis, [53]);

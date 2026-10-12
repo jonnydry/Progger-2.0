@@ -40,6 +40,8 @@ type RenderResult = {
     after: number;
     body: number;
     playback: number;
+    recordingPeak: number;
+    closedPeak: number;
   }[];
   switches?: {
     name: string;
@@ -396,6 +398,14 @@ async function measureSeam(file) {
     const previous = seamAt390370f(body, fade);
     const quarter = seamQuarterSine(body, fade);
     const closed = closeCelloSeam(body, fade);
+    const peakOf = (data) => {
+      let max = 0;
+      for (let index = 0; index < data.length; index += 1) {
+        const value = Math.abs(data[index]);
+        if (value > max) max = value;
+      }
+      return max;
+    };
     const prepared = prepareCelloBuffer(decodeContext, decoded);
     const channel = copyMono(prepared);
     const bufferStep = Math.abs(channel[0] - channel[channel.length - 1]);
@@ -429,6 +439,8 @@ async function measureSeam(file) {
       after: celloWrapSecondDifference(closed),
       body: celloBodySecondDifference(closed),
       playback: windowSecondDifference(data, at, 8),
+      recordingPeak: peakOf(body),
+      closedPeak: peakOf(closed),
       decodedLength: decoded.length,
       around: Array.from(data.slice(at - 2, at + 3)),
     };
@@ -768,6 +780,10 @@ function assertContinuous(result: RenderResult) {
       `${seam.file} after ${seam.after} body ${seam.body}`,
     );
     assert.ok(
+      seam.closedPeak <= seam.recordingPeak + 1e-6,
+      `${seam.file} closed peak ${seam.closedPeak} recording ${seam.recordingPeak}`,
+    );
+    assert.ok(
       seam.playback <= seam.body + 1e-4,
       `${seam.file} playback curvature ${seam.playback} body ${seam.body}`,
     );
@@ -782,7 +798,7 @@ function assertContinuous(result: RenderResult) {
       );
     }
     console.log(
-      `${seam.file} before ${seam.before} body ${seam.beforeBody} after ${seam.after} playback ${seam.playback} body ${seam.body} slope ${seam.slope} old ${seam.oldSlope}`,
+      `${seam.file} before ${seam.before} body ${seam.beforeBody} after ${seam.after} playback ${seam.playback} body ${seam.body} slope ${seam.slope} old ${seam.oldSlope} peak ${seam.recordingPeak} closed ${seam.closedPeak}`,
     );
   }
   assert.equal(result.switches?.length, 6 * 2 * 24);

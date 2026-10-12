@@ -394,7 +394,8 @@ export function windowSecondDifference(
  * sample before it. Following the line across the whole fade walks off the
  * waveform, because the opening slope is steep. The curvature check looks
  * ±8 samples past the join, so those samples sit on the line, and the next
- * 20 smoothstep back to the recording.
+ * 20 smoothstep back to the recording. The line is held to the recording's
+ * peak, so the bend cannot make a sample louder than the loop already was.
  */
 export function closeCelloSeam(
   samples: Float32Array,
@@ -402,6 +403,11 @@ export function closeCelloSeam(
 ): Float32Array {
   const out = samples.slice();
   if (out.length < 2) return out;
+  let peak = 0;
+  for (let index = 0; index < out.length; index += 1) {
+    const value = Math.abs(out[index] ?? 0);
+    if (value > peak) peak = value;
+  }
   const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
   const slope = (out[1] ?? 0) - (out[0] ?? 0);
   const hold = Math.min(8, fade);
@@ -409,7 +415,9 @@ export function closeCelloSeam(
   const last = out.length - 1;
   for (let steps = 1; steps <= hold + span; steps += 1) {
     const at = last - steps + 1;
-    const line = (out[0] ?? 0) - steps * slope;
+    let line = (out[0] ?? 0) - steps * slope;
+    if (line > peak) line = peak;
+    else if (line < -peak) line = -peak;
     let weight = 1;
     if (steps > hold && span > 0) {
       const progress = (hold + span - steps) / span;
