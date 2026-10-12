@@ -19,7 +19,7 @@ import {
   scaleWalk,
 } from '../lib/drone.ts';
 import { QUALITIES, diatonicChords, voicings } from '../lib/harmony.ts';
-import { SCALES, TUNING, mod, spell } from '../lib/music.ts';
+import { SCALES } from '../lib/music.ts';
 import { scheduleVoicing, voicingMidi } from '../lib/voicing-audio.ts';
 
 /**
@@ -383,10 +383,14 @@ const MODE_SCALE_ID: Record<string, string> = {
   locrian: 'locrian',
 };
 
-const STRING_NAMES = ['E', 'A', 'D', 'G', 'B', 'e'];
-
-/** A-string fret 8, the single F3 Rev rendered for E♭ Ionian. */
+/** A-string fret 8, the single F3 Rev rendered for E♭ Ionian. Not a catalog voicing. */
 export const REV_FRET_KEY = 'x,8,x,x,x,x';
+
+export function soundingCount(frets: readonly (number | null)[]): number {
+  let count = 0;
+  for (const fret of frets) if (fret !== null) count += 1;
+  return count;
+}
 
 export function fretKey(frets: readonly (number | null)[]): string {
   return frets.map((fret) => (fret === null ? 'x' : String(fret))).join(',');
@@ -413,15 +417,16 @@ function cachedVoicings(root: string, qualityId: string) {
 
 /**
  * Shapes measured for one key and mode: every diatonic grip the scale page
- * opens, plus one-note frets of scale tones. Those one-note frets are probes
- * for this harness. The catalog never builds them, and the app never plays
- * them. The loudest shape is chosen by a rendered peak.
+ * opens. Catalog voicings have at least two sounding strings. One-note
+ * frets are not candidates. The app cannot play them. The loudest shape
+ * is chosen by a rendered peak.
  */
 export function contextVoicings(root: string, modeId: string): ChordChoice[] {
   const scale = scaleForMode(modeId);
   const seen = new Set<string>();
   const choices: ChordChoice[] = [];
   const add = (frets: readonly (number | null)[], label: string) => {
+    if (soundingCount(frets) < 2) return;
     const key = fretKey(frets);
     if (seen.has(key)) return;
     seen.add(key);
@@ -430,18 +435,6 @@ export function contextVoicings(root: string, modeId: string): ChordChoice[] {
   for (const chord of diatonicChords(root, scale)) {
     for (const voicing of cachedVoicings(chord.root, chord.qualityId)) {
       add(voicing.frets, `${chord.symbol} ${voicing.name}`);
-    }
-  }
-  const pcs = new Set(spell(root, [...scale.formula]).map((note) => note.pc));
-  for (let string = 0; string < TUNING.length; string += 1) {
-    const open = TUNING[string];
-    if (open === undefined) continue;
-    for (let fret = 0; fret <= 24; fret += 1) {
-      if (!pcs.has(mod(open + fret))) continue;
-      const frets: (number | null)[] = [null, null, null, null, null, null];
-      frets[string] = fret;
-      const name = STRING_NAMES[string] ?? String(string);
-      add(frets, `${name}-string fret ${fret}`);
     }
   }
   return choices;
@@ -662,8 +655,9 @@ async function measureContextChords(log: (message: string) => void): Promise<{
     }
   }
   const eb = lists.get(contextId('Eb', 'ionian'));
-  if (!eb?.some((choice) => fretKey(choice.frets) === REV_FRET_KEY)) {
-    throw new Error('Eb ionian does not include A-string fret 8.');
+  if (!eb?.length) throw new Error('Eb ionian has no playable voicing.');
+  if (eb.some((choice) => fretKey(choice.frets) === REV_FRET_KEY)) {
+    throw new Error('Eb ionian still includes the one-note A-string probe.');
   }
   const shapes = [...unique.values()];
   log(`voicings ${shapes.length}`);
@@ -684,8 +678,11 @@ async function measureContextChords(log: (message: string) => void): Promise<{
     string,
     { choice: ChordChoice; peak: number; count: number }
   >();
-  const winnerKeys = new Set<string>([REV_FRET_KEY]);
+  const winnerKeys = new Set<string>();
   for (const [key, choices] of lists) {
+    if (choices.some((choice) => soundingCount(choice.frets) < 2)) {
+      throw new Error(`${key} includes a voicing the app cannot play.`);
+    }
     const measured = loudestMeasured(
       choices,
       choices.map((choice) => {
@@ -697,8 +694,11 @@ async function measureContextChords(log: (message: string) => void): Promise<{
     selected.set(key, { choice: measured.choice, peak: measured.peak, count: choices.length });
     winnerKeys.add(fretKey(measured.choice.frets));
   }
-  const revChoice = unique.get(REV_FRET_KEY);
-  if (!revChoice) throw new Error('A-string fret 8 was not rendered.');
+  const revChoice: ChordChoice = {
+    frets: fretsFromKey(REV_FRET_KEY),
+    midis: voicingMidi(fretsFromKey(REV_FRET_KEY)),
+    label: 'A-string fret 8',
+  };
   const clips = new Map<string, Clip>();
   for (const key of winnerKeys) {
     const shape = unique.get(key);
@@ -737,11 +737,14 @@ async function measureContextChords(log: (message: string) => void): Promise<{
       count: item.count,
     });
   }
-  const revClip = clips.get(REV_FRET_KEY);
-  if (!revClip) throw new Error('A-string fret 8 clip is missing.');
+  const revClip = await renderChord(revChoice.frets, 3.2);
+  const revPeak = peakOf(revClip.channels).peak;
+  if (!(revClip.peakAt >= 0) || !(revPeak > 0.2)) {
+    throw new Error(`A-string fret 8 rendered at ${revPeak}.`);
+  }
   return {
     ready,
-    rev: { choice: revChoice, clip: revClip, peak: peakOf(revClip.channels).peak },
+    rev: { choice: revChoice, clip: revClip, peak: revPeak },
   };
 }
 

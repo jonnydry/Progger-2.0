@@ -4,9 +4,12 @@ on:
   schedule:
     - cron: '17 6 * * *'
   workflow_dispatch:
+  pull_request:
 
 permissions:
+  actions: write
   contents: write
+  pull-requests: write
 
 jobs:
   sweep:
@@ -38,15 +41,37 @@ jobs:
       - name: Full headroom sweep
         run: npm run test:headroom
 
-      - name: Commit worst cases
+      - name: Upload worst cases
+        uses: actions/upload-artifact@v7
+        with:
+          name: headroom-worst
+          path: tests/fixtures/headroom-worst.json
+          if-no-files-found: error
+
+      - name: Open a pull request when worst cases change
         if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          branch="bot/headroom-worst-${GITHUB_RUN_ID}"
+          case "$branch" in
+            main|master|refs/heads/main|refs/heads/master)
+              echo "refusing to push ${branch}"
+              exit 1
+              ;;
+          esac
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
           git add tests/fixtures/headroom-worst.json
           if git diff --cached --quiet; then
             echo 'worst cases unchanged'
-          else
-            git commit -m "chore: refresh headroom worst cases"
-            git push
+            exit 0
           fi
+          git commit -m "chore: refresh headroom worst cases"
+          git push origin "refs/heads/${branch}:refs/heads/${branch}"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "chore: refresh headroom worst cases" \
+            --body "The nightly headroom sweep refreshed tests/fixtures/headroom-worst.json. This pull request is opened from a bot branch. The workflow does not push to main."

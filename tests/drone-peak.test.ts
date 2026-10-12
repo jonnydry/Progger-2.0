@@ -13,6 +13,8 @@ import {
   dronePitches,
   type DroneModeId,
 } from '../lib/drone.ts';
+import { QUALITIES, diatonicChords, voicings } from '../lib/harmony.ts';
+import { SCALES } from '../lib/music.ts';
 import { FULL_SCALE_MARGIN } from '../lib/drone-levels.ts';
 import { launchNamed, type BrowserName } from './browser-launch.ts';
 import {
@@ -23,6 +25,7 @@ import {
   fretKey,
   headroomCases,
   loudestMeasured,
+  soundingCount,
   type HeadroomReport,
   type WorstCase,
 } from './drone-headroom-run.ts';
@@ -745,10 +748,11 @@ void test('the headroom grid is every key and mode, and it uses the chord player
 });
 
 void test('each key measures every playable voicing, and the peak picks the chord', () => {
-  // One-note frets below are harness probes. Catalog voicings start at two strings.
   const eb = contextVoicings('Eb', 'ionian');
-  assert.ok(eb.some((choice) => fretKey(choice.frets) === REV_FRET_KEY));
-  assert.equal(eb.find((choice) => fretKey(choice.frets) === REV_FRET_KEY)?.midis.join(','), '53');
+  assert.equal(
+    eb.some((choice) => fretKey(choice.frets) === REV_FRET_KEY),
+    false,
+  );
   assert.ok(eb.some((choice) => choice.midis.length >= 3));
   assert.equal(
     eb.some((choice) => fretKey(choice.frets) === '0,x,x,x,x,x'),
@@ -758,10 +762,34 @@ void test('each key measures every playable voicing, and the peak picks the chor
   for (const root of DRONE_ROOTS) {
     for (const mode of DRONE_MODES) {
       const choices = contextVoicings(root, mode.id);
-      assert.ok(
-        choices.some((choice) => choice.midis.length === 1),
-        `${root} ${mode.id} single`,
+      const scale = SCALES.find(
+        (item) =>
+          item.formula.length === mode.formula.length &&
+          item.formula.every((degree, index) => degree === mode.formula[index]),
       );
+      if (!scale) throw new Error(`No scale for ${mode.id}.`);
+      const catalog = new Set<string>();
+      for (const chord of diatonicChords(root, scale)) {
+        const quality = QUALITIES.find((item) => item.id === chord.qualityId);
+        if (!quality) throw new Error(chord.qualityId);
+        for (const voicing of voicings(chord.root, quality)) {
+          if (soundingCount(voicing.frets) < 2) continue;
+          catalog.add(fretKey(voicing.frets));
+        }
+      }
+      assert.ok(choices.length > 0, `${root} ${mode.id} playable`);
+      assert.deepEqual(
+        new Set(choices.map((choice) => fretKey(choice.frets))),
+        catalog,
+        `${root} ${mode.id}`,
+      );
+      for (const choice of choices) {
+        assert.ok(
+          soundingCount(choice.frets) >= 2,
+          `${root} ${mode.id} ${fretKey(choice.frets)}`,
+        );
+        assert.ok(choice.midis.length >= 2, `${root} ${mode.id}`);
+      }
       assert.ok(
         choices.some((choice) => choice.midis.length >= 3),
         `${root} ${mode.id} grip`,
@@ -846,11 +874,20 @@ function assertGrid(report: HeadroomReport) {
   assert.equal(contexts.length, DRONE_ROOTS.length * DRONE_MODES.length);
   const eb = contexts.find((item) => item.root === 'Eb' && item.mode === 'ionian');
   if (!eb) throw new Error('Eb ionian chord');
-  assert.ok(
-    eb.peak + 1e-6 >= revPeak,
-    `Eb ionian ${eb.frets} ${eb.peak} below A-string fret 8 ${revPeak}`,
+  assert.notEqual(eb.frets, REV_FRET_KEY);
+  assert.ok(soundingCount(eb.frets.split(',').map((part) => (part === 'x' ? null : Number(part)))) >= 2);
+  console.log(
+    `Eb ionian playable ${eb.label} ${eb.frets} notes ${eb.midis.length} peak ${eb.peak}; probe ${REV_FRET_KEY} ${revPeak}`,
   );
   assert.equal(report.chord?.frets, eb.frets);
+  for (const item of contexts) {
+    const frets = item.frets.split(',').map((part) => (part === 'x' ? null : Number(part)));
+    const sounding = soundingCount(frets);
+    assert.ok(
+      sounding >= 2,
+      `${item.root} ${item.mode} ${item.frets} has ${sounding} strings`,
+    );
+  }
   for (const row of rows) {
     const chord = contexts.find((item) => item.root === row.root && item.mode === row.mode);
     assert.equal(row.chordFrets, chord?.frets, `${row.root} ${row.mode}`);
@@ -932,10 +969,17 @@ function readWorst(name: BrowserName): WorstCase[] {
   const parsed = JSON.parse(readFileSync(WORST_FIXTURE, 'utf8')) as SweepFile;
   const block = parsed[name];
   if (!block?.cases?.length) {
-    throw new Error(`headroom worst-case file has no ${name} cases`);
+    throw new Error(`headroom-worst.json has no ${name} cases to render`);
   }
   return block.cases;
 }
+
+void test('the push job has worst cases to render', () => {
+  for (const name of ['chromium', 'firefox'] as const) {
+    const cases = readWorst(name);
+    assert.ok(cases.length > 0, `${name} has no worst cases to render`);
+  }
+});
 
 function subsetPage(cases: WorstCase[]): string {
   const payload = JSON.stringify(cases).replaceAll('<', '\\u003c');
@@ -986,9 +1030,9 @@ void test(
       t.skip('the full sweep replaces the subset');
       return;
     }
+    const cases = readWorst('chromium');
     const browser = await launchNamed('chromium', t);
     try {
-      const cases = readWorst('chromium');
       const report = (await renderInBrowser(
         browser,
         'chromium',
@@ -1012,9 +1056,9 @@ void test(
       t.skip('the full sweep replaces the subset');
       return;
     }
+    const cases = readWorst('firefox');
     const browser = await launchNamed('firefox', t);
     try {
-      const cases = readWorst('firefox');
       const report = (await renderInBrowser(
         browser,
         'firefox',
