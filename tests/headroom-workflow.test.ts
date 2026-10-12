@@ -11,11 +11,24 @@ void test('the nightly sweep opens a bot pull request and does not push main', (
   assert.match(workflow, /^  schedule:$/m);
   assert.match(workflow, /^  workflow_dispatch:$/m);
   assert.doesNotMatch(workflow, /^  pull_request:$/m);
-  assert.match(workflow, /^  actions: write$/m);
-  assert.match(workflow, /^  contents: write$/m);
-  assert.match(workflow, /^  pull-requests: write$/m);
-  assert.match(workflow, /uses: actions\/upload-artifact@v7/);
-  assert.match(workflow, /if-no-files-found: error/);
+  assert.match(
+    workflow,
+    /permissions:\n  contents: write\n  pull-requests: write\n/,
+  );
+  assert.doesNotMatch(workflow, /actions: write/);
+  assert.match(workflow, /npm run test:headroom-check/);
+  assert.match(workflow, /HEADROOM_CHECK_RESULT/);
+  assert.match(workflow, /the render check did not record a result/);
+  assert.match(workflow, /per-push render check ran against that file/);
+  assert.match(workflow, /GITHUB_TOKEN does not trigger CI/);
+  assert.match(
+    workflow,
+    /Allow GitHub Actions to create and approve pull requests/,
+  );
+  assert.match(workflow, /pending Jonny's OK/);
+  const checkAt = workflow.indexOf('npm run test:headroom-check');
+  const prAt = workflow.indexOf('gh pr create');
+  assert.ok(checkAt > 0 && prAt > checkAt);
   assert.match(workflow, /if: github\.event_name != 'pull_request'/);
   assert.match(workflow, /branch="bot\/headroom-worst-\$\{GITHUB_RUN_ID\}"/);
   assert.match(workflow, /git push origin "refs\/heads\/\$\{branch\}:refs\/heads\/\$\{branch\}"/);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -853,7 +853,7 @@ function assertGrid(report: HeadroomReport) {
   assert.equal(rows.length, DRONE_ROOTS.length * DRONE_MODES.length * 3 * 4);
   assert.equal(report.caps?.reed, 0.063);
   assert.equal(report.caps?.bow, 0.072);
-  assert.equal(report.caps?.cello, 0.0695);
+  assert.equal(report.caps?.cello, 0.0736);
   assert.ok((report.chord?.peak ?? 0) > 0.5, JSON.stringify(report.chord));
   assert.equal(report.rev?.frets, REV_FRET_KEY);
   assert.deepEqual(report.rev?.midis, [53]);
@@ -1038,6 +1038,22 @@ function assertSubset(report: HeadroomReport, cases: WorstCase[]) {
   }
 }
 
+function recordCheck(name: string, rows: NonNullable<HeadroomReport['rows']>) {
+  const summary = ['reed', 'bow', 'cello'].map((sound) => {
+    const ofSound = rows.filter((row) => row.sound === sound);
+    let worst = ofSound[0];
+    for (const row of ofSound) {
+      if (!worst || row.confirmed > worst.confirmed) worst = row;
+    }
+    if (!worst) throw new Error(`${name} ${sound}`);
+    return `${sound} ${worst.confirmed} ${worst.root} ${worst.mode} ${worst.chordFrets}`;
+  });
+  const line = `HEADROOM_CHECK ${name} passed; ${summary.join('; ')}`;
+  console.log(line);
+  const path = process.env.HEADROOM_CHECK_RESULT;
+  if (path) appendFileSync(path, `${line}\n`);
+}
+
 void test(
   'Chrome re-renders the last full sweep worst mixes at or below -1.5 dBFS',
   { timeout: 300000 },
@@ -1058,6 +1074,7 @@ void test(
       )) as unknown as HeadroomReport;
       console.log(report.ua);
       assertSubset(report, cases);
+      recordCheck('chromium', report.rows ?? []);
     } finally {
       await browser.close();
     }
@@ -1084,6 +1101,7 @@ void test(
       )) as unknown as HeadroomReport;
       console.log(report.ua);
       assertSubset(report, cases);
+      recordCheck('firefox', report.rows ?? []);
     } finally {
       await browser.close();
     }

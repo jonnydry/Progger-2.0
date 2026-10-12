@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write
   contents: write
   pull-requests: write
 
@@ -40,17 +39,16 @@ jobs:
       - name: Full headroom sweep
         run: npm run test:headroom
 
-      - name: Upload worst cases
-        uses: actions/upload-artifact@v7
-        with:
-          name: headroom-worst
-          path: tests/fixtures/headroom-worst.json
-          if-no-files-found: error
+      - name: Re-render the worst cases the push job checks
+        env:
+          HEADROOM_CHECK_RESULT: ${{ github.workspace }}/headroom-check-result.txt
+        run: npm run test:headroom-check
 
       - name: Open a pull request when worst cases change
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
+          HEADROOM_CHECK_RESULT: ${{ github.workspace }}/headroom-check-result.txt
         run: |
           branch="bot/headroom-worst-${GITHUB_RUN_ID}"
           case "$branch" in
@@ -59,6 +57,10 @@ jobs:
               exit 1
               ;;
           esac
+          if [ ! -s "$HEADROOM_CHECK_RESULT" ]; then
+            echo 'the render check did not record a result'
+            exit 1
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -b "$branch"
@@ -69,8 +71,22 @@ jobs:
           fi
           git commit -m "chore: refresh headroom worst cases"
           git push origin "refs/heads/${branch}:refs/heads/${branch}"
+          result=$(cat "$HEADROOM_CHECK_RESULT")
+          body=$(cat <<EOF
+The nightly headroom sweep refreshed tests/fixtures/headroom-worst.json.
+
+The per-push render check ran against that file before this pull request was opened. A pull request opened with GITHUB_TOKEN does not trigger CI.
+
+Result:
+${result}
+
+This pull request is opened from bot branch ${branch}. The workflow does not push to main.
+
+The repository setting "Allow GitHub Actions to create and approve pull requests" must be on for this step. That setting is pending Jonny's OK.
+EOF
+)
           gh pr create \
             --base main \
             --head "$branch" \
             --title "chore: refresh headroom worst cases" \
-            --body "The nightly headroom sweep refreshed tests/fixtures/headroom-worst.json. This pull request is opened from a bot branch. The workflow does not push to main."
+            --body "$body"
