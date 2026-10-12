@@ -1,29 +1,17 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { pathToFileURL } from 'node:url';
+import { launchNamed, type BrowserName } from './browser-launch.ts';
 
 const STEP_LIMIT = 1e-3;
 const DRONE_CASES = 96;
 const WALK_CASES = 48;
 const CASES = DRONE_CASES * 3 + WALK_CASES;
-
-const chromeBin = [
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/google-chrome',
-].find((path) => existsSync(path));
-const firefoxBin = ['/tmp/firefox-157/firefox/firefox'].find((path) =>
-  existsSync(path),
-);
-const playwrightEntry = [
-  join(process.cwd(), 'node_modules/playwright/index.mjs'),
-  '/tmp/pw/node_modules/playwright/index.mjs',
-].find((path) => existsSync(path));
 
 type TailResult = {
   name: string;
@@ -47,6 +35,11 @@ type RenderResult = {
     oldSlope: number;
     interiorStep: number;
     decodedLength?: number;
+    before: number;
+    beforeBody: number;
+    after: number;
+    body: number;
+    playback: number;
   }[];
   switches?: {
     name: string;
@@ -88,7 +81,7 @@ function bundleProbe(): string {
   writeFileSync(
     entry,
     `export { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, soundLinearCap, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN } from '${root}/lib/drone-audio.ts';
-export { dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange } from '${root}/lib/drone.ts';
+export { dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange, celloWrapSecondDifference, celloBodySecondDifference, windowSecondDifference } from '${root}/lib/drone.ts';
 `,
   );
   execFileSync(
@@ -109,7 +102,7 @@ function page(): string {
   return `<!doctype html>
 <meta charset="utf-8" />
 <script type="module">
-import { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, soundLinearCap, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN, dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange } from '/probe.js';
+import { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, soundLinearCap, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN, dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange, celloWrapSecondDifference, celloBodySecondDifference, windowSecondDifference } from '/probe.js';
 const SOUNDS = ['reed', 'bow', 'cello'];
 
 const SAMPLE_RATE = 48000;
@@ -372,6 +365,19 @@ function seamAt390370f(samples, fadeSamples) {
   return out;
 }
 
+function seamQuarterSine(samples, fadeSamples) {
+  const out = samples.slice();
+  const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
+  const target = 2 * out[0] - out[1];
+  const delta = target - out[out.length - 1];
+  for (let index = 0; index < fade; index += 1) {
+    const progress = (index + 1) / fade;
+    const weight = Math.sin((progress * Math.PI) / 2);
+    out[out.length - fade + index] += delta * weight;
+  }
+  return out;
+}
+
 function copyMono(buffer) {
   const channel = new Float32Array(buffer.length);
   buffer.copyFromChannel(channel, 0);
@@ -388,6 +394,7 @@ async function measureSeam(file) {
     const body = decodedChannel.slice(bounds.start, bounds.end);
     const fade = celloSeamFade(decoded.sampleRate, body.length);
     const previous = seamAt390370f(body, fade);
+    const quarter = seamQuarterSine(body, fade);
     const closed = closeCelloSeam(body, fade);
     const prepared = prepareCelloBuffer(decodeContext, decoded);
     const channel = copyMono(prepared);
@@ -417,6 +424,11 @@ async function measureSeam(file) {
       slope: celloWrapSlopeChange(closed),
       playbackSlope,
       oldSlope: celloWrapSlopeChange(previous),
+      before: celloWrapSecondDifference(quarter),
+      beforeBody: celloBodySecondDifference(quarter),
+      after: celloWrapSecondDifference(closed),
+      body: celloBodySecondDifference(closed),
+      playback: windowSecondDifference(data, at, 8),
       decodedLength: decoded.length,
       around: Array.from(data.slice(at - 2, at + 3)),
     };
@@ -683,102 +695,36 @@ function serve(
   });
 }
 
-async function runChrome(bundlePath: string): Promise<RenderResult> {
-  if (!chromeBin || !playwrightEntry)
-    throw new Error('Chrome harness is unavailable.');
-  const { url, result } = await serve(bundlePath);
-  const playwright = (await import(pathToFileURL(playwrightEntry).href)) as {
-    chromium: {
-      launch: (options: {
-        executablePath: string;
-        headless: boolean;
-        args: string[];
-      }) => Promise<{
-        version: () => string;
-        newPage: () => Promise<{
-          goto: (
-            target: string,
-            options: { waitUntil: string; timeout: number },
-          ) => Promise<unknown>;
-          waitForFunction: (
-            fn: () => boolean,
-            arg: null,
-            options: { timeout: number },
-          ) => Promise<unknown>;
-          on: (event: string, listener: (error: Error) => void) => void;
-        }>;
-        close: () => Promise<void>;
-      }>;
-    };
-  };
-  const browser = await playwright.chromium.launch({
-    executablePath: chromeBin,
-    headless: true,
-    args: ['--no-sandbox', '--use-angle=swiftshader'],
-  });
+async function runNamed(
+  name: BrowserName,
+  harness: { skip: (reason?: string) => void },
+  bundlePath: string,
+): Promise<RenderResult> {
+  const browser = await launchNamed(name, harness);
   try {
+    const { url, result } = await serve(bundlePath);
     const tab = await browser.newPage();
     const errors: string[] = [];
     tab.on('pageerror', (error) => errors.push(String(error)));
+    tab.on('console', (message) => console.log(message.text()));
     await tab.goto(url, { waitUntil: 'load', timeout: 120000 });
-    await tab.waitForFunction(() => document.title === 'done', null, {
-      timeout: 480000,
-    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const body = await Promise.race([
+      result,
+      new Promise<string>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${name} render timed out`)),
+          480000,
+        );
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
     if (errors.length) throw new Error(errors.join('\n'));
-    console.log(`chrome ${browser.version()}`);
+    console.log(`${name} ${browser.version()}`);
+    return JSON.parse(body) as RenderResult;
   } finally {
     await browser.close();
   }
-  return JSON.parse(await result) as RenderResult;
-}
-
-async function runFirefox(bundlePath: string): Promise<RenderResult> {
-  if (!firefoxBin) throw new Error('Firefox 157 is unavailable.');
-  const { url, result } = await serve(bundlePath);
-  const profile = join(tmpdir(), 'fx157-reed-profile');
-  execFileSync('rm', ['-rf', profile]);
-  execFileSync('mkdir', ['-p', profile]);
-  writeFileSync(
-    join(profile, 'user.js'),
-    [
-      'user_pref("browser.shell.checkDefaultBrowser", false);',
-      'user_pref("browser.aboutwelcome.enabled", false);',
-      'user_pref("datareporting.policy.dataSubmissionEnabled", false);',
-      'user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);',
-      'user_pref("app.update.disabledForTesting", true);',
-      'user_pref("browser.startup.homepage_override.mstone", "ignore");',
-      'user_pref("browser.firstrun.didSeeAboutWelcome", true);',
-    ].join('\n'),
-  );
-  const version = execFileSync(firefoxBin, ['--version'], {
-    encoding: 'utf8',
-  }).trim();
-  console.log(version);
-  const child = spawn(
-    firefoxBin,
-    ['--headless', '--no-remote', '--profile', profile, url],
-    { stdio: 'ignore', detached: true },
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const body = await Promise.race([
-    result,
-    new Promise<string>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error('Firefox render timed out')),
-        480000,
-      );
-    }),
-  ]);
-  if (timer) clearTimeout(timer);
-  if (child.pid) {
-    try {
-      process.kill(-child.pid, 'SIGTERM');
-    } catch {
-      child.kill('SIGTERM');
-    }
-  }
-  child.unref();
-  return JSON.parse(body) as RenderResult;
 }
 
 function assertContinuous(result: RenderResult) {
@@ -817,8 +763,26 @@ function assertContinuous(result: RenderResult) {
       Math.abs(seam.oldSlope) > 1e-3,
       `${seam.file} 390370f slope ${seam.oldSlope} should fail`,
     );
+    assert.ok(
+      seam.after <= seam.body + 1e-6,
+      `${seam.file} after ${seam.after} body ${seam.body}`,
+    );
+    assert.ok(
+      seam.playback <= seam.body + 1e-4,
+      `${seam.file} playback curvature ${seam.playback} body ${seam.body}`,
+    );
+    if (
+      seam.file === 'cello-d2.m4a' ||
+      seam.file === 'cello-e3.m4a' ||
+      seam.file === 'cello-f4.m4a'
+    ) {
+      assert.ok(
+        seam.before > seam.beforeBody,
+        `${seam.file} quarter-sine ${seam.before} should exceed body ${seam.beforeBody}`,
+      );
+    }
     console.log(
-      `${seam.file} buffer ${seam.bufferStep} wrap ${seam.step} interior ${seam.interiorStep} slope ${seam.slope} old ${seam.oldSlope}`,
+      `${seam.file} before ${seam.before} body ${seam.beforeBody} after ${seam.after} playback ${seam.playback} body ${seam.body} slope ${seam.slope} old ${seam.oldSlope}`,
     );
   }
   assert.equal(result.switches?.length, 6 * 2 * 24);
@@ -846,15 +810,9 @@ function assertContinuous(result: RenderResult) {
 
 void test(
   'Chrome renders every drone sound, including the reed bellows, without a one-sample dip or a hard tail cut',
-  {
-    skip:
-      chromeBin && playwrightEntry
-        ? false
-        : 'Chrome or Playwright is not installed',
-    timeout: 480000,
-  },
-  async () => {
-    const result = await runChrome(bundleProbe());
+  { timeout: 480000 },
+  async (t) => {
+    const result = await runNamed('chromium', t, bundleProbe());
     console.log(result.ua);
     console.log(JSON.stringify(result.bySound));
     console.log(
@@ -865,13 +823,10 @@ void test(
 );
 
 void test(
-  'Firefox 157 renders every drone sound, including the reed bellows, without a one-sample dip or a hard tail cut',
-  {
-    skip: firefoxBin ? false : 'Firefox 157 is not installed',
-    timeout: 480000,
-  },
-  async () => {
-    const result = await runFirefox(bundleProbe());
+  'Firefox renders every drone sound, including the reed bellows, without a one-sample dip or a hard tail cut',
+  { timeout: 480000 },
+  async (t) => {
+    const result = await runNamed('firefox', t, bundleProbe());
     console.log(result.ua);
     console.log(JSON.stringify(result.bySound));
     console.log(

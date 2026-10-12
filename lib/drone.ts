@@ -323,9 +323,76 @@ export function celloWrapSlopeChange(samples: ArrayLike<number>): number {
 }
 
 /**
- * Bend the end of a loop toward 2·x[0]−x[1]. Matching x[0] removes the
- * step and leaves the slope change. The AAC join is a few hundredths;
- * spreading the correction across the fade keeps that slope change at 0.
+ * Largest absolute second difference within `radius` samples of the wrap.
+ * Index 0 is the first sample after the join.
+ */
+export function celloWrapSecondDifference(
+  samples: ArrayLike<number>,
+  radius = 8,
+): number {
+  const length = samples.length;
+  if (length < 3) return 0;
+  const span = Math.min(Math.max(0, radius), length - 1);
+  let max = 0;
+  for (let delta = -span; delta <= span; delta += 1) {
+    const index = (length + delta) % length;
+    const second = Math.abs(
+      (samples[(index + 1) % length] ?? 0) -
+        2 * (samples[index] ?? 0) +
+        (samples[(index - 1 + length) % length] ?? 0),
+    );
+    if (second > max) max = second;
+  }
+  return max;
+}
+
+/**
+ * Largest absolute second difference outside the tail of the join.
+ * The wrap window is held to this, so a seam kink has to exceed the loop itself.
+ */
+export function celloBodySecondDifference(
+  samples: ArrayLike<number>,
+  radius = 8,
+): number {
+  const length = samples.length;
+  if (length < radius + 3) return 0;
+  let max = 0;
+  for (let index = 1; index < length - radius; index += 1) {
+    const second = Math.abs(
+      (samples[index + 1] ?? 0) -
+        2 * (samples[index] ?? 0) +
+        (samples[index - 1] ?? 0),
+    );
+    if (second > max) max = second;
+  }
+  return max;
+}
+
+/** Largest absolute second difference in a linear window around `center`. */
+export function windowSecondDifference(
+  samples: ArrayLike<number>,
+  center: number,
+  radius = 8,
+): number {
+  let max = 0;
+  const start = Math.max(1, Math.ceil(center) - radius);
+  const end = Math.min(samples.length - 2, Math.floor(center) + radius);
+  for (let index = start; index <= end; index += 1) {
+    const second = Math.abs(
+      (samples[index + 1] ?? 0) -
+        2 * (samples[index] ?? 0) +
+        (samples[index - 1] ?? 0),
+    );
+    if (second > max) max = second;
+  }
+  return max;
+}
+
+/**
+ * Bend the tail onto the line through x[0] and x[1]. A quarter-sine offset
+ * puts the last sample on that line and leaves the kink on the sample
+ * before it. The fade instead blends each tail sample toward the line, so
+ * the last samples share its slope.
  */
 export function closeCelloSeam(
   samples: Float32Array,
@@ -334,12 +401,15 @@ export function closeCelloSeam(
   const out = samples.slice();
   if (out.length < 2) return out;
   const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
-  const target = 2 * out[0] - out[1];
-  const delta = target - out[out.length - 1];
+  const slope = out[1] - out[0];
   for (let index = 0; index < fade; index += 1) {
+    const at = out.length - fade + index;
+    const stepsBeforeWrap = out.length - at;
+    const line = out[0] - stepsBeforeWrap * slope;
     const progress = (index + 1) / fade;
-    const weight = Math.sin((progress * Math.PI) / 2);
-    out[out.length - fade + index] += delta * weight;
+    const weight = progress * progress * (3 - 2 * progress);
+    const sample = out[at] ?? 0;
+    out[at] = sample * (1 - weight) + line * weight;
   }
   return out;
 }

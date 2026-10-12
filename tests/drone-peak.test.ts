@@ -1,21 +1,30 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { pathToFileURL } from 'node:url';
-import { DRONE_MODES, DRONE_ROOTS } from '../lib/drone.ts';
-import { FULL_SCALE_MARGIN } from '../lib/drone-levels.ts';
+import type { Browser } from 'playwright';
 import {
+  DRONE_MODES,
+  DRONE_ROOTS,
+  dronePitches,
+  type DroneModeId,
+} from '../lib/drone.ts';
+import { FULL_SCALE_MARGIN } from '../lib/drone-levels.ts';
+import { launchNamed, type BrowserName } from './browser-launch.ts';
+import {
+  CONFIRM_COUNT,
+  PREDICTION_LIMIT,
   REV_FRET_KEY,
   contextVoicings,
   fretKey,
   headroomCases,
   loudestMeasured,
   type HeadroomReport,
+  type WorstCase,
 } from './drone-headroom-run.ts';
 
 /** Drone, one walk note, and the loudest chord, summed at volume 1. */
@@ -28,17 +37,9 @@ const MIX_CEILING = 0.8913;
  */
 const SOUND_LIMIT = 0.8414;
 
-const chromeBin = [
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/google-chrome',
-].find((path) => existsSync(path));
-const firefoxBin = ['/tmp/firefox-157/firefox/firefox'].find((path) =>
-  existsSync(path),
-);
-const playwrightEntry = [
-  join(process.cwd(), 'node_modules/playwright/index.mjs'),
-  '/tmp/pw/node_modules/playwright/index.mjs',
-].find((path) => existsSync(path));
+const WORST_FIXTURE = new URL('./fixtures/headroom-worst.json', import.meta.url);
+
+type SweepFile = Record<BrowserName, { seconds: number; cases: WorstCase[] }>;
 
 type PeakRow = {
   root: string;
@@ -509,98 +510,25 @@ async function waitForReport(
   return JSON.parse(body) as PeakReport;
 }
 
-async function runChrome(
+async function renderInBrowser(
+  browser: Browser,
+  name: BrowserName,
   bundlePath: string,
-  html = page(),
-  limit = 340000,
+  html: string,
+  limit: number,
 ): Promise<PeakReport> {
-  if (!chromeBin || !playwrightEntry) throw new Error('Chrome harness is unavailable.');
   const { url, result, close } = await serve(bundlePath, html);
-  const playwright = (await import(pathToFileURL(playwrightEntry).href)) as {
-    chromium: {
-      launch: (options: {
-        executablePath: string;
-        headless: boolean;
-        args: string[];
-      }) => Promise<{
-        version: () => string;
-        newPage: () => Promise<{
-          goto: (
-            target: string,
-            options: { waitUntil: string; timeout: number },
-          ) => Promise<unknown>;
-          on: (
-            event: string,
-            listener: (value: { text?: () => string }) => void,
-          ) => void;
-        }>;
-        close: () => Promise<void>;
-      }>;
-    };
-  };
-  const browser = await playwright.chromium.launch({
-    executablePath: chromeBin,
-    headless: true,
-    args: ['--no-sandbox', '--use-angle=swiftshader'],
-  });
   try {
     const tab = await browser.newPage();
     const errors: string[] = [];
-    tab.on('pageerror', (error) => errors.push(error.text?.() ?? 'page error'));
-    tab.on('console', (message) => console.log(message.text?.() ?? ''));
+    tab.on('pageerror', (error) => errors.push(error.message));
+    tab.on('console', (message) => console.log(message.text()));
     await tab.goto(url, { waitUntil: 'load', timeout: 120000 });
     const report = await waitForReport(result, limit);
-    console.log(`chrome ${browser.version()}`);
+    console.log(`${name} ${browser.version()}`);
     if (errors.length && !report.error) report.error = errors.join('\n');
     return report;
   } finally {
-    await browser.close();
-    close();
-  }
-}
-
-async function runFirefox(
-  bundlePath: string,
-  html = page(),
-  limit = 340000,
-): Promise<PeakReport> {
-  if (!firefoxBin) throw new Error('Firefox 157 is unavailable.');
-  const { url, result, close } = await serve(bundlePath, html);
-  const profile = join(tmpdir(), 'fx157-peak-profile');
-  execFileSync('rm', ['-rf', profile]);
-  execFileSync('mkdir', ['-p', profile]);
-  writeFileSync(
-    join(profile, 'user.js'),
-    [
-      'user_pref("browser.shell.checkDefaultBrowser", false);',
-      'user_pref("browser.aboutwelcome.enabled", false);',
-      'user_pref("datareporting.policy.dataSubmissionEnabled", false);',
-      'user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);',
-      'user_pref("app.update.disabledForTesting", true);',
-      'user_pref("browser.startup.homepage_override.mstone", "ignore");',
-      'user_pref("browser.firstrun.didSeeAboutWelcome", true);',
-      'user_pref("media.cubeb.sandbox", false);',
-    ].join('\n'),
-  );
-  console.log(
-    execFileSync(firefoxBin, ['--version'], { encoding: 'utf8' }).trim(),
-  );
-  const child = spawn(
-    firefoxBin,
-    ['--headless', '--no-remote', '--profile', profile, url],
-    { stdio: 'ignore', detached: true },
-  );
-  try {
-    return await waitForReport(result, limit);
-  } finally {
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        child.kill('SIGTERM');
-      }
-    }
-    child.unref();
     close();
   }
 }
@@ -667,34 +595,55 @@ function assertHeadroom(report: PeakReport, pluck: number) {
   }
 }
 
+/**
+ * Single-note model: one walk midi and one chord candidate list, not the
+ * key×mode grid. Cello mixes about 0.8302 on this page.
+ */
 void test(
   'Chrome keeps every drone sound, the loudest pluck, and a walk note at or under -1 dBFS',
-  {
-    skip:
-      chromeBin && playwrightEntry
-        ? false
-        : 'Chrome or Playwright is not installed',
-    timeout: 360000,
-  },
-  async () => {
-    const pluck = pluckAttackLevel();
-    const report = await runChrome(bundleProbe());
-    console.log(report.ua);
-    assertHeadroom(report, pluck);
+  { timeout: 360000 },
+  async (t) => {
+    const browser = await launchNamed('chromium', t);
+    try {
+      const pluck = pluckAttackLevel();
+      const report = await renderInBrowser(
+        browser,
+        'chromium',
+        bundleProbe(),
+        page(),
+        340000,
+      );
+      console.log(report.ua);
+      assertHeadroom(report, pluck);
+    } finally {
+      await browser.close();
+    }
   },
 );
 
+/**
+ * Single-note model: one walk midi and one chord candidate list, not the
+ * key×mode grid. Cello mixes about 0.8302 on this page.
+ */
 void test(
-  'Firefox 157 keeps every drone sound, the loudest pluck, and a walk note at or under -1 dBFS',
-  {
-    skip: firefoxBin ? false : 'Firefox 157 is not installed',
-    timeout: 360000,
-  },
-  async () => {
-    const pluck = pluckAttackLevel();
-    const report = await runFirefox(bundleProbe());
-    console.log(report.ua);
-    assertHeadroom(report, pluck);
+  'Firefox keeps every drone sound, the loudest pluck, and a walk note at or under -1 dBFS',
+  { timeout: 360000 },
+  async (t) => {
+    const browser = await launchNamed('firefox', t);
+    try {
+      const pluck = pluckAttackLevel();
+      const report = await renderInBrowser(
+        browser,
+        'firefox',
+        bundleProbe(),
+        page(),
+        340000,
+      );
+      console.log(report.ua);
+      assertHeadroom(report, pluck);
+    } finally {
+      await browser.close();
+    }
   },
 );
 
@@ -704,7 +653,7 @@ function headroomBundle(): string {
   const root = process.cwd();
   writeFileSync(
     entry,
-    `export { runHeadroom } from '${root}/tests/drone-headroom-run.ts';\n`,
+    `export { runHeadroom, runHeadroomSubset } from '${root}/tests/drone-headroom-run.ts';\n`,
   );
   execFileSync(
     join(root, 'node_modules/esbuild/bin/esbuild'),
@@ -770,9 +719,33 @@ void test('the headroom grid is every key and mode, and it uses the chord player
   assert.equal(source.includes('0.75 /'), false);
   assert.match(source, /loudestMeasured\(/);
   assert.match(source, /for \(let step = -5; step <= 5; step \+= 1\)/);
+  const changes = cases.filter((item) => item.via === 'key-change');
+  assert.equal(changes.length, DRONE_ROOTS.length * DRONE_MODES.length * 3);
+  for (const item of changes) {
+    assert.notEqual(item.fromRoot, item.root, `${item.sound} ${item.root} ${item.mode}`);
+    const from = dronePitches(
+      item.fromRoot,
+      item.fromMode as DroneModeId,
+      item.octave,
+    ).map((pitch) => pitch.midi);
+    const to = dronePitches(item.root, item.mode as DroneModeId, item.octave).map(
+      (pitch) => pitch.midi,
+    );
+    assert.notDeepEqual(
+      from,
+      to,
+      `${item.root} ${item.mode} ${from.join(',')} vs ${to.join(',')}`,
+    );
+  }
+  for (const item of cases) {
+    if (item.via === 'key-change') continue;
+    assert.equal(item.fromRoot, item.root, item.via);
+    assert.equal(item.fromMode, item.mode, item.via);
+  }
 });
 
 void test('each key measures every playable voicing, and the peak picks the chord', () => {
+  // One-note frets below are harness probes. Catalog voicings start at two strings.
   const eb = contextVoicings('Eb', 'ionian');
   assert.ok(eb.some((choice) => fretKey(choice.frets) === REV_FRET_KEY));
   assert.equal(eb.find((choice) => fretKey(choice.frets) === REV_FRET_KEY)?.midis.join(','), '53');
@@ -883,6 +856,18 @@ function assertGrid(report: HeadroomReport) {
     assert.equal(row.chordFrets, chord?.frets, `${row.root} ${row.mode}`);
     assert.equal(row.chordPeak, chord?.peak);
     assert.ok(row.chordPeak > 0.2, `${row.root} ${row.mode} ${row.chordPeak}`);
+    assert.ok(
+      row.peak <= PREDICTION_LIMIT,
+      `${row.sound} ${row.root} ${row.mode} ${row.via} prediction ${row.peak}`,
+    );
+    if (row.via === 'key-change') {
+      assert.notEqual(row.fromRoot, row.root, `${row.sound} ${row.root}`);
+      assert.notEqual(row.fromMidis, row.toMidis, `${row.root} ${row.fromMidis}`);
+    } else {
+      assert.equal(row.fromRoot, row.root);
+      assert.equal(row.fromMode, row.mode);
+      assert.equal(row.fromMidis, row.toMidis);
+    }
   }
   for (const root of DRONE_ROOTS) {
     for (const mode of DRONE_MODES) {
@@ -923,43 +908,167 @@ function assertGrid(report: HeadroomReport) {
       Math.max(worst.peak, worst.confirmed) > 0.5,
       `${sound} worst ${Math.max(worst.peak, worst.confirmed)}`,
     );
+    const rendered = ofSound.filter((row) => row.rendered);
+    assert.equal(rendered.length, CONFIRM_COUNT, sound);
+    for (const row of rendered) {
+      assert.ok(
+        row.confirmed <= SOUND_LIMIT,
+        `${sound} ${row.root} ${row.mode} ${row.via} render ${row.confirmed}`,
+      );
+      const notes =
+        row.kind === 'single'
+          ? 1
+          : row.kind === 'pair'
+            ? 2
+            : row.kind === 'triple'
+              ? 3
+              : 4;
+      assert.equal(row.noteShifts.length, notes);
+    }
+  }
+}
+
+function readWorst(name: BrowserName): WorstCase[] {
+  const parsed = JSON.parse(readFileSync(WORST_FIXTURE, 'utf8')) as SweepFile;
+  const block = parsed[name];
+  if (!block?.cases?.length) {
+    throw new Error(`headroom worst-case file has no ${name} cases`);
+  }
+  return block.cases;
+}
+
+function subsetPage(cases: WorstCase[]): string {
+  const payload = JSON.stringify(cases).replaceAll('<', '\\u003c');
+  return `<!doctype html>
+<meta charset="utf-8" />
+<title>headroom-subset</title>
+<script type="module">
+import { runHeadroomSubset } from '/probe.js';
+const cases = ${payload};
+try {
+  const report = await runHeadroomSubset(cases);
+  await fetch('/result', { method: 'POST', body: JSON.stringify(report) });
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const stack = error instanceof Error ? error.stack : '';
+  await fetch('/result', {
+    method: 'POST',
+    body: JSON.stringify({ error: message + '\\n' + (stack || '') }),
+  });
+}
+document.title = 'done';
+</script>`;
+}
+
+function assertSubset(report: HeadroomReport, cases: WorstCase[]) {
+  assert.equal(report.error, undefined, report.error);
+  const rows = report.rows ?? [];
+  assert.equal(rows.length, cases.length);
+  assert.ok(rows.length > 0, 'subset rendered nothing');
+  for (const sound of ['reed', 'bow', 'cello']) {
+    const ofSound = rows.filter((row) => row.sound === sound);
+    assert.equal(ofSound.length, CONFIRM_COUNT, sound);
+    for (const row of ofSound) {
+      assert.equal(row.rendered, true);
+      assert.ok(
+        row.confirmed <= SOUND_LIMIT,
+        `${sound} ${row.root} ${row.mode} ${row.via} ${row.confirmed}`,
+      );
+    }
   }
 }
 
 void test(
-  'Chrome keeps every key and mode, including a sound switch, at or below -1.5 dBFS',
-  {
-    skip:
-      chromeBin && playwrightEntry
-        ? false
-        : 'Chrome or Playwright is not installed',
-    timeout: 1500000,
-  },
-  async () => {
-    const report = (await runChrome(
-      headroomBundle(),
-      headroomPage(),
-      1400000,
-    )) as unknown as HeadroomReport;
-    console.log(report.ua);
-    assertGrid(report);
+  'Chrome re-renders the last full sweep worst mixes at or below -1.5 dBFS',
+  { timeout: 300000 },
+  async (t) => {
+    if (process.env.HEADROOM_SWEEP === 'full') {
+      t.skip('the full sweep replaces the subset');
+      return;
+    }
+    const browser = await launchNamed('chromium', t);
+    try {
+      const cases = readWorst('chromium');
+      const report = (await renderInBrowser(
+        browser,
+        'chromium',
+        headroomBundle(),
+        subsetPage(cases),
+        240000,
+      )) as unknown as HeadroomReport;
+      console.log(report.ua);
+      assertSubset(report, cases);
+    } finally {
+      await browser.close();
+    }
   },
 );
 
 void test(
-  'Firefox 157 keeps every key and mode, including a sound switch, at or below -1.5 dBFS',
-  {
-    skip: firefoxBin ? false : 'Firefox 157 is not installed',
-    timeout: 1500000,
+  'Firefox re-renders the last full sweep worst mixes at or below -1.5 dBFS',
+  { timeout: 300000 },
+  async (t) => {
+    if (process.env.HEADROOM_SWEEP === 'full') {
+      t.skip('the full sweep replaces the subset');
+      return;
+    }
+    const browser = await launchNamed('firefox', t);
+    try {
+      const cases = readWorst('firefox');
+      const report = (await renderInBrowser(
+        browser,
+        'firefox',
+        headroomBundle(),
+        subsetPage(cases),
+        240000,
+      )) as unknown as HeadroomReport;
+      console.log(report.ua);
+      assertSubset(report, cases);
+    } finally {
+      await browser.close();
+    }
   },
-  async () => {
-    const report = (await runFirefox(
-      headroomBundle(),
-      headroomPage(),
-      1400000,
-    )) as unknown as HeadroomReport;
-    console.log(report.ua);
-    assertGrid(report);
+);
+
+void test(
+  'nightly full headroom sweep',
+  { timeout: 7200000 },
+  async (t) => {
+    if (process.env.HEADROOM_SWEEP !== 'full') {
+      t.skip('the nightly workflow runs the full sweep');
+      return;
+    }
+    const bundle = headroomBundle();
+    const html = headroomPage();
+    const written: SweepFile = {
+      chromium: { seconds: 0, cases: [] },
+      firefox: { seconds: 0, cases: [] },
+    };
+    for (const name of ['chromium', 'firefox'] as const) {
+      const browser = await launchNamed(name, t);
+      try {
+        const report = (await renderInBrowser(
+          browser,
+          name,
+          bundle,
+          html,
+          3400000,
+        )) as unknown as HeadroomReport;
+        console.log(report.ua);
+        assertGrid(report);
+        const seconds = report.seconds ?? 0;
+        const cases = report.worstCases ?? [];
+        console.log(`headroom sweep ${name} ${seconds}s`);
+        console.log(`HEADROOM_WORST ${name} ${JSON.stringify(cases)}`);
+        assert.equal(cases.length, CONFIRM_COUNT * 3, name);
+        written[name] = { seconds, cases };
+      } finally {
+        await browser.close();
+      }
+    }
+    if (process.env.HEADROOM_WRITE === '1') {
+      writeFileSync(WORST_FIXTURE, `${JSON.stringify(written, null, 2)}\n`);
+    }
   },
 );
 

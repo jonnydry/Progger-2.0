@@ -32,7 +32,7 @@ export function requestSound(request: ReedRequest): DroneSoundId {
 
 /**
  * Reed cap on the voice fade. The master is volume only.
- * The cap is unchanged. Headroom comes from the shared walk trim.
+ * The walk trim is 0.1225.
  */
 export const DRONE_MAX_LINEAR_GAIN = 0.063;
 
@@ -119,9 +119,7 @@ export const WALK_GAINS = {
   attack: 0.85,
   body: 0.12,
   decay: 0.0001,
-  // Shared by every sound. Dropping the second cello crossfade lifted
-  // Chrome's Eb ionian mix to 0.84779 at 0.1375. This trim is 1 dB under
-  // that. The cello cap, not this trim, is what came down after that.
+  // Shared by reed, bow, and cello. The trim is 0.1225.
   trim: 0.1225,
   partials: 25,
 } as const;

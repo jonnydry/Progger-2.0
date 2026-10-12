@@ -17,7 +17,9 @@ import {
   modeIntervals,
   sampleForMidi,
   celloLoopBounds,
+  celloBodySecondDifference,
   celloSeamFade,
+  celloWrapSecondDifference,
   celloWrapSlopeChange,
   closeCelloSeam,
   scaleWalk,
@@ -292,6 +294,21 @@ void test('cello loop bounds follow the AAC packet the decoder returned', () => 
   assert.deepEqual(celloLoopBounds(100, 44100), { start: 0, end: 100 });
 });
 
+/** Quarter-sine bend from 79eff34: the last sample hits the line and the kink stays. */
+function seamQuarterSine(samples: Float32Array, fadeSamples: number): Float32Array {
+  const out = samples.slice();
+  const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
+  const target = 2 * (out[0] ?? 0) - (out[1] ?? 0);
+  const delta = target - (out[out.length - 1] ?? 0);
+  for (let index = 0; index < fade; index += 1) {
+    const progress = (index + 1) / fade;
+    const weight = Math.sin((progress * Math.PI) / 2);
+    const at = out.length - fade + index;
+    out[at] = (out[at] ?? 0) + delta * weight;
+  }
+  return out;
+}
+
 /** The seam at 390370f: the last sample is pulled onto x[0]. */
 function seamAt390370f(samples: Float32Array, fadeSamples: number): Float32Array {
   const out = samples.slice();
@@ -331,6 +348,26 @@ void test('the cello seam keeps the slope across the wrap', () => {
   );
   assert.ok(Math.abs(previousSlope) > slopeLimit);
   assert.equal(closed[10], samples[10]);
+  const flat = new Float32Array(4000);
+  flat[flat.length - 2] = 0.2;
+  flat[flat.length - 1] = 0.5;
+  const before = seamQuarterSine(flat, fade);
+  const after = closeCelloSeam(flat, fade);
+  const beforeWrap = celloWrapSecondDifference(before);
+  const beforeBody = celloBodySecondDifference(before);
+  const afterWrap = celloWrapSecondDifference(after);
+  const afterBody = celloBodySecondDifference(after);
+  assert.ok(
+    beforeWrap > beforeBody,
+    `quarter-sine ${beforeWrap} should exceed body ${beforeBody}`,
+  );
+  assert.ok(
+    afterWrap <= afterBody + 1e-6,
+    `line blend ${afterWrap} body ${afterBody}`,
+  );
+  console.log(
+    `synthetic seam before ${beforeWrap} body ${beforeBody} after ${afterWrap} body ${afterBody}`,
+  );
 });
 
 void test('committed cello loops match the license hashes', () => {
