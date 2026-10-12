@@ -21,6 +21,73 @@ export type AuditionState = 'idle' | 'starting' | 'playing' | 'error';
 const STRUM_GAP = 0.045;
 const DECAY = 2.5;
 
+export type ScheduledVoicing = {
+  bus: GainNode;
+  voices: {
+    oscillator: OscillatorNode;
+    envelope: GainNode;
+    filter: BiquadFilterNode;
+  }[];
+};
+
+/** The chord the audition button plays. Offline renders call this same function. */
+export function scheduleVoicing(
+  context: BaseAudioContext,
+  frets: readonly (number | null)[],
+  when: number,
+  destination: AudioNode,
+  beforeVoices?: (
+    bus: GainNode,
+    voices: ScheduledVoicing['voices'],
+  ) => void,
+): ScheduledVoicing {
+  const pitches = voicingMidi(frets);
+  const bus = context.createGain();
+  bus.gain.value = 0.75 / pitches.length;
+  bus.connect(destination);
+  const voices: ScheduledVoicing['voices'] = [];
+  // A failure while building a voice still has to drop this bus. Playback
+  // installs that cleanup before the first oscillator exists.
+  beforeVoices?.(bus, voices);
+  for (const [index, midi] of pitches.entries()) {
+    const oscillator = context.createOscillator();
+    const envelope = context.createGain();
+    const filter = context.createBiquadFilter();
+    const frequency = 440 * 2 ** ((midi - 69) / 12);
+    const real = new Float32Array(25);
+    const imaginary = new Float32Array(25);
+    for (let harmonic = 1; harmonic < imaginary.length; harmonic += 1) {
+      if (frequency * harmonic < context.sampleRate / 2) {
+        imaginary[harmonic] =
+          Math.sin(harmonic * Math.PI * 0.23) / harmonic ** 1.35;
+      }
+    }
+    // Plucking away from a string's center leaves a rounded, uneven spectrum.
+    oscillator.setPeriodicWave(context.createPeriodicWave(real, imaginary));
+    oscillator.frequency.value = frequency;
+    const at = when + index * STRUM_GAP;
+    filter.type = 'lowpass';
+    filter.Q.value = 0.45;
+    filter.frequency.setValueAtTime(Math.min(5500, frequency * 12), at);
+    filter.frequency.exponentialRampToValueAtTime(
+      Math.max(600, frequency * 2),
+      at + 1.3,
+    );
+    envelope.gain.setValueAtTime(0, at);
+    envelope.gain.linearRampToValueAtTime(0.85, at + 0.006);
+    envelope.gain.exponentialRampToValueAtTime(0.12, at + 0.65);
+    envelope.gain.exponentialRampToValueAtTime(0.0001, at + DECAY);
+    envelope.gain.linearRampToValueAtTime(0, at + DECAY + 0.02);
+    oscillator.connect(filter);
+    filter.connect(envelope);
+    envelope.connect(bus);
+    oscillator.start(at);
+    oscillator.stop(at + DECAY + 0.025);
+    voices.push({ oscillator, envelope, filter });
+  }
+  return { bus, voices };
+}
+
 /** Short local synthesis; no samples, requests, or context until a user plays. */
 export class VoicingPlayer {
   private context: AudioContext | null = null;
@@ -56,7 +123,7 @@ export class VoicingPlayer {
     const run = this.serial;
     this.onState('starting');
     try {
-      const pitches = voicingMidi(frets);
+      voicingMidi(frets);
       // Create/resume synchronously from the user's click, before any await.
       const context = (this.context ??= this.createContext());
       context.onstatechange = () => {
@@ -78,77 +145,46 @@ export class VoicingPlayer {
       if (context.state !== 'running') throw new Error('Audio is unavailable.');
 
       const start = context.currentTime + 0.025;
-      const bus = context.createGain();
-      // Fixed headroom even when every string sounds at once.
-      bus.gain.value = 0.75 / pitches.length;
-      bus.connect(context.destination);
-      const voices: {
-        oscillator: OscillatorNode;
-        envelope: GainNode;
-        filter: BiquadFilterNode;
-      }[] = [];
       let ended = 0;
       let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
-      const cleanup = () => {
-        clearTimeout(cleanupTimer);
-        for (const { oscillator, envelope, filter } of voices) {
-          oscillator.onended = null;
-          oscillator.disconnect();
-          envelope.disconnect();
-          filter.disconnect();
-        }
-        bus.disconnect();
-      };
-      this.cancelSound = () => {
-        // Fade out before stopping to avoid a hard waveform discontinuity.
-        const now = context.currentTime;
-        bus.gain.cancelScheduledValues(now);
-        bus.gain.setValueAtTime(bus.gain.value, now);
-        bus.gain.linearRampToValueAtTime(0, now + 0.018);
-        for (const { oscillator } of voices) {
-          try {
-            oscillator.stop(now + 0.02);
-          } catch {
-            // A partially constructed voice may not have started yet.
-          }
-        }
-        // Suspended audio clocks cannot deliver onended. Also clean partial
-        // graph failures that never got as far as starting an oscillator.
-        cleanupTimer = setTimeout(cleanup, 30);
-      };
+      let cleanup = () => {};
+      const { voices } = scheduleVoicing(
+        context,
+        frets,
+        start,
+        context.destination,
+        (chordBus, chordVoices) => {
+          cleanup = () => {
+            clearTimeout(cleanupTimer);
+            for (const { oscillator, envelope, filter } of chordVoices) {
+              oscillator.onended = null;
+              oscillator.disconnect();
+              envelope.disconnect();
+              filter.disconnect();
+            }
+            chordBus.disconnect();
+          };
+          this.cancelSound = () => {
+            // Fade out before stopping to avoid a hard waveform discontinuity.
+            const now = context.currentTime;
+            chordBus.gain.cancelScheduledValues(now);
+            chordBus.gain.setValueAtTime(chordBus.gain.value, now);
+            chordBus.gain.linearRampToValueAtTime(0, now + 0.018);
+            for (const { oscillator } of chordVoices) {
+              try {
+                oscillator.stop(now + 0.02);
+              } catch {
+                // A partially constructed voice may not have started yet.
+              }
+            }
+            // Suspended audio clocks cannot deliver onended. Also clean partial
+            // graph failures that never got as far as starting an oscillator.
+            cleanupTimer = setTimeout(cleanup, 30);
+          };
+        },
+      );
 
-      pitches.forEach((midi, index) => {
-        const oscillator = context.createOscillator();
-        const envelope = context.createGain();
-        const filter = context.createBiquadFilter();
-        const frequency = 440 * 2 ** ((midi - 69) / 12);
-        // Plucking away from a string's center leaves a rounded, uneven
-        // harmonic spectrum. A closing filter softens the attack into the tail.
-        const real = new Float32Array(25);
-        const imaginary = new Float32Array(25);
-        for (let harmonic = 1; harmonic < imaginary.length; harmonic++) {
-          if (frequency * harmonic < context.sampleRate / 2) {
-            imaginary[harmonic] =
-              Math.sin(harmonic * Math.PI * 0.23) / harmonic ** 1.35;
-          }
-        }
-        oscillator.setPeriodicWave(context.createPeriodicWave(real, imaginary));
-        oscillator.frequency.value = frequency;
-        const at = start + index * STRUM_GAP;
-        filter.type = 'lowpass';
-        filter.Q.value = 0.45;
-        filter.frequency.setValueAtTime(Math.min(5500, frequency * 12), at);
-        filter.frequency.exponentialRampToValueAtTime(
-          Math.max(600, frequency * 2),
-          at + 1.3,
-        );
-        envelope.gain.setValueAtTime(0, at);
-        envelope.gain.linearRampToValueAtTime(0.85, at + 0.006);
-        envelope.gain.exponentialRampToValueAtTime(0.12, at + 0.65);
-        envelope.gain.exponentialRampToValueAtTime(0.0001, at + DECAY);
-        envelope.gain.linearRampToValueAtTime(0, at + DECAY + 0.02);
-        oscillator.connect(filter).connect(envelope).connect(bus);
-        voices.push({ oscillator, filter, envelope });
+      for (const { oscillator } of voices) {
         oscillator.onended = () => {
           ended++;
           if (ended !== voices.length) return;
@@ -158,9 +194,7 @@ export class VoicingPlayer {
             this.onState('idle');
           }
         };
-        oscillator.start(at);
-        oscillator.stop(at + DECAY + 0.025);
-      });
+      }
       this.onState('playing');
     } catch {
       if (this.disposed || run !== this.serial) return;
