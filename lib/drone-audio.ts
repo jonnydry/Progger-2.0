@@ -90,8 +90,9 @@ export function voiceTailHold(fade: number): number {
 /**
  * Bow and cello caps are the voice fade's resting level, so a sample that
  * is still loading does not retarget the voice that is already sounding.
- * Both caps are unchanged: bow 0.072, cello 0.078. Makeup gain lifts a
- * full voice, so the analytical sum is not the cap.
+ * Bow stays at 0.072. Cello is 0.0736, half a decibel under 0.078.
+ * Reed stays at 0.063. Makeup gain lifts a full voice, so the analytical
+ * sum is not the cap.
  */
 export const BOW_GAINS = {
   pitch: 0.055,
@@ -109,17 +110,17 @@ export const CELLO_GAINS = {
   dry: 0.9,
   wet: 0.12,
   samplePeak: 0.5,
-  cap: 0.078,
+  // 0.5 dB under 0.078. Walk trim and the reed and bow caps stay put.
+  cap: 0.0736,
 } as const;
 
 export const WALK_GAINS = {
   attack: 0.85,
   body: 0.12,
   decay: 0.0001,
-  // Shared by every sound. Caps stay put. Dropping the second cello
-  // crossfade lifted Chrome's Eb ionian mix to 0.84779 at 0.1375.
-  // This is 1 dB under that. Chrome 154 cello mix is 0.83631.
-  // Firefox 157 cello mix is 0.83500. Each sound is at or below 0.8414.
+  // Shared by every sound. Dropping the second cello crossfade lifted
+  // Chrome's Eb ionian mix to 0.84779 at 0.1375. This trim is 1 dB under
+  // that. The cello cap, not this trim, is what came down after that.
   trim: 0.1225,
   partials: 25,
 } as const;
