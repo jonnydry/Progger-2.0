@@ -73,18 +73,18 @@ jobs:
           git push origin "refs/heads/${branch}:refs/heads/${branch}"
           result=$(cat "$HEADROOM_CHECK_RESULT")
           body=$(cat <<EOF
-The nightly headroom sweep refreshed tests/fixtures/headroom-worst.json.
+          The nightly headroom sweep refreshed tests/fixtures/headroom-worst.json.
 
-The per-push render check ran against that file before this pull request was opened. A pull request opened with GITHUB_TOKEN does not trigger CI.
+          The per-push render check ran against that file before this pull request was opened. A pull request opened with GITHUB_TOKEN does not trigger CI.
 
-Result:
-${result}
+          Result:
+          ${result}
 
-This pull request is opened from bot branch ${branch}. The workflow does not push to main.
+          This pull request is opened from bot branch ${branch}. The workflow does not push to main.
 
-The repository setting "Allow GitHub Actions to create and approve pull requests" must be on for this step. That setting is pending Jonny's OK.
-EOF
-)
+          The repository setting "Allow GitHub Actions to create and approve pull requests" must be on for this step. That setting is pending Jonny's OK.
+          EOF
+          )
           gh pr create \
             --base main \
             --head "$branch" \
