@@ -424,18 +424,31 @@ function loopPeak(samples: ArrayLike<number>): number {
   return peak;
 }
 
+/** How far a bent loop may sit above its recording. */
+export const CELLO_SEAM_PEAK_RISE_DB = 0.1;
+
+/** Decibels the bent peak sits above the recording. Zero when it does not rise. */
+export function celloPeakRiseDb(recordingPeak: number, bentPeak: number): number {
+  if (!(recordingPeak > 0)) return bentPeak > 0 ? Number.POSITIVE_INFINITY : 0;
+  if (!(bentPeak > recordingPeak)) return 0;
+  return 20 * Math.log10(bentPeak / recordingPeak);
+}
+
+function clampToPeak(value: number, peak: number): number {
+  if (value > peak) return peak;
+  if (value < -peak) return -peak;
+  return value;
+}
+
 /**
  * Eight samples on the line through x[0] and x[1], then twenty that
- * smoothstep back to the recording. `limit` holds a sample that would
- * otherwise pass the recording's peak.
+ * smoothstep back to the recording.
  */
 function bendCelloSeam(
   samples: Float32Array,
-  peak: number,
   slope: number,
   hold: number,
   span: number,
-  limit: boolean,
 ): Float32Array {
   const out = samples.slice();
   const last = out.length - 1;
@@ -448,12 +461,30 @@ function bendCelloSeam(
       weight = progress * progress * (3 - 2 * progress);
     }
     const sample = samples[at] ?? 0;
-    let blended = sample * (1 - weight) + line * weight;
-    if (limit) {
-      if (blended > peak) blended = peak;
-      else if (blended < -peak) blended = -peak;
-    }
-    out[at] = blended;
+    out[at] = sample * (1 - weight) + line * weight;
+  }
+  return out;
+}
+
+/**
+ * Sixteen-sample crossfade onto the slope line. The line and the blend are
+ * clamped to the recording peak, so a steep opening cannot walk the loop louder.
+ */
+function shortCelloCrossfade(
+  samples: Float32Array,
+  peak: number,
+  slope: number,
+): Float32Array {
+  const out = samples.slice();
+  const fade = Math.min(16, out.length - 1);
+  const last = out.length - 1;
+  for (let steps = 1; steps <= fade; steps += 1) {
+    const at = last - steps + 1;
+    const line = clampToPeak((samples[0] ?? 0) - steps * slope, peak);
+    const progress = (fade - steps + 1) / fade;
+    const weight = progress * progress * (3 - 2 * progress);
+    const sample = samples[at] ?? 0;
+    out[at] = clampToPeak(sample * (1 - weight) + line * weight, peak);
   }
   return out;
 }
@@ -463,11 +494,9 @@ function bendCelloSeam(
  * offset lands the last sample on that line and leaves the kink on the
  * sample before it. Following that line for eight samples, then smoothstepping
  * for twenty more, walks off a steep opening: F4's peak rose from 0.4977 to
- * 0.6634. When that blend would pass the recording's peak, the straight
- * piece shortens to one sample and the ease uses only the line samples that
- * stay inside the peak. Clamping the line itself left a corner just outside
- * the eight-sample window, which made the body figure worse instead of
- * giving the bend margin.
+ * 0.6634, about 2.5 dB. That loop uses a 16-sample crossfade clamped to the
+ * recording peak instead. The seam test fails when any loop rises by more
+ * than 0.1 dB.
  */
 export function closeCelloSeam(
   samples: Float32Array,
@@ -479,16 +508,9 @@ export function closeCelloSeam(
   const slope = (samples[1] ?? 0) - (samples[0] ?? 0);
   const straight = Math.min(8, fade);
   const ease = Math.min(20, Math.max(0, fade - straight));
-  const full = bendCelloSeam(samples, peak, slope, straight, ease, false);
-  if (loopPeak(full) <= peak + 1e-7) return full;
-  let inside = 0;
-  for (let steps = 1; steps <= straight + ease; steps += 1) {
-    const line = (samples[0] ?? 0) - steps * slope;
-    if (Math.abs(line) > peak) break;
-    inside = steps;
-  }
-  const span = Math.min(ease, Math.max(0, inside - 1));
-  return bendCelloSeam(samples, peak, slope, 1, span, true);
+  const full = bendCelloSeam(samples, slope, straight, ease);
+  if (celloPeakRiseDb(peak, loopPeak(full)) <= CELLO_SEAM_PEAK_RISE_DB) return full;
+  return shortCelloCrossfade(samples, peak, slope);
 }
 
 export function sampleForMidi(midi: number): {

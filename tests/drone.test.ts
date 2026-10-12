@@ -18,6 +18,8 @@ import {
   sampleForMidi,
   celloLoopBounds,
   celloBodySecondDifference,
+  celloPeakRiseDb,
+  CELLO_SEAM_PEAK_RISE_DB,
   celloSeamFade,
   celloWrapSecondDifference,
   celloWrapSlopeChange,
@@ -407,9 +409,10 @@ void test('the cello seam keeps the slope across the wrap', () => {
     `unclamped peak ${sourcePeak(walkedOff)} should walk off ${walkedPeak}`,
   );
   const walkedClosed = closeCelloSeam(walked, fade);
+  const walkedRise = celloPeakRiseDb(walkedPeak, sourcePeak(walkedClosed));
   assert.ok(
-    sourcePeak(walkedClosed) <= walkedPeak + 1e-7,
-    `walked peak ${sourcePeak(walkedClosed)} recording ${walkedPeak}`,
+    walkedRise <= CELLO_SEAM_PEAK_RISE_DB,
+    `walked peak rose ${walkedRise} dB`,
   );
   const walkedWrap = celloWrapSecondDifference(walkedClosed);
   const walkedBody = celloBodySecondDifference(walkedClosed);

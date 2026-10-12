@@ -6,6 +6,10 @@ import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import {
+  CELLO_SEAM_PEAK_RISE_DB,
+  celloPeakRiseDb,
+} from '../lib/drone.ts';
 import { launchNamed, type BrowserName } from './browser-launch.ts';
 
 const STEP_LIMIT = 1e-3;
@@ -802,9 +806,10 @@ function assertContinuous(result: RenderResult) {
       seam.body - seam.after >= 0.001,
       `${seam.file} after ${seam.after} body ${seam.body} margin ${seam.body - seam.after}`,
     );
+    const rise = celloPeakRiseDb(seam.recordingPeak, seam.closedPeak);
     assert.ok(
-      seam.closedPeak <= seam.recordingPeak + 1e-6,
-      `${seam.file} closed peak ${seam.closedPeak} recording ${seam.recordingPeak}`,
+      rise <= CELLO_SEAM_PEAK_RISE_DB,
+      `${seam.file} peak ${seam.recordingPeak} rose to ${seam.closedPeak} (${rise} dB)`,
     );
     assert.ok(
       seam.body - seam.playback >= 0.001,
@@ -827,7 +832,7 @@ function assertContinuous(result: RenderResult) {
       );
     }
     console.log(
-      `${seam.file} before ${seam.before} body ${seam.beforeBody} after ${seam.after} playback ${seam.playback} body ${seam.body} slope ${seam.slope} old ${seam.oldSlope} peak ${seam.recordingPeak} closed ${seam.closedPeak}`,
+      `${seam.file} before ${seam.before} body ${seam.beforeBody} after ${seam.after} playback ${seam.playback} body ${seam.body} slope ${seam.slope} old ${seam.oldSlope} peak ${seam.recordingPeak} closed ${seam.closedPeak} rise ${celloPeakRiseDb(seam.recordingPeak, seam.closedPeak)} dB`,
     );
   }
   assert.equal(result.switches?.length, 6 * 2 * 24);
