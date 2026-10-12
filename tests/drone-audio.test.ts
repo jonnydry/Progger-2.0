@@ -1635,6 +1635,53 @@ void test('a failed cello decode with nothing playing starts reed instead of goi
   rig.controller.dispose();
 });
 
+void test('a saved cello sound plays reed on the first tap when decode fails', async () => {
+  const store = new Map<string, string>([['progger.drone-sound', 'cello']]);
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, String(value));
+      },
+    },
+    configurable: true,
+  });
+  const urls: string[] = [];
+  try {
+    const rig = sessionSoundRig(async (input) => {
+      urls.push(fetchUrl(input));
+      return new Response(new Uint8Array(16));
+    });
+    (
+      rig.context as FakeContext & {
+        decodeAudioData: (bytes: ArrayBuffer) => Promise<FakeBuffer>;
+      }
+    ).decodeAudioData = () => Promise.reject(new Error('decode'));
+    assert.equal(rig.controller.snapshot().sound, 'cello');
+    assert.equal(rig.controller.snapshot().celloAvailable, true);
+    assert.equal(rig.controller.snapshot().pressed, false);
+    assert.equal(urls.length, 0);
+    rig.controller.setRequest({ root: 'A', modeId: 'dorian', octave: 'low' });
+    assert.equal(urls.length, 0);
+    rig.controller.toggle();
+    await until(
+      () =>
+        envelopesTargeting(rig.context, REED_GAINS.envelope).length > 0 &&
+        rig.controller.snapshot().celloAvailable === false,
+    );
+    const shot = rig.controller.snapshot();
+    assert.equal(shot.sound, 'reed');
+    assert.equal(shot.pressed, true);
+    assert.equal(shot.celloAvailable, false);
+    assert.equal(shot.message, 'Cello is unavailable.');
+    assert.equal(envelopesTargeting(rig.context, CELLO_GAINS.envelope).length, 0);
+    assert.equal(store.get('progger.drone-sound'), 'reed');
+    rig.controller.dispose();
+  } finally {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
+});
+
 void test('voice and dispose disconnects wait for the room after the dry fade', async () => {
   const delays: number[] = [];
   const original = globalThis.setTimeout;
