@@ -24,6 +24,15 @@
       ]
     },
     {
+      "source": "/audio/drone/:path*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=300"
+        }
+      ]
+    },
+    {
       "source": "/art/:path*",
       "headers": [
         {

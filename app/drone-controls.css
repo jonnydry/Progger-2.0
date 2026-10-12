@@ -1,0 +1,289 @@
+/* The root and the scale name stay a centred pair, as they are without the
+   buttons. Equal side padding keeps that centre while the buttons sit on it. */
+.night-swim .selection-bar:has(.drone-controls),
+.selection-bar:has(.drone-controls) {
+  /* 92px clears the 44px volume button and the 92px walk+toggle cluster.
+     A wider reserve squeezes the centred pair at 390 and shifts the title. */
+  --drone-side: 92px;
+  position: relative;
+  align-self: stretch;
+  box-sizing: border-box;
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  flex-wrap: nowrap;
+  padding-inline: var(--drone-side);
+}
+
+.drone-controls {
+  display: contents;
+}
+
+.drone-toggle,
+.drone-volume-trigger,
+.drone-walk {
+  position: absolute;
+  top: 50%;
+  flex: 0 0 44px;
+  transform: translateY(-50%);
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  color: var(--quiet);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.drone-volume-trigger {
+  left: 0;
+}
+
+.drone-walk {
+  right: 48px;
+}
+
+.drone-toggle {
+  right: 0;
+}
+
+.drone-toggle svg,
+.drone-volume-trigger svg,
+.drone-walk svg {
+  display: block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+.drone-toggle[aria-pressed='true'],
+.drone-walk[aria-pressed='true'],
+.drone-volume-trigger[aria-expanded='true'] {
+  color: var(--green);
+  background: var(--accent);
+  border-color: var(--green);
+}
+
+.drone-toggle:focus-visible,
+.drone-walk:focus-visible,
+.drone-volume-trigger:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 4px;
+}
+
+.night-swim .selection-bar:has(.drone-controls) .root-select,
+.selection-bar:has(.drone-controls) .root-select {
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+.night-swim .selection-bar:has(.drone-controls) .scale-select,
+.selection-bar:has(.drone-controls) .scale-select {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.selection-bar:has(.drone-controls) .scale-select .music-select {
+  display: block;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.night-swim
+  .selection-bar:has(.drone-controls)
+  .scale-select
+  .music-select-trigger,
+.selection-bar:has(.drone-controls) .scale-select .music-select-trigger {
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* The ellipsis keeps the title on one line. A wrapped title on the unpadded
+   row is two line boxes, 0.78px past the 76px minimum. Hold that height only
+   while the unpadded title still wraps.
+   Major pentatonic and Lydian augmented wrap through 502px.
+   Jazz melodic minor wraps through 526px.
+   Phrygian dominant wraps through 530px.
+   Half-whole and Whole-half diminished wrap through 590px. */
+@media (min-width: 501px) and (max-width: 502px) {
+  .night-swim
+    .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-brief, .wrap-jazz, .wrap-mid, .wrap-wide)
+    .music-select-trigger,
+  .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-brief, .wrap-jazz, .wrap-mid, .wrap-wide)
+    .music-select-trigger {
+    min-height: max(var(--reference-height), 2lh);
+  }
+}
+
+@media (min-width: 503px) and (max-width: 526px) {
+  .night-swim
+    .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-jazz, .wrap-mid, .wrap-wide)
+    .music-select-trigger,
+  .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-jazz, .wrap-mid, .wrap-wide)
+    .music-select-trigger {
+    min-height: max(var(--reference-height), 2lh);
+  }
+}
+
+@media (min-width: 527px) and (max-width: 530px) {
+  .night-swim
+    .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-mid, .wrap-wide)
+    .music-select-trigger,
+  .selection-bar:has(.drone-controls)
+    .scale-select:is(.wrap-mid, .wrap-wide)
+    .music-select-trigger {
+    min-height: max(var(--reference-height), 2lh);
+  }
+}
+
+@media (min-width: 531px) and (max-width: 590px) {
+  .night-swim
+    .selection-bar:has(.drone-controls)
+    .scale-select.wrap-wide
+    .music-select-trigger,
+  .selection-bar:has(.drone-controls)
+    .scale-select.wrap-wide
+    .music-select-trigger {
+    min-height: max(var(--reference-height), 2lh);
+  }
+}
+
+.night-swim
+  .selection-bar:has(.drone-controls)
+  .scale-select
+  .music-search-trigger
+  > span,
+.selection-bar:has(.drone-controls) .scale-select .music-search-trigger > span,
+.night-swim
+  .selection-bar:has(.drone-controls)
+  .scale-select
+  [data-slot='select-value'],
+.selection-bar:has(.drone-controls) .scale-select [data-slot='select-value'] {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drone-volume-popover {
+  position: fixed;
+  inset: auto;
+  z-index: 30;
+  box-sizing: border-box;
+  width: 220px;
+  max-width: calc(100vw - 16px);
+  margin: 0;
+  padding: 4px 10px;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+}
+
+.drone-volume-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 14px;
+}
+
+.drone-volume-popover input[type='range'] {
+  width: 100%;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+.drone-sound-field {
+  margin: 2px 0 0;
+  padding: 0;
+  border: 0;
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 14px;
+}
+
+.drone-sound-field legend {
+  margin: 0;
+  padding: 0;
+}
+
+.drone-sound-options {
+  display: flex;
+  gap: 4px;
+}
+
+.drone-sound-options label {
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.drone-sound-options label:has(input:checked) {
+  color: var(--green);
+  background: var(--accent);
+  border-color: var(--green);
+}
+
+.drone-sound-options label:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.drone-sound-options label:has(input:focus-visible) {
+  outline: 2px solid var(--green);
+  outline-offset: 1px;
+}
+
+.drone-sound-options input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.palette-note.palette-walking > span {
+  color: var(--green);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

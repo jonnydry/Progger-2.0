@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   DRONE_MODES,
@@ -8,12 +9,20 @@ import {
   colourNote,
   droneLabel,
   droneMode,
+  droneModeForScale,
   dronePitches,
+  reedRequestForScale,
   lowRootMidi,
   midiHz,
   modeIntervals,
+  sampleForMidi,
+  celloLoopBounds,
+  celloSeamFade,
+  celloWrapSlopeChange,
+  closeCelloSeam,
   scaleWalk,
   scientificPitch,
+  symmetricDetuneCents,
 } from '../lib/drone.ts';
 import { SCALES } from '../lib/music.ts';
 
@@ -115,7 +124,10 @@ void test('every root drones a fifth, except Locrian which drones the octave', (
 
 void test('drone labels spell the low dyad and the phone octave', () => {
   assert.equal(droneLabel(dronePitches('A', 'dorian', 'low')), 'A2 + E3');
-  assert.equal(droneLabel(dronePitches('A', 'dorian', 'layered')), 'A2 + E3, with A3 + E4');
+  assert.equal(
+    droneLabel(dronePitches('A', 'dorian', 'layered')),
+    'A2 + E3, with A3 + E4',
+  );
   assert.equal(droneLabel(dronePitches('A', 'locrian', 'low')), 'A2 + A3');
   assert.equal(droneLabel(dronePitches('E', 'ionian', 'low')), 'E2 + B2');
   assert.equal(droneLabel(dronePitches('Gb', 'ionian', 'low')), 'G♭2 + D♭3');
@@ -140,7 +152,7 @@ void test('colour notes keep the mode spelling', () => {
   assert.equal(colourNote('C#', 'dorian').name, 'A#');
 });
 
-void test('the scale walk climbs two octaves above the low drone and colours the characteristic degree both ways', () => {
+void test('the scale walk climbs to the octave and returns to the root without repeating it', () => {
   const walk = scaleWalk('A', 'dorian');
   assert.deepEqual(
     walk.map((step) => step.note.name),
@@ -170,10 +182,20 @@ void test('the scale walk climbs two octaves above the low drone and colours the
       false,
     ],
   );
+  const octave = walk.filter((step) => step.midi === walk[0].midi + 12);
+  assert.equal(octave.length, 1);
+  assert.equal(octave[0].note.name, 'A');
+  assert.equal(octave[0].note.degree, '1');
+  assert.equal(octave[0].colour, false);
+  assert.equal(walk[7].midi, walk[8].midi + 2);
+  assert.equal(walk.at(-1)?.midi, walk[0].midi);
+  assert.equal(walk.at(-1)?.note.name, 'A');
   assert.equal(walk[0].midi, lowRootMidi('A') + 24);
   assert.equal(
-    scaleWalk('F#', 'lydian').some((step) => step.colour && step.note.name === 'B#'),
-    true,
+    scaleWalk('F#', 'lydian').filter(
+      (step) => step.colour && step.note.name === 'B#',
+    ).length,
+    2,
   );
   const ionian = scaleWalk('A', 'ionian');
   assert.deepEqual(
@@ -183,12 +205,150 @@ void test('the scale walk climbs two octaves above the low drone and colours the
   assert.equal(ionian[7].note.name, 'A');
   assert.equal(ionian[7].note.degree, '1');
   assert.equal(ionian[7].colour, false);
+  assert.equal(ionian.at(-1)?.midi, ionian[0].midi);
   const locrian = scaleWalk('A', 'locrian');
-  assert.equal(locrian.find((step) => step.colour)?.note.name, 'Eb');
+  assert.deepEqual(
+    locrian.filter((step) => step.colour).map((step) => step.note.name),
+    ['Eb', 'Eb'],
+  );
+  assert.deepEqual(
+    scaleWalk('Bb', 'locrian')
+      .filter((step) => step.colour)
+      .map((step) => step.note.name),
+    ['Fb', 'Fb'],
+  );
   assert.deepEqual(
     dronePitches('A', 'locrian', 'low').map((pitch) => pitch.name),
     ['A', 'A'],
   );
+});
+
+void test('a catalog scale picks the church-mode voicing, or a fifth unless the scale has none', () => {
+  assert.equal(droneModeForScale('dorian'), 'dorian');
+  assert.equal(droneModeForScale('major'), 'ionian');
+  assert.equal(droneModeForScale('minor'), 'aeolian');
+  assert.equal(droneModeForScale('locrian'), 'locrian');
+  assert.equal(droneModeForScale('minor-pentatonic'), 'ionian');
+  assert.equal(droneModeForScale('whole-tone'), 'locrian');
+  assert.equal(droneModeForScale('altered'), 'locrian');
+  assert.deepEqual(reedRequestForScale('Bb', 'dorian'), {
+    root: 'Bb',
+    modeId: 'dorian',
+    octave: 'low',
+    scaleId: 'dorian',
+  });
+  assert.deepEqual(
+    scaleWalk('A', 'minor-pentatonic').map((step) => step.note.name),
+    ['A', 'C', 'D', 'E', 'G', 'A', 'G', 'E', 'D', 'C', 'A'],
+  );
+  assert.deepEqual(
+    scaleWalk('A', 'harmonic-minor').map((step) => step.note.name),
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G#', 'A', 'G#', 'F', 'E', 'D', 'C', 'B', 'A'],
+  );
+  assert.notDeepEqual(
+    scaleWalk('A', 'minor-pentatonic').map((step) => step.note.name),
+    scaleWalk('A', 'ionian').map((step) => step.note.name),
+  );
+  assert.deepEqual(
+    dronePitches('A', droneModeForScale('minor-pentatonic'), 'low').map(
+      (pitch) => pitch.degree,
+    ),
+    ['1', '5'],
+  );
+  assert.deepEqual(
+    dronePitches('A', droneModeForScale('whole-tone'), 'low').map(
+      (pitch) => pitch.degree,
+    ),
+    ['1', '8'],
+  );
+  assert.throws(
+    () => droneModeForScale('hypodorian'),
+    /Unknown scale: hypodorian/,
+  );
+});
+
+void test('detune pairs stay centred on the root and cello picks the nearest loop', () => {
+  for (const sound of ['reed', 'bow'] as const) {
+    const cents = symmetricDetuneCents(sound);
+    assert.equal(
+      cents.reduce((sum, value) => sum + value, 0),
+      0,
+    );
+  }
+  assert.equal(sampleForMidi(45).file, 'cello-a2.m4a');
+  assert.equal(sampleForMidi(45).playbackRate, 1);
+  assert.equal(sampleForMidi(50).file, 'cello-e3.m4a');
+});
+
+void test('cello loop bounds follow the AAC packet the decoder returned', () => {
+  assert.deepEqual(celloLoopBounds(94815, 44100), { start: 0, end: 94815 });
+  assert.deepEqual(celloLoopBounds(96256, 44100), { start: 1024, end: 95839 });
+  assert.deepEqual(celloLoopBounds(95232, 44100), { start: 0, end: 94815 });
+  assert.deepEqual(celloLoopBounds(103200, 48000), { start: 0, end: 103200 });
+  assert.deepEqual(celloLoopBounds(104769, 48000), {
+    start: 1115,
+    end: 104315,
+  });
+  assert.deepEqual(celloLoopBounds(100, 44100), { start: 0, end: 100 });
+});
+
+/** The seam at 390370f: the last sample is pulled onto x[0]. */
+function seamAt390370f(samples: Float32Array, fadeSamples: number): Float32Array {
+  const out = samples.slice();
+  const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
+  const delta = out[0] - out[out.length - 1];
+  for (let index = 0; index < fade; index += 1) {
+    const progress = (index + 1) / fade;
+    const weight = Math.sin((progress * Math.PI) / 2);
+    out[out.length - fade + index] += delta * weight;
+  }
+  return out;
+}
+
+void test('the cello seam keeps the slope across the wrap', () => {
+  const samples = new Float32Array(4000);
+  for (let index = 0; index < samples.length; index += 1) {
+    samples[index] = Math.sin(index / 12) * 0.4;
+  }
+  samples[samples.length - 1] = samples[0] + 0.03;
+  const fade = celloSeamFade(44100, samples.length);
+  const slopeLimit = 1e-6;
+  const closed = closeCelloSeam(samples, fade);
+  const previous = seamAt390370f(samples, fade);
+  const target = 2 * samples[0] - samples[1];
+  assert.ok(
+    Math.abs(closed[closed.length - 1] - target) < slopeLimit,
+    `end ${closed[closed.length - 1]} target ${target}`,
+  );
+  assert.ok(
+    Math.abs(celloWrapSlopeChange(closed)) < slopeLimit,
+    `slope ${celloWrapSlopeChange(closed)}`,
+  );
+  const previousSlope = celloWrapSlopeChange(previous);
+  assert.ok(
+    Math.abs(previousSlope) > 1e-3,
+    `390370f seam slope ${previousSlope} should fail the wrap test`,
+  );
+  assert.ok(Math.abs(previousSlope) > slopeLimit);
+  assert.equal(closed[10], samples[10]);
+});
+
+void test('committed cello loops match the license hashes', () => {
+  const license = readFileSync('public/audio/drone/LICENSE.md', 'utf8');
+  const names = ['cello-d2', 'cello-a2', 'cello-e3', 'cello-b3', 'cello-f4'];
+  let total = 0;
+  for (const stem of names) {
+    const file = `${stem}.m4a`;
+    const bytes = readFileSync(`public/audio/drone/${file}`);
+    total += bytes.length;
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const line = license
+      .split('\n')
+      .find((item) => item.startsWith(`| ${file} |`));
+    assert.ok(line, file);
+    assert.match(line, new RegExp(`\\| ${bytes.length} \\| \`${hash}\` \\|`));
+  }
+  assert.match(license, new RegExp(`The AAC loops total ${total} bytes`));
 });
 
 void test('the note module does not mention an audio context', () => {

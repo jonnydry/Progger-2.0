@@ -9,6 +9,7 @@ import './scene-palettes.css';
 import './scene-art.css';
 import './scene-picker.css';
 import './voicing-audition.css';
+import './drone-controls.css';
 import './practice-view.css';
 import './reference-panels.css';
 import './connected-neck.css';
