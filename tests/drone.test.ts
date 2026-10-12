@@ -17,6 +17,8 @@ import {
   modeIntervals,
   sampleForMidi,
   celloLoopBounds,
+  celloSeamFade,
+  celloWrapSlopeChange,
   closeCelloSeam,
   scaleWalk,
   scientificPitch,
@@ -290,17 +292,44 @@ void test('cello loop bounds follow the AAC packet the decoder returned', () => 
   assert.deepEqual(celloLoopBounds(100, 44100), { start: 0, end: 100 });
 });
 
-void test('the cello seam bends onto the first sample', () => {
+/** The seam at 390370f: the last sample is pulled onto x[0]. */
+function seamAt390370f(samples: Float32Array, fadeSamples: number): Float32Array {
+  const out = samples.slice();
+  const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
+  const delta = out[0] - out[out.length - 1];
+  for (let index = 0; index < fade; index += 1) {
+    const progress = (index + 1) / fade;
+    const weight = Math.sin((progress * Math.PI) / 2);
+    out[out.length - fade + index] += delta * weight;
+  }
+  return out;
+}
+
+void test('the cello seam keeps the slope across the wrap', () => {
   const samples = new Float32Array(4000);
   for (let index = 0; index < samples.length; index += 1) {
     samples[index] = Math.sin(index / 12) * 0.4;
   }
   samples[samples.length - 1] = samples[0] + 0.03;
-  const fade = 120;
-  const openStep = Math.abs(samples[0] - samples[samples.length - 1]);
+  const fade = celloSeamFade(44100, samples.length);
+  const slopeLimit = 1e-6;
   const closed = closeCelloSeam(samples, fade);
-  assert.ok(openStep > 1e-3, `open seam ${openStep}`);
-  assert.ok(Math.abs(closed[0] - closed[closed.length - 1]) < 1e-3);
+  const previous = seamAt390370f(samples, fade);
+  const target = 2 * samples[0] - samples[1];
+  assert.ok(
+    Math.abs(closed[closed.length - 1] - target) < slopeLimit,
+    `end ${closed[closed.length - 1]} target ${target}`,
+  );
+  assert.ok(
+    Math.abs(celloWrapSlopeChange(closed)) < slopeLimit,
+    `slope ${celloWrapSlopeChange(closed)}`,
+  );
+  const previousSlope = celloWrapSlopeChange(previous);
+  assert.ok(
+    Math.abs(previousSlope) > 1e-3,
+    `390370f seam slope ${previousSlope} should fail the wrap test`,
+  );
+  assert.ok(Math.abs(previousSlope) > slopeLimit);
   assert.equal(closed[10], samples[10]);
 });
 

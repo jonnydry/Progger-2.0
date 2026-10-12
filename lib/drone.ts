@@ -299,10 +299,33 @@ export function celloLoopBounds(
   return { start, end };
 }
 
+/** Length of the ramp that bends a cello loop onto its slope. */
+export const CELLO_SEAM_SECONDS = 0.06;
+
+export function celloSeamFade(sampleRate: number, length: number): number {
+  return Math.min(
+    Math.round(sampleRate * CELLO_SEAM_SECONDS),
+    Math.max(1, length - 1),
+  );
+}
+
 /**
- * Bend the end of a loop onto its first sample. The AAC join is a step
- * of a few hundredths; spreading that error across the fade leaves the
- * wrap under a one-thousandth.
+ * Change in the first difference across the wrap:
+ * (x[1] − x[0]) − (x[0] − x[n−1]). Zero when the last sample sits on
+ * the line through the first two.
+ */
+export function celloWrapSlopeChange(samples: ArrayLike<number>): number {
+  const last = samples.length - 1;
+  if (last < 2) return 0;
+  const into = samples[0] - samples[last];
+  const onward = samples[1] - samples[0];
+  return onward - into;
+}
+
+/**
+ * Bend the end of a loop toward 2·x[0]−x[1]. Matching x[0] removes the
+ * step and leaves the slope change. The AAC join is a few hundredths;
+ * spreading the correction across the fade keeps that slope change at 0.
  */
 export function closeCelloSeam(
   samples: Float32Array,
@@ -311,7 +334,8 @@ export function closeCelloSeam(
   const out = samples.slice();
   if (out.length < 2) return out;
   const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
-  const delta = out[0] - out[out.length - 1];
+  const target = 2 * out[0] - out[1];
+  const delta = target - out[out.length - 1];
   for (let index = 0; index < fade; index += 1) {
     const progress = (index + 1) / fade;
     const weight = Math.sin((progress * Math.PI) / 2);

@@ -1,6 +1,7 @@
 import {
   CELLO_SAMPLES,
   celloLoopBounds,
+  celloSeamFade,
   closeCelloSeam,
   type DroneLayer,
   type DroneModeId,
@@ -1604,10 +1605,7 @@ function loopSampleBuffer(
   const mixed = mixdown(decoded);
   const range = celloLoopBounds(mixed.length, decoded.sampleRate);
   const body = mixed.slice(range.start, range.end);
-  const fade = Math.min(
-    Math.round(decoded.sampleRate * 0.06),
-    Math.max(1, body.length - 1),
-  );
+  const fade = celloSeamFade(decoded.sampleRate, body.length);
   // The file is already a joined loop. A second equal-power crossfade
   // notches the start (about 5 dB on the E3). Bend only the end.
   const looped = closeCelloSeam(body, fade);
