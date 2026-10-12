@@ -1,7 +1,6 @@
 name: Headroom
 
 on:
-  pull_request:
   schedule:
     - cron: '17 6 * * *'
   workflow_dispatch:
@@ -28,7 +27,7 @@ jobs:
         run: npm ci
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
