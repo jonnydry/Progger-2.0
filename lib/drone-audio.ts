@@ -485,6 +485,7 @@ export function startMeasuredReed(
   when: number,
   attack: number,
   sound: DroneSoundId = 'reed',
+  resting = 1,
 ): { stop: (stopAt: number, fade: number, now?: number) => void } {
   return createReedVoice(
     context,
@@ -494,6 +495,8 @@ export function startMeasuredReed(
     attack,
     true,
     sound,
+    null,
+    resting,
   );
 }
 

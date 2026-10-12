@@ -42,7 +42,20 @@ type RenderResult = {
     file: string;
     step: number;
     bufferStep: number;
+    slope: number;
+    playbackSlope: number;
+    oldSlope: number;
+    interiorStep: number;
     decodedLength?: number;
+  }[];
+  switches?: {
+    name: string;
+    from: string;
+    to: string;
+    align: number;
+    max?: number;
+    tailMax?: number;
+    fail?: boolean;
   }[];
   bySound?: Record<
     string,
@@ -74,8 +87,8 @@ function bundleProbe(): string {
   const root = process.cwd();
   writeFileSync(
     entry,
-    `export { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN } from '${root}/lib/drone-audio.ts';
-export { dronePitches } from '${root}/lib/drone.ts';
+    `export { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, soundLinearCap, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN } from '${root}/lib/drone-audio.ts';
+export { dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange } from '${root}/lib/drone.ts';
 `,
   );
   execFileSync(
@@ -96,7 +109,7 @@ function page(): string {
   return `<!doctype html>
 <meta charset="utf-8" />
 <script type="module">
-import { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN, dronePitches } from '/probe.js';
+import { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, soundLinearCap, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN, dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange } from '/probe.js';
 const SOUNDS = ['reed', 'bow', 'cello'];
 
 const SAMPLE_RATE = 48000;
@@ -347,16 +360,39 @@ async function renderTail(name, fade) {
 
 const CELLO_FILES = ['cello-d2.m4a','cello-a2.m4a','cello-e3.m4a','cello-b3.m4a','cello-f4.m4a'];
 
+function seamAt390370f(samples, fadeSamples) {
+  const out = samples.slice();
+  const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
+  const delta = out[0] - out[out.length - 1];
+  for (let index = 0; index < fade; index += 1) {
+    const progress = (index + 1) / fade;
+    const weight = Math.sin((progress * Math.PI) / 2);
+    out[out.length - fade + index] += delta * weight;
+  }
+  return out;
+}
+
+function copyMono(buffer) {
+  const channel = new Float32Array(buffer.length);
+  buffer.copyFromChannel(channel, 0);
+  return channel;
+}
+
 async function measureSeam(file) {
   const decodeContext = new AudioContext({ sampleRate: 44100 });
   try {
     const bytes = await (await fetch('/audio/drone/' + file)).arrayBuffer();
     const decoded = await decodeContext.decodeAudioData(bytes.slice(0));
+    const decodedChannel = copyMono(decoded);
+    const bounds = celloLoopBounds(decoded.length, decoded.sampleRate);
+    const body = decodedChannel.slice(bounds.start, bounds.end);
+    const fade = celloSeamFade(decoded.sampleRate, body.length);
+    const previous = seamAt390370f(body, fade);
+    const closed = closeCelloSeam(body, fade);
     const prepared = prepareCelloBuffer(decodeContext, decoded);
-    // Firefox can hand back an empty view from getChannelData on this buffer.
-    const channel = new Float32Array(prepared.length);
-    prepared.copyFromChannel(channel, 0);
+    const channel = copyMono(prepared);
     const bufferStep = Math.abs(channel[0] - channel[channel.length - 1]);
+    const interiorStep = Math.abs(channel[1] - channel[0]);
     const rate = prepared.sampleRate;
     const tail = 8;
     const context = new OfflineAudioContext(1, channel.length + tail, rate);
@@ -368,19 +404,127 @@ async function measureSeam(file) {
     source.connect(context.destination);
     source.start(0);
     const rendered = await context.startRendering();
-    const data = rendered.getChannelData(0);
+    const data = new Float32Array(rendered.length);
+    rendered.copyFromChannel(data, 0);
     const at = channel.length;
     const step = Math.abs(data[at] - data[at - 1]);
+    const playbackSlope = (data[at + 1] - data[at]) - (data[at] - data[at - 1]);
     return {
       file,
       step,
       bufferStep,
+      interiorStep,
+      slope: celloWrapSlopeChange(closed),
+      playbackSlope,
+      oldSlope: celloWrapSlopeChange(previous),
       decodedLength: decoded.length,
       around: Array.from(data.slice(at - 2, at + 3)),
     };
   } finally {
     void decodeContext.close();
   }
+}
+
+function switchCases() {
+  const pairs = [
+    ['reed', 'bow'],
+    ['reed', 'cello'],
+    ['bow', 'reed'],
+    ['bow', 'cello'],
+    ['cello', 'reed'],
+    ['cello', 'bow'],
+  ];
+  const list = [];
+  for (const pair of pairs) {
+    for (const kind of ['mid', 'settled']) {
+      for (let align = 0; align < 24; align += 1) {
+        list.push({ from: pair[0], to: pair[1], kind, align });
+      }
+    }
+  }
+  return list;
+}
+
+async function renderSwitch(item) {
+  const start = 128;
+  const into = item.kind === 'mid'
+    ? Math.round(1.269 * SAMPLE_RATE)
+    : Math.round((REED_TIMING.playAttack + 0.75) * SAMPLE_RATE);
+  const boundary = item.kind === 'mid'
+    ? Math.ceil((start + into) / 128) * 128
+    : Math.floor((start + into) / 128) * 128;
+  const interesting = boundary + item.align;
+  const stopAt = interesting + GAP;
+  const release = Math.max(REED_TIMING.switchFade, 0.015);
+  const tailNow = stopAt + Math.round(0.35 * SAMPLE_RATE);
+  const end = tailNow;
+  const pitches = dronePitches('C', 'ionian', 'low');
+  const length = end + Math.ceil((Math.max(REED_TIMING.stopFade, 0.015) + 0.02) * SAMPLE_RATE) + 128;
+  const context = new OfflineAudioContext(2, length, SAMPLE_RATE);
+  const voices = {
+    first: startMeasuredReed(
+      context,
+      context.destination,
+      pitches,
+      at(start),
+      REED_TIMING.playAttack,
+      item.from,
+      soundLinearCap(item.from),
+    ),
+    live: null,
+  };
+  const events = [
+    {
+      at: interesting,
+      run(ctx, held) {
+        held.first.stop(at(stopAt), REED_TIMING.switchFade, at(interesting));
+        held.live = startMeasuredReed(
+          ctx,
+          ctx.destination,
+          pitches,
+          at(stopAt),
+          REED_TIMING.switchAttack,
+          item.to,
+          soundLinearCap(item.to),
+        );
+      },
+    },
+    {
+      at: tailNow,
+      run(_ctx, held) {
+        held.live.stop(at(tailNow), REED_TIMING.stopFade, at(tailNow));
+      },
+    },
+  ];
+  if (typeof context.suspend === 'function') {
+    for (const event of events) {
+      context.suspend(at(event.at)).then(() => {
+        event.run(context, voices);
+        return context.resume();
+      });
+    }
+  } else {
+    for (const event of events) event.run(context, voices);
+  }
+  const rendered = await context.startRendering();
+  const data = new Float32Array(rendered.length);
+  rendered.copyFromChannel(data, 0);
+  const step = analyze(data);
+  const silenceAt = end + Math.ceil((Math.max(REED_TIMING.stopFade, 0.015) + 0.02) * SAMPLE_RATE);
+  let tail = 0;
+  for (let index = Math.min(data.length - 1, silenceAt); index < data.length; index += 1) {
+    tail = Math.max(tail, Math.abs(data[index]));
+  }
+  const name = item.kind === 'mid' ? 'mid-swell sound switch' : 'settled sound switch';
+  return {
+    name,
+    from: item.from,
+    to: item.to,
+    align: item.align,
+    max: step.max,
+    tailMax: tail,
+    fail: step.max > STEP_LIMIT || tail > STEP_LIMIT,
+  };
 }
 
 const seams = [];
@@ -423,6 +567,21 @@ for (const item of [
 ]) {
   tails.push(await renderTail(item[0], item[1]));
 }
+const switches = [];
+for (const item of switchCases()) {
+  try {
+    switches.push(await renderSwitch(item));
+  } catch (error) {
+    switches.push({
+      name: item.kind === 'mid' ? 'mid-swell sound switch' : 'settled sound switch',
+      from: item.from,
+      to: item.to,
+      align: item.align,
+      fail: true,
+      error: String(error && error.message ? error.message : error),
+    });
+  }
+}
 let worst = rows[0];
 for (const row of rows) if ((row.max ?? 0) > (worst.max ?? 0)) worst = row;
 const failing = rows.filter((row) => row.fail);
@@ -452,6 +611,7 @@ const result = {
   bySound,
   tails,
   seams,
+  switches,
   errors: failing.slice(0, 3).map((row) => row.error).filter(Boolean),
 };
 window.__RESULT = result;
@@ -562,7 +722,7 @@ async function runChrome(bundlePath: string): Promise<RenderResult> {
     tab.on('pageerror', (error) => errors.push(String(error)));
     await tab.goto(url, { waitUntil: 'load', timeout: 120000 });
     await tab.waitForFunction(() => document.title === 'done', null, {
-      timeout: 180000,
+      timeout: 480000,
     });
     if (errors.length) throw new Error(errors.join('\n'));
     console.log(`chrome ${browser.version()}`);
@@ -605,7 +765,7 @@ async function runFirefox(bundlePath: string): Promise<RenderResult> {
     new Promise<string>((_, reject) => {
       timer = setTimeout(
         () => reject(new Error('Firefox render timed out')),
-        180000,
+        480000,
       );
     }),
   ]);
@@ -641,19 +801,38 @@ function assertContinuous(result: RenderResult) {
   assert.ok((walk.max ?? 1) < STEP_LIMIT, JSON.stringify(walk));
   assert.equal(walk.tail, 0, JSON.stringify(walk));
   assert.equal(result.seams?.length, 5);
+  const slopeLimit = 1e-6;
   for (const seam of result.seams ?? []) {
     assert.equal(seam.decodedLength, 94815, JSON.stringify(seam));
+    assert.ok(Number.isFinite(seam.step), JSON.stringify(seam));
     assert.ok(
-      Number.isFinite(seam.bufferStep) &&
-        Number.isFinite(seam.step) &&
-        seam.bufferStep < STEP_LIMIT &&
-        seam.step < STEP_LIMIT,
-      JSON.stringify(seam),
+      Math.abs(seam.slope) < slopeLimit,
+      `${seam.file} slope ${seam.slope}`,
+    );
+    assert.ok(
+      Math.abs(seam.playbackSlope) < slopeLimit,
+      `${seam.file} playback slope ${seam.playbackSlope}`,
+    );
+    assert.ok(
+      Math.abs(seam.oldSlope) > 1e-3,
+      `${seam.file} 390370f slope ${seam.oldSlope} should fail`,
     );
     console.log(
-      `${seam.file} buffer ${seam.bufferStep} wrap ${seam.step}`,
+      `${seam.file} buffer ${seam.bufferStep} wrap ${seam.step} interior ${seam.interiorStep} slope ${seam.slope} old ${seam.oldSlope}`,
     );
   }
+  assert.equal(result.switches?.length, 6 * 2 * 24);
+  for (const row of result.switches ?? []) {
+    assert.equal(row.fail, false, JSON.stringify(row));
+    assert.ok((row.max ?? 1) < STEP_LIMIT, JSON.stringify(row));
+    assert.ok((row.tailMax ?? 1) <= STEP_LIMIT, JSON.stringify(row));
+  }
+  const switchWorst = (result.switches ?? []).reduce((best, row) =>
+    (row.max ?? 0) > (best.max ?? 0) ? row : best,
+  );
+  console.log(
+    `sound switch worst ${switchWorst.max} ${switchWorst.from} to ${switchWorst.to} ${switchWorst.name} align ${switchWorst.align}`,
+  );
   assert.equal(result.tails?.length, 3);
   for (const tail of result.tails ?? []) {
     assert.ok(tail.early > 1e-4, `${tail.name} early tail ${tail.early}`);
@@ -672,7 +851,7 @@ void test(
       chromeBin && playwrightEntry
         ? false
         : 'Chrome or Playwright is not installed',
-    timeout: 180000,
+    timeout: 480000,
   },
   async () => {
     const result = await runChrome(bundleProbe());
@@ -689,7 +868,7 @@ void test(
   'Firefox 157 renders every drone sound, including the reed bellows, without a one-sample dip or a hard tail cut',
   {
     skip: firefoxBin ? false : 'Firefox 157 is not installed',
-    timeout: 180000,
+    timeout: 480000,
   },
   async () => {
     const result = await runFirefox(bundleProbe());
