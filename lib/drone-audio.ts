@@ -32,7 +32,7 @@ export function requestSound(request: ReedRequest): DroneSoundId {
 
 /**
  * Reed cap on the voice fade. The master is volume only.
- * The cap is unchanged. Headroom comes from the shared walk trim.
+ * The walk trim is 0.1225.
  */
 export const DRONE_MAX_LINEAR_GAIN = 0.063;
 

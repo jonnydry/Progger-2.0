@@ -323,25 +323,194 @@ export function celloWrapSlopeChange(samples: ArrayLike<number>): number {
 }
 
 /**
- * Bend the end of a loop toward 2·x[0]−x[1]. Matching x[0] removes the
- * step and leaves the slope change. The AAC join is a few hundredths;
- * spreading the correction across the fade keeps that slope change at 0.
+ * Largest absolute second difference on the bend side of the wrap, within
+ * `radius` samples before the join and on the join sample itself.
+ * Index 0 is the first sample after the join. The samples after it are the
+ * recording's opening. They also sit in the body window, so scoring them
+ * here made D2 and E3 tie the body on a sample the bend does not change.
+ */
+export function celloWrapSecondDifference(
+  samples: ArrayLike<number>,
+  radius = 8,
+): number {
+  const length = samples.length;
+  if (length < 3) return 0;
+  const span = Math.min(Math.max(0, radius), length - 1);
+  let max = 0;
+  for (let delta = -span; delta <= 0; delta += 1) {
+    const index = (length + delta) % length;
+    const second = Math.abs(
+      (samples[(index + 1) % length] ?? 0) -
+        2 * (samples[index] ?? 0) +
+        (samples[(index - 1 + length) % length] ?? 0),
+    );
+    if (second > max) max = second;
+  }
+  return max;
+}
+
+/**
+ * Largest absolute second difference outside the tail of the join.
+ * The wrap window is held to this, so a seam kink has to exceed the loop itself.
+ */
+export function celloBodySecondDifference(
+  samples: ArrayLike<number>,
+  radius = 8,
+): number {
+  const length = samples.length;
+  if (length < radius + 3) return 0;
+  let max = 0;
+  for (let index = 1; index < length - radius; index += 1) {
+    const second = Math.abs(
+      (samples[index + 1] ?? 0) -
+        2 * (samples[index] ?? 0) +
+        (samples[index - 1] ?? 0),
+    );
+    if (second > max) max = second;
+  }
+  return max;
+}
+
+/**
+ * Largest absolute second difference from `center - radius` through `center`.
+ * Samples after `center` are the next loop's opening. The body window already
+ * scores that opening, and counting it again tied D2 and E3.
+ */
+export function seamSideSecondDifference(
+  samples: ArrayLike<number>,
+  center: number,
+  radius = 8,
+): number {
+  let max = 0;
+  const start = Math.max(1, Math.ceil(center) - radius);
+  const end = Math.min(samples.length - 2, Math.floor(center));
+  for (let index = start; index <= end; index += 1) {
+    const second = Math.abs(
+      (samples[index + 1] ?? 0) -
+        2 * (samples[index] ?? 0) +
+        (samples[index - 1] ?? 0),
+    );
+    if (second > max) max = second;
+  }
+  return max;
+}
+
+/** Largest absolute second difference in a linear window around `center`. */
+export function windowSecondDifference(
+  samples: ArrayLike<number>,
+  center: number,
+  radius = 8,
+): number {
+  let max = 0;
+  const start = Math.max(1, Math.ceil(center) - radius);
+  const end = Math.min(samples.length - 2, Math.floor(center) + radius);
+  for (let index = start; index <= end; index += 1) {
+    const second = Math.abs(
+      (samples[index + 1] ?? 0) -
+        2 * (samples[index] ?? 0) +
+        (samples[index - 1] ?? 0),
+    );
+    if (second > max) max = second;
+  }
+  return max;
+}
+
+function loopPeak(samples: ArrayLike<number>): number {
+  let peak = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const value = Math.abs(samples[index] ?? 0);
+    if (value > peak) peak = value;
+  }
+  return peak;
+}
+
+/** How far a bent loop may sit above its recording. */
+export const CELLO_SEAM_PEAK_RISE_DB = 0.1;
+
+/** Decibels the bent peak sits above the recording. Zero when it does not rise. */
+export function celloPeakRiseDb(recordingPeak: number, bentPeak: number): number {
+  if (!(recordingPeak > 0)) return bentPeak > 0 ? Number.POSITIVE_INFINITY : 0;
+  if (!(bentPeak > recordingPeak)) return 0;
+  return 20 * Math.log10(bentPeak / recordingPeak);
+}
+
+function clampToPeak(value: number, peak: number): number {
+  if (value > peak) return peak;
+  if (value < -peak) return -peak;
+  return value;
+}
+
+/**
+ * Eight samples on the line through x[0] and x[1], then twenty that
+ * smoothstep back to the recording.
+ */
+function bendCelloSeam(
+  samples: Float32Array,
+  slope: number,
+  hold: number,
+  span: number,
+): Float32Array {
+  const out = samples.slice();
+  const last = out.length - 1;
+  for (let steps = 1; steps <= hold + span; steps += 1) {
+    const at = last - steps + 1;
+    const line = (samples[0] ?? 0) - steps * slope;
+    let weight = 1;
+    if (steps > hold && span > 0) {
+      const progress = (hold + span - steps) / span;
+      weight = progress * progress * (3 - 2 * progress);
+    }
+    const sample = samples[at] ?? 0;
+    out[at] = sample * (1 - weight) + line * weight;
+  }
+  return out;
+}
+
+/**
+ * Sixteen-sample crossfade onto the slope line. The line and the blend are
+ * clamped to the recording peak, so a steep opening cannot walk the loop louder.
+ */
+function shortCelloCrossfade(
+  samples: Float32Array,
+  peak: number,
+  slope: number,
+): Float32Array {
+  const out = samples.slice();
+  const fade = Math.min(16, out.length - 1);
+  const last = out.length - 1;
+  for (let steps = 1; steps <= fade; steps += 1) {
+    const at = last - steps + 1;
+    const line = clampToPeak((samples[0] ?? 0) - steps * slope, peak);
+    const progress = (fade - steps + 1) / fade;
+    const weight = progress * progress * (3 - 2 * progress);
+    const sample = samples[at] ?? 0;
+    out[at] = clampToPeak(sample * (1 - weight) + line * weight, peak);
+  }
+  return out;
+}
+
+/**
+ * Bend the end of a loop onto the line through x[0] and x[1]. A quarter-sine
+ * offset lands the last sample on that line and leaves the kink on the
+ * sample before it. Following that line for eight samples, then smoothstepping
+ * for twenty more, walks off a steep opening: F4's peak rose from 0.4977 to
+ * 0.6634, about 2.5 dB. That loop uses a 16-sample crossfade clamped to the
+ * recording peak instead. The seam test fails when any loop rises by more
+ * than 0.1 dB.
  */
 export function closeCelloSeam(
   samples: Float32Array,
   fadeSamples: number,
 ): Float32Array {
-  const out = samples.slice();
-  if (out.length < 2) return out;
-  const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
-  const target = 2 * out[0] - out[1];
-  const delta = target - out[out.length - 1];
-  for (let index = 0; index < fade; index += 1) {
-    const progress = (index + 1) / fade;
-    const weight = Math.sin((progress * Math.PI) / 2);
-    out[out.length - fade + index] += delta * weight;
-  }
-  return out;
+  if (samples.length < 2) return samples.slice();
+  const peak = loopPeak(samples);
+  const fade = Math.min(Math.max(1, fadeSamples), samples.length - 1);
+  const slope = (samples[1] ?? 0) - (samples[0] ?? 0);
+  const straight = Math.min(8, fade);
+  const ease = Math.min(20, Math.max(0, fade - straight));
+  const full = bendCelloSeam(samples, slope, straight, ease);
+  if (celloPeakRiseDb(peak, loopPeak(full)) <= CELLO_SEAM_PEAK_RISE_DB) return full;
+  return shortCelloCrossfade(samples, peak, slope);
 }
 
 export function sampleForMidi(midi: number): {

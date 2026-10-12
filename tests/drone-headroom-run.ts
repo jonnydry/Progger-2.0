@@ -19,8 +19,39 @@ import {
   scaleWalk,
 } from '../lib/drone.ts';
 import { QUALITIES, diatonicChords, voicings } from '../lib/harmony.ts';
-import { SCALES, TUNING, mod, spell } from '../lib/music.ts';
+import { SCALES } from '../lib/music.ts';
 import { scheduleVoicing, voicingMidi } from '../lib/voicing-audio.ts';
+
+/**
+ * Neighbourhood sums read as much as 0.021 low against a full render.
+ * A sum above this is not evidence. That row is rendered, and an
+ * unrendered sum above this fails the grid.
+ */
+export const PREDICTION_LIMIT = 0.816;
+
+/** Full-render ceiling, −1.5 dBFS. */
+export const RENDER_LIMIT = 0.8414;
+
+/** Full renders per sound. The nightly file keeps this list. */
+export const CONFIRM_COUNT = 10;
+
+export const TIMING_OFFSETS = Array.from(
+  { length: 11 },
+  (_, step) => (step - 5) * 0.004,
+);
+
+/** The other drone root, so a key-change case leaves the key it arrives on. */
+export function keyChangeSource(
+  root: string,
+  mode: string,
+): { root: string; mode: string } {
+  const index = DRONE_ROOTS.indexOf(root as (typeof DRONE_ROOTS)[number]);
+  const next = DRONE_ROOTS[(index + 1) % DRONE_ROOTS.length];
+  if (index < 0 || !next || next === root) {
+    throw new Error(`No other key for ${root}.`);
+  }
+  return { root: next, mode };
+}
 
 const RATE = 48000;
 const DRONE_AT = 4;
@@ -34,6 +65,8 @@ export type HeadroomCase = {
   sound: DroneSoundId;
   via: 'sustain' | 'key-change' | 'sound-switch';
   from: string;
+  fromRoot: string;
+  fromMode: string;
 };
 
 export type HeadroomRow = {
@@ -54,6 +87,31 @@ export type HeadroomRow = {
   chordLabel: string;
   chordFrets: string;
   chordPeak: number;
+  fromRoot: string;
+  fromMode: string;
+  fromMidis: string;
+  toMidis: string;
+  noteShifts: number[];
+  chordShift: number;
+  rendered: boolean;
+};
+
+export type WorstCase = {
+  sound: string;
+  root: string;
+  mode: string;
+  octave: string;
+  via: string;
+  from: string;
+  fromRoot: string;
+  fromMode: string;
+  kind: string;
+  index: number;
+  noteShifts: number[];
+  chordShift: number;
+  chordFrets: string;
+  prediction: number;
+  confirmed: number;
 };
 
 export type ContextChord = {
@@ -95,6 +153,8 @@ export type HeadroomReport = {
   };
   rows?: HeadroomRow[];
   caps?: { reed: number; bow: number; cello: number };
+  seconds?: number;
+  worstCases?: WorstCase[];
 };
 
 type Channels = Float32Array[];
@@ -106,43 +166,70 @@ type ChordChoice = {
   label: string;
 };
 
+function withSource(
+  spec: Omit<HeadroomCase, 'fromRoot' | 'fromMode'>,
+): HeadroomCase {
+  if (spec.via === 'key-change') {
+    const source = keyChangeSource(spec.root, spec.mode);
+    return { ...spec, fromRoot: source.root, fromMode: source.mode };
+  }
+  return { ...spec, fromRoot: spec.root, fromMode: spec.mode };
+}
+
 export function headroomCases(): HeadroomCase[] {
   const sounds: DroneSoundId[] = ['reed', 'bow', 'cello'];
   const cases: HeadroomCase[] = [];
   for (const root of DRONE_ROOTS) {
     for (const mode of DRONE_MODES) {
       for (const sound of sounds) {
-        cases.push({
-          root,
-          mode: mode.id,
-          octave: 'layered',
-          sound,
-          via: 'sustain',
-          from: '',
-        });
-        cases.push({
-          root,
-          mode: mode.id,
-          octave: 'layered',
-          sound,
-          via: 'key-change',
-          from: sound,
-        });
-        for (const from of sounds) {
-          if (from === sound) continue;
-          cases.push({
+        cases.push(
+          withSource({
             root,
             mode: mode.id,
             octave: 'layered',
             sound,
-            via: 'sound-switch',
-            from,
-          });
+            via: 'sustain',
+            from: '',
+          }),
+        );
+        cases.push(
+          withSource({
+            root,
+            mode: mode.id,
+            octave: 'layered',
+            sound,
+            via: 'key-change',
+            from: sound,
+          }),
+        );
+        for (const from of sounds) {
+          if (from === sound) continue;
+          cases.push(
+            withSource({
+              root,
+              mode: mode.id,
+              octave: 'layered',
+              sound,
+              via: 'sound-switch',
+              from,
+            }),
+          );
         }
       }
     }
   }
   return cases;
+}
+
+export function caseMidis(spec: HeadroomCase): { from: string; to: string } {
+  const list = (root: string, mode: string) =>
+    dronePitches(root, mode as DroneModeId, spec.octave)
+      .map((pitch) => pitch.midi)
+      .join(',');
+  return {
+    from: list(spec.fromRoot, spec.fromMode),
+    to: list(spec.root, spec.mode),
+  };
 }
 
 function switchMoment(): { now: number; when: number } {
@@ -226,13 +313,24 @@ function scheduleDrone(
   buffers: ReadonlyMap<string, AudioBuffer>,
   spec: HeadroomCase,
 ): void {
-  const pitches = dronePitches(spec.root, spec.mode as DroneModeId, spec.octave);
+  const incoming = dronePitches(spec.root, spec.mode as DroneModeId, spec.octave);
+  const outgoing = dronePitches(
+    spec.fromRoot,
+    spec.fromMode as DroneModeId,
+    spec.octave,
+  );
+  const midis = caseMidis(spec);
+  if (spec.via === 'key-change' && midis.from === midis.to) {
+    throw new Error(
+      `Key change stayed on ${spec.root} ${spec.mode} (${midis.to}).`,
+    );
+  }
   const cello = (sound: string) => (sound === 'cello' ? buffers : null);
   if (spec.via === 'sustain') {
     startLiveVoice(
       context,
       master,
-      pitches,
+      incoming,
       DRONE_AT,
       REED_TIMING.playAttack,
       spec.sound,
@@ -246,7 +344,7 @@ function scheduleDrone(
   const held = startLiveVoice(
     context,
     master,
-    pitches,
+    outgoing,
     DRONE_AT,
     REED_TIMING.playAttack,
     from as DroneSoundId,
@@ -257,7 +355,7 @@ function scheduleDrone(
   startLiveVoice(
     context,
     master,
-    pitches,
+    incoming,
     when,
     REED_TIMING.switchAttack,
     spec.sound,
@@ -285,10 +383,14 @@ const MODE_SCALE_ID: Record<string, string> = {
   locrian: 'locrian',
 };
 
-const STRING_NAMES = ['E', 'A', 'D', 'G', 'B', 'e'];
-
-/** A-string fret 8, the single F3 Rev rendered for E♭ Ionian. */
+/** A-string fret 8, the single F3 Rev rendered for E♭ Ionian. Not a catalog voicing. */
 export const REV_FRET_KEY = 'x,8,x,x,x,x';
+
+export function soundingCount(frets: readonly (number | null)[]): number {
+  let count = 0;
+  for (const fret of frets) if (fret !== null) count += 1;
+  return count;
+}
 
 export function fretKey(frets: readonly (number | null)[]): string {
   return frets.map((fret) => (fret === null ? 'x' : String(fret))).join(',');
@@ -314,16 +416,17 @@ function cachedVoicings(root: string, qualityId: string) {
 }
 
 /**
- * Voicings the chord player can sound for one key and mode: every diatonic
- * grip the scale page opens, and every one-note fret of a scale tone.
- * A single sounding string is a legal play() shape. The loudest one is chosen
- * by a rendered peak, never by dividing 0.75 by the note count.
+ * Shapes measured for one key and mode: every diatonic grip the scale page
+ * opens. Catalog voicings have at least two sounding strings. One-note
+ * frets are not candidates. The app cannot play them. The loudest shape
+ * is chosen by a rendered peak.
  */
 export function contextVoicings(root: string, modeId: string): ChordChoice[] {
   const scale = scaleForMode(modeId);
   const seen = new Set<string>();
   const choices: ChordChoice[] = [];
   const add = (frets: readonly (number | null)[], label: string) => {
+    if (soundingCount(frets) < 2) return;
     const key = fretKey(frets);
     if (seen.has(key)) return;
     seen.add(key);
@@ -332,18 +435,6 @@ export function contextVoicings(root: string, modeId: string): ChordChoice[] {
   for (const chord of diatonicChords(root, scale)) {
     for (const voicing of cachedVoicings(chord.root, chord.qualityId)) {
       add(voicing.frets, `${chord.symbol} ${voicing.name}`);
-    }
-  }
-  const pcs = new Set(spell(root, [...scale.formula]).map((note) => note.pc));
-  for (let string = 0; string < TUNING.length; string += 1) {
-    const open = TUNING[string];
-    if (open === undefined) continue;
-    for (let fret = 0; fret <= 24; fret += 1) {
-      if (!pcs.has(mod(open + fret))) continue;
-      const frets: (number | null)[] = [null, null, null, null, null, null];
-      frets[string] = fret;
-      const name = STRING_NAMES[string] ?? String(string);
-      add(frets, `${name}-string fret ${fret}`);
     }
   }
   return choices;
@@ -426,13 +517,14 @@ function placedNotes(
   count: number,
   droneAt: number,
   offsets: Map<number, number>,
-  shift: number,
+  shift: number | readonly number[],
 ): WalkNote[] {
   const chain: WalkNote[] = [];
   for (let back = 0; back < count; back += 1) {
     const note = notes[index - back];
     if (!note) return [];
-    const at = droneAt - (offsets.get(note.midi) ?? 0) + shift - back * 0.8;
+    const noteShift = typeof shift === 'number' ? shift : (shift[back] ?? 0);
+    const at = droneAt - (offsets.get(note.midi) ?? 0) + noteShift - back * 0.8;
     if (at < 0.001) return [];
     chain.push({ midi: note.midi, name: note.note.name, at });
   }
@@ -444,6 +536,13 @@ function kindName(count: number): string {
   if (count === 2) return 'pair';
   if (count === 3) return 'triple';
   return 'quad';
+}
+
+function kindCount(kind: string): number {
+  if (kind === 'single') return 1;
+  if (kind === 'pair') return 2;
+  if (kind === 'triple') return 3;
+  return 4;
 }
 
 function searchMix(
@@ -556,8 +655,9 @@ async function measureContextChords(log: (message: string) => void): Promise<{
     }
   }
   const eb = lists.get(contextId('Eb', 'ionian'));
-  if (!eb?.some((choice) => fretKey(choice.frets) === REV_FRET_KEY)) {
-    throw new Error('Eb ionian does not include A-string fret 8.');
+  if (!eb?.length) throw new Error('Eb ionian has no playable voicing.');
+  if (eb.some((choice) => fretKey(choice.frets) === REV_FRET_KEY)) {
+    throw new Error('Eb ionian still includes the one-note A-string probe.');
   }
   const shapes = [...unique.values()];
   log(`voicings ${shapes.length}`);
@@ -578,8 +678,11 @@ async function measureContextChords(log: (message: string) => void): Promise<{
     string,
     { choice: ChordChoice; peak: number; count: number }
   >();
-  const winnerKeys = new Set<string>([REV_FRET_KEY]);
+  const winnerKeys = new Set<string>();
   for (const [key, choices] of lists) {
+    if (choices.some((choice) => soundingCount(choice.frets) < 2)) {
+      throw new Error(`${key} includes a voicing the app cannot play.`);
+    }
     const measured = loudestMeasured(
       choices,
       choices.map((choice) => {
@@ -591,8 +694,11 @@ async function measureContextChords(log: (message: string) => void): Promise<{
     selected.set(key, { choice: measured.choice, peak: measured.peak, count: choices.length });
     winnerKeys.add(fretKey(measured.choice.frets));
   }
-  const revChoice = unique.get(REV_FRET_KEY);
-  if (!revChoice) throw new Error('A-string fret 8 was not rendered.');
+  const revChoice: ChordChoice = {
+    frets: fretsFromKey(REV_FRET_KEY),
+    midis: voicingMidi(fretsFromKey(REV_FRET_KEY)),
+    label: 'A-string fret 8',
+  };
   const clips = new Map<string, Clip>();
   for (const key of winnerKeys) {
     const shape = unique.get(key);
@@ -631,11 +737,14 @@ async function measureContextChords(log: (message: string) => void): Promise<{
       count: item.count,
     });
   }
-  const revClip = clips.get(REV_FRET_KEY);
-  if (!revClip) throw new Error('A-string fret 8 clip is missing.');
+  const revClip = await renderChord(revChoice.frets, 3.2);
+  const revPeak = peakOf(revClip.channels).peak;
+  if (!(revClip.peakAt >= 0) || !(revPeak > 0.2)) {
+    throw new Error(`A-string fret 8 rendered at ${revPeak}.`);
+  }
   return {
     ready,
-    rev: { choice: revChoice, clip: revClip, peak: peakOf(revClip.channels).peak },
+    rev: { choice: revChoice, clip: revClip, peak: revPeak },
   };
 }
 
@@ -708,6 +817,110 @@ async function renderRevMixes(
     });
   }
   return mixes;
+}
+
+function worstFrom(row: HeadroomRow): WorstCase {
+  return {
+    sound: row.sound,
+    root: row.root,
+    mode: row.mode,
+    octave: row.octave,
+    via: row.via,
+    from: row.from,
+    fromRoot: row.fromRoot,
+    fromMode: row.fromMode,
+    kind: row.kind,
+    index: row.index,
+    noteShifts: row.noteShifts,
+    chordShift: row.chordShift,
+    chordFrets: row.chordFrets,
+    prediction: row.peak,
+    confirmed: row.confirmed,
+  };
+}
+
+function specFromWorst(item: WorstCase): HeadroomCase {
+  return {
+    root: item.root,
+    mode: item.mode,
+    octave: item.octave as DroneOctave,
+    sound: item.sound as DroneSoundId,
+    via: item.via as HeadroomCase['via'],
+    from: item.from,
+    fromRoot: item.fromRoot,
+    fromMode: item.fromMode,
+  };
+}
+
+export function fretsFromKey(key: string): (number | null)[] {
+  const frets = key.split(',').map((part) => (part === 'x' ? null : Number(part)));
+  if (
+    frets.length !== 6 ||
+    frets.some((fret) => fret !== null && !Number.isInteger(fret))
+  ) {
+    throw new Error(`Bad fret key ${key}.`);
+  }
+  return frets;
+}
+
+/** Full renders of one alignment, trying each walk note's offset, then the chord. */
+async function searchRenderedOffsets(
+  buffers: ReadonlyMap<string, AudioBuffer>,
+  spec: HeadroomCase,
+  row: HeadroomRow,
+  notes: { midi: number; note: { name: string } }[],
+  walks: Map<number, Clip>,
+  ready: ReadyChord,
+): Promise<{ confirmed: number; noteShifts: number[]; chordShift: number }> {
+  const count = kindCount(row.kind);
+  const offsets = new Map([...walks].map(([midi, clip]) => [midi, clip.peakAt]));
+  let noteShifts = Array.from({ length: count }, () => row.shift);
+  let chordShift = row.shift;
+  const measure = async (shifts: readonly number[], chord: number) => {
+    const chain = placedNotes(notes, row.index, count, row.droneAt, offsets, shifts);
+    if (chain.length !== count) return -1;
+    return renderCombined(
+      buffers,
+      spec,
+      chain,
+      ready.choice,
+      row.droneAt - ready.clip.peakAt + chord,
+    );
+  };
+  const loudest = async (
+    current: number,
+    trial: (offset: number) => Promise<number>,
+  ) => {
+    const peaks = Array.from({ length: TIMING_OFFSETS.length }, () => -1);
+    await pool(TIMING_OFFSETS.length, async (index) => {
+      const offset = TIMING_OFFSETS[index];
+      if (offset === undefined) return;
+      peaks[index] = await trial(offset);
+    });
+    let best = { offset: current, peak: -1 };
+    TIMING_OFFSETS.forEach((offset, index) => {
+      const peak = peaks[index] ?? -1;
+      if (peak > best.peak) best = { offset, peak };
+    });
+    return best;
+  };
+  for (let back = 0; back < count; back += 1) {
+    const chosen = await loudest(noteShifts[back] ?? row.shift, (offset) => {
+      const trial = noteShifts.slice();
+      trial[back] = offset;
+      return measure(trial, chordShift);
+    });
+    noteShifts = noteShifts.slice();
+    noteShifts[back] = chosen.offset;
+  }
+  const chord = await loudest(chordShift, (offset) => measure(noteShifts, offset));
+  chordShift = chord.offset;
+  if (!(chord.peak > 0)) {
+    throw new Error(
+      `${spec.sound} ${spec.root} ${spec.mode} ${spec.via} full render was silent.`,
+    );
+  }
+  return { confirmed: chord.peak, noteShifts, chordShift };
 }
 
 export async function runHeadroom(): Promise<HeadroomReport> {
@@ -835,6 +1048,7 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       const found = searchMix(drone, dronePeak.at, notes, walks, ready.clip);
       const later = notes[found.index];
       const pred = notes[found.index - 1];
+      const midis = caseMidis(spec);
       rows.push({
         sound: spec.sound,
         from: spec.from,
@@ -853,18 +1067,36 @@ export async function runHeadroom(): Promise<HeadroomReport> {
         chordLabel: ready.choice.label,
         chordFrets: fretKey(ready.choice.frets),
         chordPeak: ready.peak,
+        fromRoot: spec.fromRoot,
+        fromMode: spec.fromMode,
+        fromMidis: midis.from,
+        toMidis: midis.to,
+        noteShifts: [],
+        chordShift: found.shift,
+        rendered: false,
       });
       if ((index + 1) % 24 === 0) {
         const elapsed = ((performance.now() - started) / 1000).toFixed(0);
         log(`measured ${index + 1}/${cases.length} ${elapsed}s`);
       }
     }
+    const worstCases: WorstCase[] = [];
+    const selected: HeadroomRow[] = [];
     for (const sound of ['reed', 'bow', 'cello']) {
       const ranked = rows
         .filter((row) => row.sound === sound)
-        .sort((a, b) => b.peak - a.peak)
-        .slice(0, 3);
-      for (const row of ranked) {
+        .sort((a, b) => b.peak - a.peak);
+      const top = ranked.slice(0, CONFIRM_COUNT);
+      const hot = ranked.filter(
+        (row) => row.peak > PREDICTION_LIMIT && !top.includes(row),
+      );
+      const loudest = ranked[0];
+      log(
+        `${sound} max prediction ${loudest?.peak ?? 0} above ${PREDICTION_LIMIT}: ${ranked.filter((row) => row.peak > PREDICTION_LIMIT).length}`,
+      );
+      selected.push(...top, ...hot);
+    }
+    for (const row of selected) {
         const spec = cases.find(
           (item) =>
             item.sound === row.sound &&
@@ -873,43 +1105,32 @@ export async function runHeadroom(): Promise<HeadroomReport> {
             item.via === row.via &&
             item.from === row.from,
         );
-        if (!spec) continue;
-        const notes = scaleWalk(spec.root, spec.mode);
-        const offsets = new Map(
-          [...walks].map(([midi, clip]) => [midi, clip.peakAt]),
-        );
-        const count =
-          row.kind === 'single'
-            ? 1
-            : row.kind === 'pair'
-              ? 2
-              : row.kind === 'triple'
-                ? 3
-                : 4;
-        const chain = placedNotes(
-          notes,
-          row.index,
-          count,
-          row.droneAt,
-          offsets,
-          row.shift,
-        );
+        if (!spec) {
+          throw new Error(`Missing case for ${row.sound} ${row.root} ${row.mode}.`);
+        }
         const ready = measured.ready.get(contextId(spec.root, spec.mode));
         if (!ready) throw new Error(`No chord for ${spec.root} ${spec.mode}.`);
-        const confirmed = await renderCombined(
+        const searched = await searchRenderedOffsets(
           buffers,
           spec,
-          chain,
-          ready.choice,
-          row.droneAt - ready.clip.peakAt + row.shift,
+          row,
+          scaleWalk(spec.root, spec.mode),
+          walks,
+          ready,
         );
-        row.confirmed = confirmed;
-        if (Math.abs(confirmed - row.peak) > 0.01) {
+        row.confirmed = searched.confirmed;
+        row.noteShifts = searched.noteShifts;
+        row.chordShift = searched.chordShift;
+        row.rendered = true;
+        if (row.confirmed > RENDER_LIMIT) {
           throw new Error(
-            `${sound} ${row.root} ${row.mode} ${row.via} linear ${row.peak} combined ${confirmed}`,
+            `${row.sound} ${row.root} ${row.mode} ${row.via} full render ${row.confirmed} is above ${RENDER_LIMIT}`,
           );
         }
-      }
+        log(
+          `confirmed ${row.sound} ${row.root} ${row.mode} ${row.via} prediction ${row.peak} render ${row.confirmed} shifts ${row.noteShifts.join(',')} chord ${row.chordShift}`,
+        );
+        worstCases.push(worstFrom(row));
     }
     const contexts: ContextChord[] = [];
     for (const root of DRONE_ROOTS) {
@@ -950,6 +1171,138 @@ export async function runHeadroom(): Promise<HeadroomReport> {
         bow: soundLinearCap('bow'),
         cello: soundLinearCap('cello'),
       },
+      seconds: (performance.now() - started) / 1000,
+      worstCases,
+    };
+  } finally {
+    void decodeContext.close();
+  }
+}
+
+/** Re-render stored alignments. Does not search offsets or pick new cases. */
+export async function runHeadroomSubset(
+  cases: WorstCase[],
+): Promise<HeadroomReport> {
+  const started = performance.now();
+  if (!cases.length) throw new Error('The headroom worst-case list is empty.');
+  const files = [
+    'cello-d2.m4a',
+    'cello-a2.m4a',
+    'cello-e3.m4a',
+    'cello-b3.m4a',
+    'cello-f4.m4a',
+  ];
+  const decodeContext = new AudioContext();
+  const buffers = new Map<string, AudioBuffer>();
+  try {
+    for (const file of files) {
+      const bytes = await (await fetch(`/audio/${file}`)).arrayBuffer();
+      const decoded = await decodeContext.decodeAudioData(bytes.slice(0));
+      buffers.set(file, prepareCelloBuffer(decodeContext, decoded));
+    }
+    const midis = new Set<number>();
+    for (const item of cases) {
+      const notes = scaleWalk(item.root, item.mode);
+      const count = kindCount(item.kind);
+      if (item.noteShifts.length !== count) {
+        throw new Error(
+          `${item.sound} ${item.root} ${item.mode} stored shifts do not cover ${item.kind}.`,
+        );
+      }
+      for (let back = 0; back < count; back += 1) {
+        const note = notes[item.index - back];
+        if (!note) {
+          throw new Error(
+            `Missing walk note for ${item.sound} ${item.root} ${item.mode}.`,
+          );
+        }
+        midis.add(note.midi);
+      }
+    }
+    const walks = new Map<number, Clip>();
+    for (const midi of midis) {
+      const channels = await renderOffline(2.8, (context) => {
+        const { limiter: compressed } = graph(context);
+        startWalkPluck(context, compressed, midi, LEAD, 1);
+      });
+      const found = peakOf(channels);
+      if (!(found.peak > 0.01)) throw new Error(`Walk ${midi} was silent.`);
+      walks.set(midi, { channels, peakAt: found.at - LEAD });
+    }
+    const chords = new Map<string, Clip>();
+    for (const item of cases) {
+      if (chords.has(item.chordFrets)) continue;
+      const clip = await renderChord(fretsFromKey(item.chordFrets), 3.2);
+      chords.set(item.chordFrets, clip);
+    }
+    const offsets = new Map([...walks].map(([midi, clip]) => [midi, clip.peakAt]));
+    const rows: HeadroomRow[] = [];
+    for (const item of cases) {
+      const spec = specFromWorst(item);
+      const notes = scaleWalk(spec.root, spec.mode);
+      const span = droneSpan(spec.via);
+      const drone = await renderOffline(renderSeconds(spec.via), (context) => {
+        const { master } = graph(context);
+        scheduleDrone(context, master, buffers, spec);
+      });
+      const dronePeak = peakOf(drone, span.start, span.end);
+      const clip = chords.get(item.chordFrets);
+      if (!clip) throw new Error(`Missing chord ${item.chordFrets}.`);
+      const count = kindCount(item.kind);
+      const chain = placedNotes(
+        notes,
+        item.index,
+        count,
+        dronePeak.at,
+        offsets,
+        item.noteShifts,
+      );
+      if (chain.length !== count) {
+        throw new Error(
+          `${item.sound} ${item.root} ${item.mode} stored alignment does not fit.`,
+        );
+      }
+      const frets = fretsFromKey(item.chordFrets);
+      const confirmed = await renderCombined(
+        buffers,
+        spec,
+        chain,
+        { frets, midis: voicingMidi(frets), label: item.chordFrets },
+        dronePeak.at - clip.peakAt + item.chordShift,
+      );
+      const lists = caseMidis(spec);
+      rows.push({
+        sound: item.sound,
+        from: item.from,
+        root: item.root,
+        mode: item.mode,
+        octave: item.octave,
+        via: item.via,
+        peak: item.prediction,
+        confirmed,
+        kind: item.kind,
+        shift: item.chordShift,
+        index: item.index,
+        later: '',
+        pred: '',
+        droneAt: dronePeak.at,
+        chordLabel: item.chordFrets,
+        chordFrets: item.chordFrets,
+        chordPeak: peakOf(clip.channels).peak,
+        fromRoot: item.fromRoot,
+        fromMode: item.fromMode,
+        fromMidis: lists.from,
+        toMidis: lists.to,
+        noteShifts: [...item.noteShifts],
+        chordShift: item.chordShift,
+        rendered: true,
+      });
+    }
+    return {
+      ua: navigator.userAgent,
+      rows,
+      seconds: (performance.now() - started) / 1000,
+      worstCases: cases,
     };
   } finally {
     void decodeContext.close();

@@ -17,7 +17,11 @@ import {
   modeIntervals,
   sampleForMidi,
   celloLoopBounds,
+  celloBodySecondDifference,
+  celloPeakRiseDb,
+  CELLO_SEAM_PEAK_RISE_DB,
   celloSeamFade,
+  celloWrapSecondDifference,
   celloWrapSlopeChange,
   closeCelloSeam,
   scaleWalk,
@@ -292,6 +296,21 @@ void test('cello loop bounds follow the AAC packet the decoder returned', () => 
   assert.deepEqual(celloLoopBounds(100, 44100), { start: 0, end: 100 });
 });
 
+/** Quarter-sine bend from 79eff34: the last sample hits the line and the kink stays. */
+function seamQuarterSine(samples: Float32Array, fadeSamples: number): Float32Array {
+  const out = samples.slice();
+  const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
+  const target = 2 * (out[0] ?? 0) - (out[1] ?? 0);
+  const delta = target - (out[out.length - 1] ?? 0);
+  for (let index = 0; index < fade; index += 1) {
+    const progress = (index + 1) / fade;
+    const weight = Math.sin((progress * Math.PI) / 2);
+    const at = out.length - fade + index;
+    out[at] = (out[at] ?? 0) + delta * weight;
+  }
+  return out;
+}
+
 /** The seam at 390370f: the last sample is pulled onto x[0]. */
 function seamAt390370f(samples: Float32Array, fadeSamples: number): Float32Array {
   const out = samples.slice();
@@ -331,6 +350,83 @@ void test('the cello seam keeps the slope across the wrap', () => {
   );
   assert.ok(Math.abs(previousSlope) > slopeLimit);
   assert.equal(closed[10], samples[10]);
+  const flat = new Float32Array(4000);
+  flat[flat.length - 2] = 0.2;
+  flat[flat.length - 1] = 0.5;
+  const before = seamQuarterSine(flat, fade);
+  const after = closeCelloSeam(flat, fade);
+  const beforeWrap = celloWrapSecondDifference(before);
+  const beforeBody = celloBodySecondDifference(before);
+  const afterWrap = celloWrapSecondDifference(after);
+  const afterBody = celloBodySecondDifference(after);
+  assert.ok(
+    beforeWrap > beforeBody,
+    `quarter-sine ${beforeWrap} should exceed body ${beforeBody}`,
+  );
+  assert.ok(
+    afterWrap <= afterBody + 1e-6,
+    `seam bend ${afterWrap} body ${afterBody}`,
+  );
+  const sourcePeak = (data: ArrayLike<number>) => {
+    let max = 0;
+    for (let index = 0; index < data.length; index += 1) {
+      max = Math.max(max, Math.abs(data[index] ?? 0));
+    }
+    return max;
+  };
+  assert.ok(sourcePeak(closed) <= sourcePeak(samples) + 1e-7);
+  assert.ok(sourcePeak(after) <= sourcePeak(flat) + 1e-7);
+  const steep = new Float32Array(4000);
+  steep[0] = 0.2;
+  steep[1] = 0.5;
+  const steepClosed = closeCelloSeam(steep, fade);
+  assert.ok(
+    sourcePeak(steepClosed) <= sourcePeak(steep) + 1e-7,
+    `steep peak ${sourcePeak(steepClosed)}`,
+  );
+  const walked = new Float32Array(4000);
+  for (let index = 0; index < walked.length; index += 1) {
+    walked[index] = Math.sin(index / 30) * 0.2;
+  }
+  walked[0] = 0.12;
+  walked[1] = 0.19;
+  const walkedPeak = sourcePeak(walked);
+  const walkedOff = walked.slice();
+  const walkedSlope = (walkedOff[1] ?? 0) - (walkedOff[0] ?? 0);
+  for (let steps = 1; steps <= 28; steps += 1) {
+    const at = walkedOff.length - steps;
+    const line = (walkedOff[0] ?? 0) - steps * walkedSlope;
+    let weight = 1;
+    if (steps > 8) {
+      const progress = (28 - steps) / 20;
+      weight = progress * progress * (3 - 2 * progress);
+    }
+    const sample = walked[at] ?? 0;
+    walkedOff[at] = sample * (1 - weight) + line * weight;
+  }
+  assert.ok(
+    sourcePeak(walkedOff) > walkedPeak + 0.05,
+    `unclamped peak ${sourcePeak(walkedOff)} should walk off ${walkedPeak}`,
+  );
+  const walkedClosed = closeCelloSeam(walked, fade);
+  const walkedRise = celloPeakRiseDb(walkedPeak, sourcePeak(walkedClosed));
+  assert.ok(
+    walkedRise <= CELLO_SEAM_PEAK_RISE_DB,
+    `walked peak rose ${walkedRise} dB`,
+  );
+  const walkedWrap = celloWrapSecondDifference(walkedClosed);
+  const walkedBody = celloBodySecondDifference(walkedClosed);
+  assert.ok(
+    walkedBody - walkedWrap >= 0.001,
+    `walked margin ${walkedBody - walkedWrap}`,
+  );
+  assert.ok(
+    Math.abs(celloWrapSlopeChange(steepClosed)) < slopeLimit,
+    `steep slope ${celloWrapSlopeChange(steepClosed)}`,
+  );
+  console.log(
+    `synthetic seam before ${beforeWrap} body ${beforeBody} after ${afterWrap} body ${afterBody}`,
+  );
 });
 
 void test('committed cello loops match the license hashes', () => {
