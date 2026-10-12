@@ -10,7 +10,11 @@ import { pathToFileURL } from 'node:url';
 import { DRONE_MODES, DRONE_ROOTS } from '../lib/drone.ts';
 import { FULL_SCALE_MARGIN } from '../lib/drone-levels.ts';
 import {
+  REV_FRET_KEY,
+  contextVoicings,
+  fretKey,
   headroomCases,
+  loudestMeasured,
   type HeadroomReport,
 } from './drone-headroom-run.ts';
 
@@ -18,9 +22,9 @@ import {
 const MIX_CEILING = 0.8913;
 
 /**
- * Each sound's worst rendered mix. The full grid is every key and mode,
- * sustain, key change, and sound switch, with a walk window of up to four
- * notes and the catalog chord, swept ±20 ms. −1.5 dBFS.
+ * Each sound's worst rendered mix. The grid is every key and mode, sustain,
+ * key change, and sound switch, with a walk window of up to four notes and
+ * that context's loudest measured chord, swept ±20 ms. −1.5 dBFS.
  */
 const SOUND_LIMIT = 0.8414;
 
@@ -763,7 +767,83 @@ void test('the headroom grid is every key and mode, and it uses the chord player
   );
   assert.match(source, /scheduleVoicing\(/);
   assert.equal(source.includes('startChord'), false);
+  assert.equal(source.includes('0.75 /'), false);
+  assert.match(source, /loudestMeasured\(/);
   assert.match(source, /for \(let step = -5; step <= 5; step \+= 1\)/);
+});
+
+void test('each key measures every playable voicing, and the peak picks the chord', () => {
+  const eb = contextVoicings('Eb', 'ionian');
+  assert.ok(eb.some((choice) => fretKey(choice.frets) === REV_FRET_KEY));
+  assert.equal(eb.find((choice) => fretKey(choice.frets) === REV_FRET_KEY)?.midis.join(','), '53');
+  assert.ok(eb.some((choice) => choice.midis.length >= 3));
+  assert.equal(
+    eb.some((choice) => fretKey(choice.frets) === '0,x,x,x,x,x'),
+    false,
+  );
+  assert.equal(new Set(eb.map((choice) => fretKey(choice.frets))).size, eb.length);
+  for (const root of DRONE_ROOTS) {
+    for (const mode of DRONE_MODES) {
+      const choices = contextVoicings(root, mode.id);
+      assert.ok(
+        choices.some((choice) => choice.midis.length === 1),
+        `${root} ${mode.id} single`,
+      );
+      assert.ok(
+        choices.some((choice) => choice.midis.length >= 3),
+        `${root} ${mode.id} grip`,
+      );
+    }
+  }
+  const dyad = loudestMeasured(
+    [
+      {
+        frets: [null, 8, null, null, null, null],
+        midis: [53],
+        label: 'A-string fret 8',
+      },
+      {
+        frets: [0, 2, null, null, null, null],
+        midis: [40, 47],
+        label: 'E5 dyad',
+      },
+    ],
+    [0.2, 0.9],
+  );
+  assert.equal(dyad.choice.label, 'E5 dyad');
+  assert.equal(dyad.peak, 0.9);
+  const single = loudestMeasured(
+    [
+      {
+        frets: [0, 2, null, null, null, null],
+        midis: [40, 47],
+        label: 'E5 dyad',
+      },
+      {
+        frets: [null, 8, null, null, null, null],
+        midis: [53],
+        label: 'A-string fret 8',
+      },
+    ],
+    [0.4, 0.7],
+  );
+  assert.equal(fretKey(single.choice.frets), REV_FRET_KEY);
+  const tied = loudestMeasured(
+    [
+      {
+        frets: [13, null, null, null, null, null],
+        midis: [53],
+        label: 'E-string fret 13',
+      },
+      {
+        frets: [null, 8, null, null, null, null],
+        midis: [53],
+        label: 'A-string fret 8',
+      },
+    ],
+    [0.6378752589225769, 0.6378752589225769],
+  );
+  assert.equal(fretKey(tied.choice.frets), REV_FRET_KEY);
 });
 
 function assertGrid(report: HeadroomReport) {
@@ -773,7 +853,37 @@ function assertGrid(report: HeadroomReport) {
   assert.equal(report.caps?.reed, 0.063);
   assert.equal(report.caps?.bow, 0.072);
   assert.equal(report.caps?.cello, 0.0736);
-  assert.ok((report.chord?.peak ?? 0) > 0.2, JSON.stringify(report.chord));
+  assert.ok((report.chord?.peak ?? 0) > 0.5, JSON.stringify(report.chord));
+  assert.equal(report.rev?.frets, REV_FRET_KEY);
+  assert.deepEqual(report.rev?.midis, [53]);
+  assert.equal(report.rev?.mixes.length, 2);
+  const revPeak = report.rev?.peak ?? 0;
+  assert.ok(revPeak > 0.5, `rev chord ${revPeak}`);
+  for (const mix of report.rev?.mixes ?? []) {
+    const peak = Math.max(mix.linear, mix.confirmed);
+    assert.ok(
+      peak <= SOUND_LIMIT,
+      `rev ${mix.pair} ${peak} vs ${SOUND_LIMIT}`,
+    );
+    console.log(
+      `rev ${mix.pair} shift ${mix.shift} linear ${mix.linear} confirmed ${mix.confirmed} chord ${report.rev?.frets} ${revPeak}`,
+    );
+  }
+  const contexts = report.contexts ?? [];
+  assert.equal(contexts.length, DRONE_ROOTS.length * DRONE_MODES.length);
+  const eb = contexts.find((item) => item.root === 'Eb' && item.mode === 'ionian');
+  if (!eb) throw new Error('Eb ionian chord');
+  assert.ok(
+    eb.peak + 1e-6 >= revPeak,
+    `Eb ionian ${eb.frets} ${eb.peak} below A-string fret 8 ${revPeak}`,
+  );
+  assert.equal(report.chord?.frets, eb.frets);
+  for (const row of rows) {
+    const chord = contexts.find((item) => item.root === row.root && item.mode === row.mode);
+    assert.equal(row.chordFrets, chord?.frets, `${row.root} ${row.mode}`);
+    assert.equal(row.chordPeak, chord?.peak);
+    assert.ok(row.chordPeak > 0.2, `${row.root} ${row.mode} ${row.chordPeak}`);
+  }
   for (const root of DRONE_ROOTS) {
     for (const mode of DRONE_MODES) {
       const here = rows.filter((row) => row.root === root && row.mode === mode.id);
@@ -807,7 +917,7 @@ function assertGrid(report: HeadroomReport) {
       if (peak > Math.max(worst.peak, worst.confirmed)) worst = row;
     }
     console.log(
-      `${sound} worst ${worst.via} from ${worst.from || '-'} ${worst.root} ${worst.mode} ${worst.octave} ${worst.kind} ${worst.later} after ${worst.pred} shift ${worst.shift} linear ${worst.peak} confirmed ${worst.confirmed} chord ${report.chord?.label} ${report.chord?.frets} ${report.chord?.peak}`,
+      `${sound} worst ${worst.via} from ${worst.from || '-'} ${worst.root} ${worst.mode} ${worst.octave} ${worst.kind} ${worst.later} after ${worst.pred} shift ${worst.shift} linear ${worst.peak} confirmed ${worst.confirmed} chord ${worst.chordLabel} ${worst.chordFrets} ${worst.chordPeak}`,
     );
     assert.ok(
       Math.max(worst.peak, worst.confirmed) > 0.5,

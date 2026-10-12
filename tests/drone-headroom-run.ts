@@ -18,7 +18,8 @@ import {
   dronePitches,
   scaleWalk,
 } from '../lib/drone.ts';
-import { QUALITIES, voicings } from '../lib/harmony.ts';
+import { QUALITIES, diatonicChords, voicings } from '../lib/harmony.ts';
+import { SCALES, TUNING, mod, spell } from '../lib/music.ts';
 import { scheduleVoicing, voicingMidi } from '../lib/voicing-audio.ts';
 
 const RATE = 48000;
@@ -50,6 +51,28 @@ export type HeadroomRow = {
   later: string;
   pred: string;
   droneAt: number;
+  chordLabel: string;
+  chordFrets: string;
+  chordPeak: number;
+};
+
+export type ContextChord = {
+  root: string;
+  mode: string;
+  label: string;
+  frets: string;
+  midis: number[];
+  peak: number;
+  count: number;
+};
+
+export type RevMix = {
+  pair: string;
+  pred: string;
+  later: string;
+  shift: number;
+  linear: number;
+  confirmed: number;
 };
 
 export type HeadroomReport = {
@@ -61,6 +84,14 @@ export type HeadroomReport = {
     midis: number[];
     peak: number;
     at: number;
+  };
+  contexts?: ContextChord[];
+  rev?: {
+    frets: string;
+    midis: number[];
+    peak: number;
+    at: number;
+    mixes: RevMix[];
   };
   rows?: HeadroomRow[];
   caps?: { reed: number; bow: number; cello: number };
@@ -244,25 +275,100 @@ async function renderOffline(
   return copyChannels(await context.startRendering());
 }
 
-function chordChoices(): ChordChoice[] {
+const MODE_SCALE_ID: Record<string, string> = {
+  ionian: 'major',
+  dorian: 'dorian',
+  phrygian: 'phrygian',
+  lydian: 'lydian',
+  mixolydian: 'mixolydian',
+  aeolian: 'minor',
+  locrian: 'locrian',
+};
+
+const STRING_NAMES = ['E', 'A', 'D', 'G', 'B', 'e'];
+
+/** A-string fret 8, the single F3 Rev rendered for E♭ Ionian. */
+export const REV_FRET_KEY = 'x,8,x,x,x,x';
+
+export function fretKey(frets: readonly (number | null)[]): string {
+  return frets.map((fret) => (fret === null ? 'x' : String(fret))).join(',');
+}
+
+function scaleForMode(modeId: string) {
+  const scale = SCALES.find((item) => item.id === MODE_SCALE_ID[modeId]);
+  if (!scale) throw new Error(`No scale for ${modeId}.`);
+  return scale;
+}
+
+const voicingCache = new Map<string, ReturnType<typeof voicings>>();
+
+function cachedVoicings(root: string, qualityId: string) {
+  const key = `${root}|${qualityId}`;
+  const hit = voicingCache.get(key);
+  if (hit) return hit;
+  const quality = QUALITIES.find((item) => item.id === qualityId);
+  if (!quality) throw new Error(`Unknown quality ${qualityId}.`);
+  const found = voicings(root, quality);
+  voicingCache.set(key, found);
+  return found;
+}
+
+/**
+ * Voicings the chord player can sound for one key and mode: every diatonic
+ * grip the scale page opens, and every one-note fret of a scale tone.
+ * A single sounding string is a legal play() shape. The loudest one is chosen
+ * by a rendered peak, never by dividing 0.75 by the note count.
+ */
+export function contextVoicings(root: string, modeId: string): ChordChoice[] {
+  const scale = scaleForMode(modeId);
   const seen = new Set<string>();
   const choices: ChordChoice[] = [];
-  for (const root of DRONE_ROOTS) {
-    for (const quality of QUALITIES) {
-      for (const voicing of voicings(root, quality)) {
-        const midis = voicingMidi(voicing.frets);
-        const key = midis.join(',');
-        if (seen.has(key)) continue;
-        seen.add(key);
-        choices.push({
-          frets: [...voicing.frets],
-          midis,
-          label: `${root}${quality.symbol} ${voicing.name}`,
-        });
-      }
+  const add = (frets: readonly (number | null)[], label: string) => {
+    const key = fretKey(frets);
+    if (seen.has(key)) return;
+    seen.add(key);
+    choices.push({ frets: [...frets], midis: voicingMidi(frets), label });
+  };
+  for (const chord of diatonicChords(root, scale)) {
+    for (const voicing of cachedVoicings(chord.root, chord.qualityId)) {
+      add(voicing.frets, `${chord.symbol} ${voicing.name}`);
+    }
+  }
+  const pcs = new Set(spell(root, [...scale.formula]).map((note) => note.pc));
+  for (let string = 0; string < TUNING.length; string += 1) {
+    const open = TUNING[string];
+    if (open === undefined) continue;
+    for (let fret = 0; fret <= 24; fret += 1) {
+      if (!pcs.has(mod(open + fret))) continue;
+      const frets: (number | null)[] = [null, null, null, null, null, null];
+      frets[string] = fret;
+      const name = STRING_NAMES[string] ?? String(string);
+      add(frets, `${name}-string fret ${fret}`);
     }
   }
   return choices;
+}
+
+/** Highest measured peak. An equal peak keeps A-string fret 8 when it tied. */
+export function loudestMeasured(
+  choices: readonly ChordChoice[],
+  peaks: readonly number[],
+): { choice: ChordChoice; peak: number } {
+  if (!choices.length || choices.length !== peaks.length) {
+    throw new Error('Each voicing needs one measured peak.');
+  }
+  let best = Number.NEGATIVE_INFINITY;
+  for (const peak of peaks) {
+    if (peak === undefined || !Number.isFinite(peak)) {
+      throw new Error('A voicing peak was not measured.');
+    }
+    if (peak > best) best = peak;
+  }
+  const tied = choices.filter((_, index) => peaks[index] === best);
+  const rev = tied.find((choice) => fretKey(choice.frets) === REV_FRET_KEY);
+  const choice = rev ?? tied[0];
+  if (!choice) throw new Error('No voicing was measured.');
+  return { choice, peak: best };
 }
 
 async function renderChord(frets: readonly (number | null)[], seconds: number): Promise<Clip> {
@@ -421,6 +527,189 @@ async function pool(
   await Promise.all(Array.from({ length: width }, () => run()));
 }
 
+type ReadyChord = {
+  choice: ChordChoice;
+  clip: Clip;
+  peak: number;
+  count: number;
+};
+
+function contextId(root: string, mode: string): string {
+  return `${root}|${mode}`;
+}
+
+async function measureContextChords(log: (message: string) => void): Promise<{
+  ready: Map<string, ReadyChord>;
+  rev: { choice: ChordChoice; clip: Clip; peak: number };
+}> {
+  const lists = new Map<string, ChordChoice[]>();
+  const unique = new Map<string, ChordChoice>();
+  for (const root of DRONE_ROOTS) {
+    for (const mode of DRONE_MODES) {
+      const choices = contextVoicings(root, mode.id);
+      if (!choices.length) throw new Error(`${root} ${mode.id} has no voicing.`);
+      lists.set(contextId(root, mode.id), choices);
+      for (const choice of choices) {
+        const key = fretKey(choice.frets);
+        if (!unique.has(key)) unique.set(key, choice);
+      }
+    }
+  }
+  const eb = lists.get(contextId('Eb', 'ionian'));
+  if (!eb?.some((choice) => fretKey(choice.frets) === REV_FRET_KEY)) {
+    throw new Error('Eb ionian does not include A-string fret 8.');
+  }
+  const shapes = [...unique.values()];
+  log(`voicings ${shapes.length}`);
+  const shortPeaks = Array.from({ length: shapes.length }, () => Number.NaN);
+  await pool(shapes.length, async (index) => {
+    const choice = shapes[index];
+    if (!choice) return;
+    const clip = await renderChord(choice.frets, 0.6);
+    shortPeaks[index] = peakOf(clip.channels).peak;
+  });
+  const peakByKey = new Map<string, number>();
+  shapes.forEach((shape, index) => {
+    const peak = shortPeaks[index];
+    if (peak === undefined) throw new Error(`Missing peak for ${shape.label}.`);
+    peakByKey.set(fretKey(shape.frets), peak);
+  });
+  const selected = new Map<
+    string,
+    { choice: ChordChoice; peak: number; count: number }
+  >();
+  const winnerKeys = new Set<string>([REV_FRET_KEY]);
+  for (const [key, choices] of lists) {
+    const measured = loudestMeasured(
+      choices,
+      choices.map((choice) => {
+        const peak = peakByKey.get(fretKey(choice.frets));
+        if (peak === undefined) throw new Error(`Missing peak for ${choice.label}.`);
+        return peak;
+      }),
+    );
+    selected.set(key, { choice: measured.choice, peak: measured.peak, count: choices.length });
+    winnerKeys.add(fretKey(measured.choice.frets));
+  }
+  const revChoice = unique.get(REV_FRET_KEY);
+  if (!revChoice) throw new Error('A-string fret 8 was not rendered.');
+  const clips = new Map<string, Clip>();
+  for (const key of winnerKeys) {
+    const shape = unique.get(key);
+    if (!shape) throw new Error(`Missing shape ${key}.`);
+    const clip = await renderChord(shape.frets, 3.2);
+    const peak = peakOf(clip.channels).peak;
+    if (!(clip.peakAt >= 0) || !(peak > 0.2)) {
+      throw new Error(`${shape.label} rendered at ${peak}.`);
+    }
+    clips.set(key, clip);
+  }
+  const ready = new Map<string, ReadyChord>();
+  for (const [key, item] of selected) {
+    const id = fretKey(item.choice.frets);
+    const clip = clips.get(id);
+    if (!clip) throw new Error(`Missing clip ${id}.`);
+    const full = peakOf(clip.channels).peak;
+    const choices = lists.get(key);
+    if (!choices) throw new Error(`Missing choices for ${key}.`);
+    for (const choice of choices) {
+      const short = peakByKey.get(fretKey(choice.frets));
+      if (
+        short !== undefined &&
+        short > full + 0.002 &&
+        fretKey(choice.frets) !== fretKey(item.choice.frets)
+      ) {
+        throw new Error(
+          `${key} kept ${item.choice.label} at ${full}, below ${choice.label} at ${short}.`,
+        );
+      }
+    }
+    ready.set(key, {
+      choice: item.choice,
+      clip,
+      peak: full,
+      count: item.count,
+    });
+  }
+  const revClip = clips.get(REV_FRET_KEY);
+  if (!revClip) throw new Error('A-string fret 8 clip is missing.');
+  return {
+    ready,
+    rev: { choice: revChoice, clip: revClip, peak: peakOf(revClip.channels).peak },
+  };
+}
+
+async function renderRevMixes(
+  buffers: ReadonlyMap<string, AudioBuffer>,
+  drone: Channels,
+  droneAt: number,
+  walks: Map<number, Clip>,
+  rev: { choice: ChordChoice; clip: Clip },
+): Promise<RevMix[]> {
+  const notes = scaleWalk('Eb', 'ionian');
+  const pairs: { index: number; pred: string; later: string; name: string }[] = [];
+  for (let index = 1; index < notes.length; index += 1) {
+    const later = notes[index];
+    const pred = notes[index - 1];
+    if (!later || !pred || later.midi !== 67 || later.note.name !== 'G') continue;
+    pairs.push({
+      index,
+      pred: `${pred.note.name}${pred.midi}`,
+      later: `${later.note.name}${later.midi}`,
+      name: `${pred.note.name}${pred.midi} then G${later.midi}`,
+    });
+  }
+  if (pairs.length !== 2) throw new Error(`Expected two G4 steps, found ${pairs.length}.`);
+  const spec = headroomCases().find(
+    (item) =>
+      item.root === 'Eb' &&
+      item.mode === 'ionian' &&
+      item.sound === 'cello' &&
+      item.via === 'sustain',
+  );
+  if (!spec) throw new Error('Eb ionian cello sustain is missing.');
+  const offsets = new Map([...walks].map(([midi, clip]) => [midi, clip.peakAt]));
+  const mixes: RevMix[] = [];
+  for (const pair of pairs) {
+    let best = { peak: -1, shift: 0 };
+    for (let step = -5; step <= 5; step += 1) {
+      const shift = step * 0.004;
+      const chain = placedNotes(notes, pair.index, 2, droneAt, offsets, shift);
+      if (chain.length !== 2) continue;
+      const extras = chain.map((note) => {
+        const clip = walks.get(note.midi);
+        if (!clip) throw new Error(`Missing walk ${note.midi}.`);
+        return placeScheduled(clip, note.at);
+      });
+      extras.push(placeScheduled(rev.clip, droneAt - rev.clip.peakAt + shift));
+      const peak = neighborhoodPeak(drone, extras);
+      if (peak > best.peak) best = { peak, shift };
+    }
+    const chain = placedNotes(notes, pair.index, 2, droneAt, offsets, best.shift);
+    const confirmed = await renderCombined(
+      buffers,
+      spec,
+      chain,
+      rev.choice,
+      droneAt - rev.clip.peakAt + best.shift,
+    );
+    if (Math.abs(confirmed - best.peak) > 0.01) {
+      throw new Error(
+        `Rev ${pair.name} linear ${best.peak} combined ${confirmed}.`,
+      );
+    }
+    mixes.push({
+      pair: pair.name,
+      pred: pair.pred,
+      later: pair.later,
+      shift: best.shift,
+      linear: best.peak,
+      confirmed,
+    });
+  }
+  return mixes;
+}
+
 export async function runHeadroom(): Promise<HeadroomReport> {
   const started = performance.now();
   const log = (message: string) => {
@@ -441,26 +730,12 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       const decoded = await decodeContext.decodeAudioData(bytes.slice(0));
       buffers.set(file, prepareCelloBuffer(decodeContext, decoded));
     }
-    const choices = chordChoices();
-    log(`chords ${choices.length}`);
-    let chordChoice = choices[0];
-    let chordPeak = 0;
-    if (!chordChoice) throw new Error('The catalog has no chord.');
-    await pool(choices.length, async (index) => {
-      const choice = choices[index];
-      if (!choice) return;
-      const clip = await renderChord(choice.frets, 0.5);
-      if (clip.channels[0] && peakOf(clip.channels).peak > chordPeak) {
-        chordPeak = peakOf(clip.channels).peak;
-        chordChoice = choice;
-      }
-    });
-    const chord = await renderChord(chordChoice.frets, 3.2);
-    if (!(chord.peakAt >= 0) || !(peakOf(chord.channels).peak > 0.2)) {
-      throw new Error(`Chord render was silent (${chordChoice.label}).`);
-    }
+    const measured = await measureContextChords(log);
+    const ebKey = contextId('Eb', 'ionian');
+    const ebChord = measured.ready.get(ebKey);
+    if (!ebChord) throw new Error('Eb ionian has no measured chord.');
     log(
-      `chord ${chordChoice.label} frets ${chordChoice.frets.map((fret) => fret ?? 'x').join(',')} peak ${peakOf(chord.channels).peak} at ${chord.peakAt}`,
+      `chord ${ebChord.choice.label} frets ${fretKey(ebChord.choice.frets)} peak ${ebChord.peak} at ${ebChord.clip.peakAt} of ${ebChord.count}`,
     );
     const midis = new Set<number>();
     for (const root of DRONE_ROOTS) {
@@ -498,7 +773,7 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       checkPeak.at,
       checkNotes,
       walks,
-      chord,
+      ebChord.clip,
     );
     const checkPlaced = placedNotes(
       checkNotes,
@@ -514,9 +789,21 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       buffers,
       check,
       checkPlaced,
-      chordChoice,
-      checkPeak.at - chord.peakAt + checkSearch.shift,
+      ebChord.choice,
+      checkPeak.at - ebChord.clip.peakAt + checkSearch.shift,
     );
+    const revMixes = await renderRevMixes(
+      buffers,
+      checkDrone,
+      checkPeak.at,
+      walks,
+      measured.rev,
+    );
+    for (const mix of revMixes) {
+      log(
+        `rev ${mix.pair} shift ${mix.shift} linear ${mix.linear} confirmed ${mix.confirmed}`,
+      );
+    }
     const gap = Math.abs(checkCombined - checkSearch.peak);
     log(
       `linearity cello Eb ionian ${kindName(checkSearch.count)} linear ${checkSearch.peak} combined ${checkCombined} gap ${gap}`,
@@ -543,7 +830,9 @@ export async function runHeadroom(): Promise<HeadroomReport> {
           `${spec.sound} ${spec.root} ${spec.mode} ${spec.via} drone was silent.`,
         );
       }
-      const found = searchMix(drone, dronePeak.at, notes, walks, chord);
+      const ready = measured.ready.get(contextId(spec.root, spec.mode));
+      if (!ready) throw new Error(`No chord for ${spec.root} ${spec.mode}.`);
+      const found = searchMix(drone, dronePeak.at, notes, walks, ready.clip);
       const later = notes[found.index];
       const pred = notes[found.index - 1];
       rows.push({
@@ -561,6 +850,9 @@ export async function runHeadroom(): Promise<HeadroomReport> {
         later: later ? `${later.note.name}${later.midi}` : '',
         pred: pred ? `${pred.note.name}${pred.midi}` : '',
         droneAt: dronePeak.at,
+        chordLabel: ready.choice.label,
+        chordFrets: fretKey(ready.choice.frets),
+        chordPeak: ready.peak,
       });
       if ((index + 1) % 24 === 0) {
         const elapsed = ((performance.now() - started) / 1000).toFixed(0);
@@ -602,12 +894,14 @@ export async function runHeadroom(): Promise<HeadroomReport> {
           offsets,
           row.shift,
         );
+        const ready = measured.ready.get(contextId(spec.root, spec.mode));
+        if (!ready) throw new Error(`No chord for ${spec.root} ${spec.mode}.`);
         const confirmed = await renderCombined(
           buffers,
           spec,
           chain,
-          chordChoice,
-          row.droneAt - chord.peakAt + row.shift,
+          ready.choice,
+          row.droneAt - ready.clip.peakAt + row.shift,
         );
         row.confirmed = confirmed;
         if (Math.abs(confirmed - row.peak) > 0.01) {
@@ -617,14 +911,38 @@ export async function runHeadroom(): Promise<HeadroomReport> {
         }
       }
     }
+    const contexts: ContextChord[] = [];
+    for (const root of DRONE_ROOTS) {
+      for (const mode of DRONE_MODES) {
+        const ready = measured.ready.get(contextId(root, mode.id));
+        if (!ready) throw new Error(`No chord for ${root} ${mode.id}.`);
+        contexts.push({
+          root,
+          mode: mode.id,
+          label: ready.choice.label,
+          frets: fretKey(ready.choice.frets),
+          midis: ready.choice.midis,
+          peak: ready.peak,
+          count: ready.count,
+        });
+      }
+    }
     return {
       ua: navigator.userAgent,
       chord: {
-        label: chordChoice.label,
-        frets: chordChoice.frets.map((fret) => (fret === null ? 'x' : String(fret))).join(','),
-        midis: chordChoice.midis,
-        peak: peakOf(chord.channels).peak,
-        at: chord.peakAt,
+        label: ebChord.choice.label,
+        frets: fretKey(ebChord.choice.frets),
+        midis: ebChord.choice.midis,
+        peak: ebChord.peak,
+        at: ebChord.clip.peakAt,
+      },
+      contexts,
+      rev: {
+        frets: fretKey(measured.rev.choice.frets),
+        midis: measured.rev.choice.midis,
+        peak: measured.rev.peak,
+        at: measured.rev.clip.peakAt,
+        mixes: revMixes,
       },
       rows,
       caps: {
