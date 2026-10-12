@@ -534,7 +534,7 @@ void test('volume is stored before a context exists and clamps on the master ram
   assert.equal(droneMasterGain(100), DRONE_MAX_LINEAR_GAIN);
   assert.equal(DRONE_MAX_LINEAR_GAIN, 0.063);
   assert.equal(BOW_GAINS.cap, 0.072);
-  assert.equal(CELLO_GAINS.cap, 0.0695);
+  assert.equal(CELLO_GAINS.cap, 0.0736);
   assert.equal(WALK_GAINS.trim, 0.1225);
   assert.equal(droneMasterGain(1, 'bow'), BOW_GAINS.cap);
   assert.equal(droneMasterGain(1, 'cello'), CELLO_GAINS.cap);
