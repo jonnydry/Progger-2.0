@@ -14,8 +14,9 @@ const MIX_CEILING = 0.8913;
 
 /**
  * Each sound's worst rendered mix: drone, a walk window of up to four
- * notes, and the loudest chord, swept ±20 ms. −1.5 dBFS. Under the 0.8913
- * ceiling, and under 0.871.
+ * notes, a sound-switch crossfade with overlapping walk notes, and the
+ * loudest chord, swept ±20 ms. −1.5 dBFS. Under the 0.8913 ceiling, and
+ * under 0.871.
  */
 const SOUND_LIMIT = 0.8414;
 
@@ -82,6 +83,9 @@ function bundleProbe(): string {
   prepareCelloBuffer,
   soundLinearCap,
   DRONE_LIMITER,
+  REED_TIMING,
+  ROOM_SECONDS,
+  TAIL_MARGIN,
 } from '${root}/lib/drone-audio.ts';
 export { dronePitches, scaleWalk } from '${root}/lib/drone.ts';
 `,
@@ -421,6 +425,7 @@ try {
 
 type OverlapRow = {
   sound: string;
+  from: string;
   root: string;
   mode: string;
   via: string;
@@ -437,9 +442,11 @@ type OverlapReport = {
 };
 
 /**
- * The three loudest locked mixes, each with the scale walk's overlapping
- * notes. One note, the previous step, and a four-note window are aligned
- * to the drone peak and swept with the loudest chord.
+ * The three loudest locked mixes, plus a sound change at each of those
+ * places. The outgoing voice is already swelled and fades while the new
+ * sound attacks; the search keeps going until that voice's room tail has
+ * died. One note, the previous step, and a four-note window are aligned
+ * to that window and swept with the loudest chord.
  */
 function overlapPage(): string {
   return `<!doctype html>
@@ -452,32 +459,63 @@ import {
   prepareCelloBuffer,
   soundLinearCap,
   DRONE_LIMITER,
+  REED_TIMING,
+  ROOM_SECONDS,
+  TAIL_MARGIN,
   dronePitches,
   scaleWalk,
 } from '/probe.js';
 
 const DRONE_AT = 3;
 const files = ['cello-d2.m4a','cello-a2.m4a','cello-e3.m4a','cello-b3.m4a','cello-f4.m4a'];
+const sounds = ['reed', 'bow', 'cello'];
+const places = [
+  { root: 'Eb', mode: 'locrian', octave: 'layered' },
+  { root: 'F#', mode: 'ionian', octave: 'layered' },
+  { root: 'A', mode: 'locrian', octave: 'layered' },
+];
 const cases = [
   { sound: 'reed', root: 'Eb', mode: 'locrian', octave: 'layered', via: 'sustain', attack: 1.6, seconds: 3.6 },
   { sound: 'bow', root: 'F#', mode: 'ionian', octave: 'layered', via: 'crossfade', gap: 0.254 },
   { sound: 'cello', root: 'A', mode: 'locrian', octave: 'layered', via: 'switch', attack: 0.2, seconds: 1.2 },
 ];
+for (const place of places) {
+  for (const sound of sounds) {
+    for (const from of sounds) {
+      if (from === sound) continue;
+      cases.push({ ...place, sound, from, via: 'sound-switch' });
+    }
+  }
+}
 
-function peakOf(rendered) {
+function peakOf(rendered, from = 0, until = Infinity) {
   let peak = 0;
-  let at = 0;
+  let at = from;
+  const rate = rendered.sampleRate;
+  const start = Math.max(0, Math.floor(from * rate));
+  const end = Math.min(rendered.length, Math.ceil(until * rate));
   for (let channel = 0; channel < rendered.numberOfChannels; channel += 1) {
     const data = rendered.getChannelData(channel);
-    for (let index = 0; index < data.length; index += 1) {
+    for (let index = start; index < end; index += 1) {
       const value = Math.abs(data[index]);
       if (value > peak) {
         peak = value;
-        at = index / rendered.sampleRate;
+        at = index / rate;
       }
     }
   }
   return { peak, at };
+}
+
+function switchMoment() {
+  const now = DRONE_AT + REED_TIMING.playAttack + 0.2;
+  return { now, when: now + 0.02 };
+}
+
+function crossfadeSpan() {
+  const { now } = switchMoment();
+  const dryEnd = now + REED_TIMING.switchFade;
+  return { start: now, end: dryEnd + ROOM_SECONDS + TAIL_MARGIN };
 }
 
 function startChord(context, midis, when) {
@@ -516,9 +554,9 @@ function startChord(context, midis, when) {
   });
 }
 
-function graph(context, sound) {
+function graph(context, sound, masterGain) {
   const master = context.createGain();
-  master.gain.value = soundLinearCap(sound);
+  master.gain.value = masterGain ?? soundLinearCap(sound);
   const limiter = context.createDynamicsCompressor();
   limiter.threshold.value = DRONE_LIMITER.threshold;
   limiter.knee.value = DRONE_LIMITER.knee;
@@ -533,6 +571,32 @@ function graph(context, sound) {
 function addDrone(context, master, buffers, spec) {
   const pitches = dronePitches(spec.root, spec.mode, spec.octave);
   const cello = spec.sound === 'cello' ? buffers : null;
+  if (spec.via === 'sound-switch') {
+    const { now, when } = switchMoment();
+    const outgoing = spec.from === 'cello' ? buffers : null;
+    const held = startLiveVoice(
+      context,
+      master,
+      pitches,
+      DRONE_AT,
+      REED_TIMING.playAttack,
+      spec.from,
+      outgoing,
+      soundLinearCap(spec.from),
+    );
+    held.stop(when, REED_TIMING.switchFade, now);
+    startLiveVoice(
+      context,
+      master,
+      pitches,
+      when,
+      REED_TIMING.switchAttack,
+      spec.sound,
+      cello,
+      soundLinearCap(spec.sound),
+    );
+    return;
+  }
   if (spec.via === 'crossfade') {
     const start = DRONE_AT;
     const now = start + spec.gap;
@@ -545,18 +609,28 @@ function addDrone(context, master, buffers, spec) {
   startLiveVoice(context, master, pitches, DRONE_AT, spec.attack, spec.sound, cello);
 }
 
-async function renderMix(buffers, spec, notes, chord) {
+function renderSeconds(spec) {
+  if (spec.via === 'crossfade') return DRONE_AT + spec.gap + 1.3 + 0.4;
+  if (spec.via === 'sound-switch') return crossfadeSpan().end + 3.1;
+  return DRONE_AT + spec.seconds + 0.4;
+}
+
+async function renderMix(buffers, spec, notes, chord, span) {
   const rate = 48000;
-  const seconds = DRONE_AT + (spec.via === 'crossfade' ? spec.gap + 1.3 : spec.seconds) + 0.4;
-  const context = new OfflineAudioContext(2, Math.ceil(rate * seconds), rate);
-  const { master, limiter } = graph(context, spec.sound);
+  const context = new OfflineAudioContext(2, Math.ceil(rate * renderSeconds(spec)), rate);
+  const { master, limiter } = graph(
+    context,
+    spec.sound,
+    spec.via === 'sound-switch' ? 1 : undefined,
+  );
   addDrone(context, master, buffers, spec);
   for (const note of notes) {
     if (note.at < 0) throw new Error('walk note starts before the render');
     startWalkPluck(context, limiter, note.midi, note.at, 1);
   }
   if (chord) startChord(context, chord.midis, chord.at);
-  return peakOf(await context.startRendering());
+  const rendered = await context.startRendering();
+  return span ? peakOf(rendered, span.start, span.end) : peakOf(rendered);
 }
 
 try {
@@ -593,7 +667,12 @@ try {
       const value = peakOf(await context.startRendering());
       offsets.set(note.midi, value.at - 0.02);
     }
-    const drone = await renderMix(buffers, spec, [], null);
+    const drone = spec.via === 'sound-switch'
+      ? await renderMix(buffers, spec, [], null, crossfadeSpan())
+      : await renderMix(buffers, spec, [], null);
+    if (spec.via === 'sound-switch' && !(drone.peak > 0.01)) {
+      throw new Error(spec.sound + ' from ' + spec.from + ' sound-switch window was silent');
+    }
     const placed = (index, count, shift) => {
       const later = notes[index];
       const at = drone.at - offsets.get(later.midi) + shift;
@@ -636,6 +715,7 @@ try {
     const pred = notes[best.index - 1];
     const row = {
       sound: spec.sound,
+      from: spec.from || '',
       root: spec.root,
       mode: spec.mode,
       via: spec.via,
@@ -722,14 +802,17 @@ function serve(bundlePath: string, html = page()): Promise<{
   });
 }
 
-async function waitForReport(result: Promise<string>): Promise<PeakReport> {
+async function waitForReport(
+  result: Promise<string>,
+  limit = 340000,
+): Promise<PeakReport> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const body = await Promise.race([
     result,
     new Promise<string>((_, reject) => {
       timer = setTimeout(
         () => reject(new Error('Peak render timed out')),
-        340000,
+        limit,
       );
     }),
   ]);
@@ -737,7 +820,11 @@ async function waitForReport(result: Promise<string>): Promise<PeakReport> {
   return JSON.parse(body) as PeakReport;
 }
 
-async function runChrome(bundlePath: string, html = page()): Promise<PeakReport> {
+async function runChrome(
+  bundlePath: string,
+  html = page(),
+  limit = 340000,
+): Promise<PeakReport> {
   if (!chromeBin || !playwrightEntry) throw new Error('Chrome harness is unavailable.');
   const { url, result, close } = await serve(bundlePath, html);
   const playwright = (await import(pathToFileURL(playwrightEntry).href)) as {
@@ -773,7 +860,7 @@ async function runChrome(bundlePath: string, html = page()): Promise<PeakReport>
     tab.on('pageerror', (error) => errors.push(error.text?.() ?? 'page error'));
     tab.on('console', (message) => console.log(message.text?.() ?? ''));
     await tab.goto(url, { waitUntil: 'load', timeout: 120000 });
-    const report = await waitForReport(result);
+    const report = await waitForReport(result, limit);
     console.log(`chrome ${browser.version()}`);
     if (errors.length && !report.error) report.error = errors.join('\n');
     return report;
@@ -783,7 +870,11 @@ async function runChrome(bundlePath: string, html = page()): Promise<PeakReport>
   }
 }
 
-async function runFirefox(bundlePath: string, html = page()): Promise<PeakReport> {
+async function runFirefox(
+  bundlePath: string,
+  html = page(),
+  limit = 340000,
+): Promise<PeakReport> {
   if (!firefoxBin) throw new Error('Firefox 157 is unavailable.');
   const { url, result, close } = await serve(bundlePath, html);
   const profile = join(tmpdir(), 'fx157-peak-profile');
@@ -811,7 +902,7 @@ async function runFirefox(bundlePath: string, html = page()): Promise<PeakReport
     { stdio: 'ignore', detached: true },
   );
   try {
-    return await waitForReport(result);
+    return await waitForReport(result, limit);
   } finally {
     if (child.pid) {
       try {
@@ -920,36 +1011,64 @@ void test(
 
 function assertOverlap(report: OverlapReport) {
   assert.equal(report.error, undefined, report.error);
-  assert.equal(report.rows?.length, 3);
-  for (const row of report.rows) {
+  const rows = report.rows ?? [];
+  assert.equal(rows.length, 21);
+  for (const row of rows) {
     console.log(
-      `${row.sound} ${row.root} ${row.mode} ${row.via} ${row.kind} ${row.later} after ${row.pred} overlap ${row.peak}`,
+      `${row.sound} from ${row.from || '-'} ${row.root} ${row.mode} ${row.via} ${row.kind} ${row.later} after ${row.pred} overlap ${row.peak}`,
     );
-    assert.ok(row.peak > 0.8, `${row.sound} overlap ${row.peak}`);
+    assert.ok(Number.isFinite(row.peak), `${row.sound} overlap ${row.peak}`);
     assert.ok(
       row.peak < FULL_SCALE_MARGIN,
       `${row.sound} ${row.kind} overlap ${row.peak} vs ${FULL_SCALE_MARGIN}`,
     );
     assert.ok(
       row.peak <= SOUND_LIMIT,
-      `${row.sound} worst case ${row.peak} vs ${SOUND_LIMIT}`,
+      `${row.sound} ${row.via} from ${row.from || '-'} ${row.peak} vs ${SOUND_LIMIT}`,
+    );
+  }
+  for (const sound of ['reed', 'bow', 'cello']) {
+    const ofSound = rows.filter((row) => row.sound === sound);
+    const switches = ofSound.filter((row) => row.via === 'sound-switch');
+    const locked = ofSound.filter((row) => row.via !== 'sound-switch');
+    assert.equal(locked.length, 1, `${sound} locked window`);
+    assert.equal(switches.length, 6, `${sound} sound-switch windows`);
+    for (const row of switches) {
+      // The chord alone is about 0.637. Every switch at these places
+      // cleared 0.75, so a render that dropped both voices fails here.
+      assert.ok(
+        row.peak > 0.74,
+        `${sound} from ${row.from} ${row.root} ${row.mode} silent switch ${row.peak}`,
+      );
+    }
+    const worst = ofSound.reduce((best, row) =>
+      row.peak > best.peak ? row : best,
+    );
+    assert.ok(worst.peak > 0.8, `${sound} overlap ${worst.peak}`);
+    assert.ok(
+      worst.peak <= SOUND_LIMIT,
+      `${sound} worst case ${worst.peak} vs ${SOUND_LIMIT}`,
+    );
+    console.log(
+      `${sound} worst ${worst.via} from ${worst.from || '-'} ${worst.root} ${worst.mode} ${worst.kind} ${worst.later} after ${worst.pred} ${worst.peak}`,
     );
   }
 }
 
 void test(
-  'Chrome keeps a consecutive scale-walk window at or below -1.5 dBFS on the loudest mixes',
+  'Chrome keeps a sound-switch crossfade and a scale-walk window at or below -1.5 dBFS',
   {
     skip:
       chromeBin && playwrightEntry
         ? false
         : 'Chrome or Playwright is not installed',
-    timeout: 300000,
+    timeout: 720000,
   },
   async () => {
     const report = (await runChrome(
       bundleProbe(),
       overlapPage(),
+      700000,
     )) as unknown as OverlapReport;
     console.log(report.ua);
     assertOverlap(report);
@@ -957,15 +1076,16 @@ void test(
 );
 
 void test(
-  'Firefox 157 keeps a consecutive scale-walk window at or below -1.5 dBFS on the loudest mixes',
+  'Firefox 157 keeps a sound-switch crossfade and a scale-walk window at or below -1.5 dBFS',
   {
     skip: firefoxBin ? false : 'Firefox 157 is not installed',
-    timeout: 300000,
+    timeout: 720000,
   },
   async () => {
     const report = (await runFirefox(
       bundleProbe(),
       overlapPage(),
+      700000,
     )) as unknown as OverlapReport;
     console.log(report.ua);
     assertOverlap(report);

@@ -495,7 +495,12 @@ export function startMeasuredReed(
   );
 }
 
-/** The production voice, waveform included, for a peak measurement. */
+/**
+ * The production voice, waveform included, for a peak measurement.
+ * `resting` is the voice fade's level, the same argument production passes
+ * when it builds a voice. A same-sound render can leave this at 1 and put
+ * the cap on the master instead.
+ */
 export function startLiveVoice(
   context: BaseAudioContext,
   destination: AudioNode,
@@ -504,6 +509,7 @@ export function startLiveVoice(
   attack: number,
   sound: DroneSoundId,
   buffers: ReadonlyMap<string, AudioBuffer> | null = null,
+  resting = 1,
 ): { stop: (stopAt: number, fade: number, now?: number) => void } {
   return createReedVoice(
     context,
@@ -514,6 +520,7 @@ export function startLiveVoice(
     false,
     sound,
     buffers,
+    resting,
   );
 }
 
