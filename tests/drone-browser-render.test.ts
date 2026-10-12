@@ -42,6 +42,7 @@ type RenderResult = {
     playback: number;
     recordingPeak: number;
     closedPeak: number;
+    unclampedPeak: number;
   }[];
   switches?: {
     name: string;
@@ -83,7 +84,7 @@ function bundleProbe(): string {
   writeFileSync(
     entry,
     `export { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, soundLinearCap, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN } from '${root}/lib/drone-audio.ts';
-export { dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange, celloWrapSecondDifference, celloBodySecondDifference, windowSecondDifference } from '${root}/lib/drone.ts';
+export { dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange, celloWrapSecondDifference, celloBodySecondDifference, windowSecondDifference, seamSideSecondDifference } from '${root}/lib/drone.ts';
 `,
   );
   execFileSync(
@@ -104,7 +105,7 @@ function page(): string {
   return `<!doctype html>
 <meta charset="utf-8" />
 <script type="module">
-import { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, soundLinearCap, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN, dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange, celloWrapSecondDifference, celloBodySecondDifference, windowSecondDifference } from '/probe.js';
+import { startMeasuredReed, startMeasuredWalk, startLiveVoice, prepareCelloBuffer, soundLinearCap, REED_TIMING, WALK_STOP_FADE, ROOM_SECONDS, TAIL_MARGIN, dronePitches, celloLoopBounds, celloSeamFade, closeCelloSeam, celloWrapSlopeChange, celloWrapSecondDifference, celloBodySecondDifference, windowSecondDifference, seamSideSecondDifference } from '/probe.js';
 const SOUNDS = ['reed', 'bow', 'cello'];
 
 const SAMPLE_RATE = 48000;
@@ -367,6 +368,26 @@ function seamAt390370f(samples, fadeSamples) {
   return out;
 }
 
+function seamUnclamped(samples, fadeSamples) {
+  const out = samples.slice();
+  const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
+  const slope = out[1] - out[0];
+  const hold = Math.min(8, fade);
+  const span = Math.min(20, fade - hold);
+  const last = out.length - 1;
+  for (let steps = 1; steps <= hold + span; steps += 1) {
+    const at = last - steps + 1;
+    const line = out[0] - steps * slope;
+    let weight = 1;
+    if (steps > hold && span > 0) {
+      const progress = (hold + span - steps) / span;
+      weight = progress * progress * (3 - 2 * progress);
+    }
+    out[at] = out[at] * (1 - weight) + line * weight;
+  }
+  return out;
+}
+
 function seamQuarterSine(samples, fadeSamples) {
   const out = samples.slice();
   const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
@@ -398,6 +419,7 @@ async function measureSeam(file) {
     const previous = seamAt390370f(body, fade);
     const quarter = seamQuarterSine(body, fade);
     const closed = closeCelloSeam(body, fade);
+    const unclamped = seamUnclamped(body, fade);
     const peakOf = (data) => {
       let max = 0;
       for (let index = 0; index < data.length; index += 1) {
@@ -438,9 +460,10 @@ async function measureSeam(file) {
       beforeBody: celloBodySecondDifference(quarter),
       after: celloWrapSecondDifference(closed),
       body: celloBodySecondDifference(closed),
-      playback: windowSecondDifference(data, at, 8),
+      playback: seamSideSecondDifference(data, at, 8),
       recordingPeak: peakOf(body),
       closedPeak: peakOf(closed),
+      unclampedPeak: peakOf(unclamped),
       decodedLength: decoded.length,
       around: Array.from(data.slice(at - 2, at + 3)),
     };
@@ -776,17 +799,23 @@ function assertContinuous(result: RenderResult) {
       `${seam.file} 390370f slope ${seam.oldSlope} should fail`,
     );
     assert.ok(
-      seam.after <= seam.body + 1e-6,
-      `${seam.file} after ${seam.after} body ${seam.body}`,
+      seam.body - seam.after >= 0.001,
+      `${seam.file} after ${seam.after} body ${seam.body} margin ${seam.body - seam.after}`,
     );
     assert.ok(
       seam.closedPeak <= seam.recordingPeak + 1e-6,
       `${seam.file} closed peak ${seam.closedPeak} recording ${seam.recordingPeak}`,
     );
     assert.ok(
-      seam.playback <= seam.body + 1e-4,
-      `${seam.file} playback curvature ${seam.playback} body ${seam.body}`,
+      seam.body - seam.playback >= 0.001,
+      `${seam.file} playback ${seam.playback} body ${seam.body} margin ${seam.body - seam.playback}`,
     );
+    if (seam.file === 'cello-f4.m4a') {
+      assert.ok(
+        seam.unclampedPeak > seam.recordingPeak + 0.1,
+        `${seam.file} unclamped ${seam.unclampedPeak} should walk off ${seam.recordingPeak}`,
+      );
+    }
     if (
       seam.file === 'cello-d2.m4a' ||
       seam.file === 'cello-e3.m4a' ||

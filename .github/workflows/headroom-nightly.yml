@@ -5,15 +5,27 @@ on:
     - cron: '17 6 * * *'
   workflow_dispatch:
 
+# One night at a time. A second run waits; it does not cancel a sweep
+# that is already rendering.
+concurrency:
+  group: headroom-worst
+  cancel-in-progress: false
+
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   sweep:
     name: full sweep
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.publish.outputs.changed }}
+      fixture: ${{ steps.publish.outputs.fixture }}
+      result: ${{ steps.publish.outputs.result }}
+      sha: ${{ steps.publish.outputs.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -44,11 +56,49 @@ jobs:
           HEADROOM_CHECK_RESULT: ${{ github.workspace }}/headroom-check-result.txt
         run: npm run test:headroom-check
 
-      - name: Update the bot pull request when worst cases change
+      - name: Record the sweep result
+        id: publish
+        env:
+          HEADROOM_CHECK_RESULT: ${{ github.workspace }}/headroom-check-result.txt
+        run: |
+          if [ ! -s "$HEADROOM_CHECK_RESULT" ]; then
+            echo 'the render check did not record a result'
+            exit 1
+          fi
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          {
+            echo 'result<<CHECK'
+            cat "$HEADROOM_CHECK_RESULT"
+            echo 'CHECK'
+          } >> "$GITHUB_OUTPUT"
+          if git diff --quiet -- tests/fixtures/headroom-worst.json; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'worst cases unchanged'
+            exit 0
+          fi
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo "fixture=$(base64 -w 0 tests/fixtures/headroom-worst.json)" >> "$GITHUB_OUTPUT"
+
+  pull-request:
+    name: update bot pull request
+    needs: sweep
+    if: needs.sweep.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.sweep.outputs.sha }}
+
+      - name: Update the bot pull request
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-          HEADROOM_CHECK_RESULT: ${{ github.workspace }}/headroom-check-result.txt
+          FIXTURE: ${{ needs.sweep.outputs.fixture }}
+          RESULT: ${{ needs.sweep.outputs.result }}
         run: |
           branch="bot/headroom-worst"
           if [ "$branch" != "bot/headroom-worst" ]; then
@@ -61,10 +111,11 @@ jobs:
               exit 1
               ;;
           esac
-          if [ ! -s "$HEADROOM_CHECK_RESULT" ]; then
+          if [ -z "$RESULT" ]; then
             echo 'the render check did not record a result'
             exit 1
           fi
+          printf '%s' "$FIXTURE" | base64 -d > tests/fixtures/headroom-worst.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -B "$branch"
@@ -75,7 +126,7 @@ jobs:
           fi
           git commit -m "chore: refresh headroom worst cases"
           git push --force origin "HEAD:refs/heads/bot/headroom-worst"
-          result=$(cat "$HEADROOM_CHECK_RESULT")
+          result="$RESULT"
           body=$(cat <<EOF
           The nightly headroom sweep refreshed tests/fixtures/headroom-worst.json.
 

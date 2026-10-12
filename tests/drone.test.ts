@@ -382,6 +382,41 @@ void test('the cello seam keeps the slope across the wrap', () => {
     sourcePeak(steepClosed) <= sourcePeak(steep) + 1e-7,
     `steep peak ${sourcePeak(steepClosed)}`,
   );
+  const walked = new Float32Array(4000);
+  for (let index = 0; index < walked.length; index += 1) {
+    walked[index] = Math.sin(index / 30) * 0.2;
+  }
+  walked[0] = 0.12;
+  walked[1] = 0.19;
+  const walkedPeak = sourcePeak(walked);
+  const walkedOff = walked.slice();
+  const walkedSlope = (walkedOff[1] ?? 0) - (walkedOff[0] ?? 0);
+  for (let steps = 1; steps <= 28; steps += 1) {
+    const at = walkedOff.length - steps;
+    const line = (walkedOff[0] ?? 0) - steps * walkedSlope;
+    let weight = 1;
+    if (steps > 8) {
+      const progress = (28 - steps) / 20;
+      weight = progress * progress * (3 - 2 * progress);
+    }
+    const sample = walked[at] ?? 0;
+    walkedOff[at] = sample * (1 - weight) + line * weight;
+  }
+  assert.ok(
+    sourcePeak(walkedOff) > walkedPeak + 0.05,
+    `unclamped peak ${sourcePeak(walkedOff)} should walk off ${walkedPeak}`,
+  );
+  const walkedClosed = closeCelloSeam(walked, fade);
+  assert.ok(
+    sourcePeak(walkedClosed) <= walkedPeak + 1e-7,
+    `walked peak ${sourcePeak(walkedClosed)} recording ${walkedPeak}`,
+  );
+  const walkedWrap = celloWrapSecondDifference(walkedClosed);
+  const walkedBody = celloBodySecondDifference(walkedClosed);
+  assert.ok(
+    walkedBody - walkedWrap >= 0.001,
+    `walked margin ${walkedBody - walkedWrap}`,
+  );
   assert.ok(
     Math.abs(celloWrapSlopeChange(steepClosed)) < slopeLimit,
     `steep slope ${celloWrapSlopeChange(steepClosed)}`,

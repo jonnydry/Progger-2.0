@@ -10,11 +10,17 @@ void test('the nightly sweep opens a bot pull request and does not push main', (
   assert.match(workflow, /^  schedule:$/m);
   assert.match(workflow, /^  workflow_dispatch:$/m);
   assert.doesNotMatch(workflow, /^  pull_request:$/m);
+  assert.match(workflow, /^concurrency:\n  group: headroom-worst\n  cancel-in-progress: false\n/m);
+  assert.match(workflow, /^permissions:\n  contents: read\n/m);
+  assert.doesNotMatch(workflow, /^permissions:\n  contents: write/m);
+  assert.doesNotMatch(workflow, /actions: write/);
+  assert.equal(workflow.match(/contents: write/g)?.length, 1);
+  assert.equal(workflow.match(/pull-requests: write/g)?.length, 1);
   assert.match(
     workflow,
-    /permissions:\n  contents: write\n  pull-requests: write\n/,
+    /pull-request:[\s\S]*permissions:\n      contents: write\n      pull-requests: write\n/,
   );
-  assert.doesNotMatch(workflow, /actions: write/);
+  assert.match(workflow, /sweep:[\s\S]*permissions:\n      contents: read\n/);
   assert.match(workflow, /npm run test:headroom-check/);
   assert.match(workflow, /HEADROOM_CHECK_RESULT/);
   assert.match(workflow, /the render check did not record a result/);
@@ -28,6 +34,7 @@ void test('the nightly sweep opens a bot pull request and does not push main', (
   const checkAt = workflow.indexOf('npm run test:headroom-check');
   const prAt = workflow.indexOf('gh pr create');
   assert.ok(checkAt > 0 && prAt > checkAt);
+  assert.match(workflow, /needs: sweep/);
   assert.match(workflow, /if: github\.event_name != 'pull_request'/);
   assert.match(workflow, /branch="bot\/headroom-worst"/);
   assert.doesNotMatch(workflow, /GITHUB_RUN_ID/);

@@ -17,6 +17,7 @@ import { QUALITIES, diatonicChords, voicings } from '../lib/harmony.ts';
 import { SCALES } from '../lib/music.ts';
 import { FULL_SCALE_MARGIN } from '../lib/drone-levels.ts';
 import { launchNamed, type BrowserName } from './browser-launch.ts';
+import { headroomSourceHash } from './headroom-sources.ts';
 import {
   CONFIRM_COUNT,
   PREDICTION_LIMIT,
@@ -42,7 +43,11 @@ const SOUND_LIMIT = 0.8414;
 
 const WORST_FIXTURE = new URL('./fixtures/headroom-worst.json', import.meta.url);
 
-type SweepFile = Record<BrowserName, { seconds: number; cases: WorstCase[] }>;
+type SweepFile = {
+  sources: string;
+  chromium: { seconds: number; cases: WorstCase[] };
+  firefox: { seconds: number; cases: WorstCase[] };
+};
 
 type PeakRow = {
   root: string;
@@ -971,6 +976,12 @@ function fretSounding(key: string): number {
 
 function readWorst(name: BrowserName): WorstCase[] {
   const parsed = JSON.parse(readFileSync(WORST_FIXTURE, 'utf8')) as SweepFile;
+  const expected = headroomSourceHash();
+  if (parsed.sources !== expected) {
+    throw new Error(
+      `headroom-worst.json was not generated from the current audio sources and drone assets (fixture ${parsed.sources ?? 'missing'}, tree ${expected})`,
+    );
+  }
   const block = parsed[name];
   if (!block?.cases?.length) {
     throw new Error(`headroom-worst.json has no ${name} cases to render`);
@@ -1024,11 +1035,23 @@ function assertSubset(report: HeadroomReport, cases: WorstCase[]) {
       fretSounding(row.chordFrets) >= 2,
       `${row.sound} ${row.root} ${row.chordFrets} is not a playable voicing`,
     );
+    assert.ok(
+      row.rendered || row.peak <= PREDICTION_LIMIT,
+      `${row.sound} ${row.root} ${row.mode} ${row.via} prediction ${row.peak} was not rendered`,
+    );
+    assert.ok(
+      row.chordPeak > 0.2,
+      `${row.sound} ${row.root} ${row.mode} chord ${row.chordPeak}`,
+    );
   }
   for (const sound of ['reed', 'bow', 'cello']) {
     const ofSound = rows.filter((row) => row.sound === sound);
-    assert.ok(ofSound.length >= CONFIRM_COUNT, sound);
-    for (const row of ofSound) {
+    const rendered = ofSound.filter((row) => row.rendered);
+    assert.ok(
+      rendered.length >= CONFIRM_COUNT,
+      `${sound} rendered ${rendered.length} of the top ${CONFIRM_COUNT}`,
+    );
+    for (const row of rendered) {
       assert.equal(row.rendered, true);
       assert.ok(
         row.confirmed <= SOUND_LIMIT,
@@ -1118,7 +1141,7 @@ void test(
     }
     const bundle = headroomBundle();
     const html = headroomPage();
-    const written: SweepFile = {
+    const written: Omit<SweepFile, 'sources'> = {
       chromium: { seconds: 0, cases: [] },
       firefox: { seconds: 0, cases: [] },
     };
@@ -1145,7 +1168,8 @@ void test(
       }
     }
     if (process.env.HEADROOM_WRITE === '1') {
-      writeFileSync(WORST_FIXTURE, `${JSON.stringify(written, null, 2)}\n`);
+      const file: SweepFile = { sources: headroomSourceHash(), ...written };
+      writeFileSync(WORST_FIXTURE, `${JSON.stringify(file, null, 2)}\n`);
     }
   },
 );
