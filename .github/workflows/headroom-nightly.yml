@@ -44,13 +44,17 @@ jobs:
           HEADROOM_CHECK_RESULT: ${{ github.workspace }}/headroom-check-result.txt
         run: npm run test:headroom-check
 
-      - name: Open a pull request when worst cases change
+      - name: Update the bot pull request when worst cases change
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           HEADROOM_CHECK_RESULT: ${{ github.workspace }}/headroom-check-result.txt
         run: |
-          branch="bot/headroom-worst-${GITHUB_RUN_ID}"
+          branch="bot/headroom-worst"
+          if [ "$branch" != "bot/headroom-worst" ]; then
+            echo "refusing to push ${branch}"
+            exit 1
+          fi
           case "$branch" in
             main|master|refs/heads/main|refs/heads/master)
               echo "refusing to push ${branch}"
@@ -63,30 +67,35 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout -b "$branch"
+          git checkout -B "$branch"
           git add tests/fixtures/headroom-worst.json
           if git diff --cached --quiet; then
             echo 'worst cases unchanged'
             exit 0
           fi
           git commit -m "chore: refresh headroom worst cases"
-          git push origin "refs/heads/${branch}:refs/heads/${branch}"
+          git push --force origin "HEAD:refs/heads/bot/headroom-worst"
           result=$(cat "$HEADROOM_CHECK_RESULT")
           body=$(cat <<EOF
           The nightly headroom sweep refreshed tests/fixtures/headroom-worst.json.
 
-          The per-push render check ran against that file before this pull request was opened. A pull request opened with GITHUB_TOKEN does not trigger CI.
+          The per-push render check ran against that file before this pull request was opened or updated. A pull request opened with GITHUB_TOKEN does not trigger CI.
 
           Result:
           ${result}
 
-          This pull request is opened from bot branch ${branch}. The workflow does not push to main.
+          This pull request tracks bot branch bot/headroom-worst. Each night force-updates that branch only. The workflow does not push to main or to any human branch.
 
           The repository setting "Allow GitHub Actions to create and approve pull requests" must be on for this step. That setting is pending Jonny's OK.
           EOF
           )
-          gh pr create \
-            --base main \
-            --head "$branch" \
-            --title "chore: refresh headroom worst cases" \
-            --body "$body"
+          number=$(gh pr list --head "bot/headroom-worst" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --body "$body"
+          else
+            gh pr create \
+              --base main \
+              --head "bot/headroom-worst" \
+              --title "chore: refresh headroom worst cases" \
+              --body "$body"
+          fi
