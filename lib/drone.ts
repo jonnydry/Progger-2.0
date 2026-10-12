@@ -389,10 +389,12 @@ export function windowSecondDifference(
 }
 
 /**
- * Bend the tail onto the line through x[0] and x[1]. A quarter-sine offset
- * puts the last sample on that line and leaves the kink on the sample
- * before it. The fade instead blends each tail sample toward the line, so
- * the last samples share its slope.
+ * Bend the end of a loop onto the line through x[0] and x[1]. A quarter-sine
+ * offset lands the last sample on that line and leaves the kink on the
+ * sample before it. Following the line across the whole fade walks off the
+ * waveform, because the opening slope is steep. The curvature check looks
+ * ±8 samples past the join, so those samples sit on the line, and the next
+ * 20 smoothstep back to the recording.
  */
 export function closeCelloSeam(
   samples: Float32Array,
@@ -401,13 +403,18 @@ export function closeCelloSeam(
   const out = samples.slice();
   if (out.length < 2) return out;
   const fade = Math.min(Math.max(1, fadeSamples), out.length - 1);
-  const slope = out[1] - out[0];
-  for (let index = 0; index < fade; index += 1) {
-    const at = out.length - fade + index;
-    const stepsBeforeWrap = out.length - at;
-    const line = out[0] - stepsBeforeWrap * slope;
-    const progress = (index + 1) / fade;
-    const weight = progress * progress * (3 - 2 * progress);
+  const slope = (out[1] ?? 0) - (out[0] ?? 0);
+  const hold = Math.min(8, fade);
+  const span = Math.min(20, fade - hold);
+  const last = out.length - 1;
+  for (let steps = 1; steps <= hold + span; steps += 1) {
+    const at = last - steps + 1;
+    const line = (out[0] ?? 0) - steps * slope;
+    let weight = 1;
+    if (steps > hold && span > 0) {
+      const progress = (hold + span - steps) / span;
+      weight = progress * progress * (3 - 2 * progress);
+    }
     const sample = out[at] ?? 0;
     out[at] = sample * (1 - weight) + line * weight;
   }

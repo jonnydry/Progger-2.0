@@ -36,9 +36,6 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium firefox
 
-      - name: Hide Playwright browsers
-        run: echo "PLAYWRIGHT_BROWSERS_PATH=/tmp/playwright-missing" >> "$GITHUB_ENV"
-
       - name: lint
         run: npm run lint
 

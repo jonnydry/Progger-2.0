@@ -363,7 +363,7 @@ void test('the cello seam keeps the slope across the wrap', () => {
   );
   assert.ok(
     afterWrap <= afterBody + 1e-6,
-    `line blend ${afterWrap} body ${afterBody}`,
+    `seam bend ${afterWrap} body ${afterBody}`,
   );
   console.log(
     `synthetic seam before ${beforeWrap} body ${beforeBody} after ${afterWrap} body ${afterBody}`,

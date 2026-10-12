@@ -857,8 +857,8 @@ function assertGrid(report: HeadroomReport) {
     assert.equal(row.chordPeak, chord?.peak);
     assert.ok(row.chordPeak > 0.2, `${row.root} ${row.mode} ${row.chordPeak}`);
     assert.ok(
-      row.peak <= PREDICTION_LIMIT,
-      `${row.sound} ${row.root} ${row.mode} ${row.via} prediction ${row.peak}`,
+      row.rendered || row.peak <= PREDICTION_LIMIT,
+      `${row.sound} ${row.root} ${row.mode} ${row.via} prediction ${row.peak} was not rendered`,
     );
     if (row.via === 'key-change') {
       assert.notEqual(row.fromRoot, row.root, `${row.sound} ${row.root}`);
@@ -909,7 +909,7 @@ function assertGrid(report: HeadroomReport) {
       `${sound} worst ${Math.max(worst.peak, worst.confirmed)}`,
     );
     const rendered = ofSound.filter((row) => row.rendered);
-    assert.equal(rendered.length, CONFIRM_COUNT, sound);
+    assert.ok(rendered.length >= CONFIRM_COUNT, sound);
     for (const row of rendered) {
       assert.ok(
         row.confirmed <= SOUND_LIMIT,
@@ -967,7 +967,7 @@ function assertSubset(report: HeadroomReport, cases: WorstCase[]) {
   assert.ok(rows.length > 0, 'subset rendered nothing');
   for (const sound of ['reed', 'bow', 'cello']) {
     const ofSound = rows.filter((row) => row.sound === sound);
-    assert.equal(ofSound.length, CONFIRM_COUNT, sound);
+    assert.ok(ofSound.length >= CONFIRM_COUNT, sound);
     for (const row of ofSound) {
       assert.equal(row.rendered, true);
       assert.ok(
@@ -1060,7 +1060,7 @@ void test(
         const cases = report.worstCases ?? [];
         console.log(`headroom sweep ${name} ${seconds}s`);
         console.log(`HEADROOM_WORST ${name} ${JSON.stringify(cases)}`);
-        assert.equal(cases.length, CONFIRM_COUNT * 3, name);
+        assert.ok(cases.length >= CONFIRM_COUNT * 3, name);
         written[name] = { seconds, cases };
       } finally {
         await browser.close();

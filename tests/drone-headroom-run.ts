@@ -22,7 +22,11 @@ import { QUALITIES, diatonicChords, voicings } from '../lib/harmony.ts';
 import { SCALES, TUNING, mod, spell } from '../lib/music.ts';
 import { scheduleVoicing, voicingMidi } from '../lib/voicing-audio.ts';
 
-/** Neighbourhood sums read as much as 0.021 low against a full render. */
+/**
+ * Neighbourhood sums read as much as 0.021 low against a full render.
+ * A sum above this is not evidence. That row is rendered, and an
+ * unrendered sum above this fails the grid.
+ */
 export const PREDICTION_LIMIT = 0.816;
 
 /** Full-render ceiling, −1.5 dBFS. */
@@ -1039,11 +1043,6 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       const ready = measured.ready.get(contextId(spec.root, spec.mode));
       if (!ready) throw new Error(`No chord for ${spec.root} ${spec.mode}.`);
       const found = searchMix(drone, dronePeak.at, notes, walks, ready.clip);
-      if (found.peak > PREDICTION_LIMIT) {
-        throw new Error(
-          `${spec.sound} ${spec.root} ${spec.mode} ${spec.via} prediction ${found.peak} is above ${PREDICTION_LIMIT}`,
-        );
-      }
       const later = notes[found.index];
       const pred = notes[found.index - 1];
       const midis = caseMidis(spec);
@@ -1079,12 +1078,22 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       }
     }
     const worstCases: WorstCase[] = [];
+    const selected: HeadroomRow[] = [];
     for (const sound of ['reed', 'bow', 'cello']) {
       const ranked = rows
         .filter((row) => row.sound === sound)
-        .sort((a, b) => b.peak - a.peak)
-        .slice(0, CONFIRM_COUNT);
-      for (const row of ranked) {
+        .sort((a, b) => b.peak - a.peak);
+      const top = ranked.slice(0, CONFIRM_COUNT);
+      const hot = ranked.filter(
+        (row) => row.peak > PREDICTION_LIMIT && !top.includes(row),
+      );
+      const loudest = ranked[0];
+      log(
+        `${sound} max prediction ${loudest?.peak ?? 0} above ${PREDICTION_LIMIT}: ${ranked.filter((row) => row.peak > PREDICTION_LIMIT).length}`,
+      );
+      selected.push(...top, ...hot);
+    }
+    for (const row of selected) {
         const spec = cases.find(
           (item) =>
             item.sound === row.sound &&
@@ -1093,7 +1102,9 @@ export async function runHeadroom(): Promise<HeadroomReport> {
             item.via === row.via &&
             item.from === row.from,
         );
-        if (!spec) throw new Error(`Missing case for ${sound} ${row.root} ${row.mode}.`);
+        if (!spec) {
+          throw new Error(`Missing case for ${row.sound} ${row.root} ${row.mode}.`);
+        }
         const ready = measured.ready.get(contextId(spec.root, spec.mode));
         if (!ready) throw new Error(`No chord for ${spec.root} ${spec.mode}.`);
         const searched = await searchRenderedOffsets(
@@ -1110,14 +1121,13 @@ export async function runHeadroom(): Promise<HeadroomReport> {
         row.rendered = true;
         if (row.confirmed > RENDER_LIMIT) {
           throw new Error(
-            `${sound} ${row.root} ${row.mode} ${row.via} full render ${row.confirmed} is above ${RENDER_LIMIT}`,
+            `${row.sound} ${row.root} ${row.mode} ${row.via} full render ${row.confirmed} is above ${RENDER_LIMIT}`,
           );
         }
         log(
-          `confirmed ${sound} ${row.root} ${row.mode} ${row.via} prediction ${row.peak} render ${row.confirmed} shifts ${row.noteShifts.join(',')} chord ${row.chordShift}`,
+          `confirmed ${row.sound} ${row.root} ${row.mode} ${row.via} prediction ${row.peak} render ${row.confirmed} shifts ${row.noteShifts.join(',')} chord ${row.chordShift}`,
         );
         worstCases.push(worstFrom(row));
-      }
     }
     const contexts: ContextChord[] = [];
     for (const root of DRONE_ROOTS) {
