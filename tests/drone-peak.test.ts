@@ -776,22 +776,31 @@ void test('each key measures every playable voicing, and the peak picks the chor
   const eb = contextVoicings('Eb', 'ionian');
   assert.ok(eb.some((choice) => fretKey(choice.frets) === REV_FRET_KEY));
   assert.equal(eb.find((choice) => fretKey(choice.frets) === REV_FRET_KEY)?.midis.join(','), '53');
-  assert.ok(eb.some((choice) => choice.midis.length >= 3));
-  assert.equal(
-    eb.some((choice) => fretKey(choice.frets) === '0,x,x,x,x,x'),
-    false,
-  );
+  const counts = new Set(eb.map((choice) => choice.midis.length));
+  for (const count of [1, 2, 3, 4, 5, 6]) {
+    assert.ok(counts.has(count), `missing ${count}-note voicing`);
+  }
+  assert.ok(eb.some((choice) => fretKey(choice.frets) === '0,x,x,x,x,x'));
+  // 8629 catalog diagrams plus 150 single-string taps. None of those taps
+  // collide with a catalog diagram, and no catalog shape is a single note.
+  assert.equal(eb.length, 8779);
   assert.equal(new Set(eb.map((choice) => fretKey(choice.frets))).size, eb.length);
+  const locrian = contextVoicings('Eb', 'locrian');
+  assert.deepEqual(
+    locrian.map((choice) => fretKey(choice.frets)),
+    eb.map((choice) => fretKey(choice.frets)),
+  );
   for (const root of DRONE_ROOTS) {
     for (const mode of DRONE_MODES) {
       const choices = contextVoicings(root, mode.id);
+      assert.equal(choices.length, eb.length, `${root} ${mode.id}`);
       assert.ok(
         choices.some((choice) => choice.midis.length === 1),
         `${root} ${mode.id} single`,
       );
       assert.ok(
-        choices.some((choice) => choice.midis.length >= 3),
-        `${root} ${mode.id} grip`,
+        choices.some((choice) => choice.midis.length === 6),
+        `${root} ${mode.id} six`,
       );
     }
   }

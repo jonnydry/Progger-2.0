@@ -18,8 +18,8 @@ import {
   dronePitches,
   scaleWalk,
 } from '../lib/drone.ts';
-import { QUALITIES, diatonicChords, voicings } from '../lib/harmony.ts';
-import { SCALES, TUNING, mod, spell } from '../lib/music.ts';
+import { QUALITIES, voicings } from '../lib/harmony.ts';
+import { SCALES, TUNING } from '../lib/music.ts';
 import { scheduleVoicing, voicingMidi } from '../lib/voicing-audio.ts';
 
 const RATE = 48000;
@@ -313,14 +313,16 @@ function cachedVoicings(root: string, qualityId: string) {
   return found;
 }
 
+let playableCache: ChordChoice[] | undefined;
+
 /**
- * Voicings the chord player can sound for one key and mode: every diatonic
- * grip the scale page opens, and every one-note fret of a scale tone.
- * A single sounding string is a legal play() shape. The loudest one is chosen
+ * Every shape the chord player can sound. Catalog grips and compact
+ * voicings cover two to six notes. A fretboard tap and a one-note voicing
+ * are the same call: one sounding string, frets 0–24. The loudest is chosen
  * by a rendered peak, never by dividing 0.75 by the note count.
  */
-export function contextVoicings(root: string, modeId: string): ChordChoice[] {
-  const scale = scaleForMode(modeId);
+export function playableVoicings(): ChordChoice[] {
+  if (playableCache) return playableCache;
   const seen = new Set<string>();
   const choices: ChordChoice[] = [];
   const add = (frets: readonly (number | null)[], label: string) => {
@@ -329,24 +331,34 @@ export function contextVoicings(root: string, modeId: string): ChordChoice[] {
     seen.add(key);
     choices.push({ frets: [...frets], midis: voicingMidi(frets), label });
   };
-  for (const chord of diatonicChords(root, scale)) {
-    for (const voicing of cachedVoicings(chord.root, chord.qualityId)) {
-      add(voicing.frets, `${chord.symbol} ${voicing.name}`);
+  for (const root of DRONE_ROOTS) {
+    for (const quality of QUALITIES) {
+      for (const voicing of cachedVoicings(root, quality.id)) {
+        const sounding = voicing.frets.filter((fret) => fret !== null).length;
+        if (sounding < 2 || sounding > 6) continue;
+        add(voicing.frets, `${root}${quality.symbol} ${voicing.name}`);
+      }
     }
   }
-  const pcs = new Set(spell(root, [...scale.formula]).map((note) => note.pc));
   for (let string = 0; string < TUNING.length; string += 1) {
-    const open = TUNING[string];
-    if (open === undefined) continue;
     for (let fret = 0; fret <= 24; fret += 1) {
-      if (!pcs.has(mod(open + fret))) continue;
       const frets: (number | null)[] = [null, null, null, null, null, null];
       frets[string] = fret;
       const name = STRING_NAMES[string] ?? String(string);
       add(frets, `${name}-string fret ${fret}`);
     }
   }
+  playableCache = choices;
   return choices;
+}
+
+/** The same playable set for every key and mode. Any of these paths can sound. */
+export function contextVoicings(root: string, modeId: string): ChordChoice[] {
+  scaleForMode(modeId);
+  if (!(DRONE_ROOTS as readonly string[]).includes(root)) {
+    throw new Error(`No drone root ${root}.`);
+  }
+  return playableVoicings();
 }
 
 /** Highest measured peak. An equal peak keeps A-string fret 8 when it tied. */
@@ -567,6 +579,7 @@ async function measureContextChords(log: (message: string) => void): Promise<{
     if (!choice) return;
     const clip = await renderChord(choice.frets, 0.6);
     shortPeaks[index] = peakOf(clip.channels).peak;
+    if (index % 1000 === 0) log(`measured ${index}`);
   });
   const peakByKey = new Map<string, number>();
   shapes.forEach((shape, index) => {
