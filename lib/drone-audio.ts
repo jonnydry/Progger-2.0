@@ -91,7 +91,7 @@ export function voiceTailHold(fade: number): number {
 /**
  * Bow and cello caps are the voice fade's resting level, so a sample that
  * is still loading does not retarget the voice that is already sounding.
- * Bow stays at 0.072. Cello is 0.0736 for the pre-trim playable-voicing measurement.
+ * Bow stays at 0.072. Cello is 0.0695, another half decibel under 0.0736.
  * Reed stays at 0.063. Makeup gain lifts a full voice, so the analytical
  * sum is not the cap.
  */
@@ -111,9 +111,9 @@ export const CELLO_GAINS = {
   dry: 0.9,
   wet: 0.12,
   samplePeak: 0.5,
-  // Pre-trim cap. The shipped value is 0.0695, half a decibel under this.
+  // 0.5 dB under 0.0736. 10^(-0.5/20) * 0.0736 rounds to 0.0695.
   // Walk trim and the reed and bow caps stay put.
-  cap: 0.0736,
+  cap: 0.0695,
 } as const;
 
 export const WALK_GAINS = {

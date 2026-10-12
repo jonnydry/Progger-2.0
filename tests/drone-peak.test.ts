@@ -853,7 +853,7 @@ function assertGrid(report: HeadroomReport) {
   assert.equal(rows.length, DRONE_ROOTS.length * DRONE_MODES.length * 3 * 4);
   assert.equal(report.caps?.reed, 0.063);
   assert.equal(report.caps?.bow, 0.072);
-  assert.equal(report.caps?.cello, 0.0736);
+  assert.equal(report.caps?.cello, 0.0695);
   assert.ok((report.chord?.peak ?? 0) > 0.5, JSON.stringify(report.chord));
   assert.equal(report.rev?.frets, REV_FRET_KEY);
   assert.deepEqual(report.rev?.midis, [53]);
@@ -965,6 +965,10 @@ function assertGrid(report: HeadroomReport) {
   }
 }
 
+function fretSounding(key: string): number {
+  return soundingCount(key.split(',').map((part) => (part === 'x' ? null : Number(part))));
+}
+
 function readWorst(name: BrowserName): WorstCase[] {
   const parsed = JSON.parse(readFileSync(WORST_FIXTURE, 'utf8')) as SweepFile;
   const block = parsed[name];
@@ -978,6 +982,12 @@ void test('the push job has worst cases to render', () => {
   for (const name of ['chromium', 'firefox'] as const) {
     const cases = readWorst(name);
     assert.ok(cases.length > 0, `${name} has no worst cases to render`);
+    for (const item of cases) {
+      assert.ok(
+        fretSounding(item.chordFrets) >= 2,
+        `${name} ${item.sound} ${item.chordFrets} is not a playable voicing`,
+      );
+    }
   }
 });
 
@@ -1009,6 +1019,12 @@ function assertSubset(report: HeadroomReport, cases: WorstCase[]) {
   const rows = report.rows ?? [];
   assert.equal(rows.length, cases.length);
   assert.ok(rows.length > 0, 'subset rendered nothing');
+  for (const row of rows) {
+    assert.ok(
+      fretSounding(row.chordFrets) >= 2,
+      `${row.sound} ${row.root} ${row.chordFrets} is not a playable voicing`,
+    );
+  }
   for (const sound of ['reed', 'bow', 'cello']) {
     const ofSound = rows.filter((row) => row.sound === sound);
     assert.ok(ofSound.length >= CONFIRM_COUNT, sound);
