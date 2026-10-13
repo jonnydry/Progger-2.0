@@ -1220,7 +1220,12 @@ async function measureLimiter(
   };
 }
 
-export async function runHeadroom(): Promise<HeadroomReport> {
+export async function runHeadroom(options?: {
+  /** Skip the rendered confirmation. The chord sweep uses a second page for that. */
+  confirm?: boolean;
+  /** Rows already measured. Skips the grid and runs the confirmation on these. */
+  rows?: HeadroomRow[];
+}): Promise<HeadroomReport> {
   const started = performance.now();
   const log = (message: string) => {
     console.log(message);
@@ -1323,7 +1328,10 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       );
     }
     const cases = headroomCases();
-    const rows: HeadroomRow[] = [];
+    const rows: HeadroomRow[] = options?.rows
+      ? options.rows.map((row) => ({ ...row, noteShifts: [...row.noteShifts] }))
+      : [];
+    if (!options?.rows) {
     for (let index = 0; index < cases.length; index += 1) {
       const spec = cases[index];
       if (!spec) continue;
@@ -1375,15 +1383,21 @@ export async function runHeadroom(): Promise<HeadroomReport> {
         log(`measured ${index + 1}/${cases.length} ${elapsed}s`);
       }
     }
-    const limiter = await measureLimiter(
-      buffers,
-      rows,
-      cases,
-      walks,
-      measured.ready,
-      log,
-    );
+    }
+    const limiter = options?.rows
+      ? {
+          kneeStart: limiterKneeStart(),
+          mixes: 0,
+          aboveKnee: 0,
+          reduced: 0,
+          maxReductionDb: 0,
+          chordCount: 0,
+          chordsReduced: 0,
+        }
+      : await measureLimiter(buffers, rows, cases, walks, measured.ready, log);
     const worstCases: WorstCase[] = [];
+    const comparisons: LimiterComparison[] = [];
+    if (options?.confirm !== false) {
     const selected: HeadroomRow[] = [];
     for (const sound of ['reed', 'bow', 'cello']) {
       const ranked = rows
@@ -1435,7 +1449,6 @@ export async function runHeadroom(): Promise<HeadroomReport> {
         );
         worstCases.push(worstFrom(row));
     }
-    const comparisons: LimiterComparison[] = [];
     for (const sound of ['reed', 'bow', 'cello']) {
       const ranked = rows
         .filter((row) => row.sound === sound && row.rendered)
@@ -1465,6 +1478,7 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       log(
         `limiter worst ${sound} shaped ${compared.dry} limited ${compared.limited} net ${compared.netDb.toFixed(2)} dB reduction ${compared.reductionDb.toFixed(2)} dB ${compared.chordFrets}`,
       );
+    }
     }
     const contexts: ContextChord[] = [];
     for (const root of DRONE_ROOTS) {

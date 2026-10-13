@@ -28,6 +28,7 @@ import {
   loudestMeasured,
   soundingCount,
   type HeadroomReport,
+  type HeadroomRow,
   type WorstCase,
 } from './drone-headroom-run.ts';
 
@@ -531,6 +532,7 @@ async function renderInBrowser(
     const report = await waitForReport(result, limit);
     console.log(`${name} ${browser.version()}`);
     if (errors.length && !report.error) report.error = errors.join('\n');
+    await tab.close();
     return report;
   } finally {
     close();
@@ -667,14 +669,44 @@ function headroomBundle(): string {
   return outfile;
 }
 
-function headroomPage(): string {
+function rowKey(row: HeadroomRow): string {
+  return [row.sound, row.root, row.mode, row.via, row.from].join('\0');
+}
+
+function mergeHeadroom(
+  grid: HeadroomReport,
+  confirmed: HeadroomReport,
+): HeadroomReport {
+  const updates = new Map(
+    (confirmed.rows ?? []).map((row) => [rowKey(row), row]),
+  );
+  return {
+    ...grid,
+    rows: (grid.rows ?? []).map((row) => updates.get(rowKey(row)) ?? row),
+    worstCases: confirmed.worstCases,
+    comparisons: confirmed.comparisons,
+    seconds: (grid.seconds ?? 0) + (confirmed.seconds ?? 0),
+  };
+}
+
+function headroomPage(
+  mode: 'all' | 'grid' | 'confirm' = 'all',
+  rows?: HeadroomRow[],
+): string {
+  const payload = JSON.stringify(rows ?? null).replaceAll('<', '\\u003c');
+  const call =
+    mode === 'grid'
+      ? 'runHeadroom({ confirm: false })'
+      : mode === 'confirm'
+        ? `runHeadroom({ rows: ${payload} })`
+        : 'runHeadroom()';
   return `<!doctype html>
 <meta charset="utf-8" />
 <title>headroom</title>
 <script type="module">
 import { runHeadroom } from '/probe.js';
 try {
-  const report = await runHeadroom();
+  const report = await ${call};
   await fetch('/result', { method: 'POST', body: JSON.stringify(report) });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
@@ -1162,7 +1194,6 @@ void test(
       return;
     }
     const bundle = headroomBundle();
-    const html = headroomPage();
     const written: Omit<SweepFile, 'sources'> = {
       chromium: { seconds: 0, cases: [] },
       firefox: { seconds: 0, cases: [] },
@@ -1170,13 +1201,21 @@ void test(
     for (const name of ['chromium', 'firefox'] as const) {
       const browser = await launchNamed(name, t);
       try {
-        const report = (await renderInBrowser(
+        const grid = (await renderInBrowser(
           browser,
           name,
           bundle,
-          html,
+          headroomPage('grid'),
           3400000,
         )) as unknown as HeadroomReport;
+        const confirmed = (await renderInBrowser(
+          browser,
+          name,
+          bundle,
+          headroomPage('confirm', grid.rows),
+          3400000,
+        )) as unknown as HeadroomReport;
+        const report = mergeHeadroom(grid, confirmed);
         console.log(report.ua);
         assertGrid(report);
         const seconds = report.seconds ?? 0;

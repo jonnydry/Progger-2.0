@@ -74,3 +74,48 @@ void test('a real strum ducks the drone to the floor without ripple or a phase f
     }),
   );
 });
+
+function toneAmplitude(data: Float32Array, sampleRate: number, frequency: number): number {
+  const from = Math.floor(0.22 * sampleRate);
+  const until = Math.floor(0.42 * sampleRate);
+  let real = 0;
+  let imag = 0;
+  for (let index = from; index < until; index += 1) {
+    const sample = data[index] ?? 0;
+    const angle = (2 * Math.PI * frequency * index) / sampleRate;
+    real += sample * Math.cos(angle);
+    imag -= sample * Math.sin(angle);
+  }
+  return (2 * Math.hypot(real, imag)) / (until - from);
+}
+
+void test('the sidechain ducks the drone when it only feeds the gain', async () => {
+  const rate = 48000;
+  const seconds = 1.6;
+  const frequency = 30;
+  const render = async (strum: boolean) => {
+    const context = new OfflineAudioContext(1, Math.ceil(rate * seconds), rate);
+    const stage = createDroneStage(context, context.destination);
+    await stage.installDuck();
+    const tone = context.createOscillator();
+    tone.frequency.value = frequency;
+    const toneGain = context.createGain();
+    toneGain.gain.value = 0.08;
+    tone.connect(toneGain);
+    toneGain.connect(stage.input);
+    tone.start();
+    if (strum) scheduleVoicing(context, [0, 2, 2, 1, 0, 0], 0.05, stage.chordInput);
+    const rendered = await context.startRendering();
+    return toneAmplitude(rendered.getChannelData(0), rate, frequency);
+  };
+  const open = await render(false);
+  const ducked = await render(true);
+  const ratio = ducked / open;
+  console.log(JSON.stringify({ open, ducked, ratio }));
+  assert.ok(open > 0.05, `open tone ${open}`);
+  assert.ok(
+    ratio < DRONE_DUCK_FLOOR + 0.08,
+    `ducked ratio ${ratio} (open ${open}, ducked ${ducked})`,
+  );
+  assert.ok(ratio > DRONE_DUCK_FLOOR * 0.5, `ducked ratio ${ratio}`);
+});
