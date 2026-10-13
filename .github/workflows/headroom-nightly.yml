@@ -147,16 +147,17 @@ jobs:
             exit 0
           fi
           git commit -m "chore: refresh headroom worst cases"
-          # This is the commit this step just created. Later steps receive
-          # it as an output and do not resolve the branch again.
+          # SHA of the commit this step just created. The status step uses
+          # this value. It does not use github.sha or look up the branch tip.
           commit_sha=$(git rev-parse HEAD)
           git push --force origin "HEAD:refs/heads/bot/headroom-worst"
           echo "sha=${commit_sha}" >> "$GITHUB_OUTPUT"
 
-      # The sha is the output of the commit step. This step does not resolve the bot branch.
+      # always() so a failed re-render still posts. The only gate is the SHA
+      # written above, which exists only after this run's push succeeded.
       - name: Post the nightly commit status
         id: status
-        if: success() && steps.commit.outputs.sha != ''
+        if: always() && steps.commit.outputs.sha != ''
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.commit.outputs.sha }}
