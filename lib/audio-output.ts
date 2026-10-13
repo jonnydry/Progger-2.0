@@ -52,28 +52,42 @@ export const OUTPUT_TAIL = outputTailSeconds();
  * Chords and walk plucks enter at `chordInput`, so they are not saturated.
  * Their envelope ducks the drone. The safety clip stays after the sum.
  * Drive 3 keeps a cap-level sine under about 2% THD. Drive 16 was near 18%.
- * Makeup is the small-signal slope. 1.27 keeps the loudest drone crossfade
- * near 0.225, so that peak plus the 0.6375 pluck ceiling stays under −1 dBFS.
+ * Makeup is the small-signal slope. 4.26 puts the default reed near −14 LUFS,
+ * about 12 dB over main. The loudest bowed sustain stays under the 0.8 knee.
  */
 export const DRONE_DRIVE = 3;
-export const DRONE_MAKEUP = 1.27;
+export const DRONE_MAKEUP = 4.26;
 /** One-pole time constants. Attack is fast; release ignores the string's pitch. */
 export const DRONE_DUCK_ATTACK = 0.01;
-export const DRONE_DUCK_RELEASE = 0.22;
+export const DRONE_DUCK_RELEASE = 0.28;
 /**
  * How hard a chord envelope pushes the drone down. The floor below
  * catches it, so a loud strum cannot drive the gain through zero.
  */
-export const DRONE_DUCK_DEPTH = 6;
+export const DRONE_DUCK_DEPTH = 10;
 /**
- * Lowest drone VCA gain while a chord is sounding. −10 dB is inside the
- * −9 to −12 dB window: deep enough to leave the chord the headroom,
- * and still positive so the drone cannot flip phase.
+ * Lowest drone VCA gain while a chord is sounding. −26 dB leaves a
+ * walked chord on the louder drones under the 0.8 knee, and the gain
+ * stays positive so the drone cannot flip phase.
+ * The release is 280 ms, so the return after a strum is a slow swell.
  */
-export const DRONE_DUCK_FLOOR_DB = -10;
+export const DRONE_DUCK_FLOOR_DB = -26;
 export const DRONE_DUCK_FLOOR = 10 ** (DRONE_DUCK_FLOOR_DB / 20);
-/** The drone waits this long so the chord envelope can duck it before the strum peak. */
-export const DRONE_DUCK_LOOKAHEAD = 0.008;
+/**
+ * Lookahead shared by the drone and the chord.
+ * The sidechain hears the chord immediately. Both signals wait this long
+ * before the bus, and the drone VCA is after that wait, so the gain is
+ * already at the floor when the strum and the drone meet.
+ */
+export const DRONE_DUCK_LOOKAHEAD = 0.02;
+/**
+ * Chord and walk level while the drone is on.
+ * A bowed Eb locrian stack peaked 0.34 dB over the knee at full level.
+ * The sidechain hears the strum before this trim, and the drone-off
+ * path never enters the chord bus.
+ */
+export const DRONE_CHORD_TRIM_DB = -0.7;
+export const DRONE_CHORD_TRIM = 10 ** (DRONE_CHORD_TRIM_DB / 20);
 
 export function droneSaturateSample(sample: number): number {
   return Math.tanh(sample * DRONE_DRIVE) * (DRONE_MAKEUP / DRONE_DRIVE);
@@ -225,12 +239,18 @@ export function createDroneStage(
   level.gain.value = 1;
   const chordInput = track(context.createGain());
   chordInput.gain.value = 1;
+  const chordLevel = track(context.createGain());
+  chordLevel.gain.value = DRONE_CHORD_TRIM;
   const delay = track(context.createDelay(0.05));
   delay.delayTime.value = DRONE_DUCK_LOOKAHEAD;
-  input.connect(level);
-  level.connect(delay);
-  delay.connect(destination);
-  chordInput.connect(destination);
+  const chordDelay = track(context.createDelay(0.05));
+  chordDelay.delayTime.value = DRONE_DUCK_LOOKAHEAD;
+  input.connect(delay);
+  delay.connect(level);
+  level.connect(destination);
+  chordInput.connect(chordLevel);
+  chordLevel.connect(chordDelay);
+  chordDelay.connect(destination);
   let duck: AudioNode | null = null;
   let duckReady = false;
   let installing: Promise<void> | null = null;

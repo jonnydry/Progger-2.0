@@ -22,13 +22,23 @@ import { integratedLufs } from './loudness-meter.ts';
 const RATE = 48000;
 
 /** Integrated LUFS of each drone alone, volume 1, measured on this graph. */
+/** Main, before this branch's makeup. The drone must clear each of these by 6 dB. */
+const MAIN_LOUDNESS: Record<string, number> = {
+  'reed-low': -27.44,
+  'reed-layered': -26.37,
+  'bow-low': -25.4,
+  'bow-layered': -24.84,
+  'cello-low': -29.01,
+  'cello-layered': -27.4,
+};
+
 const LOUDNESS: Record<string, number> = {
-  'reed-low': -25.44,
-  'reed-layered': -24.4,
-  'bow-low': -23.46,
-  'bow-layered': -22.91,
-  'cello-low': -26.98,
-  'cello-layered': -25.4,
+  'reed-low': -14.9,
+  'reed-layered': -13.87,
+  'bow-low': -12.95,
+  'bow-layered': -12.41,
+  'cello-low': -16.48,
+  'cello-layered': -14.89,
 };
 
 function readU32(data: Uint8Array, offset: number): number {
@@ -236,13 +246,25 @@ void test('each drone sound at the default level stays gently compressed and mea
         thd: harmonic.thd,
         thirdDb: harmonic.thirdDb,
       });
-      const expected = LOUDNESS[`${sound}-${octave}`];
-      assert.ok(expected !== undefined, `${sound} ${octave}`);
+      const key = `${sound}-${octave}`;
+      const expected = LOUDNESS[key];
+      const baseline = MAIN_LOUDNESS[key];
+      assert.ok(expected !== undefined && baseline !== undefined, key);
       assert.ok(
         Math.abs(rendered.lufs - expected) < 0.35,
         `${sound} ${octave} ${rendered.lufs} LUFS, expected ${expected}`,
       );
-      assert.ok(rendered.peak < 0.5, `${sound} ${octave} peak ${rendered.peak}`);
+      assert.ok(
+        rendered.lufs >= baseline + 6,
+        `${sound} ${octave} ${rendered.lufs} LUFS is under +6 dB versus main ${baseline}`,
+      );
+      if (sound === 'reed' && octave === 'low') {
+        assert.ok(
+          Math.abs(rendered.lufs + 14) < 1,
+          `default reed ${rendered.lufs} LUFS, target about -14`,
+        );
+      }
+      assert.ok(rendered.peak < 0.8, `${sound} ${octave} peak ${rendered.peak}`);
     }
   }
   const full = await renderDrone('bow', 'layered', 1, buffers);

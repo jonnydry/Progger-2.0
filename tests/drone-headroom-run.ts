@@ -953,9 +953,10 @@ async function renderRevMixes(
       chordAt,
       'limited',
     );
-    if (confirmed > RENDER_LIMIT) {
+    const revCeiling = Math.min(OUTPUT_KNEE, RENDER_LIMIT);
+    if (confirmed > revCeiling) {
       throw new Error(
-        `Rev ${pair.name} limited ${confirmed} is above ${RENDER_LIMIT}.`,
+        `Rev ${pair.name} limited ${confirmed} entered the limiter (ceiling ${revCeiling}).`,
       );
     }
     mixes.push({
@@ -1189,7 +1190,13 @@ async function measureLimiter(
       placed.chordAt,
       'shaped',
     );
-    stats[index] = clipStats(shaped);
+    const found = clipStats(shaped);
+    stats[index] = found;
+    if (found.over) {
+      log(
+        `above knee ${row.sound} ${row.root} ${row.mode} ${row.octave} ${row.via} from ${row.from || '-'} peak ${found.peak.toFixed(5)} reduction ${found.maxDb.toFixed(2)} dB chord ${row.chordFrets}`,
+      );
+    }
     finished += 1;
     if (finished % 24 === 0) log(`clip ${finished}/${rows.length}`);
   });
@@ -1209,6 +1216,11 @@ async function measureLimiter(
   log(
     `limiter engagement ${reduced}/${rows.length} (${(reduced / rows.length).toFixed(4)}) max ${maxReductionDb.toFixed(2)} dB above-knee ${aboveKnee} measured ${finished} chords ${chordReduced.size}/${chords.size} knee ${knee.toFixed(4)}`,
   );
+  if (aboveKnee > 0) {
+    throw new Error(
+      `limiter engaged on ${aboveKnee}/${rows.length} mixes, max ${maxReductionDb.toFixed(2)} dB`,
+    );
+  }
   return {
     kneeStart: knee,
     mixes: rows.length,
@@ -1439,9 +1451,10 @@ export async function runHeadroom(options?: {
         row.noteShifts = searched.noteShifts;
         row.chordShift = searched.chordShift;
         row.rendered = true;
-        if (row.confirmed > RENDER_LIMIT) {
+        const ceiling = Math.min(OUTPUT_KNEE, RENDER_LIMIT);
+        if (row.confirmed > ceiling) {
           throw new Error(
-            `${row.sound} ${row.root} ${row.mode} ${row.via} full render ${row.confirmed} is above ${RENDER_LIMIT}`,
+            `${row.sound} ${row.root} ${row.mode} ${row.via} full render ${row.confirmed} entered the limiter (ceiling ${ceiling})`,
           );
         }
         log(
