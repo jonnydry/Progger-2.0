@@ -1,7 +1,7 @@
 {
-  "sources": "778737694c06c607a98a3da164b6afe91ab6258c1d6a57fc1355d7a8931dee29",
+  "sources": "9f221209a0749f59af603f6e07e22347f82f06cc4abc85f9318dbfd715338103",
   "chromium": {
-    "seconds": 638.6747999999989,
+    "seconds": 650.5995,
     "cases": [
       {
         "sound": "reed",
@@ -18,10 +18,10 @@
           0,
           -0.016
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
-        "prediction": 0.7362629408016801,
-        "confirmed": 0.6772539615631104
+        "prediction": 0.7362629557028413,
+        "confirmed": 0.622551679611206
       },
       {
         "sound": "reed",
@@ -39,10 +39,10 @@
           0.004,
           0.004
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7343484393495601,
-        "confirmed": 0.6283066272735596
+        "confirmed": 0.5843081474304199
       },
       {
         "sound": "reed",
@@ -61,8 +61,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.7330995844677091,
-        "confirmed": 0.6430361270904541
+        "prediction": 0.7330995695665479,
+        "confirmed": 0.6161133050918579
       },
       {
         "sound": "reed",
@@ -81,8 +81,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.7234620498493314,
-        "confirmed": 0.6539796590805054
+        "prediction": 0.7234620647504926,
+        "confirmed": 0.6203185319900513
       },
       {
         "sound": "reed",
@@ -100,10 +100,10 @@
           -0.016,
           -0.016
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7219408636592561,
-        "confirmed": 0.6447254419326782
+        "confirmed": 0.6118125915527344
       },
       {
         "sound": "reed",
@@ -122,8 +122,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.7217141957953572,
-        "confirmed": 0.650881290435791
+        "prediction": 0.721714218147099,
+        "confirmed": 0.6191279888153076
       },
       {
         "sound": "reed",
@@ -142,8 +142,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.7208768771961331,
-        "confirmed": 0.6557453870773315
+        "prediction": 0.7208768920972943,
+        "confirmed": 0.6209970712661743
       },
       {
         "sound": "reed",
@@ -162,8 +162,8 @@
         ],
         "chordShift": -0.004,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.7063378067687154,
-        "confirmed": 0.672476053237915
+        "prediction": 0.706337814219296,
+        "confirmed": 0.627426028251648
       },
       {
         "sound": "reed",
@@ -182,8 +182,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
-        "prediction": 0.7020026589743793,
-        "confirmed": 0.6891164779663086
+        "prediction": 0.7020026217214763,
+        "confirmed": 0.6356614828109741
       },
       {
         "sound": "reed",
@@ -204,7 +204,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7018506487511331,
-        "confirmed": 0.6309245824813843
+        "confirmed": 0.6140329837799072
       },
       {
         "sound": "bow",
@@ -221,10 +221,10 @@
           0,
           0.008
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7607465581968427,
-        "confirmed": 0.6597121953964233
+        "confirmed": 0.6175827980041504
       },
       {
         "sound": "bow",
@@ -241,10 +241,10 @@
           0,
           0.008
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7606891887262464,
-        "confirmed": 0.6596646308898926
+        "confirmed": 0.6206996440887451
       },
       {
         "sound": "bow",
@@ -261,10 +261,10 @@
           0,
           0.008
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7584289805963635,
-        "confirmed": 0.657781720161438
+        "confirmed": 0.6202017068862915
       },
       {
         "sound": "bow",
@@ -282,10 +282,10 @@
           0.004,
           0.004
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.7369778833526652,
-        "confirmed": 0.6309072971343994
+        "prediction": 0.7369778982538264,
+        "confirmed": 0.5900077819824219
       },
       {
         "sound": "bow",
@@ -305,8 +305,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.728780933393864,
-        "confirmed": 0.6505706310272217
+        "prediction": 0.7287809184927028,
+        "confirmed": 0.618746280670166
       },
       {
         "sound": "bow",
@@ -326,8 +326,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.7261008552450221,
-        "confirmed": 0.6394991874694824
+        "prediction": 0.7261008254426997,
+        "confirmed": 0.6144918203353882
       },
       {
         "sound": "bow",
@@ -347,7 +347,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7260610084049404,
-        "confirmed": 0.7147834300994873
+        "confirmed": 0.645524263381958
       },
       {
         "sound": "bow",
@@ -367,7 +367,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7251222329214215,
-        "confirmed": 0.6663694381713867
+        "confirmed": 0.6253955364227295
       },
       {
         "sound": "bow",
@@ -388,7 +388,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7229345373052638,
-        "confirmed": 0.6374987363815308
+        "confirmed": 0.6137231588363647
       },
       {
         "sound": "bow",
@@ -407,8 +407,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.7207384081557393,
-        "confirmed": 0.6355307102203369
+        "prediction": 0.7207383932545781,
+        "confirmed": 0.6132292747497559
       },
       {
         "sound": "cello",
@@ -425,10 +425,10 @@
           0,
           0.008
         ],
-        "chordShift": 0.02,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7874115006998181,
-        "confirmed": 0.6022040843963623
+        "confirmed": 0.5990113019943237
       },
       {
         "sound": "cello",
@@ -448,7 +448,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7580293761566281,
-        "confirmed": 0.698854923248291
+        "confirmed": 0.6378786563873291
       },
       {
         "sound": "cello",
@@ -468,8 +468,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
-        "prediction": 0.7272853886388475,
-        "confirmed": 0.6667346954345703
+        "prediction": 0.7272854035400087,
+        "confirmed": 0.6277934312820435
       },
       {
         "sound": "cello",
@@ -488,8 +488,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
-        "prediction": 0.7235439117066562,
-        "confirmed": 0.680607795715332
+        "prediction": 0.7235439042560756,
+        "confirmed": 0.6323919296264648
       },
       {
         "sound": "cello",
@@ -507,10 +507,10 @@
           -0.016,
           -0.016
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7229096775554353,
-        "confirmed": 0.6456177234649658
+        "confirmed": 0.607752799987793
       },
       {
         "sound": "cello",
@@ -529,8 +529,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.715479482896626,
-        "confirmed": 0.672813892364502
+        "prediction": 0.7154794754460454,
+        "confirmed": 0.627872109413147
       },
       {
         "sound": "cello",
@@ -550,8 +550,8 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
-        "prediction": 0.7131556577223819,
-        "confirmed": 0.6205400228500366
+        "prediction": 0.7131556428212207,
+        "confirmed": 0.6072063446044922
       },
       {
         "sound": "cello",
@@ -572,28 +572,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7119811361335451,
-        "confirmed": 0.6535815000534058
-      },
-      {
-        "sound": "cello",
-        "root": "D",
-        "mode": "dorian",
-        "octave": "layered",
-        "via": "sound-switch",
-        "from": "reed",
-        "fromRoot": "D",
-        "fromMode": "dorian",
-        "kind": "triple",
-        "index": 11,
-        "noteShifts": [
-          0,
-          -0.016,
-          -0.016
-        ],
-        "chordShift": 0,
-        "chordFrets": "x,x,x,14,15,13",
-        "prediction": 0.7119811361335451,
-        "confirmed": 0.6535816192626953
+        "confirmed": 0.6227394342422485
       },
       {
         "sound": "cello",
@@ -613,13 +592,34 @@
         ],
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
-        "prediction": 0.7119811212323839,
-        "confirmed": 0.6535816192626953
+        "prediction": 0.7119811361335451,
+        "confirmed": 0.6227395534515381
+      },
+      {
+        "sound": "cello",
+        "root": "D",
+        "mode": "dorian",
+        "octave": "layered",
+        "via": "sound-switch",
+        "from": "reed",
+        "fromRoot": "D",
+        "fromMode": "dorian",
+        "kind": "triple",
+        "index": 11,
+        "noteShifts": [
+          0,
+          -0.016,
+          -0.016
+        ],
+        "chordShift": 0,
+        "chordFrets": "x,x,x,14,15,13",
+        "prediction": 0.7119811286829645,
+        "confirmed": 0.6227395534515381
       }
     ]
   },
   "firefox": {
-    "seconds": 261.864,
+    "seconds": 261.076,
     "cases": [
       {
         "sound": "reed",
@@ -636,10 +636,10 @@
           0,
           -0.016
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7363276495598257,
-        "confirmed": 0.6774164438247681
+        "confirmed": 0.6225249767303467
       },
       {
         "sound": "reed",
@@ -657,10 +657,10 @@
           0.004,
           0.004
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7341797185945325,
-        "confirmed": 0.6281310319900513
+        "confirmed": 0.584280252456665
       },
       {
         "sound": "reed",
@@ -680,7 +680,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7328713708557189,
-        "confirmed": 0.6428700685501099
+        "confirmed": 0.6160831451416016
       },
       {
         "sound": "reed",
@@ -700,7 +700,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7234981977380812,
-        "confirmed": 0.6540619134902954
+        "confirmed": 0.6204187870025635
       },
       {
         "sound": "reed",
@@ -720,7 +720,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7218412780202925,
-        "confirmed": 0.6506695747375488
+        "confirmed": 0.6191151142120361
       },
       {
         "sound": "reed",
@@ -738,10 +738,10 @@
           -0.016,
           -0.016
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7215237773925764,
-        "confirmed": 0.6443464756011963
+        "confirmed": 0.611691951751709
       },
       {
         "sound": "reed",
@@ -761,7 +761,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7209027879871428,
-        "confirmed": 0.6558408737182617
+        "confirmed": 0.6211023330688477
       },
       {
         "sound": "reed",
@@ -781,7 +781,7 @@
         "chordShift": -0.004,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7063676291145384,
-        "confirmed": 0.6726109981536865
+        "confirmed": 0.6275448799133301
       },
       {
         "sound": "reed",
@@ -801,7 +801,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7024076585657895,
-        "confirmed": 0.6885724067687988
+        "confirmed": 0.6353685855865479
       },
       {
         "sound": "reed",
@@ -822,7 +822,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7020626373559935,
-        "confirmed": 0.6315765380859375
+        "confirmed": 0.6142565011978149
       },
       {
         "sound": "bow",
@@ -839,10 +839,10 @@
           0,
           0.008
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7611060314811766,
-        "confirmed": 0.6599922180175781
+        "confirmed": 0.6177055835723877
       },
       {
         "sound": "bow",
@@ -859,10 +859,10 @@
           0,
           0.008
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7610659622587264,
-        "confirmed": 0.6599593162536621
+        "confirmed": 0.6208333969116211
       },
       {
         "sound": "bow",
@@ -879,10 +879,10 @@
           0,
           0.008
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7584672593511641,
-        "confirmed": 0.6577954292297363
+        "confirmed": 0.620442271232605
       },
       {
         "sound": "bow",
@@ -900,10 +900,10 @@
           0.004,
           0.004
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7374982965993695,
-        "confirmed": 0.6315476894378662
+        "confirmed": 0.5901068449020386
       },
       {
         "sound": "bow",
@@ -924,7 +924,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7291656268644147,
-        "confirmed": 0.6507372856140137
+        "confirmed": 0.6188454627990723
       },
       {
         "sound": "bow",
@@ -945,7 +945,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7265810800599866,
-        "confirmed": 0.6396889686584473
+        "confirmed": 0.6146290302276611
       },
       {
         "sound": "bow",
@@ -965,7 +965,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7260402743704617,
-        "confirmed": 0.7142306566238403
+        "confirmed": 0.6452617645263672
       },
       {
         "sound": "bow",
@@ -985,7 +985,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7253924407996237,
-        "confirmed": 0.666536808013916
+        "confirmed": 0.6255121231079102
       },
       {
         "sound": "bow",
@@ -1006,7 +1006,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7233236117172055,
-        "confirmed": 0.6376383304595947
+        "confirmed": 0.6138410568237305
       },
       {
         "sound": "bow",
@@ -1026,7 +1026,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7211294271983206,
-        "confirmed": 0.6355273723602295
+        "confirmed": 0.6132858991622925
       },
       {
         "sound": "cello",
@@ -1043,10 +1043,10 @@
           0,
           0.008
         ],
-        "chordShift": 0.02,
+        "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7881865599192679,
-        "confirmed": 0.6066737174987793
+        "confirmed": 0.5996718406677246
       },
       {
         "sound": "cello",
@@ -1066,7 +1066,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7551230886019766,
-        "confirmed": 0.7377097606658936
+        "confirmed": 0.6528719663619995
       },
       {
         "sound": "cello",
@@ -1087,7 +1087,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7274287648469908,
-        "confirmed": 0.6672674417495728
+        "confirmed": 0.6279178857803345
       },
       {
         "sound": "cello",
@@ -1107,7 +1107,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7236793120391667,
-        "confirmed": 0.6801378726959229
+        "confirmed": 0.6322174072265625
       },
       {
         "sound": "cello",
@@ -1125,10 +1125,10 @@
           -0.016,
           -0.016
         ],
-        "chordShift": 0.008,
+        "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7228422693879111,
-        "confirmed": 0.6455429792404175
+        "confirmed": 0.607863187789917
       },
       {
         "sound": "cello",
@@ -1148,7 +1148,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7133715250529349,
-        "confirmed": 0.6714050769805908
+        "confirmed": 0.6273455619812012
       },
       {
         "sound": "cello",
@@ -1169,7 +1169,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,6,5,4,x",
         "prediction": 0.7128628177451901,
-        "confirmed": 0.6203503608703613
+        "confirmed": 0.6071796417236328
       },
       {
         "sound": "cello",
@@ -1190,7 +1190,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7120575614244444,
-        "confirmed": 0.653775691986084
+        "confirmed": 0.6228116750717163
       },
       {
         "sound": "cello",
@@ -1211,7 +1211,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7120575614244444,
-        "confirmed": 0.653775691986084
+        "confirmed": 0.6228116750717163
       },
       {
         "sound": "cello",
@@ -1232,7 +1232,7 @@
         "chordShift": 0,
         "chordFrets": "x,x,x,14,15,13",
         "prediction": 0.7120575614244444,
-        "confirmed": 0.653775691986084
+        "confirmed": 0.6228116750717163
       }
     ]
   }
