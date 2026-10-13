@@ -26,6 +26,7 @@ jobs:
       fixture: ${{ steps.publish.outputs.fixture }}
       result: ${{ steps.publish.outputs.result }}
       sha: ${{ steps.publish.outputs.sha }}
+      check: ${{ steps.publish.outputs.check }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -52,6 +53,8 @@ jobs:
         run: npm run test:headroom
 
       - name: Re-render the worst cases the push job checks
+        id: render
+        continue-on-error: true
         env:
           HEADROOM_CHECK_RESULT: ${{ github.workspace }}/headroom-check-result.txt
         run: npm run test:headroom-check
@@ -60,10 +63,21 @@ jobs:
         id: publish
         env:
           HEADROOM_CHECK_RESULT: ${{ github.workspace }}/headroom-check-result.txt
+          CHECK_OUTCOME: ${{ steps.render.outcome }}
         run: |
-          if [ ! -s "$HEADROOM_CHECK_RESULT" ]; then
-            echo 'the render check did not record a result'
-            exit 1
+          if [ "$CHECK_OUTCOME" != "success" ]; then
+            echo 'check=failure' >> "$GITHUB_OUTPUT"
+            if [ ! -s "$HEADROOM_CHECK_RESULT" ]; then
+              printf '%s\n' 'the per-push render check failed before it recorded a result' > "$HEADROOM_CHECK_RESULT"
+            else
+              printf '%s\n' 'the per-push render check failed' >> "$HEADROOM_CHECK_RESULT"
+            fi
+          else
+            if [ ! -s "$HEADROOM_CHECK_RESULT" ]; then
+              echo 'the render check did not record a result'
+              exit 1
+            fi
+            echo 'check=success' >> "$GITHUB_OUTPUT"
           fi
           echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           delimiter="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
@@ -83,25 +97,34 @@ jobs:
           echo 'changed=true' >> "$GITHUB_OUTPUT"
           echo "fixture=$(base64 -w 0 tests/fixtures/headroom-worst.json)" >> "$GITHUB_OUTPUT"
 
+      # Outputs are already recorded. Failing here keeps the nightly red
+      # when the re-render fails, including when the fixture did not change
+      # and there is no new commit to mark.
+      - name: Fail the sweep when the render check failed
+        if: steps.publish.outputs.check == 'failure'
+        run: |
+          echo 'the per-push render check failed'
+          exit 1
+
   pull-request:
     name: update bot pull request
     needs: sweep
-    if: needs.sweep.outputs.changed == 'true'
+    if: always() && needs.sweep.outputs.changed == 'true' && needs.sweep.outputs.fixture != '' && needs.sweep.result != 'cancelled'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write
+      statuses: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.sweep.outputs.sha }}
 
-      - name: Update the bot pull request
+      - name: Commit and push the bot branch
+        id: commit
         env:
-          GH_TOKEN: ${{ github.token }}
           FIXTURE: ${{ needs.sweep.outputs.fixture }}
-          RESULT: ${{ needs.sweep.outputs.result }}
         run: |
           branch="bot/headroom-worst"
           if [ "$branch" != "bot/headroom-worst" ]; then
@@ -114,10 +137,6 @@ jobs:
               exit 1
               ;;
           esac
-          if [ -z "$RESULT" ]; then
-            echo 'the render check did not record a result'
-            exit 1
-          fi
           printf '%s' "$FIXTURE" | base64 -d > tests/fixtures/headroom-worst.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -128,12 +147,84 @@ jobs:
             exit 0
           fi
           git commit -m "chore: refresh headroom worst cases"
+          # This is the commit this step just created. Later steps receive
+          # it as an output and do not resolve the branch again.
+          commit_sha=$(git rev-parse HEAD)
           git push --force origin "HEAD:refs/heads/bot/headroom-worst"
+          echo "sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+
+      # The sha is the output of the commit step. This step does not resolve the bot branch.
+      - name: Post the nightly commit status
+        id: status
+        if: success() && steps.commit.outputs.sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          CHECK: ${{ needs.sweep.outputs.check }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SHA" ]; then
+            echo 'missing the pushed commit sha'
+            exit 1
+          fi
+          if [ "$CHECK" = "success" ]; then
+            state=success
+            description='Nightly per-push headroom check passed'
+          else
+            state=failure
+            description='Nightly per-push headroom check failed'
+          fi
+          posted=0
+          attempt=1
+          while [ "$attempt" -le 5 ]; do
+            if gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+              -f state="$state" \
+              -f target_url="$RUN_URL" \
+              -f description="$description" \
+              -f context='headroom/nightly-verified'
+            then
+              posted=1
+              break
+            fi
+            echo "status post attempt ${attempt} did not land"
+            attempt=$((attempt + 1))
+            sleep 2
+          done
+          if [ "$posted" != 1 ]; then
+            echo 'could not post the commit status'
+            exit 1
+          fi
+          echo "state=${state}" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the bot pull request
+        if: success() && steps.commit.outputs.sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.sweep.outputs.result }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          STATE: ${{ steps.status.outputs.state }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$RESULT" ]; then
+            echo 'the render check did not record a result'
+            exit 1
+          fi
+          if [ "$STATE" = "success" ]; then
+            title="chore: refresh headroom worst cases"
+          else
+            title="chore: headroom check failed"
+          fi
           result="$RESULT"
           body=$(cat <<EOF
           The nightly headroom sweep refreshed tests/fixtures/headroom-worst.json.
 
           The per-push render check ran against that file before this pull request was opened or updated. A pull request opened with GITHUB_TOKEN does not trigger CI.
+
+          The nightly run posted commit status headroom/nightly-verified (${STATE}) on ${SHA}:
+          ${RUN_URL}
 
           Result:
           ${result}
@@ -143,11 +234,11 @@ jobs:
           )
           number=$(gh pr list --head "bot/headroom-worst" --base main --state open --json number --jq '.[0].number // empty')
           if [ -n "$number" ]; then
-            gh pr edit "$number" --body "$body"
+            gh pr edit "$number" --body "$body" --title "$title"
           else
             gh pr create \
               --base main \
               --head "bot/headroom-worst" \
-              --title "chore: refresh headroom worst cases" \
+              --title "$title" \
               --body "$body"
           fi
