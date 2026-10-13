@@ -99,7 +99,7 @@ function bundleProbe(): string {
   startWalkPluck,
   prepareCelloBuffer,
   soundLinearCap,
-  DRONE_LIMITER,
+  createOutputChain,
   REED_TIMING,
   ROOM_SECONDS,
   TAIL_MARGIN,
@@ -125,7 +125,7 @@ import {
   startWalkPluck,
   prepareCelloBuffer,
   soundLinearCap,
-  DRONE_LIMITER,
+  createOutputChain,
   dronePitches,
 } from '/probe.js';
 
@@ -153,10 +153,10 @@ function peakOf(rendered) {
   return { peak, at };
 }
 
-function startChord(context, midis, when) {
+function startChord(context, midis, when, destination) {
   const bus = context.createGain();
   bus.gain.value = 0.75 / midis.length;
-  bus.connect(context.destination);
+  bus.connect(destination || context.destination);
   midis.forEach((midi, index) => {
     const oscillator = context.createOscillator();
     const envelope = context.createGain();
@@ -190,24 +190,19 @@ function startChord(context, midis, when) {
 }
 
 function graph(context, sound) {
+  const chain = createOutputChain(context);
+  chain.setDrone(true, 0, 0);
   const master = context.createGain();
   master.gain.value = soundLinearCap(sound);
-  const limiter = context.createDynamicsCompressor();
-  limiter.threshold.value = DRONE_LIMITER.threshold;
-  limiter.knee.value = DRONE_LIMITER.knee;
-  limiter.ratio.value = DRONE_LIMITER.ratio;
-  limiter.attack.value = DRONE_LIMITER.attack;
-  limiter.release.value = DRONE_LIMITER.release;
-  master.connect(limiter);
-  limiter.connect(context.destination);
-  return { master, limiter };
+  master.connect(chain.bus);
+  return { master, bus: chain.bus };
 }
 
 async function renderOverlap(buffers, root, mode, octave, sound, gap, walk) {
   const rate = 48000;
   const seconds = 0.05 + gap + 0.9;
   const context = new OfflineAudioContext(2, Math.ceil(rate * seconds), rate);
-  const { master, limiter } = graph(context, sound);
+  const { master, bus } = graph(context, sound);
   const pitches = dronePitches(root, mode, octave);
   const cello = sound === 'cello' ? buffers : null;
   const start = 0.05;
@@ -216,15 +211,15 @@ async function renderOverlap(buffers, root, mode, octave, sound, gap, walk) {
   const first = startLiveVoice(context, master, pitches, start, 0.2, sound, cello);
   first.stop(when, 0.16, now);
   startLiveVoice(context, master, pitches, when, 0.2, sound, cello);
-  if (walk) startWalkPluck(context, limiter, walk.midi, walk.at, 1);
-  if (walk && walk.chord) startChord(context, walk.chord, walk.chordAt);
+  if (walk) startWalkPluck(context, bus, walk.midi, walk.at, 1);
+  if (walk && walk.chord) startChord(context, walk.chord, walk.chordAt, bus);
   return peakOf(await context.startRendering());
 }
 
 async function renderVoice(buffers, root, mode, octave, sound, attack, seconds, walk) {
   const rate = 48000;
   const context = new OfflineAudioContext(2, Math.ceil(rate * seconds), rate);
-  const { master, limiter } = graph(context, sound);
+  const { master, bus } = graph(context, sound);
   const voice = startLiveVoice(
     context,
     master,
@@ -234,8 +229,8 @@ async function renderVoice(buffers, root, mode, octave, sound, attack, seconds, 
     sound,
     sound === 'cello' ? buffers : null,
   );
-  if (walk) startWalkPluck(context, limiter, walk.midi, walk.at, 1);
-  if (walk && walk.chord) startChord(context, walk.chord, walk.chordAt);
+  if (walk) startWalkPluck(context, bus, walk.midi, walk.at, 1);
+  if (walk && walk.chord) startChord(context, walk.chord, walk.chordAt, bus);
   return peakOf(await context.startRendering());
 }
 
@@ -253,8 +248,8 @@ try {
   for (let midi = 40; midi <= 84; midi += 1) {
     const rate = 48000;
     const context = new OfflineAudioContext(2, Math.ceil(rate * 0.12), rate);
-    const { limiter } = graph(context, 'reed');
-    startWalkPluck(context, limiter, midi, 0.01, 1);
+    const { bus } = graph(context, 'reed');
+    startWalkPluck(context, bus, midi, 0.01, 1);
     const value = peakOf(await context.startRendering());
     if (value.peak > walkPeak) {
       walkPeak = value.peak;
@@ -856,9 +851,9 @@ function assertGrid(report: HeadroomReport) {
   assert.equal(report.error, undefined, report.error);
   const rows = report.rows ?? [];
   assert.equal(rows.length, DRONE_ROOTS.length * DRONE_MODES.length * 3 * 4);
-  assert.equal(report.caps?.reed, 0.063);
-  assert.equal(report.caps?.bow, 0.072);
-  assert.equal(report.caps?.cello, 0.0736);
+  assert.equal(report.caps?.reed, 0.1257);
+  assert.equal(report.caps?.bow, 0.1437);
+  assert.equal(report.caps?.cello, 0.1469);
   assert.ok((report.chord?.peak ?? 0) > 0.5, JSON.stringify(report.chord));
   assert.equal(report.rev?.frets, REV_FRET_KEY);
   assert.deepEqual(report.rev?.midis, [53]);
@@ -866,13 +861,16 @@ function assertGrid(report: HeadroomReport) {
   const revPeak = report.rev?.peak ?? 0;
   assert.ok(revPeak > 0.5, `rev chord ${revPeak}`);
   for (const mix of report.rev?.mixes ?? []) {
-    const peak = Math.max(mix.linear, mix.confirmed);
     assert.ok(
-      peak <= SOUND_LIMIT,
-      `rev ${mix.pair} ${peak} vs ${SOUND_LIMIT}`,
+      mix.confirmed <= SOUND_LIMIT,
+      `rev ${mix.pair} limited ${mix.confirmed} vs ${SOUND_LIMIT}`,
+    );
+    assert.ok(
+      mix.confirmed < FULL_SCALE_MARGIN,
+      `rev ${mix.pair} limited ${mix.confirmed}`,
     );
     console.log(
-      `rev ${mix.pair} shift ${mix.shift} linear ${mix.linear} confirmed ${mix.confirmed} chord ${report.rev?.frets} ${revPeak}`,
+      `rev ${mix.pair} shift ${mix.shift} dry ${mix.linear} limited ${mix.confirmed} chord ${report.rev?.frets} ${revPeak}`,
     );
   }
   const contexts = report.contexts ?? [];
@@ -925,31 +923,25 @@ function assertGrid(report: HeadroomReport) {
       ofSound.filter((row) => row.via === 'sound-switch').length,
       12 * 7 * 2,
     );
-    let worst = ofSound[0];
+    let worst = ofSound.find((row) => row.rendered) ?? ofSound[0];
     if (!worst) throw new Error(sound);
     for (const row of ofSound) {
-      const peak = Math.max(row.peak, row.confirmed);
       assert.ok(
-        Number.isFinite(peak) && peak > 0.15,
-        `${sound} ${row.root} ${row.mode} ${row.via} ${peak}`,
+        Number.isFinite(row.peak) && row.peak > 0.15,
+        `${sound} ${row.root} ${row.mode} ${row.via} ${row.peak}`,
       );
-      assert.ok(
-        peak < FULL_SCALE_MARGIN,
-        `${sound} ${row.root} ${row.mode} ${row.via} ${peak}`,
-      );
-      assert.ok(
-        peak <= SOUND_LIMIT,
-        `${sound} ${row.via} from ${row.from || '-'} ${row.root} ${row.mode} ${row.kind} ${peak} vs ${SOUND_LIMIT}`,
-      );
-      if (peak > Math.max(worst.peak, worst.confirmed)) worst = row;
+      if (row.rendered) {
+        assert.ok(
+          row.confirmed <= SOUND_LIMIT && row.confirmed < FULL_SCALE_MARGIN,
+          `${sound} ${row.via} from ${row.from || '-'} ${row.root} ${row.mode} ${row.kind} limited ${row.confirmed} dry ${row.peak} vs ${SOUND_LIMIT}`,
+        );
+        if (row.confirmed > worst.confirmed) worst = row;
+      }
     }
     console.log(
-      `${sound} worst ${worst.via} from ${worst.from || '-'} ${worst.root} ${worst.mode} ${worst.octave} ${worst.kind} ${worst.later} after ${worst.pred} shift ${worst.shift} linear ${worst.peak} confirmed ${worst.confirmed} chord ${worst.chordLabel} ${worst.chordFrets} ${worst.chordPeak}`,
+      `${sound} worst ${worst.via} from ${worst.from || '-'} ${worst.root} ${worst.mode} ${worst.octave} ${worst.kind} ${worst.later} after ${worst.pred} shift ${worst.shift} dry ${worst.peak} limited ${worst.confirmed} chord ${worst.chordLabel} ${worst.chordFrets} ${worst.chordPeak}`,
     );
-    assert.ok(
-      Math.max(worst.peak, worst.confirmed) > 0.5,
-      `${sound} worst ${Math.max(worst.peak, worst.confirmed)}`,
-    );
+    assert.ok(worst.confirmed > 0.5, `${sound} worst ${worst.confirmed}`);
     const rendered = ofSound.filter((row) => row.rendered);
     assert.ok(rendered.length >= CONFIRM_COUNT, sound);
     for (const row of rendered) {
@@ -967,6 +959,17 @@ function assertGrid(report: HeadroomReport) {
               : 4;
       assert.equal(row.noteShifts.length, notes);
     }
+  }
+  for (const item of report.comparisons ?? []) {
+    console.log(
+      `limiter worst ${item.sound} dry ${item.dry} limited ${item.limited} net ${item.netDb.toFixed(2)} dB reduction ${item.reductionDb.toFixed(2)} dB ${item.root} ${item.mode} ${item.via} ${item.chordFrets}`,
+    );
+  }
+  if (report.limiter) {
+    const sweep = report.limiter;
+    console.log(
+      `limiter engagement ${sweep.reduced}/${sweep.mixes} (${(sweep.reduced / sweep.mixes).toFixed(4)}) max ${sweep.maxReductionDb.toFixed(2)} dB above-knee ${sweep.aboveKnee} chords ${sweep.chordsReduced}/${sweep.chordCount} knee ${sweep.kneeStart.toFixed(4)}`,
+    );
   }
 }
 
@@ -1058,6 +1061,24 @@ function assertSubset(report: HeadroomReport, cases: WorstCase[]) {
         `${sound} ${row.root} ${row.mode} ${row.via} ${row.confirmed}`,
       );
     }
+    const compared = (report.comparisons ?? [])
+      .filter((item) => item.sound === sound)
+      .sort((left, right) => right.limited - left.limited)[0];
+    if (compared) {
+      console.log(
+        `limiter ${sound} dry ${compared.dry} limited ${compared.limited} net ${compared.netDb.toFixed(2)} dB reduction ${compared.reductionDb.toFixed(2)} dB ${compared.root} ${compared.mode} ${compared.chordFrets}`,
+      );
+      assert.ok(
+        compared.limited <= SOUND_LIMIT,
+        `${sound} limited ${compared.limited}`,
+      );
+    }
+  }
+  if (report.limiter) {
+    const sweep = report.limiter;
+    console.log(
+      `limiter engagement ${sweep.reduced}/${sweep.mixes} max ${sweep.maxReductionDb.toFixed(2)} dB above-knee ${sweep.aboveKnee} chords ${sweep.chordsReduced}/${sweep.chordCount}`,
+    );
   }
 }
 

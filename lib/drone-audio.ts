@@ -1,4 +1,8 @@
 import {
+  createOutputChain,
+  type OutputChain,
+} from './audio-output.ts';
+import {
   CELLO_SAMPLES,
   celloLoopBounds,
   celloSeamFade,
@@ -16,6 +20,15 @@ import {
   symmetricDetuneCents,
 } from './drone.ts';
 
+export {
+  DRONE_LIMITER,
+  createOutputChain,
+  limiterKneeStart,
+  pageAudio,
+  voicingContext,
+  type OutputChain,
+} from './audio-output.ts';
+
 export type DroneStatus = 'idle' | 'starting' | 'playing' | 'error';
 
 export type ReedRequest = {
@@ -32,17 +45,9 @@ export function requestSound(request: ReedRequest): DroneSoundId {
 
 /**
  * Reed cap on the voice fade. The master is volume only.
- * The walk trim is 0.1225.
+ * +6 dB from 0.063. The walk trim stays 0.1225.
  */
-export const DRONE_MAX_LINEAR_GAIN = 0.063;
-
-export const DRONE_LIMITER = {
-  threshold: -1,
-  knee: 0,
-  ratio: 20,
-  attack: 0.003,
-  release: 0.08,
-} as const;
+export const DRONE_MAX_LINEAR_GAIN = 0.1257;
 
 /** Gains the reed graph and the headroom calculation both read. */
 export const REED_GAINS = {
@@ -91,9 +96,9 @@ export function voiceTailHold(fade: number): number {
 /**
  * Bow and cello caps are the voice fade's resting level, so a sample that
  * is still loading does not retarget the voice that is already sounding.
- * Bow stays at 0.072. Cello is 0.0736, half a decibel under 0.078.
- * Reed stays at 0.063. Makeup gain lifts a full voice, so the analytical
- * sum is not the cap.
+ * Bow is 0.1437, +6 dB from 0.072. Cello is 0.1469, +6 dB from 0.0736.
+ * Reed is 0.1257, +6 dB from 0.063. Makeup gain lifts a full voice, so the
+ * analytical sum is not the cap. The walk trim stays 0.1225.
  */
 export const BOW_GAINS = {
   pitch: 0.055,
@@ -101,7 +106,7 @@ export const BOW_GAINS = {
   envelope: 1,
   dry: 0.8,
   wet: 0.22,
-  cap: 0.072,
+  cap: 0.1437,
   voices: 4,
 } as const;
 
@@ -111,8 +116,8 @@ export const CELLO_GAINS = {
   dry: 0.9,
   wet: 0.12,
   samplePeak: 0.5,
-  // 0.5 dB under 0.078. Walk trim and the reed and bow caps stay put.
-  cap: 0.0736,
+  // +6 dB from 0.0736. The walk trim stays 0.1225.
+  cap: 0.1469,
 } as const;
 
 export const WALK_GAINS = {
@@ -375,6 +380,8 @@ type ReedOptions = {
   onHeld?: (heard: ReedRequest, attempted: ReedRequest) => void;
   /** The cello loops failed to decode. `hold` keeps the current voice. */
   onCelloUnavailable?: (mode: 'hold' | 'fallback') => void;
+  /** Shared output. When omitted, the engine builds a chain on its own context. */
+  output?: OutputChain | (() => OutputChain);
 };
 
 class CelloDecodeError extends Error {
@@ -954,10 +961,14 @@ function reedWave(context: BaseAudioContext, frequency: number): PeriodicWave {
 
 const AUDIO_ERROR = 'Audio didn\u2019t start. Tap play to try again.';
 
+/** Master, bus, dry tap, wet tap, and the limiter. */
+const OUTPUT_NODES = 5;
+
 export class ReedDrone {
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
-  private limiter: DynamicsCompressorNode | null = null;
+  private chain: OutputChain | null = null;
+  private ownsChain = false;
   private voices: ReedVoice[] = [];
   private voiceNodes = 0;
   private outputUntil = 0;
@@ -994,6 +1005,7 @@ export class ReedDrone {
     attempted: ReedRequest,
   ) => void;
   private readonly createContext: () => AudioContext;
+  private readonly outputOption: ReedOptions['output'];
   private readonly ownsContext: boolean;
   private onContextState: (() => void) | null = null;
   private readonly documentTarget: VisibilityTarget | null;
@@ -1018,6 +1030,7 @@ export class ReedDrone {
     this.onWalk = options.onWalk ?? (() => {});
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.ownsContext = options.createContext === undefined;
+    this.outputOption = options.output;
     this.createContext = options.createContext ?? (() => new AudioContext());
     this.documentTarget =
       options.document === undefined
@@ -1039,7 +1052,8 @@ export class ReedDrone {
   }
 
   nodeCount(): number {
-    return this.voiceNodes + (this.master ? 2 : 0);
+    if (!this.master) return this.voiceNodes;
+    return this.voiceNodes + (this.ownsChain ? OUTPUT_NODES : 1);
   }
 
   play(request: ReedRequest): void {
@@ -1105,6 +1119,9 @@ export class ReedDrone {
     clearTimeout(this.walkTimer);
     this.stopPlucks();
     this.onWalk(null);
+    if (this.phase !== 'playing' && this.phase !== 'starting') {
+      this.releaseLimiter();
+    }
   }
 
   setVolume(volume: number): void {
@@ -1128,6 +1145,7 @@ export class ReedDrone {
     else this.voices = [];
     this.voiceNodes = 0;
     this.phase = 'idle';
+    if (!this.walking) this.releaseLimiter();
     this.onStatus('idle');
   }
 
@@ -1146,7 +1164,8 @@ export class ReedDrone {
     this.windowTarget?.removeEventListener('pagehide', this.onPageHide);
     const context = this.context;
     const master = this.master;
-    const limiter = this.limiter;
+    const chain = this.chain;
+    const ownsChain = this.ownsChain;
     const ownsContext = this.ownsContext;
     if (context) {
       if (this.onContextState) {
@@ -1155,19 +1174,20 @@ export class ReedDrone {
       }
       const now = context.currentTime;
       this.fadeVoices(now, REED_TIMING.hideFade);
+      chain?.setDrone(false, now, 0);
       // The dry fade is the short part. The room keeps ringing for
       // ROOM_SECONDS, and a fade that was already running can be longer
       // than the hide cut. The master stays up through the later tail.
       const wait = Math.max(0, this.outputUntil - now);
       setTimeout(() => {
         master?.disconnect();
-        limiter?.disconnect();
+        if (ownsChain) chain?.disconnect();
         if (ownsContext) void context.close().catch(() => {});
       }, wait * 1000);
     }
     this.context = null;
     this.master = null;
-    this.limiter = null;
+    this.chain = null;
     this.voices = [];
     this.voiceNodes = 0;
   }
@@ -1247,23 +1267,31 @@ export class ReedDrone {
     }
   }
 
+  private resolveOutput(): OutputChain | null {
+    const option = this.outputOption;
+    if (!option) return null;
+    return typeof option === 'function' ? option() : option;
+  }
+
+  private releaseLimiter(): void {
+    if (!this.chain || !this.context) return;
+    this.chain.setDrone(false, this.context.currentTime);
+  }
+
   private unlock(): { context: AudioContext; master: GainNode } {
-    if (this.context && this.master) {
+    if (this.context && this.master && this.chain) {
       this.applyVolume();
+      this.chain.setDrone(true, this.context.currentTime);
       void this.context.resume().catch(() => {});
       return { context: this.context, master: this.master };
     }
     const context = this.createContext();
+    const external = this.resolveOutput();
+    const chain = external ?? createOutputChain(context);
     const master = context.createGain();
     master.gain.value = this.volume;
-    const limiter = context.createDynamicsCompressor();
-    limiter.threshold.value = DRONE_LIMITER.threshold;
-    limiter.knee.value = DRONE_LIMITER.knee;
-    limiter.ratio.value = DRONE_LIMITER.ratio;
-    limiter.attack.value = DRONE_LIMITER.attack;
-    limiter.release.value = DRONE_LIMITER.release;
-    master.connect(limiter);
-    limiter.connect(context.destination);
+    master.connect(chain.bus);
+    chain.setDrone(true, context.currentTime);
     this.onContextState = () => {
       if (context.state === 'running' || context.state === 'closed') return;
       this.stopWalk();
@@ -1273,7 +1301,8 @@ export class ReedDrone {
     context.addEventListener('statechange', this.onContextState);
     this.context = context;
     this.master = master;
-    this.limiter = limiter;
+    this.chain = chain;
+    this.ownsChain = !external;
     void context.resume().catch(() => {});
     return { context, master };
   }
@@ -1457,11 +1486,11 @@ export class ReedDrone {
   }
 
   private pluckAt(midi: number, when: number): void {
-    if (!this.context || !this.limiter) return;
+    if (!this.context || !this.chain) return;
     if (when < this.context.currentTime) return;
     const plucked = startWalkPluck(
       this.context,
-      this.limiter,
+      this.chain.bus,
       midi,
       when,
       this.volume,
@@ -1519,7 +1548,7 @@ function scheduleWalkEnvelope(
   param.linearRampToValueAtTime(0, when + 2.52);
 }
 
-/** The walk pluck: its own periodic wave, into the limiter, scaled by volume. */
+/** The walk pluck: its own periodic wave, into the shared bus, scaled by volume. */
 export function startWalkPluck(
   context: BaseAudioContext,
   destination: AudioNode,

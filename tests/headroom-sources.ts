@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 
 /** Audio modules the headroom render reads, plus the cello loops. */
 const SOURCE_FILES = [
+  'lib/audio-output.ts',
   'lib/drone-audio.ts',
   'lib/drone-levels.ts',
   'lib/drone.ts',

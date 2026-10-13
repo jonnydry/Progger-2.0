@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Play, Square } from 'lucide-react';
+import { pageAudio } from '@/lib/audio-output';
 import { VoicingPlayer, type AuditionState } from '@/lib/voicing-audio';
 
 export function VoicingAudition({
@@ -14,7 +15,7 @@ export function VoicingAudition({
   const player = useRef<VoicingPlayer | null>(null);
   const [state, setState] = useState<AuditionState>('idle');
   useEffect(() => {
-    const current = new VoicingPlayer(setState);
+    const current = new VoicingPlayer(setState, () => pageAudio().voicing);
     player.current = current;
     const hide = () => {
       if (document.hidden) current.stop();

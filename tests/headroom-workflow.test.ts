@@ -26,16 +26,19 @@ void test('the nightly sweep opens a bot pull request and does not push main', (
   assert.match(workflow, /the render check did not record a result/);
   assert.match(workflow, /per-push render check ran against that file/);
   assert.match(workflow, /GITHUB_TOKEN does not trigger CI/);
-  assert.match(
+  assert.doesNotMatch(workflow, /pending Jonny/);
+  assert.doesNotMatch(
     workflow,
     /Allow GitHub Actions to create and approve pull requests/,
   );
-  assert.match(workflow, /pending Jonny's OK/);
+  assert.match(workflow, /od -An -N16 -tx1 \/dev\/urandom/);
+  assert.match(workflow, /grep -Fqx "\$delimiter"/);
+  assert.doesNotMatch(workflow, /result<<CHECK/);
   const checkAt = workflow.indexOf('npm run test:headroom-check');
   const prAt = workflow.indexOf('gh pr create');
   assert.ok(checkAt > 0 && prAt > checkAt);
   assert.match(workflow, /needs: sweep/);
-  assert.match(workflow, /if: github\.event_name != 'pull_request'/);
+  assert.doesNotMatch(workflow, /if: github\.event_name != 'pull_request'/);
   assert.match(workflow, /branch="bot\/headroom-worst"/);
   assert.doesNotMatch(workflow, /GITHUB_RUN_ID/);
   assert.match(

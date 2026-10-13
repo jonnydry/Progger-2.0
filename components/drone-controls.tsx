@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { AudioLines, ChevronDown, Footprints } from 'lucide-react';
 import { DRONE_SOUNDS, reedRequestForScale, type DroneSoundId } from '@/lib/drone';
+import { pageAudio } from '@/lib/audio-output';
 import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
 import {
   DRONE_ICON_PX,
@@ -32,7 +33,13 @@ export function useReedDrone(input: {
     () =>
       new ExploreDrone(
         (onStatus, onWalk, onHeld, onCelloUnavailable) =>
-          new ReedDrone(onStatus, { onWalk, onHeld, onCelloUnavailable }),
+          new ReedDrone(onStatus, {
+            onWalk,
+            onHeld,
+            onCelloUnavailable,
+            createContext: () => pageAudio().context,
+            output: () => pageAudio().chain,
+          }),
         reedRequestForScale(input.root, input.scaleId),
       ),
   );
