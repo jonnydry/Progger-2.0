@@ -49,9 +49,11 @@ export const OUTPUT_TAIL = outputTailSeconds();
  * Chords and walk plucks enter at `chordInput`, so they are not saturated.
  * Their envelope ducks the drone. The safety clip stays after the sum.
  * Drive 3 keeps a cap-level sine under about 2% THD. Drive 16 was near 18%.
+ * Makeup is the small-signal slope. 1.27 keeps the loudest drone crossfade
+ * near 0.225, so that peak plus the 0.6375 pluck ceiling stays under −1 dBFS.
  */
 export const DRONE_DRIVE = 3;
-export const DRONE_MAKEUP = 3.305;
+export const DRONE_MAKEUP = 1.27;
 /** One-pole time constants. Attack is fast; release ignores the string's pitch. */
 export const DRONE_DUCK_ATTACK = 0.01;
 export const DRONE_DUCK_RELEASE = 0.22;

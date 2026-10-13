@@ -23,12 +23,12 @@ const RATE = 48000;
 
 /** Integrated LUFS of each drone alone, volume 1, measured on this graph. */
 const LOUDNESS: Record<string, number> = {
-  'reed-low': -17.13,
-  'reed-layered': -16.09,
-  'bow-low': -15.15,
-  'bow-layered': -14.6,
-  'cello-low': -18.68,
-  'cello-layered': -17.09,
+  'reed-low': -25.44,
+  'reed-layered': -24.4,
+  'bow-low': -23.46,
+  'bow-layered': -22.91,
+  'cello-low': -26.98,
+  'cello-layered': -25.4,
 };
 
 function readU32(data: Uint8Array, offset: number): number {
