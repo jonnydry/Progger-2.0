@@ -5,12 +5,16 @@ import {
   BOW_GAINS,
   CELLO_GAINS,
   DRONE_MAX_LINEAR_GAIN,
+  OUTPUT_CEILING,
+  OUTPUT_KNEE,
+  outputLimitSample,
   ReedDrone,
   REED_GAINS,
   REED_TIMING,
   WALK_GAINS,
   WALK_LEAD_SECONDS,
   WALK_STOP_FADE,
+  createOutputChain,
   droneMasterGain,
   soundLinearCap,
   voiceTailHold,
@@ -114,19 +118,10 @@ class FakeBuffer {
   }
 }
 
-class Compressor {
-  threshold = new Param();
-  knee = new Param();
-  ratio = new Param();
-  attack = new Param();
-  release = new Param();
-  connections: unknown[] = [];
-  disconnected = false;
-  connect(next: unknown) {
-    this.connections.push(next);
-    return next;
-  }
-  disconnect() {
+class WaveShaper extends FakeNode {
+  curve: Float32Array | null = null;
+  oversample = 'none';
+  override disconnect() {
     this.disconnected = true;
     this.connections = [];
   }
@@ -141,7 +136,7 @@ class FakeContext {
   private stateListeners = new Set<() => void>();
   oscillators: Oscillator[] = [];
   sources: BufferSource[] = [];
-  compressors: Compressor[] = [];
+  shapers: WaveShaper[] = [];
   gains: (FakeNode & { gain: Param })[] = [];
   filters: (FakeNode & { frequency: Param; Q: Param; type: string })[] = [];
   convolvers: (FakeNode & { normalize: boolean; buffer: FakeBuffer | null })[] =
@@ -195,17 +190,10 @@ class FakeContext {
     this.filters.push(node);
     return node;
   }
-  createDynamicsCompressor() {
-    const compressor = new Compressor();
-    this.params.push(
-      compressor.threshold,
-      compressor.knee,
-      compressor.ratio,
-      compressor.attack,
-      compressor.release,
-    );
-    this.compressors.push(compressor);
-    return compressor;
+  createWaveShaper() {
+    const shaper = new WaveShaper();
+    this.shapers.push(shaper);
+    return shaper;
   }
   createConvolver() {
     const node = Object.assign(new FakeNode(), {
@@ -278,14 +266,22 @@ function createdNodes(context: FakeContext): number {
     context.filters.length +
     context.sources.length +
     context.convolvers.length +
-    context.compressors.length
+    context.shapers.length
   );
 }
 
+function outputBus(context: FakeContext) {
+  const limiter = context.shapers[0];
+  assert.ok(limiter);
+  const bus = context.gains.find((gain) => gain.connections.includes(limiter));
+  assert.ok(bus);
+  return bus;
+}
+
 function masterGain(context: FakeContext) {
-  const limiter = context.compressors[0];
-  const master = context.gains.find((gain) =>
-    gain.connections.includes(limiter),
+  const bus = outputBus(context);
+  const master = context.gains.find(
+    (gain) => gain !== bus && gain.connections.includes(bus),
   );
   assert.ok(master);
   return master;
@@ -306,22 +302,42 @@ void test('constructing the reed engine does not create an audio context', () =>
   assert.equal(created(), 0);
 });
 
+void test('the limiter is off the destination until the drone is on, and a snap bypass drops it', () => {
+  const context = new FakeContext();
+  const chain = createOutputChain(context as unknown as AudioContext);
+  assert.equal(chain.voicingTarget(), context.destination);
+  assert.equal(context.destination.connections.length, 0);
+  chain.setDrone(true, context.currentTime, 0);
+  assert.equal(chain.voicingTarget(), chain.bus);
+  const wet = (chain.limiter as unknown as FakeNode).connections[0] as FakeNode;
+  assert.ok(wet.connections.includes(context.destination));
+  chain.setDrone(false, context.currentTime, 0);
+  assert.equal(chain.voicingTarget(), context.destination);
+  assert.equal(wet.disconnected, true);
+});
+
 void test('a low reed starts on one context and centers the root', async () => {
   const { engine, context, states, created } = setup();
   engine.play(lowRequest);
   await until(() => states.at(-1) === 'playing');
   assert.ok(states.includes('starting'));
   assert.equal(created(), 1);
-  assert.equal(context.compressors.length, 1);
-  const limiter = context.compressors[0];
-  assert.equal(limiter.threshold.value, -1);
-  assert.equal(limiter.knee.value, 0);
-  assert.equal(limiter.ratio.value, 20);
-  assert.equal(limiter.attack.value, 0.003);
-  assert.equal(limiter.release.value, 0.08);
-  assert.ok(limiter.connections.includes(context.destination));
-  assert.equal(engine.nodeCount(), 29);
-  assert.equal(createdNodes(context), 29);
+  assert.equal(context.shapers.length, 1);
+  const limiter = context.shapers[0];
+  assert.ok(limiter);
+  assert.equal(limiter.oversample, 'none');
+  assert.ok(limiter.curve);
+  assert.equal(outputLimitSample(0.5), 0.5);
+  assert.equal(outputLimitSample(OUTPUT_KNEE), OUTPUT_KNEE);
+  assert.ok(outputLimitSample(0.93) < OUTPUT_CEILING);
+  assert.ok(outputLimitSample(0.93) < 0.93);
+  assert.ok(outputLimitSample(1) <= OUTPUT_CEILING);
+  assert.equal(outputLimitSample(-0.95), -outputLimitSample(0.95));
+  const wet = limiter.connections[0] as FakeNode;
+  assert.ok(wet);
+  assert.ok(wet.connections.includes(context.destination));
+  assert.equal(engine.nodeCount(), 32);
+  assert.equal(createdNodes(context), 32);
   assert.deepEqual(
     context.oscillators.map((oscillator) => oscillator.starts),
     context.oscillators.map(() => [4.02]),
@@ -421,7 +437,7 @@ void test('playing again with the upper octave reuses the context', async () => 
   await until(() => states.at(-1) === 'playing');
   const before = createdNodes(context);
   engine.play({ root: 'A', modeId: 'dorian', octave: 'layered' });
-  await until(() => engine.nodeCount() === 35 && states.at(-1) === 'playing');
+  await until(() => engine.nodeCount() === 38 && states.at(-1) === 'playing');
   assert.equal(created(), 1);
   assert.equal(createdNodes(context) - before, 33);
   engine.dispose();
@@ -431,8 +447,8 @@ void test('Locrian drones the octave with the same reed pair', async () => {
   const { engine, context, states } = setup();
   engine.play({ root: 'A', modeId: 'locrian', octave: 'low' });
   await until(() => states.at(-1) === 'playing');
-  assert.equal(engine.nodeCount(), 29);
-  assert.equal(createdNodes(context), 29);
+  assert.equal(engine.nodeCount(), 32);
+  assert.equal(createdNodes(context), 32);
   const frequencies = context.oscillators.map(
     (oscillator) => oscillator.frequency.value,
   );
@@ -532,9 +548,9 @@ void test('volume is stored before a context exists and clamps on the master ram
   );
   assert.equal(droneMasterGain(1), DRONE_MAX_LINEAR_GAIN);
   assert.equal(droneMasterGain(100), DRONE_MAX_LINEAR_GAIN);
-  assert.equal(DRONE_MAX_LINEAR_GAIN, 0.063);
-  assert.equal(BOW_GAINS.cap, 0.072);
-  assert.equal(CELLO_GAINS.cap, 0.0736);
+  assert.equal(DRONE_MAX_LINEAR_GAIN, 0.1257);
+  assert.equal(BOW_GAINS.cap, 0.1437);
+  assert.equal(CELLO_GAINS.cap, 0.1469);
   assert.equal(WALK_GAINS.trim, 0.1225);
   assert.equal(droneMasterGain(1, 'bow'), BOW_GAINS.cap);
   assert.equal(droneMasterGain(1, 'cello'), CELLO_GAINS.cap);
@@ -657,15 +673,17 @@ void test('dispose closes a context the reed created and leaves a passed-in cont
   passed.engine.play(lowRequest);
   await until(() => passed.states.at(-1) === 'playing');
   const sharedMaster = masterGain(passed.context);
-  const sharedLimiter = passed.context.compressors[0];
+  const sharedLimiter = passed.context.shapers[0];
   passed.engine.dispose();
   assert.equal(passed.context.closed, 0);
   assert.equal(passed.context.stateListenerCount(), 0);
   assert.equal(sharedMaster.disconnected, false);
   assert.equal(sharedLimiter.disconnected, false);
+  const wet = sharedLimiter.connections[0] as FakeNode;
+  assert.equal(wet.disconnected, true);
   assert.equal(
     sharedLimiter.connections.includes(passed.context.destination),
-    true,
+    false,
   );
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(sharedMaster.disconnected, false);
@@ -929,7 +947,7 @@ void test('dispose waits out a fade that is already running', async () => {
   engine.play(lowRequest);
   await until(() => states.at(-1) === 'playing');
   const master = masterGain(context);
-  const limiter = context.compressors[0];
+  const limiter = context.shapers[0];
   engine.stop();
   engine.dispose();
   assert.equal(master.disconnected, false);
@@ -1312,11 +1330,20 @@ void test('a scale walk is booked on the audio clock and a late timer cannot bun
           (context.currentTime + release + 1 / context.sampleRate),
       ) < 1e-9,
     );
+    const tail = due();
+    assert.equal(tail.length, 1);
+    assert.ok((tail[0]?.ms ?? 0) >= 2000);
+    const beforeTail = context.oscillators.length;
+    tail[0]?.fn();
+    if (tail[0]) tail[0].ran = true;
+    assert.equal(context.oscillators.length, beforeTail);
     assert.equal(due().length, 0);
     engine.walk(lowRequest);
     assert.equal(context.oscillators.length, notes.length * 2);
     engine.walk(lowRequest);
-    assert.equal(due().length, 0);
+    const released = due();
+    assert.equal(released.length, 1);
+    assert.ok((released[0]?.ms ?? 0) >= 2000);
     engine.dispose();
   } finally {
     globalThis.setTimeout = originalSet;

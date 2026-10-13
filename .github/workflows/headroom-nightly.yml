@@ -66,10 +66,14 @@ jobs:
             exit 1
           fi
           echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          delimiter="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          while grep -Fqx "$delimiter" "$HEADROOM_CHECK_RESULT"; do
+            delimiter="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          done
           {
-            echo 'result<<CHECK'
+            echo "result<<${delimiter}"
             cat "$HEADROOM_CHECK_RESULT"
-            echo 'CHECK'
+            echo "${delimiter}"
           } >> "$GITHUB_OUTPUT"
           if git diff --quiet -- tests/fixtures/headroom-worst.json; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
@@ -94,7 +98,6 @@ jobs:
           ref: ${{ needs.sweep.outputs.sha }}
 
       - name: Update the bot pull request
-        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           FIXTURE: ${{ needs.sweep.outputs.fixture }}
@@ -136,8 +139,6 @@ jobs:
           ${result}
 
           This pull request tracks bot branch bot/headroom-worst. Each night force-updates that branch only. The workflow does not push to main or to any human branch.
-
-          The repository setting "Allow GitHub Actions to create and approve pull requests" must be on for this step. That setting is pending Jonny's OK.
           EOF
           )
           number=$(gh pr list --head "bot/headroom-worst" --base main --state open --json number --jq '.[0].number // empty')

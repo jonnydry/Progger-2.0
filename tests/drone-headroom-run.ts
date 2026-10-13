@@ -1,9 +1,10 @@
 import {
-  DRONE_LIMITER,
   DRONE_MAX_LINEAR_GAIN,
   REED_TIMING,
   ROOM_SECONDS,
   TAIL_MARGIN,
+  createOutputChain,
+  limiterKneeStart,
   prepareCelloBuffer,
   soundLinearCap,
   startLiveVoice,
@@ -133,6 +134,32 @@ export type RevMix = {
   confirmed: number;
 };
 
+export type LimiterComparison = {
+  sound: string;
+  root: string;
+  mode: string;
+  via: string;
+  chordFrets: string;
+  dry: number;
+  limited: number;
+  netDb: number;
+  reductionDb: number;
+  reductionAt: number;
+  lagSamples: number;
+  windowDry: number;
+  windowWet: number;
+};
+
+export type LimiterSweep = {
+  kneeStart: number;
+  mixes: number;
+  aboveKnee: number;
+  reduced: number;
+  maxReductionDb: number;
+  chordCount: number;
+  chordsReduced: number;
+};
+
 export type HeadroomReport = {
   ua?: string;
   error?: string;
@@ -155,6 +182,8 @@ export type HeadroomReport = {
   caps?: { reed: number; bow: number; cello: number };
   seconds?: number;
   worstCases?: WorstCase[];
+  limiter?: LimiterSweep;
+  comparisons?: LimiterComparison[];
 };
 
 type Channels = Float32Array[];
@@ -285,26 +314,48 @@ function peakOf(
   return { peak, at };
 }
 
-function limiter(context: BaseAudioContext): DynamicsCompressorNode {
-  const node = context.createDynamicsCompressor();
-  node.threshold.value = DRONE_LIMITER.threshold;
-  node.knee.value = DRONE_LIMITER.knee;
-  node.ratio.value = DRONE_LIMITER.ratio;
-  node.attack.value = DRONE_LIMITER.attack;
-  node.release.value = DRONE_LIMITER.release;
-  return node;
-}
-
-function graph(context: BaseAudioContext): {
-  master: GainNode;
-  limiter: DynamicsCompressorNode;
-} {
+/**
+ * Stem renders and the linearity check sum in the dry graph.
+ * A confirmed mix sends the drone, the walk, and the chord through the
+ * limiter, the same bus the page uses while the drone is on.
+ */
+function scheduleMix(
+  context: BaseAudioContext,
+  buffers: ReadonlyMap<string, AudioBuffer>,
+  spec: HeadroomCase,
+  notes: WalkNote[],
+  chord: ChordChoice,
+  chordAt: number,
+  mode: 'dry' | 'limited',
+): void {
+  if (mode === 'limited') {
+    const chain = createOutputChain(context);
+    chain.setDrone(true, 0, 0);
+    const master = context.createGain();
+    master.gain.value = 1;
+    master.connect(chain.bus);
+    scheduleDrone(context, master, buffers, spec);
+    for (const note of notes) {
+      startWalkPluck(context, chain.bus, note.midi, note.at, 1);
+    }
+    scheduleVoicing(context, chord.frets, chordAt, chain.bus);
+    return;
+  }
   const master = context.createGain();
   master.gain.value = 1;
-  const compressed = limiter(context);
-  master.connect(compressed);
-  compressed.connect(context.destination);
-  return { master, limiter: compressed };
+  master.connect(context.destination);
+  scheduleDrone(context, master, buffers, spec);
+  for (const note of notes) {
+    startWalkPluck(context, context.destination, note.midi, note.at, 1);
+  }
+  scheduleVoicing(context, chord.frets, chordAt, context.destination);
+}
+
+function dryMaster(context: BaseAudioContext): GainNode {
+  const master = context.createGain();
+  master.gain.value = 1;
+  master.connect(context.destination);
+  return master;
 }
 
 function scheduleDrone(
@@ -586,28 +637,111 @@ function searchMix(
   return best;
 }
 
+const REDUCTION_WINDOW = Math.round(0.02 * RATE);
+const REDUCTION_FLOOR = 0.02;
+/** Below this, table interpolation is not counted as gain reduction. */
+const REDUCTION_DB = 0.05;
+
+function bestLag(dry: Channels, wet: Channels): number {
+  const left = dry[0];
+  const right = wet[0];
+  if (!left || !right) return 0;
+  let peak = 0;
+  let peakAt = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const value = Math.abs(left[index] ?? 0);
+    if (value > peak) {
+      peak = value;
+      peakAt = index;
+    }
+  }
+  const radius = Math.round(0.02 * RATE);
+  const from = Math.max(0, peakAt - Math.round(0.04 * RATE));
+  const to = Math.min(left.length, peakAt + Math.round(0.04 * RATE));
+  let best = 0;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (let lag = -radius; lag <= radius; lag += 1) {
+    let score = 0;
+    for (let index = from; index < to; index += 4) {
+      score += (left[index] ?? 0) * (right[index + lag] ?? 0);
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = lag;
+    }
+  }
+  return best;
+}
+
+function windowReductionDb(
+  dry: Channels,
+  wet: Channels,
+  lag = 0,
+): { db: number; at: number; dryPeak: number; wetPeak: number } {
+  const length = Math.min(dry[0]?.length ?? 0, wet[0]?.length ?? 0);
+  let max = 0;
+  let at = 0;
+  let dryAtMax = 0;
+  let wetAtMax = 0;
+  for (let start = 0; start + REDUCTION_WINDOW <= length; start += REDUCTION_WINDOW) {
+    let dryPeak = 0;
+    let wetPeak = 0;
+    for (const data of dry) {
+      for (let index = start; index < start + REDUCTION_WINDOW; index += 1) {
+        const value = Math.abs(data[index] ?? 0);
+        if (value > dryPeak) dryPeak = value;
+      }
+    }
+    for (const data of wet) {
+      for (let index = start; index < start + REDUCTION_WINDOW; index += 1) {
+        const value = Math.abs(data[index + lag] ?? 0);
+        if (value > wetPeak) wetPeak = value;
+      }
+    }
+    if (dryPeak < REDUCTION_FLOOR) continue;
+    const db = 20 * Math.log10(dryPeak / Math.max(wetPeak, 1e-12));
+    if (db > max) {
+      max = db;
+      at = start / RATE;
+      dryAtMax = dryPeak;
+      wetAtMax = wetPeak;
+    }
+  }
+  return { db: max, at, dryPeak: dryAtMax, wetPeak: wetAtMax };
+}
+
+function mixSeconds(spec: HeadroomCase, notes: WalkNote[], chordAt: number): number {
+  return (
+    Math.max(
+      renderSeconds(spec.via),
+      ...notes.map((note) => note.at + 2.8),
+      chordAt + 3.2,
+    ) + 0.15
+  );
+}
+
+async function renderMix(
+  buffers: ReadonlyMap<string, AudioBuffer>,
+  spec: HeadroomCase,
+  notes: WalkNote[],
+  chord: ChordChoice,
+  chordAt: number,
+  mode: 'dry' | 'limited',
+): Promise<Channels> {
+  return renderOffline(mixSeconds(spec, notes, chordAt), (context) => {
+    scheduleMix(context, buffers, spec, notes, chord, chordAt, mode);
+  });
+}
+
 async function renderCombined(
   buffers: ReadonlyMap<string, AudioBuffer>,
   spec: HeadroomCase,
   notes: WalkNote[],
   chord: ChordChoice,
   chordAt: number,
+  mode: 'dry' | 'limited' = 'dry',
 ): Promise<number> {
-  const seconds =
-    Math.max(
-      renderSeconds(spec.via),
-      ...notes.map((note) => note.at + 2.8),
-      chordAt + 3.2,
-    ) + 0.15;
-  const channels = await renderOffline(seconds, (context) => {
-    const { master, limiter: compressed } = graph(context);
-    scheduleDrone(context, master, buffers, spec);
-    for (const note of notes) {
-      startWalkPluck(context, compressed, note.midi, note.at, 1);
-    }
-    scheduleVoicing(context, chord.frets, chordAt, context.destination);
-  });
-  return peakOf(channels).peak;
+  return peakOf(await renderMix(buffers, spec, notes, chord, chordAt, mode)).peak;
 }
 
 async function pool(
@@ -795,16 +929,22 @@ async function renderRevMixes(
       if (peak > best.peak) best = { peak, shift };
     }
     const chain = placedNotes(notes, pair.index, 2, droneAt, offsets, best.shift);
+    const chordAt = droneAt - rev.clip.peakAt + best.shift;
+    const dry = await renderCombined(buffers, spec, chain, rev.choice, chordAt, 'dry');
+    if (Math.abs(dry - best.peak) > 0.01) {
+      throw new Error(`Rev ${pair.name} linear ${best.peak} combined ${dry}.`);
+    }
     const confirmed = await renderCombined(
       buffers,
       spec,
       chain,
       rev.choice,
-      droneAt - rev.clip.peakAt + best.shift,
+      chordAt,
+      'limited',
     );
-    if (Math.abs(confirmed - best.peak) > 0.01) {
+    if (confirmed > RENDER_LIMIT) {
       throw new Error(
-        `Rev ${pair.name} linear ${best.peak} combined ${confirmed}.`,
+        `Rev ${pair.name} limited ${confirmed} is above ${RENDER_LIMIT}.`,
       );
     }
     mixes.push({
@@ -885,6 +1025,7 @@ async function searchRenderedOffsets(
       chain,
       ready.choice,
       row.droneAt - ready.clip.peakAt + chord,
+      'limited',
     );
   };
   const loudest = async (
@@ -923,6 +1064,154 @@ async function searchRenderedOffsets(
   return { confirmed: chord.peak, noteShifts, chordShift };
 }
 
+function specForRow(row: HeadroomRow, cases: readonly HeadroomCase[]): HeadroomCase {
+  const spec = cases.find(
+    (item) =>
+      item.sound === row.sound &&
+      item.root === row.root &&
+      item.mode === row.mode &&
+      item.via === row.via &&
+      item.from === row.from,
+  );
+  if (!spec) {
+    throw new Error(`Missing case for ${row.sound} ${row.root} ${row.mode} ${row.via}.`);
+  }
+  return spec;
+}
+
+function rowPlacement(
+  row: HeadroomRow,
+  walks: Map<number, Clip>,
+  chordPeakAt: number,
+): { notes: WalkNote[]; chordAt: number } | null {
+  const scaleNotes = scaleWalk(row.root, row.mode);
+  const offsets = new Map([...walks].map(([midi, clip]) => [midi, clip.peakAt]));
+  const count = kindCount(row.kind);
+  const shifts = row.noteShifts.length === count ? row.noteShifts : row.shift;
+  const notes = placedNotes(
+    scaleNotes,
+    row.index,
+    count,
+    row.droneAt,
+    offsets,
+    shifts,
+  );
+  if (notes.length !== count) return null;
+  return { notes, chordAt: row.droneAt - chordPeakAt + row.chordShift };
+}
+
+async function compareAlignment(
+  buffers: ReadonlyMap<string, AudioBuffer>,
+  spec: HeadroomCase,
+  notes: WalkNote[],
+  chord: ChordChoice,
+  chordAt: number,
+): Promise<LimiterComparison> {
+  const dry = await renderMix(buffers, spec, notes, chord, chordAt, 'dry');
+  const limited = await renderMix(buffers, spec, notes, chord, chordAt, 'limited');
+  const dryPeak = peakOf(dry).peak;
+  const limitedPeak = peakOf(limited).peak;
+  const lag = bestLag(dry, limited);
+  const reduction = windowReductionDb(dry, limited, lag);
+  return {
+    sound: spec.sound,
+    root: spec.root,
+    mode: spec.mode,
+    via: spec.via,
+    chordFrets: fretKey(chord.frets),
+    dry: dryPeak,
+    limited: limitedPeak,
+    netDb:
+      20 * Math.log10(Math.max(limitedPeak, 1e-12) / Math.max(dryPeak, 1e-12)),
+    reductionDb: reduction.db,
+    reductionAt: reduction.at,
+    lagSamples: lag,
+    windowDry: reduction.dryPeak,
+    windowWet: reduction.wetPeak,
+  };
+}
+
+async function measureLimiter(
+  buffers: ReadonlyMap<string, AudioBuffer>,
+  rows: readonly HeadroomRow[],
+  cases: readonly HeadroomCase[],
+  walks: Map<number, Clip>,
+  ready: Map<string, ReadyChord>,
+  log: (message: string) => void,
+): Promise<LimiterSweep> {
+  const knee = limiterKneeStart();
+  const chords = new Set(rows.map((row) => row.chordFrets));
+  const ranked = [...rows].sort((left, right) => right.peak - left.peak);
+  const hot = ranked.filter((row) => row.peak >= knee);
+  const probe = hot.slice(0, 36);
+  const reductions = new Map<HeadroomRow, number>();
+  const measureRows = async (list: readonly HeadroomRow[]) => {
+    const found = Array.from({ length: list.length }, () => 0);
+    let finished = 0;
+    await pool(list.length, async (index) => {
+      const row = list[index];
+      if (!row) return;
+      const spec = specForRow(row, cases);
+      const chord = ready.get(contextId(spec.root, spec.mode));
+      if (!chord) throw new Error(`No chord for ${spec.root} ${spec.mode}.`);
+      const placed = rowPlacement(row, walks, chord.clip.peakAt);
+      if (!placed) return;
+      const compared = await compareAlignment(
+        buffers,
+        spec,
+        placed.notes,
+        chord.choice,
+        placed.chordAt,
+      );
+      found[index] = compared.reductionDb;
+      finished += 1;
+      if (finished % 12 === 0) log(`limiter ${finished}/${list.length}`);
+    });
+    list.forEach((row, index) => reductions.set(row, found[index] ?? 0));
+  };
+  await measureRows(probe);
+  const probeReduced = probe.some((row) => (reductions.get(row) ?? 0) > REDUCTION_DB);
+  if (probeReduced) {
+    await measureRows(hot.filter((row) => !reductions.has(row)));
+  } else if (probe.length) {
+    log(
+      `limiter measured the ${probe.length} loudest mixes above the knee; none reduced, so the quieter mixes are counted clear`,
+    );
+  }
+  const quiet = ranked.at(-1);
+  if (quiet && quiet.peak < knee && !reductions.has(quiet)) {
+    await measureRows([quiet]);
+    if ((reductions.get(quiet) ?? 0) > REDUCTION_DB) {
+      throw new Error(
+        `Limiter reduced ${quiet.sound} ${quiet.root} ${quiet.mode} below the knee (${quiet.peak}) by ${(reductions.get(quiet) ?? 0).toFixed(2)} dB.`,
+      );
+    }
+  }
+  const chordReduced = new Set<string>();
+  let reduced = 0;
+  let maxReductionDb = 0;
+  for (const row of hot) {
+    const db = reductions.get(row) ?? 0;
+    if (db > maxReductionDb) maxReductionDb = db;
+    if (db > REDUCTION_DB) {
+      reduced += 1;
+      chordReduced.add(row.chordFrets);
+    }
+  }
+  log(
+    `limiter engagement ${reduced}/${rows.length} max ${maxReductionDb.toFixed(2)} dB above-knee ${hot.length} measured ${reductions.size} chords ${chordReduced.size}/${chords.size}`,
+  );
+  return {
+    kneeStart: knee,
+    mixes: rows.length,
+    aboveKnee: hot.length,
+    reduced,
+    maxReductionDb,
+    chordCount: chords.size,
+    chordsReduced: chordReduced.size,
+  };
+}
+
 export async function runHeadroom(): Promise<HeadroomReport> {
   const started = performance.now();
   const log = (message: string) => {
@@ -959,8 +1248,7 @@ export async function runHeadroom(): Promise<HeadroomReport> {
     const walks = new Map<number, Clip>();
     for (const midi of midis) {
       const channels = await renderOffline(2.8, (context) => {
-        const { limiter: compressed } = graph(context);
-        startWalkPluck(context, compressed, midi, LEAD, 1);
+        startWalkPluck(context, context.destination, midi, LEAD, 1);
       });
       const found = peakOf(channels);
       if (!(found.peak > 0.01)) throw new Error(`Walk ${midi} was silent.`);
@@ -976,8 +1264,7 @@ export async function runHeadroom(): Promise<HeadroomReport> {
     if (!check) throw new Error('Eb ionian cello sustain is missing.');
     const checkNotes = scaleWalk(check.root, check.mode);
     const checkDrone = await renderOffline(renderSeconds(check.via), (context) => {
-      const { master } = graph(context);
-      scheduleDrone(context, master, buffers, check);
+      scheduleDrone(context, dryMaster(context), buffers, check);
     });
     const checkSpan = droneSpan(check.via);
     const checkPeak = peakOf(checkDrone, checkSpan.start, checkSpan.end);
@@ -1004,6 +1291,7 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       checkPlaced,
       ebChord.choice,
       checkPeak.at - ebChord.clip.peakAt + checkSearch.shift,
+      'dry',
     );
     const revMixes = await renderRevMixes(
       buffers,
@@ -1034,8 +1322,7 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       const notes = scaleWalk(spec.root, spec.mode);
       const span = droneSpan(spec.via);
       const drone = await renderOffline(renderSeconds(spec.via), (context) => {
-        const { master } = graph(context);
-        scheduleDrone(context, master, buffers, spec);
+        scheduleDrone(context, dryMaster(context), buffers, spec);
       });
       const dronePeak = peakOf(drone, span.start, span.end);
       if (!(dronePeak.peak > 0.01)) {
@@ -1080,6 +1367,14 @@ export async function runHeadroom(): Promise<HeadroomReport> {
         log(`measured ${index + 1}/${cases.length} ${elapsed}s`);
       }
     }
+    const limiter = await measureLimiter(
+      buffers,
+      rows,
+      cases,
+      walks,
+      measured.ready,
+      log,
+    );
     const worstCases: WorstCase[] = [];
     const selected: HeadroomRow[] = [];
     for (const sound of ['reed', 'bow', 'cello']) {
@@ -1132,6 +1427,37 @@ export async function runHeadroom(): Promise<HeadroomReport> {
         );
         worstCases.push(worstFrom(row));
     }
+    const comparisons: LimiterComparison[] = [];
+    for (const sound of ['reed', 'bow', 'cello']) {
+      const ranked = rows
+        .filter((row) => row.sound === sound && row.rendered)
+        .sort((left, right) => right.confirmed - left.confirmed);
+      const row = ranked[0];
+      if (!row) continue;
+      const spec = specForRow(row, cases);
+      const chord = measured.ready.get(contextId(spec.root, spec.mode));
+      if (!chord) throw new Error(`No chord for ${spec.root} ${spec.mode}.`);
+      const placed = rowPlacement(row, walks, chord.clip.peakAt);
+      if (!placed) {
+        throw new Error(
+          `${sound} worst alignment ${row.root} ${row.mode} does not fit.`,
+        );
+      }
+      const compared = await compareAlignment(
+        buffers,
+        spec,
+        placed.notes,
+        chord.choice,
+        placed.chordAt,
+      );
+      if (compared.reductionDb > limiter.maxReductionDb) {
+        limiter.maxReductionDb = compared.reductionDb;
+      }
+      comparisons.push(compared);
+      log(
+        `limiter worst ${sound} dry ${compared.dry} limited ${compared.limited} net ${compared.netDb.toFixed(2)} dB reduction ${compared.reductionDb.toFixed(2)} dB ${compared.chordFrets}`,
+      );
+    }
     const contexts: ContextChord[] = [];
     for (const root of DRONE_ROOTS) {
       for (const mode of DRONE_MODES) {
@@ -1173,6 +1499,8 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       },
       seconds: (performance.now() - started) / 1000,
       worstCases,
+      limiter,
+      comparisons,
     };
   } finally {
     void decodeContext.close();
@@ -1222,8 +1550,7 @@ export async function runHeadroomSubset(
     const walks = new Map<number, Clip>();
     for (const midi of midis) {
       const channels = await renderOffline(2.8, (context) => {
-        const { limiter: compressed } = graph(context);
-        startWalkPluck(context, compressed, midi, LEAD, 1);
+        startWalkPluck(context, context.destination, midi, LEAD, 1);
       });
       const found = peakOf(channels);
       if (!(found.peak > 0.01)) throw new Error(`Walk ${midi} was silent.`);
@@ -1237,13 +1564,13 @@ export async function runHeadroomSubset(
     }
     const offsets = new Map([...walks].map(([midi, clip]) => [midi, clip.peakAt]));
     const rows: HeadroomRow[] = [];
+    const comparisons: LimiterComparison[] = [];
     for (const item of cases) {
       const spec = specFromWorst(item);
       const notes = scaleWalk(spec.root, spec.mode);
       const span = droneSpan(spec.via);
       const drone = await renderOffline(renderSeconds(spec.via), (context) => {
-        const { master } = graph(context);
-        scheduleDrone(context, master, buffers, spec);
+        scheduleDrone(context, dryMaster(context), buffers, spec);
       });
       const dronePeak = peakOf(drone, span.start, span.end);
       const clip = chords.get(item.chordFrets);
@@ -1263,13 +1590,11 @@ export async function runHeadroomSubset(
         );
       }
       const frets = fretsFromKey(item.chordFrets);
-      const confirmed = await renderCombined(
-        buffers,
-        spec,
-        chain,
-        { frets, midis: voicingMidi(frets), label: item.chordFrets },
-        dronePeak.at - clip.peakAt + item.chordShift,
-      );
+      const choice = { frets, midis: voicingMidi(frets), label: item.chordFrets };
+      const chordAt = dronePeak.at - clip.peakAt + item.chordShift;
+      const compared = await compareAlignment(buffers, spec, chain, choice, chordAt);
+      const confirmed = compared.limited;
+      comparisons.push(compared);
       const lists = caseMidis(spec);
       rows.push({
         sound: item.sound,
@@ -1303,6 +1628,7 @@ export async function runHeadroomSubset(
       rows,
       seconds: (performance.now() - started) / 1000,
       worstCases: cases,
+      comparisons,
     };
   } finally {
     void decodeContext.close();
