@@ -31,6 +31,7 @@ import {
   type GainRamp,
   type ReedRequest,
 } from '../lib/drone-audio.ts';
+import { DRONE_CHORD_TRIM, DRONE_DUCK_LOOKAHEAD } from '../lib/audio-output.ts';
 import { CELLO_SAMPLES, midiHz, scaleWalk } from '../lib/drone.ts';
 import { droneControlName } from '../lib/drone-controls.ts';
 import { ExploreDrone } from '../lib/drone-session.ts';
@@ -346,8 +347,16 @@ void test('the limiter is off the destination until the drone is on, and a snap 
   chain.setDrone(true, context.currentTime, 0);
   assert.equal(chain.voicingTarget(), chain.chordInput);
   const chord = chain.chordInput as unknown as FakeNode;
-  assert.ok(chord.connections.includes(chain.bus));
+  assert.equal(chord.connections.includes(chain.bus), false);
   assert.equal(chord.connections.includes(chain.droneInput), false);
+  const trim = chord.connections.find((node) => {
+    const gain = (node as { gain?: { value: number } }).gain;
+    return gain !== undefined && Math.abs(gain.value - DRONE_CHORD_TRIM) < 1e-12;
+  }) as (FakeNode & { gain: { value: number } }) | undefined;
+  assert.ok(trim);
+  const delayed = trim.connections[0] as FakeNode & { delayTime?: { value: number } };
+  assert.equal(delayed.delayTime?.value, DRONE_DUCK_LOOKAHEAD);
+  assert.ok(delayed.connections.includes(chain.bus));
   const wet = (chain.limiter as unknown as FakeNode).connections[0] as FakeNode;
   assert.ok(wet.connections.includes(context.destination));
   chain.setDrone(false, context.currentTime, 0);
@@ -375,8 +384,8 @@ void test('a low reed starts on one context and centers the root', async () => {
   const wet = limiter.connections[0] as FakeNode;
   assert.ok(wet);
   assert.ok(wet.connections.includes(context.destination));
-  assert.equal(engine.nodeCount(), 40);
-  assert.equal(createdNodes(context), 40);
+  assert.equal(engine.nodeCount(), 42);
+  assert.equal(createdNodes(context), 42);
   assert.deepEqual(
     context.oscillators.map((oscillator) => oscillator.starts),
     context.oscillators.map(() => [4.02]),
@@ -477,7 +486,7 @@ void test('playing again with the upper octave reuses the context', async () => 
   await until(() => states.at(-1) === 'playing');
   const before = createdNodes(context);
   engine.play({ root: 'A', modeId: 'dorian', octave: 'layered' });
-  await until(() => engine.nodeCount() === 46 && states.at(-1) === 'playing');
+  await until(() => engine.nodeCount() === 48 && states.at(-1) === 'playing');
   assert.equal(created(), 1);
   assert.equal(createdNodes(context) - before, 33);
   engine.dispose();
@@ -487,8 +496,8 @@ void test('Locrian drones the octave with the same reed pair', async () => {
   const { engine, context, states } = setup();
   engine.play({ root: 'A', modeId: 'locrian', octave: 'low' });
   await until(() => states.at(-1) === 'playing');
-  assert.equal(engine.nodeCount(), 40);
-  assert.equal(createdNodes(context), 40);
+  assert.equal(engine.nodeCount(), 42);
+  assert.equal(createdNodes(context), 42);
   const frequencies = context.oscillators.map(
     (oscillator) => oscillator.frequency.value,
   );

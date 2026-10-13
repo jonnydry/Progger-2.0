@@ -166,7 +166,9 @@ try {
     if (engage) {
       const chain = createOutputChain(context);
       chain.setDrone(true, 0, 0);
-      gain.connect(chain.voicingTarget());
+      // Chords wait out the sidechain lookahead and sit 0.7 dB down.
+      // This sine enters the bus, so the comparison is the limiter alone.
+      gain.connect(chain.bus);
     } else {
       gain.connect(context.destination);
     }
