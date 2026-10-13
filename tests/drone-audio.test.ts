@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import {
   BOW_GAINS,
   CELLO_GAINS,
-  DRONE_LIMITER,
   DRONE_MAX_LINEAR_GAIN,
+  OUTPUT_CEILING,
+  OUTPUT_KNEE,
+  outputLimitSample,
   ReedDrone,
   REED_GAINS,
   REED_TIMING,
@@ -116,19 +118,10 @@ class FakeBuffer {
   }
 }
 
-class Compressor {
-  threshold = new Param();
-  knee = new Param();
-  ratio = new Param();
-  attack = new Param();
-  release = new Param();
-  connections: unknown[] = [];
-  disconnected = false;
-  connect(next: unknown) {
-    this.connections.push(next);
-    return next;
-  }
-  disconnect() {
+class WaveShaper extends FakeNode {
+  curve: Float32Array | null = null;
+  oversample = 'none';
+  override disconnect() {
     this.disconnected = true;
     this.connections = [];
   }
@@ -143,7 +136,7 @@ class FakeContext {
   private stateListeners = new Set<() => void>();
   oscillators: Oscillator[] = [];
   sources: BufferSource[] = [];
-  compressors: Compressor[] = [];
+  shapers: WaveShaper[] = [];
   gains: (FakeNode & { gain: Param })[] = [];
   filters: (FakeNode & { frequency: Param; Q: Param; type: string })[] = [];
   convolvers: (FakeNode & { normalize: boolean; buffer: FakeBuffer | null })[] =
@@ -197,17 +190,10 @@ class FakeContext {
     this.filters.push(node);
     return node;
   }
-  createDynamicsCompressor() {
-    const compressor = new Compressor();
-    this.params.push(
-      compressor.threshold,
-      compressor.knee,
-      compressor.ratio,
-      compressor.attack,
-      compressor.release,
-    );
-    this.compressors.push(compressor);
-    return compressor;
+  createWaveShaper() {
+    const shaper = new WaveShaper();
+    this.shapers.push(shaper);
+    return shaper;
   }
   createConvolver() {
     const node = Object.assign(new FakeNode(), {
@@ -280,12 +266,12 @@ function createdNodes(context: FakeContext): number {
     context.filters.length +
     context.sources.length +
     context.convolvers.length +
-    context.compressors.length
+    context.shapers.length
   );
 }
 
 function outputBus(context: FakeContext) {
-  const limiter = context.compressors[0];
+  const limiter = context.shapers[0];
   assert.ok(limiter);
   const bus = context.gains.find((gain) => gain.connections.includes(limiter));
   assert.ok(bus);
@@ -336,13 +322,17 @@ void test('a low reed starts on one context and centers the root', async () => {
   await until(() => states.at(-1) === 'playing');
   assert.ok(states.includes('starting'));
   assert.equal(created(), 1);
-  assert.equal(context.compressors.length, 1);
-  const limiter = context.compressors[0];
-  assert.equal(limiter.threshold.value, DRONE_LIMITER.threshold);
-  assert.equal(limiter.knee.value, DRONE_LIMITER.knee);
-  assert.equal(limiter.ratio.value, DRONE_LIMITER.ratio);
-  assert.equal(limiter.attack.value, DRONE_LIMITER.attack);
-  assert.equal(limiter.release.value, DRONE_LIMITER.release);
+  assert.equal(context.shapers.length, 1);
+  const limiter = context.shapers[0];
+  assert.ok(limiter);
+  assert.equal(limiter.oversample, 'none');
+  assert.ok(limiter.curve);
+  assert.equal(outputLimitSample(0.5), 0.5);
+  assert.equal(outputLimitSample(OUTPUT_KNEE), OUTPUT_KNEE);
+  assert.ok(outputLimitSample(0.93) < OUTPUT_CEILING);
+  assert.ok(outputLimitSample(0.93) < 0.93);
+  assert.ok(outputLimitSample(1) <= OUTPUT_CEILING);
+  assert.equal(outputLimitSample(-0.95), -outputLimitSample(0.95));
   const wet = limiter.connections[0] as FakeNode;
   assert.ok(wet);
   assert.ok(wet.connections.includes(context.destination));
@@ -683,7 +673,7 @@ void test('dispose closes a context the reed created and leaves a passed-in cont
   passed.engine.play(lowRequest);
   await until(() => passed.states.at(-1) === 'playing');
   const sharedMaster = masterGain(passed.context);
-  const sharedLimiter = passed.context.compressors[0];
+  const sharedLimiter = passed.context.shapers[0];
   passed.engine.dispose();
   assert.equal(passed.context.closed, 0);
   assert.equal(passed.context.stateListenerCount(), 0);
@@ -957,7 +947,7 @@ void test('dispose waits out a fade that is already running', async () => {
   engine.play(lowRequest);
   await until(() => states.at(-1) === 'playing');
   const master = masterGain(context);
-  const limiter = context.compressors[0];
+  const limiter = context.shapers[0];
   engine.stop();
   engine.dispose();
   assert.equal(master.disconnected, false);

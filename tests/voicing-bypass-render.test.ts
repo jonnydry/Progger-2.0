@@ -32,6 +32,9 @@ type BypassReport = {
   }[];
   fadeDelta: number;
   steadyDelta: number;
+  quietSine: Diff;
+  hotSine: Diff;
+  hotPeak: number;
 };
 
 function bundle(): string {
@@ -152,6 +155,33 @@ try {
       repeat: diff(direct, repeat),
     });
   }
+  function sine(amplitude, engage) {
+    const frames = Math.round(rate * 0.05);
+    const context = new OfflineAudioContext(2, frames, rate);
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    gain.gain.value = amplitude;
+    oscillator.frequency.value = 440;
+    oscillator.connect(gain);
+    if (engage) {
+      const chain = createOutputChain(context);
+      chain.setDrone(true, 0, 0);
+      gain.connect(chain.voicingTarget());
+    } else {
+      gain.connect(context.destination);
+    }
+    oscillator.start(0);
+    oscillator.stop(0.05);
+    return context.startRendering().then(channels);
+  }
+  const quietDry = await sine(0.4, false);
+  const quietWet = await sine(0.4, true);
+  const hotDry = await sine(0.95, false);
+  const hotWet = await sine(0.95, true);
+  let hotPeak = 0;
+  for (const data of hotWet) {
+    for (const sample of data) hotPeak = Math.max(hotPeak, Math.abs(sample));
+  }
   const faded = channels(await render((context) => {
     const chain = createOutputChain(context);
     const oscillator = context.createOscillator();
@@ -173,6 +203,9 @@ try {
       chords: rows,
       fadeDelta: Math.max(maxStep(faded, 0.05, 0.07), maxStep(faded, 0.12, 0.14)),
       steadyDelta: maxStep(faded, 0.08, 0.11),
+      quietSine: diff(quietDry, quietWet),
+      hotSine: diff(hotDry, hotWet),
+      hotPeak,
     }),
   });
   document.title = 'done';
@@ -246,17 +279,25 @@ function assertIdentical(name: BrowserName, label: string, found: Diff) {
 
 function assertBypass(name: BrowserName, report: BypassReport) {
   assert.equal(report.error, undefined, report.error);
+  console.log(
+    `${name} quiet sine ${report.quietSine.count}/${report.quietSine.max} hot sine ${report.hotSine.max} peak ${report.hotPeak}`,
+  );
   assert.equal(report.chords.length, 4);
   for (const row of report.chords) {
     assertIdentical(name, `${row.frets} idle`, row.idle);
     assertIdentical(name, `${row.frets} snap`, row.snap);
     assertIdentical(name, `${row.frets} proxy`, row.proxy);
     assertIdentical(name, `${row.frets} repeat`, row.repeat);
-    assert.ok(row.limited.max > 0.01, `${row.frets} limiter delta ${row.limited.max}`);
     console.log(
       `bypass ${name} ${row.frets} idle ${row.idle.count}/${row.idle.max} snap ${row.snap.count}/${row.snap.max} proxy ${row.proxy.count}/${row.proxy.max} repeat ${row.repeat.count}/${row.repeat.max} limited ${row.limited.max}`,
     );
   }
+  assert.ok(
+    report.quietSine.max <= CHROME_ULP,
+    `quiet sine ${report.quietSine.max}`,
+  );
+  assert.ok(report.hotSine.max > 0.01, `hot sine delta ${report.hotSine.max}`);
+  assert.ok(report.hotPeak <= 0.8414, `hot sine peak ${report.hotPeak}`);
   assert.ok(report.steadyDelta > 0.005, `steady ${report.steadyDelta}`);
   assert.ok(
     report.fadeDelta < report.steadyDelta * 3,

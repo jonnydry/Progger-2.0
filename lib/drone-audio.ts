@@ -21,9 +21,12 @@ import {
 } from './drone.ts';
 
 export {
-  DRONE_LIMITER,
+  OUTPUT_CEILING,
+  OUTPUT_KNEE,
   createOutputChain,
+  limiterCurve,
   limiterKneeStart,
+  outputLimitSample,
   pageAudio,
   voicingContext,
   type OutputChain,
@@ -97,8 +100,8 @@ export function voiceTailHold(fade: number): number {
  * Bow and cello caps are the voice fade's resting level, so a sample that
  * is still loading does not retarget the voice that is already sounding.
  * Bow is 0.1437, +6 dB from 0.072. Cello is 0.1469, +6 dB from 0.0736.
- * Reed is 0.1257, +6 dB from 0.063. Makeup gain lifts a full voice, so the
- * analytical sum is not the cap. The walk trim stays 0.1225.
+ * Reed is 0.1257, +6 dB from 0.063. The rendered mix is not that sum.
+ * The walk trim stays 0.1225.
  */
 export const BOW_GAINS = {
   pitch: 0.055,

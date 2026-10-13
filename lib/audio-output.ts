@@ -5,13 +5,15 @@
  * so a voicing render matches a direct connection sample for sample.
  */
 
-export const DRONE_LIMITER = {
-  threshold: -1.5,
-  knee: 6,
-  ratio: 12,
-  attack: 0.001,
-  release: 0.22,
-} as const;
+/**
+ * Memoryless soft clip. Unity through the knee, then an exponential
+ * approach to the ceiling with a matched slope, so a sample under the
+ * knee is unchanged and a sample above it cannot reach the ceiling.
+ * A DynamicsCompressor was not usable here: its makeup gain lifted
+ * ordinary mixes, and it still let a 0.93 peak through.
+ */
+export const OUTPUT_KNEE = 0.8;
+export const OUTPUT_CEILING = 0.8414;
 
 /** Crossfade between the dry tap and the limiter. Short enough to be click-free. */
 export const OUTPUT_CROSSFADE = 0.02;
@@ -20,12 +22,31 @@ export const OUTPUT_CROSSFADE = 0.02;
 const OUTPUT_TAIL = 2.6;
 
 export function limiterKneeStart(): number {
-  return 10 ** ((DRONE_LIMITER.threshold - DRONE_LIMITER.knee / 2) / 20);
+  return OUTPUT_KNEE;
+}
+
+/** One sample of the output clip. Odd, monotonic, and exact on [−knee, knee]. */
+export function outputLimitSample(sample: number): number {
+  const magnitude = Math.abs(sample);
+  if (magnitude <= OUTPUT_KNEE) return sample;
+  const headroom = OUTPUT_CEILING - OUTPUT_KNEE;
+  const limited =
+    OUTPUT_KNEE + headroom * (1 - Math.exp(-(magnitude - OUTPUT_KNEE) / headroom));
+  return Math.sign(sample) * limited;
+}
+
+export function limiterCurve(length = 2049): Float32Array {
+  const curve = new Float32Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const x = (index / (length - 1)) * 2 - 1;
+    curve[index] = outputLimitSample(x);
+  }
+  return curve;
 }
 
 export type OutputChain = {
   bus: GainNode;
-  limiter: DynamicsCompressorNode;
+  limiter: WaveShaperNode;
   /** Real destination while the drone is off. The bus while it is on. */
   voicingTarget(): AudioNode;
   /**
@@ -43,12 +64,9 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
   const wet = context.createGain();
   dry.gain.value = 1;
   wet.gain.value = 0;
-  const limiter = context.createDynamicsCompressor();
-  limiter.threshold.value = DRONE_LIMITER.threshold;
-  limiter.knee.value = DRONE_LIMITER.knee;
-  limiter.ratio.value = DRONE_LIMITER.ratio;
-  limiter.attack.value = DRONE_LIMITER.attack;
-  limiter.release.value = DRONE_LIMITER.release;
+  const limiter = context.createWaveShaper();
+  limiter.curve = limiterCurve() as Float32Array<ArrayBuffer>;
+  limiter.oversample = 'none';
   let connected = false;
   let drone = false;
   let timer: ReturnType<typeof setTimeout> | undefined;

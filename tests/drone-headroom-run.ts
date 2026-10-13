@@ -639,8 +639,8 @@ function searchMix(
 
 const REDUCTION_WINDOW = Math.round(0.02 * RATE);
 const REDUCTION_FLOOR = 0.02;
-/** Below this, makeup and render noise are not counted as gain reduction. */
-const REDUCTION_DB = 0.3;
+/** Below this, table interpolation is not counted as gain reduction. */
+const REDUCTION_DB = 0.05;
 
 function bestLag(dry: Channels, wet: Channels): number {
   const left = dry[0];
@@ -942,6 +942,11 @@ async function renderRevMixes(
       chordAt,
       'limited',
     );
+    if (confirmed > RENDER_LIMIT) {
+      throw new Error(
+        `Rev ${pair.name} limited ${confirmed} is above ${RENDER_LIMIT}.`,
+      );
+    }
     mixes.push({
       pair: pair.name,
       pred: pair.pred,
