@@ -21,12 +21,21 @@ import {
 } from './drone.ts';
 
 export {
+  DRONE_DRIVE,
+  DRONE_DUCK_DEPTH,
+  DRONE_DUCK_HERTZ,
+  DRONE_MAKEUP,
   OUTPUT_CEILING,
+  OUTPUT_CROSSFADE,
   OUTPUT_KNEE,
+  OUTPUT_TAIL,
+  createDroneStage,
   createOutputChain,
+  droneSaturateSample,
   limiterCurve,
   limiterKneeStart,
   outputLimitSample,
+  outputTailSeconds,
   pageAudio,
   voicingContext,
   type OutputChain,
@@ -964,8 +973,14 @@ function reedWave(context: BaseAudioContext, frequency: number): PeriodicWave {
 
 const AUDIO_ERROR = 'Audio didn\u2019t start. Tap play to try again.';
 
-/** Master, bus, dry tap, wet tap, and the limiter. */
-const OUTPUT_NODES = 5;
+/**
+ * Master, the drone saturator, its level, the chord input, the sidechain
+ * rectifier, follower, depth, and lookahead, plus the bus, dry tap, wet tap, and limiter.
+ */
+const OUTPUT_NODES = 12;
+
+/** Volume moves this fast, so a slider drag does not step the gain. */
+export const VOLUME_GLIDE = 0.05;
 
 export class ReedDrone {
   private context: AudioContext | null = null;
@@ -1293,7 +1308,7 @@ export class ReedDrone {
     const chain = external ?? createOutputChain(context);
     const master = context.createGain();
     master.gain.value = this.volume;
-    master.connect(chain.bus);
+    master.connect(chain.droneInput);
     chain.setDrone(true, context.currentTime);
     this.onContextState = () => {
       if (context.state === 'running' || context.state === 'closed') return;
@@ -1359,7 +1374,7 @@ export class ReedDrone {
     const next = this.volume;
     this.master.gain.cancelScheduledValues(now);
     this.master.gain.setValueAtTime(this.master.gain.value, now);
-    this.master.gain.linearRampToValueAtTime(next, now + 0.03);
+    this.master.gain.setTargetAtTime(next, now, VOLUME_GLIDE);
   }
 
   private fadeVoices(when: number, fade: number): void {
@@ -1493,7 +1508,7 @@ export class ReedDrone {
     if (when < this.context.currentTime) return;
     const plucked = startWalkPluck(
       this.context,
-      this.chain.bus,
+      this.chain.chordInput,
       midi,
       when,
       this.volume,

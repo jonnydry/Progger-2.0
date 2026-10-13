@@ -9,6 +9,28 @@ import {
 import { scaleWalk, type DroneSoundId } from './drone.ts';
 
 const SOUND_KEY = 'progger.drone-sound';
+const VOLUME_KEY = 'progger.drone-volume';
+
+function storedVolume(): number {
+  try {
+    if (typeof localStorage === 'undefined') return 1;
+    const value = localStorage.getItem(VOLUME_KEY);
+    if (value === null) return 1;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 1;
+    return clampDroneVolume(parsed);
+  } catch {
+    return 1;
+  }
+}
+
+function storeVolume(volume: number): void {
+  try {
+    localStorage.setItem(VOLUME_KEY, String(volume));
+  } catch {
+    // Private mode can refuse storage. The level still applies for this visit.
+  }
+}
 
 function storedSound(): DroneSoundId {
   try {
@@ -92,7 +114,7 @@ export class ExploreDrone {
   private phase: DronePhase = 'unstarted';
   private current: ReedRequest | null = null;
   private request: ReedRequest;
-  private volume = 1;
+  private volume = storedVolume();
   private sound: DroneSoundId = storedSound();
   private walking = false;
   private walkPc: number | null = null;
@@ -266,6 +288,7 @@ export class ExploreDrone {
 
   setVolume(volume: number): void {
     this.volume = clampDroneVolume(volume);
+    storeVolume(this.volume);
     this.engine?.setVolume(this.volume);
     this.emit();
   }

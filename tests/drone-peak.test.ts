@@ -194,8 +194,8 @@ function graph(context, sound) {
   chain.setDrone(true, 0, 0);
   const master = context.createGain();
   master.gain.value = soundLinearCap(sound);
-  master.connect(chain.bus);
-  return { master, bus: chain.bus };
+  master.connect(chain.droneInput);
+  return { master, bus: chain.chordInput };
 }
 
 async function renderOverlap(buffers, root, mode, octave, sound, gap, walk) {
@@ -962,7 +962,7 @@ function assertGrid(report: HeadroomReport) {
   }
   for (const item of report.comparisons ?? []) {
     console.log(
-      `limiter worst ${item.sound} dry ${item.dry} limited ${item.limited} net ${item.netDb.toFixed(2)} dB reduction ${item.reductionDb.toFixed(2)} dB ${item.root} ${item.mode} ${item.via} ${item.chordFrets}`,
+      `limiter worst ${item.sound} shaped ${item.dry} limited ${item.limited} net ${item.netDb.toFixed(2)} dB reduction ${item.reductionDb.toFixed(2)} dB ${item.root} ${item.mode} ${item.via} ${item.chordFrets}`,
     );
   }
   if (report.limiter) {
@@ -1066,7 +1066,7 @@ function assertSubset(report: HeadroomReport, cases: WorstCase[]) {
       .sort((left, right) => right.limited - left.limited)[0];
     if (compared) {
       console.log(
-        `limiter ${sound} dry ${compared.dry} limited ${compared.limited} net ${compared.netDb.toFixed(2)} dB reduction ${compared.reductionDb.toFixed(2)} dB ${compared.root} ${compared.mode} ${compared.chordFrets}`,
+        `limiter ${sound} shaped ${compared.dry} limited ${compared.limited} net ${compared.netDb.toFixed(2)} dB reduction ${compared.reductionDb.toFixed(2)} dB ${compared.root} ${compared.mode} ${compared.chordFrets}`,
       );
       assert.ok(
         compared.limited <= SOUND_LIMIT,

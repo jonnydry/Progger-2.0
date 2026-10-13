@@ -434,6 +434,21 @@ export function DroneControls({
       >
         <Footprints size={DRONE_ICON_PX} aria-hidden="true" />
       </button>
+      <label className="drone-level">
+        <span className="sr-only">Drone volume</span>
+        <input
+          id="drone-level"
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={volume}
+          aria-label="Drone volume"
+          onChange={(event) =>
+            onVolume(clampDroneVolume(event.target.valueAsNumber))
+          }
+        />
+      </label>
       <button
         type="button"
         id="drone-toggle"

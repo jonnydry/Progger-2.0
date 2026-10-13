@@ -2,9 +2,11 @@
    buttons. Equal side padding keeps that centre while the buttons sit on it. */
 .night-swim .selection-bar:has(.drone-controls),
 .selection-bar:has(.drone-controls) {
-  /* 92px clears the 44px volume button and the 92px walk+toggle cluster.
-     A wider reserve squeezes the centred pair at 390 and shifts the title. */
+  /* 92px clears the 44px sound button and the 92px walk+toggle cluster.
+     The volume slider sits under that cluster until the row is wide enough
+     to place it beside the toggle. Equal side padding keeps the title centred. */
   --drone-side: 92px;
+  padding-bottom: 32px;
   position: relative;
   align-self: stretch;
   box-sizing: border-box;
@@ -50,6 +52,53 @@
 
 .drone-walk {
   right: 48px;
+}
+
+.drone-level {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  width: 92px;
+  height: 32px;
+  margin: 0;
+}
+
+.drone-level input[type='range'] {
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  margin: 0;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+@media (min-width: 840px) {
+  .night-swim .selection-bar:has(.drone-controls),
+  .selection-bar:has(.drone-controls) {
+    --drone-side: 176px;
+    padding-bottom: 0;
+  }
+
+  .drone-walk {
+    right: 124px;
+  }
+
+  .drone-level {
+    right: 48px;
+    bottom: auto;
+    top: 50%;
+    width: 72px;
+    height: 44px;
+    transform: translateY(-50%);
+  }
+
+  .drone-level input[type='range'] {
+    height: 44px;
+    min-height: 44px;
+  }
 }
 
 .drone-toggle {

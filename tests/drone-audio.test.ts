@@ -4,9 +4,15 @@ import assert from 'node:assert/strict';
 import {
   BOW_GAINS,
   CELLO_GAINS,
+  DRONE_DUCK_HERTZ,
+  DRONE_MAKEUP,
   DRONE_MAX_LINEAR_GAIN,
   OUTPUT_CEILING,
+  OUTPUT_CROSSFADE,
   OUTPUT_KNEE,
+  OUTPUT_TAIL,
+  VOLUME_GLIDE,
+  droneSaturateSample,
   outputLimitSample,
   ReedDrone,
   REED_GAINS,
@@ -31,7 +37,7 @@ import { ExploreDrone } from '../lib/drone-session.ts';
 
 class Param {
   value = 0;
-  events: { method: string; value: number; time: number }[] = [];
+  events: { method: string; value: number; time: number; constant?: number }[] = [];
   cancelScheduledValues(time = 0) {
     this.events.push({ method: 'cancel', value: 0, time });
   }
@@ -45,6 +51,10 @@ class Param {
   linearRampToValueAtTime(value: number, time = 0) {
     this.value = value;
     this.events.push({ method: 'linear', value, time });
+  }
+  setTargetAtTime(value: number, time = 0, constant = 0) {
+    this.value = value;
+    this.events.push({ method: 'target', value, time, constant });
   }
   exponentialRampToValueAtTime(value: number, time = 0) {
     this.value = value;
@@ -137,6 +147,7 @@ class FakeContext {
   oscillators: Oscillator[] = [];
   sources: BufferSource[] = [];
   shapers: WaveShaper[] = [];
+  delays: FakeNode[] = [];
   gains: (FakeNode & { gain: Param })[] = [];
   filters: (FakeNode & { frequency: Param; Q: Param; type: string })[] = [];
   convolvers: (FakeNode & { normalize: boolean; buffer: FakeBuffer | null })[] =
@@ -194,6 +205,11 @@ class FakeContext {
     const shaper = new WaveShaper();
     this.shapers.push(shaper);
     return shaper;
+  }
+  createDelay() {
+    const delay = Object.assign(new FakeNode(), { delayTime: new Param() });
+    this.delays.push(delay);
+    return delay;
   }
   createConvolver() {
     const node = Object.assign(new FakeNode(), {
@@ -266,23 +282,20 @@ function createdNodes(context: FakeContext): number {
     context.filters.length +
     context.sources.length +
     context.convolvers.length +
-    context.shapers.length
+    context.shapers.length +
+    context.delays.length
   );
-}
-
-function outputBus(context: FakeContext) {
-  const limiter = context.shapers[0];
-  assert.ok(limiter);
-  const bus = context.gains.find((gain) => gain.connections.includes(limiter));
-  assert.ok(bus);
-  return bus;
 }
 
 function masterGain(context: FakeContext) {
-  const bus = outputBus(context);
-  const master = context.gains.find(
-    (gain) => gain !== bus && gain.connections.includes(bus),
-  );
+  const saturator = context.shapers.find((shaper) => {
+    const curve = shaper.curve;
+    if (!curve || curve.length < 3) return false;
+    const index = Math.round(0.75 * (curve.length - 1));
+    return Math.abs((curve[index] ?? 0) - droneSaturateSample(0.5)) < 1e-3;
+  });
+  assert.ok(saturator);
+  const master = context.gains.find((gain) => gain.connections.includes(saturator));
   assert.ok(master);
   return master;
 }
@@ -302,13 +315,37 @@ void test('constructing the reed engine does not create an audio context', () =>
   assert.equal(created(), 0);
 });
 
+void test('bypass waits for the voicing release and the room', () => {
+  const delays: number[] = [];
+  const original = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: TimerHandler, ms?: number) => {
+    delays.push(ms ?? 0);
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  try {
+    const context = new FakeContext();
+    const chain = createOutputChain(context as unknown as AudioContext);
+    chain.setDrone(true, 1, 0);
+    delays.length = 0;
+    chain.setDrone(false, 1);
+    assert.equal(delays.length, 1);
+    assert.equal(delays[0], (OUTPUT_CROSSFADE + OUTPUT_TAIL) * 1000);
+    assert.ok(OUTPUT_TAIL > 2.6);
+  } finally {
+    globalThis.setTimeout = original;
+  }
+});
+
 void test('the limiter is off the destination until the drone is on, and a snap bypass drops it', () => {
   const context = new FakeContext();
   const chain = createOutputChain(context as unknown as AudioContext);
   assert.equal(chain.voicingTarget(), context.destination);
   assert.equal(context.destination.connections.length, 0);
   chain.setDrone(true, context.currentTime, 0);
-  assert.equal(chain.voicingTarget(), chain.bus);
+  assert.equal(chain.voicingTarget(), chain.chordInput);
+  const chord = chain.chordInput as unknown as FakeNode;
+  assert.ok(chord.connections.includes(chain.bus));
+  assert.equal(chord.connections.includes(chain.droneInput), false);
   const wet = (chain.limiter as unknown as FakeNode).connections[0] as FakeNode;
   assert.ok(wet.connections.includes(context.destination));
   chain.setDrone(false, context.currentTime, 0);
@@ -322,7 +359,7 @@ void test('a low reed starts on one context and centers the root', async () => {
   await until(() => states.at(-1) === 'playing');
   assert.ok(states.includes('starting'));
   assert.equal(created(), 1);
-  assert.equal(context.shapers.length, 1);
+  assert.equal(context.shapers.length, 3);
   const limiter = context.shapers[0];
   assert.ok(limiter);
   assert.equal(limiter.oversample, 'none');
@@ -336,8 +373,8 @@ void test('a low reed starts on one context and centers the root', async () => {
   const wet = limiter.connections[0] as FakeNode;
   assert.ok(wet);
   assert.ok(wet.connections.includes(context.destination));
-  assert.equal(engine.nodeCount(), 32);
-  assert.equal(createdNodes(context), 32);
+  assert.equal(engine.nodeCount(), 39);
+  assert.equal(createdNodes(context), 39);
   assert.deepEqual(
     context.oscillators.map((oscillator) => oscillator.starts),
     context.oscillators.map(() => [4.02]),
@@ -392,7 +429,14 @@ void test('a low reed starts on one context and centers the root', async () => {
     context.convolvers[0].buffer.length,
     Math.floor(context.sampleRate * 0.8),
   );
-  assert.deepEqual(context.filters.map((filter) => filter.type).sort(), [
+  const voiceFilters = context.filters.filter(
+    (filter) => filter.frequency.value !== DRONE_DUCK_HERTZ,
+  );
+  assert.equal(
+    context.filters.length - voiceFilters.length,
+    1,
+  );
+  assert.deepEqual(voiceFilters.map((filter) => filter.type).sort(), [
     'bandpass',
     'bandpass',
     'bandpass',
@@ -400,13 +444,13 @@ void test('a low reed starts on one context and centers the root', async () => {
     'lowpass',
   ]);
   assert.deepEqual(
-    context.filters
+    voiceFilters
       .map((filter) => filter.frequency.value)
       .sort((a, b) => a - b),
     [620, 740, 1280, 1800, 2140],
   );
   assert.deepEqual(
-    context.filters.map((filter) => filter.Q.value).sort((a, b) => a - b),
+    voiceFilters.map((filter) => filter.Q.value).sort((a, b) => a - b),
     [0.45, 0.5, 4.4, 5.4, 6.2],
   );
   engine.dispose();
@@ -437,7 +481,7 @@ void test('playing again with the upper octave reuses the context', async () => 
   await until(() => states.at(-1) === 'playing');
   const before = createdNodes(context);
   engine.play({ root: 'A', modeId: 'dorian', octave: 'layered' });
-  await until(() => engine.nodeCount() === 38 && states.at(-1) === 'playing');
+  await until(() => engine.nodeCount() === 45 && states.at(-1) === 'playing');
   assert.equal(created(), 1);
   assert.equal(createdNodes(context) - before, 33);
   engine.dispose();
@@ -447,8 +491,8 @@ void test('Locrian drones the octave with the same reed pair', async () => {
   const { engine, context, states } = setup();
   engine.play({ root: 'A', modeId: 'locrian', octave: 'low' });
   await until(() => states.at(-1) === 'playing');
-  assert.equal(engine.nodeCount(), 32);
-  assert.equal(createdNodes(context), 32);
+  assert.equal(engine.nodeCount(), 39);
+  assert.equal(createdNodes(context), 39);
   const frequencies = context.oscillators.map(
     (oscillator) => oscillator.frequency.value,
   );
@@ -526,6 +570,45 @@ void test('retune waits for a real play, then moves to the new pitches on the sa
   engine.dispose();
 });
 
+void test('drone volume defaults to the loud level and is stored', () => {
+  const store = new Map<string, string>([['progger.drone-volume', '0.4']]);
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, String(value));
+      },
+    },
+    configurable: true,
+  });
+  try {
+    const remembered = new ExploreDrone(() => {
+      throw new Error('The volume choice does not start audio.');
+    }, lowRequest);
+    assert.equal(remembered.snapshot().volume, 0.4);
+    remembered.setVolume(0.35);
+    assert.equal(remembered.snapshot().volume, 0.35);
+    assert.equal(store.get('progger.drone-volume'), '0.35');
+    remembered.dispose();
+    store.delete('progger.drone-volume');
+    const fresh = new ExploreDrone(() => {
+      throw new Error('The volume choice does not start audio.');
+    }, lowRequest);
+    assert.equal(fresh.snapshot().volume, 1);
+    fresh.dispose();
+  } finally {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
+});
+
+void test('the drone saturator raises small samples and bends peaks', () => {
+  assert.equal(droneSaturateSample(0), 0);
+  assert.ok(Math.abs(droneSaturateSample(0.001) / 0.001 - DRONE_MAKEUP) < 0.02);
+  assert.ok(droneSaturateSample(0.14) < 0.14 * DRONE_MAKEUP);
+  assert.ok(droneSaturateSample(0.14) < 0.25);
+  assert.equal(droneSaturateSample(-0.2), -droneSaturateSample(0.2));
+});
+
 void test('volume is stored before a context exists and clamps on the master ramp', async () => {
   const { engine, context, states } = setup();
   engine.setVolume(0.5);
@@ -535,14 +618,12 @@ void test('volume is stored before a context exists and clamps on the master ram
   assert.equal(master.gain.value, 0.5);
   assert.equal(fadeOf(envelopeGains(context)[0]).gain.value, DRONE_MAX_LINEAR_GAIN);
   engine.setVolume(2);
-  assert.equal(
-    master.gain.events.filter((event) => event.method === 'linear').at(-1)
-      ?.value,
-    1,
-  );
+  const raised = master.gain.events.filter((event) => event.method === 'target').at(-1);
+  assert.equal(raised?.value, 1);
+  assert.equal(raised?.constant, VOLUME_GLIDE);
   engine.setVolume(Number.NaN);
   assert.equal(
-    master.gain.events.filter((event) => event.method === 'linear').at(-1)
+    master.gain.events.filter((event) => event.method === 'target').at(-1)
       ?.value,
     0,
   );

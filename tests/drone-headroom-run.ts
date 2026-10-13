@@ -3,8 +3,11 @@ import {
   REED_TIMING,
   ROOM_SECONDS,
   TAIL_MARGIN,
+  OUTPUT_KNEE,
+  createDroneStage,
   createOutputChain,
   limiterKneeStart,
+  outputLimitSample,
   prepareCelloBuffer,
   soundLinearCap,
   startLiveVoice,
@@ -326,19 +329,27 @@ function scheduleMix(
   notes: WalkNote[],
   chord: ChordChoice,
   chordAt: number,
-  mode: 'dry' | 'limited',
+  mode: 'dry' | 'shaped' | 'limited',
 ): void {
-  if (mode === 'limited') {
-    const chain = createOutputChain(context);
-    chain.setDrone(true, 0, 0);
+  if (mode === 'limited' || mode === 'shaped') {
     const master = context.createGain();
     master.gain.value = 1;
-    master.connect(chain.bus);
+    let chordInput: AudioNode;
+    if (mode === 'limited') {
+      const chain = createOutputChain(context);
+      chain.setDrone(true, 0, 0);
+      master.connect(chain.droneInput);
+      chordInput = chain.chordInput;
+    } else {
+      const stage = createDroneStage(context, context.destination);
+      master.connect(stage.input);
+      chordInput = stage.chordInput;
+    }
     scheduleDrone(context, master, buffers, spec);
     for (const note of notes) {
-      startWalkPluck(context, chain.bus, note.midi, note.at, 1);
+      startWalkPluck(context, chordInput, note.midi, note.at, 1);
     }
-    scheduleVoicing(context, chord.frets, chordAt, chain.bus);
+    scheduleVoicing(context, chord.frets, chordAt, chordInput);
     return;
   }
   const master = context.createGain();
@@ -640,8 +651,6 @@ function searchMix(
 const REDUCTION_WINDOW = Math.round(0.02 * RATE);
 const REDUCTION_FLOOR = 0.02;
 /** Below this, table interpolation is not counted as gain reduction. */
-const REDUCTION_DB = 0.05;
-
 function bestLag(dry: Channels, wet: Channels): number {
   const left = dry[0];
   const right = wet[0];
@@ -726,7 +735,7 @@ async function renderMix(
   notes: WalkNote[],
   chord: ChordChoice,
   chordAt: number,
-  mode: 'dry' | 'limited',
+  mode: 'dry' | 'shaped' | 'limited',
 ): Promise<Channels> {
   return renderOffline(mixSeconds(spec, notes, chordAt), (context) => {
     scheduleMix(context, buffers, spec, notes, chord, chordAt, mode);
@@ -739,7 +748,7 @@ async function renderCombined(
   notes: WalkNote[],
   chord: ChordChoice,
   chordAt: number,
-  mode: 'dry' | 'limited' = 'dry',
+  mode: 'dry' | 'shaped' | 'limited' = 'dry',
 ): Promise<number> {
   return peakOf(await renderMix(buffers, spec, notes, chord, chordAt, mode)).peak;
 }
@@ -1107,7 +1116,7 @@ async function compareAlignment(
   chord: ChordChoice,
   chordAt: number,
 ): Promise<LimiterComparison> {
-  const dry = await renderMix(buffers, spec, notes, chord, chordAt, 'dry');
+  const dry = await renderMix(buffers, spec, notes, chord, chordAt, 'shaped');
   const limited = await renderMix(buffers, spec, notes, chord, chordAt, 'limited');
   const dryPeak = peakOf(dry).peak;
   const limitedPeak = peakOf(limited).peak;
@@ -1131,6 +1140,21 @@ async function compareAlignment(
   };
 }
 
+function clipStats(channels: Channels): { over: boolean; maxDb: number; peak: number } {
+  let peak = 0;
+  for (const data of channels) {
+    for (let index = 0; index < data.length; index += 1) {
+      const value = Math.abs(data[index] ?? 0);
+      if (value > peak) peak = value;
+    }
+  }
+  const over = peak > OUTPUT_KNEE;
+  const limited = outputLimitSample(peak);
+  const maxDb =
+    over && limited > 0 ? 20 * Math.log10(peak / limited) : 0;
+  return { over, maxDb, peak };
+}
+
 async function measureLimiter(
   buffers: ReadonlyMap<string, AudioBuffer>,
   rows: readonly HeadroomRow[],
@@ -1141,70 +1165,52 @@ async function measureLimiter(
 ): Promise<LimiterSweep> {
   const knee = limiterKneeStart();
   const chords = new Set(rows.map((row) => row.chordFrets));
-  const ranked = [...rows].sort((left, right) => right.peak - left.peak);
-  const hot = ranked.filter((row) => row.peak >= knee);
-  const probe = hot.slice(0, 36);
-  const reductions = new Map<HeadroomRow, number>();
-  const measureRows = async (list: readonly HeadroomRow[]) => {
-    const found = Array.from({ length: list.length }, () => 0);
-    let finished = 0;
-    await pool(list.length, async (index) => {
-      const row = list[index];
-      if (!row) return;
-      const spec = specForRow(row, cases);
-      const chord = ready.get(contextId(spec.root, spec.mode));
-      if (!chord) throw new Error(`No chord for ${spec.root} ${spec.mode}.`);
-      const placed = rowPlacement(row, walks, chord.clip.peakAt);
-      if (!placed) return;
-      const compared = await compareAlignment(
-        buffers,
-        spec,
-        placed.notes,
-        chord.choice,
-        placed.chordAt,
-      );
-      found[index] = compared.reductionDb;
-      finished += 1;
-      if (finished % 12 === 0) log(`limiter ${finished}/${list.length}`);
-    });
-    list.forEach((row, index) => reductions.set(row, found[index] ?? 0));
-  };
-  await measureRows(probe);
-  const probeReduced = probe.some((row) => (reductions.get(row) ?? 0) > REDUCTION_DB);
-  if (probeReduced) {
-    await measureRows(hot.filter((row) => !reductions.has(row)));
-  } else if (probe.length) {
-    log(
-      `limiter measured the ${probe.length} loudest mixes above the knee; none reduced, so the quieter mixes are counted clear`,
+  const stats = Array.from({ length: rows.length }, () => ({
+    over: false,
+    maxDb: 0,
+    peak: 0,
+  }));
+  let finished = 0;
+  await pool(rows.length, async (index) => {
+    const row = rows[index];
+    if (!row) return;
+    const spec = specForRow(row, cases);
+    const chord = ready.get(contextId(spec.root, spec.mode));
+    if (!chord) throw new Error(`No chord for ${spec.root} ${spec.mode}.`);
+    const placed = rowPlacement(row, walks, chord.clip.peakAt);
+    if (!placed) return;
+    const shaped = await renderMix(
+      buffers,
+      spec,
+      placed.notes,
+      chord.choice,
+      placed.chordAt,
+      'shaped',
     );
-  }
-  const quiet = ranked.at(-1);
-  if (quiet && quiet.peak < knee && !reductions.has(quiet)) {
-    await measureRows([quiet]);
-    if ((reductions.get(quiet) ?? 0) > REDUCTION_DB) {
-      throw new Error(
-        `Limiter reduced ${quiet.sound} ${quiet.root} ${quiet.mode} below the knee (${quiet.peak}) by ${(reductions.get(quiet) ?? 0).toFixed(2)} dB.`,
-      );
-    }
-  }
+    stats[index] = clipStats(shaped);
+    finished += 1;
+    if (finished % 24 === 0) log(`clip ${finished}/${rows.length}`);
+  });
   const chordReduced = new Set<string>();
   let reduced = 0;
+  let aboveKnee = 0;
   let maxReductionDb = 0;
-  for (const row of hot) {
-    const db = reductions.get(row) ?? 0;
-    if (db > maxReductionDb) maxReductionDb = db;
-    if (db > REDUCTION_DB) {
-      reduced += 1;
-      chordReduced.add(row.chordFrets);
-    }
-  }
+  rows.forEach((row, index) => {
+    const found = stats[index];
+    if (!found) return;
+    if (found.maxDb > maxReductionDb) maxReductionDb = found.maxDb;
+    if (!found.over) return;
+    aboveKnee += 1;
+    reduced += 1;
+    chordReduced.add(row.chordFrets);
+  });
   log(
-    `limiter engagement ${reduced}/${rows.length} max ${maxReductionDb.toFixed(2)} dB above-knee ${hot.length} measured ${reductions.size} chords ${chordReduced.size}/${chords.size}`,
+    `limiter engagement ${reduced}/${rows.length} (${(reduced / rows.length).toFixed(4)}) max ${maxReductionDb.toFixed(2)} dB above-knee ${aboveKnee} measured ${finished} chords ${chordReduced.size}/${chords.size} knee ${knee.toFixed(4)}`,
   );
   return {
     kneeStart: knee,
     mixes: rows.length,
-    aboveKnee: hot.length,
+    aboveKnee,
     reduced,
     maxReductionDb,
     chordCount: chords.size,
@@ -1455,7 +1461,7 @@ export async function runHeadroom(): Promise<HeadroomReport> {
       }
       comparisons.push(compared);
       log(
-        `limiter worst ${sound} dry ${compared.dry} limited ${compared.limited} net ${compared.netDb.toFixed(2)} dB reduction ${compared.reductionDb.toFixed(2)} dB ${compared.chordFrets}`,
+        `limiter worst ${sound} shaped ${compared.dry} limited ${compared.limited} net ${compared.netDb.toFixed(2)} dB reduction ${compared.reductionDb.toFixed(2)} dB ${compared.chordFrets}`,
       );
     }
     const contexts: ContextChord[] = [];
