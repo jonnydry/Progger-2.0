@@ -235,7 +235,7 @@ function DroneVolumePopover({
           max={1}
           step={0.01}
           value={volume}
-          aria-label="Drone volume"
+          aria-label="Sound menu volume"
           onChange={(event) =>
             onVolume(clampDroneVolume(event.target.valueAsNumber))
           }
@@ -435,7 +435,7 @@ export function DroneControls({
         <Footprints size={DRONE_ICON_PX} aria-hidden="true" />
       </button>
       <label className="drone-level">
-        <span className="sr-only">Drone volume</span>
+        <span className="sr-only">Drone level</span>
         <input
           id="drone-level"
           type="range"
@@ -443,7 +443,7 @@ export function DroneControls({
           max={1}
           step={0.01}
           value={volume}
-          aria-label="Drone volume"
+          aria-label="Drone level"
           onChange={(event) =>
             onVolume(clampDroneVolume(event.target.valueAsNumber))
           }

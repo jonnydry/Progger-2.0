@@ -11,14 +11,19 @@ import { scaleWalk, type DroneSoundId } from './drone.ts';
 const SOUND_KEY = 'progger.drone-sound';
 const VOLUME_KEY = 'progger.drone-volume';
 
+export function volumeFromStorage(value: string | null): number {
+  if (value === null) return 1;
+  const trimmed = value.trim();
+  if (trimmed === '') return 1;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return 1;
+  return clampDroneVolume(parsed);
+}
+
 function storedVolume(): number {
   try {
     if (typeof localStorage === 'undefined') return 1;
-    const value = localStorage.getItem(VOLUME_KEY);
-    if (value === null) return 1;
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return 1;
-    return clampDroneVolume(parsed);
+    return volumeFromStorage(localStorage.getItem(VOLUME_KEY));
   } catch {
     return 1;
   }
@@ -198,6 +203,19 @@ export class ExploreDrone {
     this.emit();
   };
 
+  private readonly onStorage = (event: StorageEvent) => {
+    if (event.storageArea && event.storageArea !== localStorage) return;
+    if (event.key !== null && event.key !== VOLUME_KEY) return;
+    const next =
+      event.key === VOLUME_KEY
+        ? volumeFromStorage(event.newValue)
+        : storedVolume();
+    if (next === this.volume) return;
+    this.volume = next;
+    this.engine?.setVolume(next);
+    this.emit();
+  };
+
   constructor(
     createEngine: (
       onStatus: (status: DroneStatus, message?: string) => void,
@@ -209,6 +227,9 @@ export class ExploreDrone {
   ) {
     this.createEngine = createEngine;
     this.request = { ...request, sound: this.sound };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', this.onStorage);
+    }
   }
 
   snapshot(): DroneSnapshot {
@@ -295,6 +316,9 @@ export class ExploreDrone {
 
   dispose(): void {
     this.disposed = true;
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('storage', this.onStorage);
+    }
     this.enabled = false;
     if (this.phase === 'playing' || this.phase === 'starting') {
       this.engine?.stop(droneStopFade('away'));

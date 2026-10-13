@@ -322,7 +322,7 @@ function peakOf(
  * A confirmed mix sends the drone, the walk, and the chord through the
  * limiter, the same bus the page uses while the drone is on.
  */
-function scheduleMix(
+async function scheduleMix(
   context: BaseAudioContext,
   buffers: ReadonlyMap<string, AudioBuffer>,
   spec: HeadroomCase,
@@ -330,18 +330,20 @@ function scheduleMix(
   chord: ChordChoice,
   chordAt: number,
   mode: 'dry' | 'shaped' | 'limited',
-): void {
+): Promise<void> {
   if (mode === 'limited' || mode === 'shaped') {
     const master = context.createGain();
     master.gain.value = 1;
     let chordInput: AudioNode;
     if (mode === 'limited') {
       const chain = createOutputChain(context);
+      await chain.installDuck();
       chain.setDrone(true, 0, 0);
       master.connect(chain.droneInput);
       chordInput = chain.chordInput;
     } else {
       const stage = createDroneStage(context, context.destination);
+      await stage.installDuck();
       master.connect(stage.input);
       chordInput = stage.chordInput;
     }
@@ -428,10 +430,10 @@ function scheduleDrone(
 
 async function renderOffline(
   seconds: number,
-  schedule: (context: OfflineAudioContext) => void,
+  schedule: (context: OfflineAudioContext) => void | Promise<void>,
 ): Promise<Channels> {
   const context = new OfflineAudioContext(2, samples(seconds), RATE);
-  schedule(context);
+  await schedule(context);
   return copyChannels(await context.startRendering());
 }
 
@@ -737,9 +739,9 @@ async function renderMix(
   chordAt: number,
   mode: 'dry' | 'shaped' | 'limited',
 ): Promise<Channels> {
-  return renderOffline(mixSeconds(spec, notes, chordAt), (context) => {
-    scheduleMix(context, buffers, spec, notes, chord, chordAt, mode);
-  });
+  return renderOffline(mixSeconds(spec, notes, chordAt), (context) =>
+    scheduleMix(context, buffers, spec, notes, chord, chordAt, mode),
+  );
 }
 
 async function renderCombined(

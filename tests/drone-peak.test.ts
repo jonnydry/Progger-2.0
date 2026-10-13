@@ -189,8 +189,9 @@ function startChord(context, midis, when, destination) {
   });
 }
 
-function graph(context, sound) {
+async function graph(context, sound) {
   const chain = createOutputChain(context);
+  await chain.installDuck();
   chain.setDrone(true, 0, 0);
   const master = context.createGain();
   master.gain.value = soundLinearCap(sound);
@@ -202,7 +203,7 @@ async function renderOverlap(buffers, root, mode, octave, sound, gap, walk) {
   const rate = 48000;
   const seconds = 0.05 + gap + 0.9;
   const context = new OfflineAudioContext(2, Math.ceil(rate * seconds), rate);
-  const { master, bus } = graph(context, sound);
+  const { master, bus } = await graph(context, sound);
   const pitches = dronePitches(root, mode, octave);
   const cello = sound === 'cello' ? buffers : null;
   const start = 0.05;
@@ -219,7 +220,7 @@ async function renderOverlap(buffers, root, mode, octave, sound, gap, walk) {
 async function renderVoice(buffers, root, mode, octave, sound, attack, seconds, walk) {
   const rate = 48000;
   const context = new OfflineAudioContext(2, Math.ceil(rate * seconds), rate);
-  const { master, bus } = graph(context, sound);
+  const { master, bus } = await graph(context, sound);
   const voice = startLiveVoice(
     context,
     master,
@@ -248,7 +249,7 @@ try {
   for (let midi = 40; midi <= 84; midi += 1) {
     const rate = 48000;
     const context = new OfflineAudioContext(2, Math.ceil(rate * 0.12), rate);
-    const { bus } = graph(context, 'reed');
+    const { bus } = await graph(context, 'reed');
     startWalkPluck(context, bus, midi, 0.01, 1);
     const value = peakOf(await context.startRendering());
     if (value.peak > walkPeak) {

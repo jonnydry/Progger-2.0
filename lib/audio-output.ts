@@ -45,20 +45,81 @@ export function outputTailSeconds(): number {
 export const OUTPUT_TAIL = outputTailSeconds();
 
 /**
- * Drone-only loudness. A tanh bend cuts crest factor, then the small-signal
- * slope brings the steady tone up. Chords and walk plucks enter at
- * `chordInput`, so they are not saturated. Their level ducks the drone
- * through an envelope follower. The safety clip stays after the sum.
+ * Drone-only loudness. A gentle tanh bend, then the small-signal slope.
+ * Chords and walk plucks enter at `chordInput`, so they are not saturated.
+ * Their envelope ducks the drone. The safety clip stays after the sum.
+ * Drive 3 keeps a cap-level sine under about 2% THD. Drive 16 was near 18%.
  */
-export const DRONE_DRIVE = 16;
+export const DRONE_DRIVE = 3;
 export const DRONE_MAKEUP = 3.305;
-export const DRONE_DUCK_HERTZ = 70;
-export const DRONE_DUCK_DEPTH = 4;
+/** One-pole time constants. Attack is fast; release ignores the string's pitch. */
+export const DRONE_DUCK_ATTACK = 0.01;
+export const DRONE_DUCK_RELEASE = 0.22;
+/**
+ * How hard a chord envelope pushes the drone down. The floor below
+ * catches it, so a loud strum cannot drive the gain through zero.
+ */
+export const DRONE_DUCK_DEPTH = 6;
+/**
+ * Lowest drone VCA gain while a chord is sounding. −10 dB is inside the
+ * −9 to −12 dB window: deep enough to leave the chord the headroom,
+ * and still positive so the drone cannot flip phase.
+ */
+export const DRONE_DUCK_FLOOR_DB = -10;
+export const DRONE_DUCK_FLOOR = 10 ** (DRONE_DUCK_FLOOR_DB / 20);
 /** The drone waits this long so the chord envelope can duck it before the strum peak. */
 export const DRONE_DUCK_LOOKAHEAD = 0.008;
 
 export function droneSaturateSample(sample: number): number {
   return Math.tanh(sample * DRONE_DRIVE) * (DRONE_MAKEUP / DRONE_DRIVE);
+}
+
+/** Harmonics of a sine at `amplitude` through the drone saturator. */
+export function droneSaturatorHarmonics(
+  amplitude: number,
+  frequency = 110,
+  sampleRate = 48000,
+): { thd: number; thirdDb: number; peak: number } {
+  const cycles = 80;
+  const length = Math.round((sampleRate * cycles) / frequency);
+  let peak = 0;
+  const harmonics = Array.from({ length: 9 }, () => 0);
+  for (let harmonic = 1; harmonic <= 9; harmonic += 1) {
+    let real = 0;
+    let imag = 0;
+    const omega = (2 * Math.PI * frequency * harmonic) / sampleRate;
+    for (let index = 0; index < length; index += 1) {
+      const input = amplitude * Math.sin((2 * Math.PI * frequency * index) / sampleRate);
+      const sample = droneSaturateSample(input);
+      if (harmonic === 1) peak = Math.max(peak, Math.abs(sample));
+      real += sample * Math.cos(omega * index);
+      imag -= sample * Math.sin(omega * index);
+    }
+    harmonics[harmonic - 1] = (2 * Math.hypot(real, imag)) / length;
+  }
+  const fundamental = harmonics[0] ?? 0;
+  let distortion = 0;
+  for (let index = 1; index < harmonics.length; index += 1) {
+    distortion += (harmonics[index] ?? 0) ** 2;
+  }
+  const third = harmonics[2] ?? 0;
+  return {
+    thd: fundamental > 0 ? Math.sqrt(distortion) / fundamental : 0,
+    thirdDb: fundamental > 0 && third > 0 ? 20 * Math.log10(third / fundamental) : -Infinity,
+    peak,
+  };
+}
+
+/**
+ * What the sidechain adds to the VCA's intrinsic gain of 1.
+ * The result stays at or above `DRONE_DUCK_FLOOR - 1`, so the gain
+ * itself stays at or above the floor.
+ */
+export function droneDuckOffset(sample: number): number {
+  const floorOffset = DRONE_DUCK_FLOOR - 1;
+  if (sample >= 0) return 0;
+  if (sample <= floorOffset) return floorOffset;
+  return sample;
 }
 
 export function droneSaturateCurve(length = 2049): Float32Array {
@@ -70,13 +131,64 @@ export function droneSaturateCurve(length = 2049): Float32Array {
   return curve;
 }
 
-export function rectifierCurve(length = 2049): Float32Array {
+export function droneDuckFloorCurve(length = 2049): Float32Array {
   const curve = new Float32Array(length);
   for (let index = 0; index < length; index += 1) {
     const x = (index / (length - 1)) * 2 - 1;
-    curve[index] = Math.abs(x);
+    curve[index] = droneDuckOffset(x);
   }
   return curve;
+}
+
+const DUCK_PROCESSOR_NAME = 'drone-duck-follower';
+const duckModules = new WeakMap<BaseAudioContext, Promise<void>>();
+
+function duckProcessorSource(): string {
+  return `const ATTACK=${DRONE_DUCK_ATTACK};const RELEASE=${DRONE_DUCK_RELEASE};
+class DroneDuckFollower extends AudioWorkletProcessor {
+  constructor() { super(); this.env = 0; }
+  process(inputs, outputs) {
+    const output = outputs[0] && outputs[0][0];
+    if (!output) return true;
+    const channels = (inputs[0] || []);
+    const attack = 1 - Math.exp(-1 / (sampleRate * ATTACK));
+    const release = 1 - Math.exp(-1 / (sampleRate * RELEASE));
+    let env = this.env;
+    for (let index = 0; index < output.length; index += 1) {
+      let level = 0;
+      for (let channel = 0; channel < channels.length; channel += 1) {
+        const data = channels[channel];
+        if (data && index < data.length) {
+          const value = Math.abs(data[index]);
+          if (value > level) level = value;
+        }
+      }
+      env += (level > env ? attack : release) * (level - env);
+      output[index] = env;
+    }
+    this.env = env;
+    return true;
+  }
+}
+registerProcessor('${DUCK_PROCESSOR_NAME}', DroneDuckFollower);`;
+}
+
+/** Register the envelope follower on this context. A context without a worklet resolves at once. */
+export function prepareDuckFollower(context: BaseAudioContext): Promise<void> {
+  const pending = duckModules.get(context);
+  if (pending) return pending;
+  const worklet = (context as AudioContext).audioWorklet;
+  if (!worklet) {
+    const ready = Promise.resolve();
+    duckModules.set(context, ready);
+    return ready;
+  }
+  const url = URL.createObjectURL(
+    new Blob([duckProcessorSource()], { type: 'application/javascript' }),
+  );
+  const ready = worklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+  duckModules.set(context, ready);
+  return ready;
 }
 
 export type DroneStage = {
@@ -84,39 +196,85 @@ export type DroneStage = {
   input: WaveShaperNode;
   /** Chords and walk plucks. They duck the drone and skip the saturator. */
   chordInput: GainNode;
+  /** The signal added to the drone VCA. Null until `installDuck` resolves. */
+  duck: AudioNode | null;
+  readonly duckReady: boolean;
+  /** Nodes this stage created, including the sidechain once it is installed. */
+  readonly ownedNodes: number;
+  installDuck(): Promise<void>;
 };
 
 export function createDroneStage(
   context: BaseAudioContext,
   destination: AudioNode,
 ): DroneStage {
-  const input = context.createWaveShaper();
+  let owned = 0;
+  const track = <T extends AudioNode>(node: T): T => {
+    owned += 1;
+    return node;
+  };
+  const input = track(context.createWaveShaper());
   input.curve = droneSaturateCurve() as Float32Array<ArrayBuffer>;
   input.oversample = 'none';
-  const level = context.createGain();
+  const level = track(context.createGain());
   level.gain.value = 1;
-  const chordInput = context.createGain();
+  const chordInput = track(context.createGain());
   chordInput.gain.value = 1;
-  const rectify = context.createWaveShaper();
-  rectify.curve = rectifierCurve() as Float32Array<ArrayBuffer>;
-  rectify.oversample = 'none';
-  const follower = context.createBiquadFilter();
-  follower.type = 'lowpass';
-  follower.frequency.value = DRONE_DUCK_HERTZ;
-  follower.Q.value = 0.707;
-  const depth = context.createGain();
-  depth.gain.value = -DRONE_DUCK_DEPTH;
-  const delay = context.createDelay(0.05);
+  const delay = track(context.createDelay(0.05));
   delay.delayTime.value = DRONE_DUCK_LOOKAHEAD;
   input.connect(level);
   level.connect(delay);
   delay.connect(destination);
   chordInput.connect(destination);
-  chordInput.connect(rectify);
-  rectify.connect(follower);
-  follower.connect(depth);
-  depth.connect(level.gain);
-  return { input, chordInput };
+  let duck: AudioNode | null = null;
+  let duckReady = false;
+  let installing: Promise<void> | null = null;
+
+  function connect(follower: AudioNode): void {
+    if (duckReady) return;
+    const depth = track(context.createGain());
+    depth.gain.value = -DRONE_DUCK_DEPTH;
+    const floor = track(context.createWaveShaper());
+    floor.curve = droneDuckFloorCurve() as Float32Array<ArrayBuffer>;
+    floor.oversample = 'none';
+    chordInput.connect(follower);
+    follower.connect(depth);
+    depth.connect(floor);
+    floor.connect(level.gain);
+    duck = floor;
+    duckReady = true;
+  }
+
+  return {
+    input,
+    chordInput,
+    get duck() {
+      return duck;
+    },
+    get duckReady() {
+      return duckReady;
+    },
+    get ownedNodes() {
+      return owned;
+    },
+    installDuck() {
+      if (duckReady) return Promise.resolve();
+      if (installing) return installing;
+      const worklet = (context as AudioContext).audioWorklet;
+      if (!worklet) {
+        connect(track(context.createGain()));
+        installing = Promise.resolve();
+        return installing;
+      }
+      installing = prepareDuckFollower(context).then(() => {
+        if (duckReady) return;
+        const WorkletNode = globalThis.AudioWorkletNode;
+        if (!WorkletNode) throw new Error('AudioWorkletNode is unavailable.');
+        connect(track(new WorkletNode(context, DUCK_PROCESSOR_NAME)));
+      });
+      return installing;
+    },
+  };
 }
 
 export function limiterKneeStart(): number {
@@ -149,6 +307,10 @@ export type OutputChain = {
   droneInput: WaveShaperNode;
   /** Chords and walk plucks while the drone is on. */
   chordInput: GainNode;
+  readonly duckReady: boolean;
+  /** Chain nodes, including the sidechain once `installDuck` has connected it. */
+  readonly ownedNodes: number;
+  installDuck(): Promise<void>;
   /** Real destination while the drone is off. The chord input while it is on. */
   voicingTarget(): AudioNode;
   /**
@@ -160,13 +322,18 @@ export type OutputChain = {
 };
 
 export function createOutputChain(context: BaseAudioContext): OutputChain {
-  const bus = context.createGain();
+  let owned = 0;
+  const track = <T extends AudioNode>(node: T): T => {
+    owned += 1;
+    return node;
+  };
+  const bus = track(context.createGain());
   bus.gain.value = 1;
-  const dry = context.createGain();
-  const wet = context.createGain();
+  const dry = track(context.createGain());
+  const wet = track(context.createGain());
   dry.gain.value = 1;
   wet.gain.value = 0;
-  const limiter = context.createWaveShaper();
+  const limiter = track(context.createWaveShaper());
   limiter.curve = limiterCurve() as Float32Array<ArrayBuffer>;
   limiter.oversample = 'none';
   const stage = createDroneStage(context, bus);
@@ -212,6 +379,15 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     limiter,
     droneInput: stage.input,
     chordInput: stage.chordInput,
+    get duckReady() {
+      return stage.duckReady;
+    },
+    get ownedNodes() {
+      return owned + stage.ownedNodes;
+    },
+    installDuck() {
+      return stage.installDuck();
+    },
     voicingTarget() {
       return drone && connected ? stage.chordInput : context.destination;
     },

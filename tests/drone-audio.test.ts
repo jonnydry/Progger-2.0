@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   BOW_GAINS,
   CELLO_GAINS,
-  DRONE_DUCK_HERTZ,
+  droneSaturatorHarmonics,
   DRONE_MAKEUP,
   DRONE_MAX_LINEAR_GAIN,
   OUTPUT_CEILING,
@@ -429,13 +429,7 @@ void test('a low reed starts on one context and centers the root', async () => {
     context.convolvers[0].buffer.length,
     Math.floor(context.sampleRate * 0.8),
   );
-  const voiceFilters = context.filters.filter(
-    (filter) => filter.frequency.value !== DRONE_DUCK_HERTZ,
-  );
-  assert.equal(
-    context.filters.length - voiceFilters.length,
-    1,
-  );
+  const voiceFilters = context.filters;
   assert.deepEqual(voiceFilters.map((filter) => filter.type).sort(), [
     'bandpass',
     'bandpass',
@@ -596,8 +590,85 @@ void test('drone volume defaults to the loud level and is stored', () => {
     }, lowRequest);
     assert.equal(fresh.snapshot().volume, 1);
     fresh.dispose();
+    for (const blank of ['', '   ', 'nope', 'NaN']) {
+      store.set('progger.drone-volume', blank);
+      const fallback = new ExploreDrone(() => {
+        throw new Error('The volume choice does not start audio.');
+      }, lowRequest);
+      assert.equal(fallback.snapshot().volume, 1, blank);
+      fallback.dispose();
+    }
+    store.set('progger.drone-volume', '0');
+    const silent = new ExploreDrone(() => {
+      throw new Error('The volume choice does not start audio.');
+    }, lowRequest);
+    assert.equal(silent.snapshot().volume, 0);
+    silent.dispose();
   } finally {
     delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
+});
+
+void test('another tab updates the drone volume and an empty value returns to the default', async () => {
+  const store = new Map<string, string>();
+  const listeners = new Set<(event: Event) => void>();
+  const windowTarget = {
+    addEventListener(_type: string, listener: (event: Event) => void) {
+      listeners.add(listener);
+    },
+    removeEventListener(_type: string, listener: (event: Event) => void) {
+      listeners.delete(listener);
+    },
+  };
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, String(value));
+      },
+    },
+    configurable: true,
+  });
+  Object.defineProperty(globalThis, 'window', {
+    value: windowTarget,
+    configurable: true,
+  });
+  const context = new FakeContext();
+  const controller = new ExploreDrone(
+    (onStatus, onWalk, onHeld, onCelloUnavailable) =>
+      new ReedDrone(onStatus, {
+        onWalk,
+        onHeld,
+        onCelloUnavailable,
+        createContext: () => context as unknown as AudioContext,
+      }),
+    lowRequest,
+  );
+  const send = (key: string | null, newValue: string | null) => {
+    const event = new Event('storage');
+    Object.defineProperty(event, 'key', { value: key });
+    Object.defineProperty(event, 'newValue', { value: newValue });
+    for (const listener of listeners) listener(event);
+  };
+  try {
+    controller.setActive(true);
+    controller.toggle();
+    await until(() => controller.snapshot().pressed);
+    send('progger.drone-volume', '0.25');
+    assert.equal(controller.snapshot().volume, 0.25);
+    assert.equal(masterGain(context).gain.value, 0.25);
+    send('progger.theme', 'day');
+    assert.equal(controller.snapshot().volume, 0.25);
+    send('progger.drone-volume', '');
+    assert.equal(controller.snapshot().volume, 1);
+    assert.equal(masterGain(context).gain.value, 1);
+    send('progger.drone-volume', 'nope');
+    assert.equal(controller.snapshot().volume, 1);
+    controller.dispose();
+    assert.equal(listeners.size, 0);
+  } finally {
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+    delete (globalThis as { window?: unknown }).window;
   }
 });
 
@@ -605,8 +676,16 @@ void test('the drone saturator raises small samples and bends peaks', () => {
   assert.equal(droneSaturateSample(0), 0);
   assert.ok(Math.abs(droneSaturateSample(0.001) / 0.001 - DRONE_MAKEUP) < 0.02);
   assert.ok(droneSaturateSample(0.14) < 0.14 * DRONE_MAKEUP);
-  assert.ok(droneSaturateSample(0.14) < 0.25);
+  assert.ok(droneSaturateSample(0.14) > 0.14 * DRONE_MAKEUP * 0.9);
   assert.equal(droneSaturateSample(-0.2), -droneSaturateSample(0.2));
+  for (const amplitude of [0.1257, 0.1437, 0.1469]) {
+    const harmonic = droneSaturatorHarmonics(amplitude);
+    assert.ok(
+      harmonic.thd < 0.03,
+      `cap ${amplitude} THD ${(harmonic.thd * 100).toFixed(2)}%`,
+    );
+    assert.ok(harmonic.thirdDb < -28);
+  }
 });
 
 void test('volume is stored before a context exists and clamps on the master ramp', async () => {
