@@ -328,8 +328,10 @@ void test('bypass waits for the voicing release and the room', () => {
     chain.setDrone(true, 1, 0);
     delays.length = 0;
     chain.setDrone(false, 1);
-    assert.equal(delays.length, 1);
-    assert.equal(delays[0], (OUTPUT_CROSSFADE + OUTPUT_TAIL) * 1000);
+    assert.deepEqual(delays, [
+      0,
+      (OUTPUT_CROSSFADE + OUTPUT_TAIL) * 1000,
+    ]);
     assert.ok(OUTPUT_TAIL > 2.6);
   } finally {
     globalThis.setTimeout = original;
@@ -373,8 +375,8 @@ void test('a low reed starts on one context and centers the root', async () => {
   const wet = limiter.connections[0] as FakeNode;
   assert.ok(wet);
   assert.ok(wet.connections.includes(context.destination));
-  assert.equal(engine.nodeCount(), 39);
-  assert.equal(createdNodes(context), 39);
+  assert.equal(engine.nodeCount(), 40);
+  assert.equal(createdNodes(context), 40);
   assert.deepEqual(
     context.oscillators.map((oscillator) => oscillator.starts),
     context.oscillators.map(() => [4.02]),
@@ -475,7 +477,7 @@ void test('playing again with the upper octave reuses the context', async () => 
   await until(() => states.at(-1) === 'playing');
   const before = createdNodes(context);
   engine.play({ root: 'A', modeId: 'dorian', octave: 'layered' });
-  await until(() => engine.nodeCount() === 45 && states.at(-1) === 'playing');
+  await until(() => engine.nodeCount() === 46 && states.at(-1) === 'playing');
   assert.equal(created(), 1);
   assert.equal(createdNodes(context) - before, 33);
   engine.dispose();
@@ -485,8 +487,8 @@ void test('Locrian drones the octave with the same reed pair', async () => {
   const { engine, context, states } = setup();
   engine.play({ root: 'A', modeId: 'locrian', octave: 'low' });
   await until(() => states.at(-1) === 'playing');
-  assert.equal(engine.nodeCount(), 39);
-  assert.equal(createdNodes(context), 39);
+  assert.equal(engine.nodeCount(), 40);
+  assert.equal(createdNodes(context), 40);
   const frequencies = context.oscillators.map(
     (oscillator) => oscillator.frequency.value,
   );
@@ -1491,19 +1493,32 @@ void test('a scale walk is booked on the audio clock and a late timer cannot bun
       ) < 1e-9,
     );
     const tail = due();
-    assert.equal(tail.length, 1);
-    assert.ok((tail[0]?.ms ?? 0) >= 2000);
+    const hold = tail.filter((timer) => timer.ms >= 2000);
+    const brief = tail.filter((timer) => timer.ms < 2000);
+    assert.equal(hold.length, 1);
+    assert.equal(brief.length, 1);
+    assert.ok(Math.abs(brief[0].ms - OUTPUT_CROSSFADE * 1000) < 1e-6);
     const beforeTail = context.oscillators.length;
-    tail[0]?.fn();
-    if (tail[0]) tail[0].ran = true;
+    context.currentTime += OUTPUT_CROSSFADE;
+    for (const timer of tail) {
+      timer.ran = true;
+      timer.fn();
+    }
+    const drop = due();
+    assert.equal(drop.length, 1);
+    assert.ok(drop[0].ms <= OUTPUT_CROSSFADE * 1000 + 1);
+    context.currentTime += OUTPUT_CROSSFADE;
+    drop[0].ran = true;
+    drop[0].fn();
     assert.equal(context.oscillators.length, beforeTail);
     assert.equal(due().length, 0);
     engine.walk(lowRequest);
     assert.equal(context.oscillators.length, notes.length * 2);
     engine.walk(lowRequest);
     const released = due();
-    assert.equal(released.length, 1);
-    assert.ok((released[0]?.ms ?? 0) >= 2000);
+    const releasedHold = released.filter((timer) => timer.ms >= 2000);
+    assert.equal(releasedHold.length, 1);
+    assert.ok((releasedHold[0]?.ms ?? 0) >= 2000);
     engine.dispose();
   } finally {
     globalThis.setTimeout = originalSet;

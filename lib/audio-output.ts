@@ -15,7 +15,10 @@
 export const OUTPUT_KNEE = 0.8;
 export const OUTPUT_CEILING = 0.8414;
 
-/** Crossfade between the dry tap and the limiter. Short enough to be click-free. */
+/**
+ * Fade used to enter and leave silence around a graph change.
+ * The limiter is inserted or removed only while the speaker is silent.
+ */
 export const OUTPUT_CROSSFADE = 0.02;
 
 /**
@@ -317,7 +320,8 @@ export type OutputChain = {
   voicingTarget(): AudioNode;
   /**
    * Engage or bypass the limiter.
-   * `fade` is seconds. Zero snaps and, on bypass, drops the speaker taps.
+   * A positive `fade` mutes the speaker, changes the graph at silence,
+   * then fades back in. Zero snaps and, on bypass, drops the taps.
    */
   setDrone(active: boolean, time: number, fade?: number): void;
   disconnect(): void;
@@ -331,49 +335,204 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
   };
   const bus = track(context.createGain());
   bus.gain.value = 1;
+  const speaker = track(context.createGain());
+  speaker.gain.value = 0;
   const dry = track(context.createGain());
   const wet = track(context.createGain());
   dry.gain.value = 1;
-  wet.gain.value = 0;
+  wet.gain.value = 1;
   const limiter = track(context.createWaveShaper());
   limiter.curve = limiterCurve() as Float32Array<ArrayBuffer>;
   limiter.oversample = 'none';
   const stage = createDroneStage(context, bus);
-  let connected = false;
+  /** Where the bus is patched. `off` touches nothing ahead of the destination. */
+  let route: 'off' | 'limited' | 'open' = 'off';
   let drone = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let connected = false;
+  let epoch = 0;
+  let pendingSilence = -1;
+  /** When the fade back in after `pendingSilence` reaches unity. */
+  let pendingRestoreEnd = -1;
+  let segment = { from: 0, to: 0, start: 0, end: 0 };
+  let tailTimer: ReturnType<typeof setTimeout> | undefined;
+  let dropTimer: ReturnType<typeof setTimeout> | undefined;
+  let switchTimer: ReturnType<typeof setTimeout> | undefined;
 
-  function clearTimer(): void {
-    if (timer === undefined) return;
+  function clearTimer(timer: ReturnType<typeof setTimeout> | undefined) {
+    if (timer === undefined) return undefined;
     clearTimeout(timer);
-    timer = undefined;
+    return undefined;
   }
 
-  function taps(on: boolean): void {
-    if (on && !connected) {
-      bus.connect(dry);
-      dry.connect(context.destination);
-      bus.connect(limiter);
-      limiter.connect(wet);
-      wet.connect(context.destination);
-      connected = true;
+  function clearTimers(): void {
+    tailTimer = clearTimer(tailTimer);
+    dropTimer = clearTimer(dropTimer);
+    switchTimer = clearTimer(switchTimer);
+  }
+
+  function levelAt(time: number): number {
+    if (
+      pendingRestoreEnd >= 0 &&
+      time >= pendingRestoreEnd &&
+      segment.end <= pendingRestoreEnd
+    ) {
+      return 1;
+    }
+    if (!(segment.end > segment.start) || time <= segment.start) return segment.from;
+    if (time >= segment.end) return segment.to;
+    const mix = (time - segment.start) / (segment.end - segment.start);
+    return segment.from + (segment.to - segment.from) * mix;
+  }
+
+  function scheduleFade(time: number, target: number, seconds: number): void {
+    const from = levelAt(time);
+    speaker.gain.cancelScheduledValues(time);
+    speaker.gain.setValueAtTime(from, time);
+    if (!(seconds > 0) || from === target) {
+      speaker.gain.setValueAtTime(target, time);
+      segment = { from: target, to: target, start: time, end: time };
       return;
     }
-    if (!on && connected) {
+    const end = time + seconds;
+    speaker.gain.linearRampToValueAtTime(target, end);
+    segment = { from, to: target, start: time, end };
+  }
+
+  function routeLimited(): void {
+    if (route === 'off') bus.connect(speaker);
+    if (route === 'open') {
       dry.disconnect();
-      wet.disconnect();
-      connected = false;
+      speaker.disconnect();
     }
+    if (route !== 'limited') {
+      speaker.connect(limiter);
+      if (route === 'off') limiter.connect(wet);
+      wet.connect(context.destination);
+      wet.gain.value = 1;
+    }
+    route = 'limited';
+    drone = true;
+    connected = true;
   }
 
-  function ramp(param: AudioParam, target: number, time: number, fade: number): void {
-    param.cancelScheduledValues(time);
-    param.setValueAtTime(param.value, time);
-    if (fade <= 0) {
-      param.setValueAtTime(target, time);
+  function routeOpen(): void {
+    if (route === 'limited') {
+      wet.disconnect();
+      speaker.disconnect();
+    }
+    if (route === 'off') bus.connect(speaker);
+    if (route !== 'open') {
+      speaker.connect(dry);
+      dry.connect(context.destination);
+      dry.gain.value = 1;
+    }
+    route = 'open';
+    drone = false;
+    connected = true;
+  }
+
+  function routeOff(): void {
+    if (route === 'limited') wet.disconnect();
+    if (route === 'open') dry.disconnect();
+    if (route !== 'off') {
+      speaker.disconnect();
+      bus.disconnect();
+    }
+    route = 'off';
+    drone = false;
+    connected = false;
+    pendingSilence = -1;
+    pendingRestoreEnd = -1;
+  }
+
+  function canSuspend(): boolean {
+    const offline = context as OfflineAudioContext;
+    return typeof offline.length === 'number' && typeof offline.suspend === 'function';
+  }
+
+  /**
+   * Change the route once the speaker has reached silence, then fade back in.
+   * Contexts that can suspend do the switch on the audio clock.
+   * A live context waits the same interval.
+   * Firefox's offline context cannot suspend. Both fades are already on the
+   * speaker parameter, and the route is patched before the first sample.
+   * The fade back in is a new ramp, so it does not replace the event that
+   * lands on zero.
+   */
+  function atSilence(when: number, restoreSeconds: number, active: boolean): void {
+    pendingSilence = when;
+    pendingRestoreEnd = when + restoreSeconds;
+    const token = epoch;
+    const finish = (anchor: boolean) => {
+      if (token !== epoch) return;
+      if (pendingSilence === when) pendingSilence = -1;
+      if (active) routeLimited();
+      else routeOpen();
+      if (anchor) {
+        restore(when, restoreSeconds);
+      } else {
+        speaker.gain.linearRampToValueAtTime(1, when + restoreSeconds);
+        segment = { from: 0, to: 1, start: when, end: when + restoreSeconds };
+      }
+      pendingRestoreEnd = -1;
+    };
+    if (canSuspend()) {
+      const offline = context as OfflineAudioContext;
+      void offline.suspend(when).then(() => {
+        finish(true);
+        return offline.resume();
+      });
       return;
     }
-    param.linearRampToValueAtTime(target, time + fade);
+    const offline = context as OfflineAudioContext;
+    if (typeof offline.length === 'number') {
+      finish(false);
+      return;
+    }
+    switchTimer = clearTimer(switchTimer);
+    const delay = Math.max(0, (when - context.currentTime) * 1000);
+    const waitForSilence = () => {
+      switchTimer = undefined;
+      if (token !== epoch) return;
+      const remaining = when - context.currentTime;
+      if (remaining > 0.001) {
+        switchTimer = setTimeout(waitForSilence, remaining * 1000);
+        return;
+      }
+      finish(true);
+    };
+    switchTimer = setTimeout(waitForSilence, delay);
+  }
+
+  function armTail(seconds: number): void {
+    tailTimer = clearTimer(tailTimer);
+    dropTimer = clearTimer(dropTimer);
+    const token = epoch;
+    tailTimer = setTimeout(() => {
+      tailTimer = undefined;
+      if (token !== epoch || drone || route !== 'open') return;
+      const now = context.currentTime;
+      const dropAt = now + OUTPUT_CROSSFADE;
+      scheduleFade(now, 0, OUTPUT_CROSSFADE);
+      const drop = () => {
+        dropTimer = undefined;
+        if (token !== epoch || drone || route !== 'open') return;
+        const remaining = dropAt - context.currentTime;
+        if (remaining > 0.001) {
+          dropTimer = setTimeout(drop, remaining * 1000);
+          return;
+        }
+        routeOff();
+      };
+      dropTimer = setTimeout(drop, OUTPUT_CROSSFADE * 1000);
+    }, (seconds + OUTPUT_TAIL) * 1000);
+  }
+
+  function restore(when: number, seconds: number): void {
+    const start = Math.max(when, context.currentTime);
+    speaker.gain.setValueAtTime(0, start);
+    speaker.gain.linearRampToValueAtTime(1, start + seconds);
+    segment = { from: 0, to: 1, start, end: start + seconds };
   }
 
   return {
@@ -395,42 +554,51 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     },
     setDrone(active: boolean, time: number, fade = OUTPUT_CROSSFADE) {
       const seconds = Math.max(0, fade);
-      if (connected && active === drone && seconds > 0) return;
-      clearTimer();
-      if (active) {
-        taps(true);
-        drone = true;
-        ramp(dry.gain, 0, time, seconds);
-        ramp(wet.gain, 1, time, seconds);
+      if (seconds === 0) {
+        epoch += 1;
+        pendingSilence = -1;
+        pendingRestoreEnd = -1;
+        clearTimers();
+        if (active) {
+          scheduleFade(time, 1, 0);
+          routeLimited();
+        } else {
+          scheduleFade(time, 0, 0);
+          routeOff();
+        }
         return;
       }
-      drone = false;
-      if (!connected) return;
-      ramp(dry.gain, 1, time, seconds);
-      ramp(wet.gain, 0, time, seconds);
-      if (seconds <= 0) {
-        taps(false);
+      if (active && route === 'limited' && pendingSilence < 0) return;
+      if (!active && route === 'off') return;
+      if (!active && route === 'open' && pendingSilence < 0) return;
+      if (active && route === 'off') {
+        clearTimers();
+        speaker.gain.cancelScheduledValues(time);
+        speaker.gain.setValueAtTime(0, time);
+        segment = { from: 0, to: 0, start: time, end: time };
+        routeLimited();
+        speaker.gain.linearRampToValueAtTime(1, time + seconds);
+        segment = { from: 0, to: 1, start: time, end: time + seconds };
         return;
       }
-      timer = setTimeout(() => {
-        timer = undefined;
-        if (drone) return;
-        taps(false);
-      }, (seconds + OUTPUT_TAIL) * 1000);
+      scheduleFade(time, 0, seconds);
+      const silence = time + seconds;
+      atSilence(silence, seconds, active);
+      if (!active) armTail(seconds);
     },
     disconnect() {
-      clearTimer();
+      epoch += 1;
+      pendingSilence = -1;
+      pendingRestoreEnd = -1;
+      clearTimers();
+      route = 'off';
       drone = false;
-      if (!connected) {
-        bus.disconnect();
-        limiter.disconnect();
-        return;
-      }
+      connected = false;
       bus.disconnect();
       dry.disconnect();
       wet.disconnect();
+      speaker.disconnect();
       limiter.disconnect();
-      connected = false;
     },
   };
 }
