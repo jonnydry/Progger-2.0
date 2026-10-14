@@ -21,12 +21,14 @@
   font-size: 12px;
   line-height: 1.25;
 }
-.under-neck .phrase-heading p,
-.under-neck .phrase-plan {
+.under-neck .phrase-heading p {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
+}
+.under-neck .phrase-plan {
+  white-space: normal;
 }
 .under-neck .phrase-controls {
   gap: 6px 8px;
@@ -141,7 +143,9 @@
 }
 .phrase-staff {
   display: grid;
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 14px 12px;
+  align-items: start;
   width: 100%;
   min-width: 0;
   overflow: hidden;
