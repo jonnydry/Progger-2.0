@@ -9,11 +9,7 @@ import {
   type RefObject,
 } from 'react';
 import { AudioLines, ChevronDown, Footprints } from 'lucide-react';
-import {
-  DRONE_SOUNDS,
-  reedRequestForScale,
-  type DroneSoundId,
-} from '@/lib/drone';
+import { DRONE_SOUNDS, reedRequestForScale, type DroneSoundId } from '@/lib/drone';
 import { pageAudio } from '@/lib/audio-output';
 import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
 import {
@@ -125,6 +121,10 @@ function guardBoxes(): DroneBox[] {
   return boxesFor(VOLUME_POPOVER_GUARD_SELECTORS);
 }
 
+function soundLabel(id: DroneSoundId): string {
+  return DRONE_SOUNDS.find((choice) => choice.id === id)?.label ?? id;
+}
+
 /**
  * Fixed elements stay on the viewport unless an ancestor paints or
  * transforms. Inline-size containment does not do that, so the shell's
@@ -184,15 +184,13 @@ function DroneVolumePopover({
 
   useLayoutEffect(() => {
     if (didFocus.current) return;
+    didFocus.current = true;
     if (initialFocus === 'slider') {
-      if (!origin) return;
-      didFocus.current = true;
       sliderRef.current?.focus({ preventScroll: true });
       return;
     }
-    didFocus.current = true;
     anchorRef.current?.focus({ preventScroll: true });
-  }, [anchorRef, initialFocus, origin]);
+  }, [anchorRef, initialFocus]);
 
   useLayoutEffect(() => {
     const place = () => {
@@ -296,28 +294,23 @@ function DroneVolumePopover({
       </label>
       <fieldset className="drone-sound-field">
         <legend>Sound</legend>
-        <div
-          className="drone-sound-options"
-          role="radiogroup"
-          aria-label="Drone sound"
-        >
+        <div className="drone-sound-options">
           {DRONE_SOUNDS.map((choice) => {
             const unavailable = choice.id === 'cello' && !celloAvailable;
             return (
-              <label key={choice.id}>
-                <input
-                  type="radio"
-                  name="drone-sound"
-                  value={choice.id}
-                  checked={sound === choice.id}
-                  disabled={unavailable}
-                  onChange={() => onSound(choice.id)}
-                />
+              <button
+                key={choice.id}
+                type="button"
+                data-sound={choice.id}
+                aria-pressed={sound === choice.id}
+                disabled={unavailable}
+                onClick={() => onSound(choice.id)}
+              >
                 {choice.label}
                 {unavailable ? (
                   <span className="sr-only">, unavailable</span>
                 ) : null}
-              </label>
+              </button>
             );
           })}
         </div>
@@ -350,9 +343,8 @@ export function DroneControls({
   onWalk: () => void;
 }) {
   const [volumeOpen, setVolumeOpen] = useState(false);
-  const [volumeFocus, setVolumeFocus] = useState<'trigger' | 'slider'>(
-    'trigger',
-  );
+  const [volumeFocus, setVolumeFocus] = useState<'trigger' | 'slider'>('trigger');
+  const activeSound = soundLabel(sound);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const volumeRef = useRef<HTMLButtonElement>(null);
   const restoreToggleFocus = useRef(false);
@@ -456,7 +448,9 @@ export function DroneControls({
         id="drone-volume-trigger"
         className="drone-volume-trigger"
         ref={volumeRef}
-        aria-label="Drone volume"
+        data-sound={sound}
+        data-playing={enabled ? 'true' : 'false'}
+        aria-label={`Drone sound, ${activeSound}`}
         aria-haspopup="dialog"
         aria-expanded={volumeOpen}
         aria-controls="drone-volume-popover"
@@ -473,6 +467,7 @@ export function DroneControls({
           setVolumeOpen((open) => !open);
         }}
       >
+        <span className="drone-sound-name">{activeSound}</span>
         <ChevronDown size={DRONE_ICON_PX} aria-hidden="true" />
       </button>
       {volumeOpen ? (
@@ -493,9 +488,7 @@ export function DroneControls({
         id="drone-walk"
         className="drone-walk"
         aria-pressed={walking}
-        aria-label={
-          walking ? 'Stop the scale walk' : 'Walk the scale up and down'
-        }
+        aria-label={walking ? 'Stop the scale walk' : 'Walk the scale up and down'}
         onClick={onWalk}
       >
         <Footprints size={DRONE_ICON_PX} aria-hidden="true" />
@@ -521,7 +514,7 @@ export function DroneControls({
         className="drone-toggle"
         ref={toggleRef}
         aria-pressed={enabled}
-        aria-label={droneControlName(enabled)}
+        aria-label={droneControlName(enabled, activeSound)}
         aria-keyshortcuts="ArrowDown ArrowUp"
         onClick={onToggle}
         onKeyDown={(event) => {

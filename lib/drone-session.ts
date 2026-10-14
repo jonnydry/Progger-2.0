@@ -274,6 +274,10 @@ export class ExploreDrone {
     }
     if (sound === 'cello') void this.engineOrCreate().preloadCello();
     this.reconcile();
+    // A silent pick still has to publish the choice. Reconcile only emits
+    // when it starts, retunes, or stops, so an off drone would keep the
+    // previous name until the next tap.
+    this.emit();
   }
 
   walk(): void {

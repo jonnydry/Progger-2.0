@@ -23,8 +23,9 @@ export type DroneBox = {
   height: number;
 };
 
-export function droneControlName(enabled: boolean): string {
-  return enabled ? 'Drone, on' : 'Drone, off';
+export function droneControlName(enabled: boolean, sound?: string): string {
+  const state = enabled ? 'Drone, on' : 'Drone, off';
+  return sound ? `${state}, ${sound}` : state;
 }
 
 export function droneVolumeKeyOpens(key: string): boolean {
@@ -88,14 +89,19 @@ export function boxesOverlap(a: DroneBox, b: DroneBox): boolean {
  * when they cross. A 4px graze is −4, not a miss.
  */
 export function boxGap(a: DroneBox, b: DroneBox): number {
-  const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const overlapX =
+    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
   const overlapY =
     Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
   if (overlapX > 0 && overlapY > 0) return -Math.min(overlapX, overlapY);
   const gapX =
-    overlapX > 0 ? 0 : Math.max(b.x - (a.x + a.width), a.x - (b.x + b.width));
+    overlapX > 0
+      ? 0
+      : Math.max(b.x - (a.x + a.width), a.x - (b.x + b.width));
   const gapY =
-    overlapY > 0 ? 0 : Math.max(b.y - (a.y + a.height), a.y - (b.y + b.height));
+    overlapY > 0
+      ? 0
+      : Math.max(b.y - (a.y + a.height), a.y - (b.y + b.height));
   if (overlapX > 0) return gapY;
   if (overlapY > 0) return gapX;
   return Math.hypot(gapX, gapY);
