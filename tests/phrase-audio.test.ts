@@ -126,6 +126,14 @@ void test('phrase playback never starts the drone and stays out of the first loa
   assert.equal(launcher.includes('.play('), false);
   assert.equal(launcher.includes('setOpen((current) => {'), false);
   assert.match(page, /phrase-tab-host/);
+  const cluster = page.slice(
+    page.indexOf('className="under-neck"'),
+    page.indexOf('phraseMarks='),
+  );
+  assert.match(cluster, /<DroneControls/);
+  assert.match(cluster, /<PhraseLauncher/);
+  assert.match(cluster, /id="phrase-tab-host"/);
+  assert.equal(page.includes('volumePopoverOrigin'), false);
   assert.match(audio, /phraseInput/);
   assert.match(audio, /PHRASE_END_RELEASE_SEC/);
   const panel = readFileSync(

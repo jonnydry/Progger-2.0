@@ -713,20 +713,6 @@ export default function Home() {
                       }
                     />
                   </label>
-                  {kind === 'scales' && (
-                    <DroneControls
-                      enabled={drone.enabled}
-                      volume={drone.volume}
-                      sound={drone.sound}
-                      celloAvailable={drone.celloAvailable}
-                      walking={drone.walking}
-                      message={drone.message}
-                      onToggle={() => drone.toggle()}
-                      onVolume={(value) => drone.setVolume(value)}
-                      onSound={(value) => drone.setSound(value)}
-                      onWalk={() => drone.walk()}
-                    />
-                  )}
                 </div>
                 <p className="scale-caption">
                   {kind === 'scales'
@@ -833,18 +819,37 @@ export default function Home() {
               </div>
             )}
             {!practice && voicingBrowser}
-            <PhraseLauncher
-              active={page === 'explore'}
-              scaleRoot={scaleRoot}
-              scaleId={scale.id}
-              scaleName={scale.name}
-              scaleNotes={phraseScaleNotes}
-              chord={phraseChord}
-              onMarks={showPhraseMarks}
-            />
             <Fretboard
               controls={instrumentControls}
               controlsAbove={practice}
+              belowNeck={
+                <div className="under-neck">
+                  {kind === 'scales' && (
+                    <DroneControls
+                      enabled={drone.enabled}
+                      volume={drone.volume}
+                      sound={drone.sound}
+                      celloAvailable={drone.celloAvailable}
+                      walking={drone.walking}
+                      message={drone.message}
+                      onToggle={() => drone.toggle()}
+                      onVolume={(value) => drone.setVolume(value)}
+                      onSound={(value) => drone.setSound(value)}
+                      onWalk={() => drone.walk()}
+                    />
+                  )}
+                  <PhraseLauncher
+                    active={page === 'explore'}
+                    scaleRoot={scaleRoot}
+                    scaleId={scale.id}
+                    scaleName={scale.name}
+                    scaleNotes={phraseScaleNotes}
+                    chord={phraseChord}
+                    onMarks={showPhraseMarks}
+                  />
+                  <div id="phrase-tab-host" className="phrase-tab-host" />
+                </div>
+              }
               notes={selectedVoicing?.soundedNotes ?? notes}
               root={`${pretty(root)} ${title}`}
               pattern={shape}
@@ -865,7 +870,6 @@ export default function Home() {
               phraseMarks={phraseMarks ?? []}
               focusFret={phraseFocus}
             />
-            <div id="phrase-tab-host" className="phrase-tab-host" />
             {practice && voicingBrowser}
           </section>
           {kind === 'chords' && (

@@ -241,6 +241,31 @@
   white-space: nowrap;
 }
 
+.under-neck .drone-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: static;
+  min-width: 0;
+}
+
+.under-neck .drone-toggle,
+.under-neck .drone-volume-trigger,
+.under-neck .drone-walk,
+.under-neck .drone-level {
+  position: static;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  transform: none;
+}
+
+.under-neck .drone-level {
+  width: 92px;
+  height: 44px;
+}
+
 .drone-volume-popover {
   position: fixed;
   inset: auto;
@@ -255,6 +280,13 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+}
+
+.drone-volume-popover[data-side='sheet'] {
+  right: 8px;
+  width: auto;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
 }
 
 .drone-volume-field {

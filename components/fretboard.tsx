@@ -226,6 +226,7 @@ export function Fretboard({
   root,
   controls,
   controlsAbove = false,
+  belowNeck,
   pattern,
   availablePatterns = [],
   activePatternIndex = 0,
@@ -244,6 +245,7 @@ export function Fretboard({
   notes: Note[];
   controls: ReactNode;
   controlsAbove?: boolean;
+  belowNeck?: ReactNode;
   root: string;
   pattern?: Pattern;
   availablePatterns?: Pattern[];
@@ -898,6 +900,7 @@ export function Fretboard({
           />
         </div>
       </div>
+      {belowNeck}
       <div className="instrument-dock">
         {!controlsAbove && controls}
         <div className="neck-navigation">

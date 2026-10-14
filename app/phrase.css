@@ -1,6 +1,45 @@
 .phrase-launcher {
   margin: 0 0 18px;
 }
+.under-neck .phrase-launcher {
+  margin: 0;
+}
+.under-neck .phrase-panel {
+  gap: 6px;
+  margin-top: 0;
+  padding: 4px 0 0;
+}
+.under-neck .phrase-heading {
+  gap: 2px;
+}
+.under-neck .phrase-heading h2 {
+  font-size: 15px;
+}
+.under-neck .phrase-heading p,
+.under-neck .phrase-plan,
+.under-neck .phrase-status {
+  font-size: 12px;
+  line-height: 1.25;
+}
+.under-neck .phrase-heading p,
+.under-neck .phrase-plan {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+.under-neck .phrase-controls {
+  gap: 6px 8px;
+}
+.under-neck .phrase-tempo input[type='range'] {
+  width: min(120px, 30vw);
+}
+.under-neck .phrase-tab-host {
+  margin: 0;
+}
+.under-neck .phrase-staff {
+  gap: 8px;
+}
 .phrase-open {
   min-height: 44px;
 }

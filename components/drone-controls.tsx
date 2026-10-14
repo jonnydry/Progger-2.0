@@ -9,18 +9,24 @@ import {
   type RefObject,
 } from 'react';
 import { AudioLines, ChevronDown, Footprints } from 'lucide-react';
-import { DRONE_SOUNDS, reedRequestForScale, type DroneSoundId } from '@/lib/drone';
+import {
+  DRONE_SOUNDS,
+  reedRequestForScale,
+  type DroneSoundId,
+} from '@/lib/drone';
 import { pageAudio } from '@/lib/audio-output';
 import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
 import {
   DRONE_ICON_PX,
-  VOLUME_POPOVER_OBSTACLE_SELECTORS,
+  VOLUME_POPOVER_GUARD_SELECTORS,
+  type AnchoredPopoverSide,
   type DroneBox,
+  anchoredVolumePopover,
   droneControlName,
   droneVolumeFocusOut,
   droneVolumeOpens,
+  popoverFixedPoint,
   volumePopoverKey,
-  volumePopoverOrigin,
 } from '@/lib/drone-controls';
 import { ExploreDrone } from '@/lib/drone-session';
 
@@ -104,9 +110,9 @@ function toBox(rect: Pick<DOMRect, 'x' | 'y' | 'width' | 'height'>): DroneBox {
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 }
 
-function obstacleBoxes(): DroneBox[] {
+function boxesFor(selectors: readonly string[]): DroneBox[] {
   const boxes: DroneBox[] = [];
-  for (const selector of VOLUME_POPOVER_OBSTACLE_SELECTORS) {
+  for (const selector of selectors) {
     for (const node of document.querySelectorAll(selector)) {
       const rect = node.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) boxes.push(toBox(rect));
@@ -115,65 +121,111 @@ function obstacleBoxes(): DroneBox[] {
   return boxes;
 }
 
+function guardBoxes(): DroneBox[] {
+  return boxesFor(VOLUME_POPOVER_GUARD_SELECTORS);
+}
+
+/**
+ * Fixed elements stay on the viewport unless an ancestor paints or
+ * transforms. Inline-size containment does not do that, so the shell's
+ * container query must not be treated as the frame: subtracting it pins
+ * the menu while the button scrolls away.
+ */
+function fixedFrame(node: HTMLElement): { x: number; y: number } | null {
+  let current: HTMLElement | null = node.parentElement;
+  while (current && current !== document.documentElement) {
+    const style = getComputedStyle(current);
+    const containsFixed =
+      style.transform !== 'none' ||
+      style.filter !== 'none' ||
+      style.perspective !== 'none' ||
+      style.contain === 'paint' ||
+      style.contain.split(' ').includes('paint') ||
+      style.willChange.split(',').some((part) => {
+        const value = part.trim();
+        return value === 'transform' || value === 'paint';
+      });
+    if (containsFixed) {
+      const rect = current.getBoundingClientRect();
+      return { x: rect.left, y: rect.top };
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
 function DroneVolumePopover({
   volume,
   sound,
   celloAvailable,
   onVolume,
   onSound,
-  onDismiss,
   onFocusLeave,
   pointerOnTrigger,
   anchorRef,
+  initialFocus,
 }: {
   volume: number;
   sound: DroneSoundId;
   celloAvailable: boolean;
   onVolume: (volume: number) => void;
   onSound: (sound: DroneSoundId) => void;
-  onDismiss: () => void;
   onFocusLeave: () => void;
   pointerOnTrigger: RefObject<boolean>;
   anchorRef: RefObject<HTMLButtonElement | null>;
+  initialFocus: 'trigger' | 'slider';
 }) {
   const panelRef = useRef<HTMLDialogElement>(null);
   const sliderRef = useRef<HTMLInputElement>(null);
   const didFocus = useRef(false);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [origin, setOrigin] = useState<{ x: number; y: number } | null>(null);
+  const [side, setSide] = useState<AnchoredPopoverSide>('below');
 
   useLayoutEffect(() => {
-    if (!origin || didFocus.current) return;
+    if (didFocus.current) return;
+    if (initialFocus === 'slider') {
+      if (!origin) return;
+      didFocus.current = true;
+      sliderRef.current?.focus({ preventScroll: true });
+      return;
+    }
     didFocus.current = true;
-    sliderRef.current?.focus({ preventScroll: true });
-  }, [origin]);
+    anchorRef.current?.focus({ preventScroll: true });
+  }, [anchorRef, initialFocus, origin]);
 
   useLayoutEffect(() => {
     const place = () => {
       const trigger = anchorRef.current?.getBoundingClientRect();
       const panel = panelRef.current;
       if (!trigger || !panel || panel.offsetWidth < 1) return;
-      const next = volumePopoverOrigin({
+      const next = anchoredVolumePopover({
         trigger: toBox(trigger),
         popover: { width: panel.offsetWidth, height: panel.offsetHeight },
         viewport: { width: window.innerWidth, height: window.innerHeight },
-        obstacles: obstacleBoxes(),
+        guards: guardBoxes(),
       });
-      if (!next) {
-        onDismiss();
-        return;
-      }
+      const point = popoverFixedPoint(next, fixedFrame(panel));
+      const rounded = {
+        x: Math.round(point.x),
+        y:
+          next.side === 'above'
+            ? Math.floor(point.y)
+            : next.side === 'below'
+              ? Math.ceil(point.y)
+              : Math.round(point.y),
+      };
+      setSide(next.side);
       setOrigin((current) =>
-        current && current.x === next.x && current.y === next.y
+        current && current.x === rounded.x && current.y === rounded.y
           ? current
-          : next,
+          : rounded,
       );
     };
     const panel = panelRef.current;
     const onCancel = (event: Event) => {
       event.preventDefault();
     };
-    const onScroll = () => onDismiss();
     const onFocusOut = (event: FocusEvent) => {
       const next = event.relatedTarget;
       const relatedInside = next instanceof Node && !!panel?.contains(next);
@@ -199,21 +251,22 @@ function DroneVolumePopover({
     panel?.addEventListener('focusout', onFocusOut);
     place();
     window.addEventListener('resize', place);
-    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('scroll', place, true);
     return () => {
       if (leaveTimer.current !== null) clearTimeout(leaveTimer.current);
       panel?.removeEventListener('cancel', onCancel);
       panel?.removeEventListener('focusout', onFocusOut);
       window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('scroll', place, true);
     };
-  }, [anchorRef, onDismiss, onFocusLeave, pointerOnTrigger]);
+  }, [anchorRef, onFocusLeave, pointerOnTrigger]);
 
   return (
     <dialog
       id="drone-volume-popover"
       aria-label="Drone volume"
       className="drone-volume-popover"
+      data-side={side}
       open
       ref={panelRef}
       style={
@@ -243,7 +296,11 @@ function DroneVolumePopover({
       </label>
       <fieldset className="drone-sound-field">
         <legend>Sound</legend>
-        <div className="drone-sound-options" role="radiogroup" aria-label="Drone sound">
+        <div
+          className="drone-sound-options"
+          role="radiogroup"
+          aria-label="Drone sound"
+        >
           {DRONE_SOUNDS.map((choice) => {
             const unavailable = choice.id === 'cello' && !celloAvailable;
             return (
@@ -293,17 +350,15 @@ export function DroneControls({
   onWalk: () => void;
 }) {
   const [volumeOpen, setVolumeOpen] = useState(false);
+  const [volumeFocus, setVolumeFocus] = useState<'trigger' | 'slider'>(
+    'trigger',
+  );
   const toggleRef = useRef<HTMLButtonElement>(null);
   const volumeRef = useRef<HTMLButtonElement>(null);
   const restoreToggleFocus = useRef(false);
   const dismissing = useRef(false);
   const pointerOnTrigger = useRef(false);
   const returnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dismissVolume = useCallback(() => {
-    restoreToggleFocus.current = true;
-    dismissing.current = true;
-    setVolumeOpen(false);
-  }, []);
   const leaveVolume = useCallback(() => {
     if (dismissing.current || restoreToggleFocus.current) return;
     setVolumeOpen(false);
@@ -312,7 +367,7 @@ export function DroneControls({
   useLayoutEffect(() => {
     if (volumeOpen || !restoreToggleFocus.current) return;
     restoreToggleFocus.current = false;
-    toggleRef.current?.focus({ preventScroll: true });
+    volumeRef.current?.focus({ preventScroll: true });
   }, [volumeOpen]);
 
   useEffect(() => {
@@ -347,12 +402,16 @@ export function DroneControls({
       if (!outside(event.target)) return;
       event.preventDefault();
       dismissing.current = true;
-      restoreToggleFocus.current = true;
+      const clickedToggle =
+        event.target instanceof Element &&
+        !!event.target.closest('#drone-toggle');
+      restoreToggleFocus.current = !clickedToggle;
       if (returnTimer.current !== null) clearTimeout(returnTimer.current);
       returnTimer.current = setTimeout(() => {
         returnTimer.current = null;
         setVolumeOpen(false);
-        toggleRef.current?.focus({ preventScroll: true });
+        if (clickedToggle) toggleRef.current?.focus({ preventScroll: true });
+        else volumeRef.current?.focus({ preventScroll: true });
       }, 0);
     };
     const onPointerUp = (event: PointerEvent) => {
@@ -368,8 +427,12 @@ export function DroneControls({
     const onFocusIn = (event: FocusEvent) => {
       if (!dismissing.current) return;
       const target = event.target;
-      if (target instanceof Element && target.id === 'drone-toggle') return;
-      toggleRef.current?.focus({ preventScroll: true });
+      if (
+        target instanceof Element &&
+        (target.id === 'drone-toggle' || target.id === 'drone-volume-trigger')
+      )
+        return;
+      volumeRef.current?.focus({ preventScroll: true });
     };
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('pointerdown', onPointerDown);
@@ -406,6 +469,7 @@ export function DroneControls({
         onClick={() => {
           pointerOnTrigger.current = false;
           if (!droneVolumeOpens({ kind: 'click' })) return;
+          setVolumeFocus('trigger');
           setVolumeOpen((open) => !open);
         }}
       >
@@ -418,10 +482,10 @@ export function DroneControls({
           sound={sound}
           celloAvailable={celloAvailable}
           onSound={onSound}
-          onDismiss={dismissVolume}
           onFocusLeave={leaveVolume}
           pointerOnTrigger={pointerOnTrigger}
           anchorRef={volumeRef}
+          initialFocus={volumeFocus}
         />
       ) : null}
       <button
@@ -429,7 +493,9 @@ export function DroneControls({
         id="drone-walk"
         className="drone-walk"
         aria-pressed={walking}
-        aria-label={walking ? 'Stop the scale walk' : 'Walk the scale up and down'}
+        aria-label={
+          walking ? 'Stop the scale walk' : 'Walk the scale up and down'
+        }
         onClick={onWalk}
       >
         <Footprints size={DRONE_ICON_PX} aria-hidden="true" />
@@ -467,6 +533,7 @@ export function DroneControls({
           if (!droneVolumeOpens({ kind: 'keydown', key: event.key })) return;
           if (!next.open || next.focus !== 'slider') return;
           event.preventDefault();
+          setVolumeFocus('slider');
           setVolumeOpen(true);
         }}
       >

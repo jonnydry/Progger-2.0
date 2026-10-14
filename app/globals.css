@@ -608,6 +608,14 @@ main {
 .neck-frame {
   display: flex;
 }
+.under-neck {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 10px;
+  min-width: 0;
+}
 .string-labels {
   flex: 0 0 32px;
   padding-top: 31px;
