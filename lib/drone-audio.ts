@@ -21,12 +21,25 @@ import {
 } from './drone.ts';
 
 export {
+  DRONE_DRIVE,
+  DRONE_DUCK_ATTACK,
+  DRONE_DUCK_DEPTH,
+  DRONE_DUCK_FLOOR,
+  DRONE_DUCK_RELEASE,
+  DRONE_MAKEUP,
+  droneDuckOffset,
+  droneSaturatorHarmonics,
   OUTPUT_CEILING,
+  OUTPUT_CROSSFADE,
   OUTPUT_KNEE,
+  OUTPUT_TAIL,
+  createDroneStage,
   createOutputChain,
+  droneSaturateSample,
   limiterCurve,
   limiterKneeStart,
   outputLimitSample,
+  outputTailSeconds,
   pageAudio,
   voicingContext,
   type OutputChain,
@@ -964,8 +977,8 @@ function reedWave(context: BaseAudioContext, frequency: number): PeriodicWave {
 
 const AUDIO_ERROR = 'Audio didn\u2019t start. Tap play to try again.';
 
-/** Master, bus, dry tap, wet tap, and the limiter. */
-const OUTPUT_NODES = 5;
+/** Volume moves this fast, so a slider drag does not step the gain. */
+export const VOLUME_GLIDE = 0.05;
 
 export class ReedDrone {
   private context: AudioContext | null = null;
@@ -985,6 +998,9 @@ export class ReedDrone {
   private walkIndex = 0;
   private walkGeneration = 0;
   private walkTimer: ReturnType<typeof setTimeout> | undefined;
+  private duckGate: Promise<void> = Promise.resolve();
+  /** Master plus the shared chain. Counted from the nodes the chain creates. */
+  private outputNodes = 0;
   private plucks: {
     oscillator: OscillatorNode;
     envelope: GainNode;
@@ -1056,7 +1072,7 @@ export class ReedDrone {
 
   nodeCount(): number {
     if (!this.master) return this.voiceNodes;
-    return this.voiceNodes + (this.ownsChain ? OUTPUT_NODES : 1);
+    return this.voiceNodes + (this.ownsChain ? this.outputNodes : 1);
   }
 
   play(request: ReedRequest): void {
@@ -1111,9 +1127,16 @@ export class ReedDrone {
       return;
     }
     this.walking = true;
-    const context = this.unlock().context;
-    void context.resume().catch(() => {});
-    this.runWalk(scaleWalk(request.root, request.scaleId ?? request.modeId));
+    const opened = this.unlock();
+    void opened.context.resume().catch(() => {});
+    const notes = scaleWalk(request.root, request.scaleId ?? request.modeId);
+    const start = () => {
+      if (!this.walking || !this.chain || !this.context) return;
+      this.chain.setDrone(true, this.context.currentTime);
+      this.runWalk(notes);
+    };
+    if (this.chain?.duckReady) start();
+    else void this.duckGate.then(start);
   }
 
   stopWalk(): void {
@@ -1208,13 +1231,21 @@ export class ReedDrone {
     this.onStatus('starting');
     try {
       const opened = this.unlock();
+      // Join the sample load before the first await. A failed fetch clears
+      // itself, and a later join would download the loops a second time.
+      const celloReady =
+        sound === 'cello' ? this.ensureCello(opened.context) : null;
+      if (celloReady) void celloReady.catch(() => {});
+      await this.duckGate;
+      if (generation !== this.generation || this.disposed) return;
+      this.chain?.setDrone(true, opened.context.currentTime);
       await this.waitUntilRunning(opened.context, generation);
       if (generation !== this.generation || this.disposed) return;
       if (opened.context.state !== 'running')
         throw new Error('Audio is unavailable.');
       // A sample that is still loading must not cut or retarget the voice
       // that is already sounding. The crossfade starts after decode.
-      if (sound === 'cello') await this.ensureCello(opened.context);
+      if (celloReady) await celloReady;
       if (generation !== this.generation || this.disposed) return;
       const when = opened.context.currentTime + 0.02;
       const voice = createReedVoice(
@@ -1284,7 +1315,9 @@ export class ReedDrone {
   private unlock(): { context: AudioContext; master: GainNode } {
     if (this.context && this.master && this.chain) {
       this.applyVolume();
-      this.chain.setDrone(true, this.context.currentTime);
+      if (this.chain.duckReady) {
+        this.chain.setDrone(true, this.context.currentTime);
+      }
       void this.context.resume().catch(() => {});
       return { context: this.context, master: this.master };
     }
@@ -1293,8 +1326,14 @@ export class ReedDrone {
     const chain = external ?? createOutputChain(context);
     const master = context.createGain();
     master.gain.value = this.volume;
-    master.connect(chain.bus);
-    chain.setDrone(true, context.currentTime);
+    master.connect(chain.droneInput);
+    this.duckGate = chain.installDuck().then(() => {
+      this.outputNodes = 1 + chain.ownedNodes;
+    });
+    if (chain.duckReady) {
+      this.outputNodes = 1 + chain.ownedNodes;
+      chain.setDrone(true, context.currentTime);
+    }
     this.onContextState = () => {
       if (context.state === 'running' || context.state === 'closed') return;
       this.stopWalk();
@@ -1359,7 +1398,7 @@ export class ReedDrone {
     const next = this.volume;
     this.master.gain.cancelScheduledValues(now);
     this.master.gain.setValueAtTime(this.master.gain.value, now);
-    this.master.gain.linearRampToValueAtTime(next, now + 0.03);
+    this.master.gain.setTargetAtTime(next, now, VOLUME_GLIDE);
   }
 
   private fadeVoices(when: number, fade: number): void {
@@ -1493,7 +1532,7 @@ export class ReedDrone {
     if (when < this.context.currentTime) return;
     const plucked = startWalkPluck(
       this.context,
-      this.chain.bus,
+      this.chain.chordInput,
       midi,
       when,
       this.volume,

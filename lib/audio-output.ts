@@ -15,11 +15,292 @@
 export const OUTPUT_KNEE = 0.8;
 export const OUTPUT_CEILING = 0.8414;
 
-/** Crossfade between the dry tap and the limiter. Short enough to be click-free. */
+/**
+ * Fade used to enter and leave silence around a graph change.
+ * The limiter is inserted or removed only while the speaker is silent.
+ */
 export const OUTPUT_CROSSFADE = 0.02;
 
-/** How long a chord already on the bus may ring after the drone lets go. */
-const OUTPUT_TAIL = 2.6;
+/**
+ * How long a chord already on the bus may ring after the drone lets go.
+ * The voicing strums six strings 45 ms apart, then decays for 2.5 s and
+ * releases over 20 ms. The drone room keeps ringing for 0.8 s plus a
+ * 50 ms margin. The hold is that release plus that room.
+ * tests/output-tail.test.ts locks the pieces to voicing-audio.ts and the room.
+ */
+export const OUTPUT_VOICING_STRINGS = 6;
+export const OUTPUT_VOICING_STRUM = 0.045;
+export const OUTPUT_VOICING_DECAY = 2.5;
+export const OUTPUT_VOICING_RELEASE = 0.02;
+export const OUTPUT_ROOM = 0.8;
+export const OUTPUT_ROOM_MARGIN = 0.05;
+
+export function outputTailSeconds(): number {
+  return (
+    (OUTPUT_VOICING_STRINGS - 1) * OUTPUT_VOICING_STRUM +
+    OUTPUT_VOICING_DECAY +
+    OUTPUT_VOICING_RELEASE +
+    OUTPUT_ROOM +
+    OUTPUT_ROOM_MARGIN
+  );
+}
+
+export const OUTPUT_TAIL = outputTailSeconds();
+
+/**
+ * Drone-only loudness. A gentle tanh bend, then the small-signal slope.
+ * Chords and walk plucks enter at `chordInput`, so they are not saturated.
+ * Their envelope ducks the drone. The safety clip stays after the sum.
+ * Drive 3 keeps a cap-level sine under about 2% THD. Drive 16 was near 18%.
+ * Makeup is the small-signal slope. 4.26 puts the default reed near −14 LUFS,
+ * about 12 dB over main. The loudest bowed sustain stays under the 0.8 knee.
+ */
+export const DRONE_DRIVE = 3;
+export const DRONE_MAKEUP = 4.26;
+/** One-pole time constants. Attack is fast; release ignores the string's pitch. */
+export const DRONE_DUCK_ATTACK = 0.01;
+export const DRONE_DUCK_RELEASE = 0.28;
+/**
+ * How hard a chord envelope pushes the drone down. The floor below
+ * catches it, so a loud strum cannot drive the gain through zero.
+ */
+export const DRONE_DUCK_DEPTH = 10;
+/**
+ * Lowest drone VCA gain while a chord is sounding. −26 dB leaves a
+ * walked chord on the louder drones under the 0.8 knee, and the gain
+ * stays positive so the drone cannot flip phase.
+ * The release is 280 ms, so the return after a strum is a slow swell.
+ */
+export const DRONE_DUCK_FLOOR_DB = -26;
+export const DRONE_DUCK_FLOOR = 10 ** (DRONE_DUCK_FLOOR_DB / 20);
+/**
+ * Lookahead shared by the drone and the chord.
+ * The sidechain hears the chord immediately. Both signals wait this long
+ * before the bus, and the drone VCA is after that wait, so the gain is
+ * already at the floor when the strum and the drone meet.
+ */
+export const DRONE_DUCK_LOOKAHEAD = 0.02;
+/**
+ * Chord and walk level while the drone is on.
+ * A bowed Eb locrian stack peaked 0.34 dB over the knee at full level.
+ * The sidechain hears the strum before this trim, and the drone-off
+ * path never enters the chord bus.
+ */
+export const DRONE_CHORD_TRIM_DB = -0.7;
+export const DRONE_CHORD_TRIM = 10 ** (DRONE_CHORD_TRIM_DB / 20);
+
+export function droneSaturateSample(sample: number): number {
+  return Math.tanh(sample * DRONE_DRIVE) * (DRONE_MAKEUP / DRONE_DRIVE);
+}
+
+/** Harmonics of a sine at `amplitude` through the drone saturator. */
+export function droneSaturatorHarmonics(
+  amplitude: number,
+  frequency = 110,
+  sampleRate = 48000,
+): { thd: number; thirdDb: number; peak: number } {
+  const cycles = 80;
+  const length = Math.round((sampleRate * cycles) / frequency);
+  let peak = 0;
+  const harmonics = Array.from({ length: 9 }, () => 0);
+  for (let harmonic = 1; harmonic <= 9; harmonic += 1) {
+    let real = 0;
+    let imag = 0;
+    const omega = (2 * Math.PI * frequency * harmonic) / sampleRate;
+    for (let index = 0; index < length; index += 1) {
+      const input = amplitude * Math.sin((2 * Math.PI * frequency * index) / sampleRate);
+      const sample = droneSaturateSample(input);
+      if (harmonic === 1) peak = Math.max(peak, Math.abs(sample));
+      real += sample * Math.cos(omega * index);
+      imag -= sample * Math.sin(omega * index);
+    }
+    harmonics[harmonic - 1] = (2 * Math.hypot(real, imag)) / length;
+  }
+  const fundamental = harmonics[0] ?? 0;
+  let distortion = 0;
+  for (let index = 1; index < harmonics.length; index += 1) {
+    distortion += (harmonics[index] ?? 0) ** 2;
+  }
+  const third = harmonics[2] ?? 0;
+  return {
+    thd: fundamental > 0 ? Math.sqrt(distortion) / fundamental : 0,
+    thirdDb: fundamental > 0 && third > 0 ? 20 * Math.log10(third / fundamental) : -Infinity,
+    peak,
+  };
+}
+
+/**
+ * What the sidechain adds to the VCA's intrinsic gain of 1.
+ * The result stays at or above `DRONE_DUCK_FLOOR - 1`, so the gain
+ * itself stays at or above the floor.
+ */
+export function droneDuckOffset(sample: number): number {
+  const floorOffset = DRONE_DUCK_FLOOR - 1;
+  if (sample >= 0) return 0;
+  if (sample <= floorOffset) return floorOffset;
+  return sample;
+}
+
+export function droneSaturateCurve(length = 2049): Float32Array {
+  const curve = new Float32Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const x = (index / (length - 1)) * 2 - 1;
+    curve[index] = droneSaturateSample(x);
+  }
+  return curve;
+}
+
+export function droneDuckFloorCurve(length = 2049): Float32Array {
+  const curve = new Float32Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const x = (index / (length - 1)) * 2 - 1;
+    curve[index] = droneDuckOffset(x);
+  }
+  return curve;
+}
+
+const DUCK_PROCESSOR_NAME = 'drone-duck-follower';
+const duckModules = new WeakMap<BaseAudioContext, Promise<void>>();
+
+function duckProcessorSource(): string {
+  return `const ATTACK=${DRONE_DUCK_ATTACK};const RELEASE=${DRONE_DUCK_RELEASE};
+class DroneDuckFollower extends AudioWorkletProcessor {
+  constructor() { super(); this.env = 0; }
+  process(inputs, outputs) {
+    const output = outputs[0] && outputs[0][0];
+    if (!output) return true;
+    const channels = (inputs[0] || []);
+    const attack = 1 - Math.exp(-1 / (sampleRate * ATTACK));
+    const release = 1 - Math.exp(-1 / (sampleRate * RELEASE));
+    let env = this.env;
+    for (let index = 0; index < output.length; index += 1) {
+      let level = 0;
+      for (let channel = 0; channel < channels.length; channel += 1) {
+        const data = channels[channel];
+        if (data && index < data.length) {
+          const value = Math.abs(data[index]);
+          if (value > level) level = value;
+        }
+      }
+      env += (level > env ? attack : release) * (level - env);
+      output[index] = env;
+    }
+    this.env = env;
+    return true;
+  }
+}
+registerProcessor('${DUCK_PROCESSOR_NAME}', DroneDuckFollower);`;
+}
+
+/** Register the envelope follower on this context. A context without a worklet resolves at once. */
+export function prepareDuckFollower(context: BaseAudioContext): Promise<void> {
+  const pending = duckModules.get(context);
+  if (pending) return pending;
+  const worklet = (context as AudioContext).audioWorklet;
+  if (!worklet) {
+    const ready = Promise.resolve();
+    duckModules.set(context, ready);
+    return ready;
+  }
+  const url = URL.createObjectURL(
+    new Blob([duckProcessorSource()], { type: 'application/javascript' }),
+  );
+  const ready = worklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+  duckModules.set(context, ready);
+  return ready;
+}
+
+export type DroneStage = {
+  /** Saturated drone. The volume master connects here. */
+  input: WaveShaperNode;
+  /** Chords and walk plucks. They duck the drone and skip the saturator. */
+  chordInput: GainNode;
+  /** The signal added to the drone VCA. Null until `installDuck` resolves. */
+  duck: AudioNode | null;
+  readonly duckReady: boolean;
+  /** Nodes this stage created, including the sidechain once it is installed. */
+  readonly ownedNodes: number;
+  installDuck(): Promise<void>;
+};
+
+export function createDroneStage(
+  context: BaseAudioContext,
+  destination: AudioNode,
+): DroneStage {
+  let owned = 0;
+  const track = <T extends AudioNode>(node: T): T => {
+    owned += 1;
+    return node;
+  };
+  const input = track(context.createWaveShaper());
+  input.curve = droneSaturateCurve() as Float32Array<ArrayBuffer>;
+  input.oversample = 'none';
+  const level = track(context.createGain());
+  level.gain.value = 1;
+  const chordInput = track(context.createGain());
+  chordInput.gain.value = 1;
+  const chordLevel = track(context.createGain());
+  chordLevel.gain.value = DRONE_CHORD_TRIM;
+  const delay = track(context.createDelay(0.05));
+  delay.delayTime.value = DRONE_DUCK_LOOKAHEAD;
+  const chordDelay = track(context.createDelay(0.05));
+  chordDelay.delayTime.value = DRONE_DUCK_LOOKAHEAD;
+  input.connect(delay);
+  delay.connect(level);
+  level.connect(destination);
+  chordInput.connect(chordLevel);
+  chordLevel.connect(chordDelay);
+  chordDelay.connect(destination);
+  let duck: AudioNode | null = null;
+  let duckReady = false;
+  let installing: Promise<void> | null = null;
+
+  function connect(follower: AudioNode): void {
+    if (duckReady) return;
+    const depth = track(context.createGain());
+    depth.gain.value = -DRONE_DUCK_DEPTH;
+    const floor = track(context.createWaveShaper());
+    floor.curve = droneDuckFloorCurve() as Float32Array<ArrayBuffer>;
+    floor.oversample = 'none';
+    chordInput.connect(follower);
+    follower.connect(depth);
+    depth.connect(floor);
+    floor.connect(level.gain);
+    duck = floor;
+    duckReady = true;
+  }
+
+  return {
+    input,
+    chordInput,
+    get duck() {
+      return duck;
+    },
+    get duckReady() {
+      return duckReady;
+    },
+    get ownedNodes() {
+      return owned;
+    },
+    installDuck() {
+      if (duckReady) return Promise.resolve();
+      if (installing) return installing;
+      const worklet = (context as AudioContext).audioWorklet;
+      if (!worklet) {
+        connect(track(context.createGain()));
+        installing = Promise.resolve();
+        return installing;
+      }
+      installing = prepareDuckFollower(context).then(() => {
+        if (duckReady) return;
+        const WorkletNode = globalThis.AudioWorkletNode;
+        if (!WorkletNode) throw new Error('AudioWorkletNode is unavailable.');
+        connect(track(new WorkletNode(context, DUCK_PROCESSOR_NAME)));
+      });
+      return installing;
+    },
+  };
+}
 
 export function limiterKneeStart(): number {
   return OUTPUT_KNEE;
@@ -47,107 +328,297 @@ export function limiterCurve(length = 2049): Float32Array {
 export type OutputChain = {
   bus: GainNode;
   limiter: WaveShaperNode;
-  /** Real destination while the drone is off. The bus while it is on. */
+  /** Saturated drone input. The volume master connects here. */
+  droneInput: WaveShaperNode;
+  /** Chords and walk plucks while the drone is on. */
+  chordInput: GainNode;
+  readonly duckReady: boolean;
+  /** Chain nodes, including the sidechain once `installDuck` has connected it. */
+  readonly ownedNodes: number;
+  installDuck(): Promise<void>;
+  /** Real destination while the drone is off. The chord input while it is on. */
   voicingTarget(): AudioNode;
   /**
    * Engage or bypass the limiter.
-   * `fade` is seconds. Zero snaps and, on bypass, drops the speaker taps.
+   * A positive `fade` mutes the speaker, changes the graph at silence,
+   * then fades back in. Zero snaps and, on bypass, drops the taps.
    */
   setDrone(active: boolean, time: number, fade?: number): void;
   disconnect(): void;
 };
 
 export function createOutputChain(context: BaseAudioContext): OutputChain {
-  const bus = context.createGain();
+  let owned = 0;
+  const track = <T extends AudioNode>(node: T): T => {
+    owned += 1;
+    return node;
+  };
+  const bus = track(context.createGain());
   bus.gain.value = 1;
-  const dry = context.createGain();
-  const wet = context.createGain();
+  const speaker = track(context.createGain());
+  speaker.gain.value = 0;
+  const dry = track(context.createGain());
+  const wet = track(context.createGain());
   dry.gain.value = 1;
-  wet.gain.value = 0;
-  const limiter = context.createWaveShaper();
+  wet.gain.value = 1;
+  const limiter = track(context.createWaveShaper());
   limiter.curve = limiterCurve() as Float32Array<ArrayBuffer>;
   limiter.oversample = 'none';
-  let connected = false;
+  const stage = createDroneStage(context, bus);
+  /** Where the bus is patched. `off` touches nothing ahead of the destination. */
+  let route: 'off' | 'limited' | 'open' = 'off';
   let drone = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let connected = false;
+  let epoch = 0;
+  let pendingSilence = -1;
+  /** When the fade back in after `pendingSilence` reaches unity. */
+  let pendingRestoreEnd = -1;
+  let segment = { from: 0, to: 0, start: 0, end: 0 };
+  let tailTimer: ReturnType<typeof setTimeout> | undefined;
+  let dropTimer: ReturnType<typeof setTimeout> | undefined;
+  let switchTimer: ReturnType<typeof setTimeout> | undefined;
 
-  function clearTimer(): void {
-    if (timer === undefined) return;
+  function clearTimer(timer: ReturnType<typeof setTimeout> | undefined) {
+    if (timer === undefined) return undefined;
     clearTimeout(timer);
-    timer = undefined;
+    return undefined;
   }
 
-  function taps(on: boolean): void {
-    if (on && !connected) {
-      bus.connect(dry);
-      dry.connect(context.destination);
-      bus.connect(limiter);
-      limiter.connect(wet);
-      wet.connect(context.destination);
-      connected = true;
+  function clearTimers(): void {
+    tailTimer = clearTimer(tailTimer);
+    dropTimer = clearTimer(dropTimer);
+    switchTimer = clearTimer(switchTimer);
+  }
+
+  function levelAt(time: number): number {
+    if (
+      pendingRestoreEnd >= 0 &&
+      time >= pendingRestoreEnd &&
+      segment.end <= pendingRestoreEnd
+    ) {
+      return 1;
+    }
+    if (!(segment.end > segment.start) || time <= segment.start) return segment.from;
+    if (time >= segment.end) return segment.to;
+    const mix = (time - segment.start) / (segment.end - segment.start);
+    return segment.from + (segment.to - segment.from) * mix;
+  }
+
+  function scheduleFade(time: number, target: number, seconds: number): void {
+    const from = levelAt(time);
+    speaker.gain.cancelScheduledValues(time);
+    speaker.gain.setValueAtTime(from, time);
+    if (!(seconds > 0) || from === target) {
+      speaker.gain.setValueAtTime(target, time);
+      segment = { from: target, to: target, start: time, end: time };
       return;
     }
-    if (!on && connected) {
+    const end = time + seconds;
+    speaker.gain.linearRampToValueAtTime(target, end);
+    segment = { from, to: target, start: time, end };
+  }
+
+  function routeLimited(): void {
+    if (route === 'off') bus.connect(speaker);
+    if (route === 'open') {
       dry.disconnect();
-      wet.disconnect();
-      connected = false;
+      speaker.disconnect();
     }
+    if (route !== 'limited') {
+      speaker.connect(limiter);
+      if (route === 'off') limiter.connect(wet);
+      wet.connect(context.destination);
+      wet.gain.value = 1;
+    }
+    route = 'limited';
+    drone = true;
+    connected = true;
   }
 
-  function ramp(param: AudioParam, target: number, time: number, fade: number): void {
-    param.cancelScheduledValues(time);
-    param.setValueAtTime(param.value, time);
-    if (fade <= 0) {
-      param.setValueAtTime(target, time);
+  function routeOpen(): void {
+    if (route === 'limited') {
+      wet.disconnect();
+      speaker.disconnect();
+    }
+    if (route === 'off') bus.connect(speaker);
+    if (route !== 'open') {
+      speaker.connect(dry);
+      dry.connect(context.destination);
+      dry.gain.value = 1;
+    }
+    route = 'open';
+    drone = false;
+    connected = true;
+  }
+
+  function routeOff(): void {
+    if (route === 'limited') wet.disconnect();
+    if (route === 'open') dry.disconnect();
+    if (route !== 'off') {
+      speaker.disconnect();
+      bus.disconnect();
+    }
+    route = 'off';
+    drone = false;
+    connected = false;
+    pendingSilence = -1;
+    pendingRestoreEnd = -1;
+  }
+
+  function canSuspend(): boolean {
+    const offline = context as OfflineAudioContext;
+    return typeof offline.length === 'number' && typeof offline.suspend === 'function';
+  }
+
+  /**
+   * Change the route once the speaker has reached silence, then fade back in.
+   * Contexts that can suspend do the switch on the audio clock.
+   * A live context waits the same interval.
+   * Firefox's offline context cannot suspend. Both fades are already on the
+   * speaker parameter, and the route is patched before the first sample.
+   * The fade back in is a new ramp, so it does not replace the event that
+   * lands on zero.
+   */
+  function atSilence(when: number, restoreSeconds: number, active: boolean): void {
+    pendingSilence = when;
+    pendingRestoreEnd = when + restoreSeconds;
+    const token = epoch;
+    const finish = (anchor: boolean) => {
+      if (token !== epoch) return;
+      if (pendingSilence === when) pendingSilence = -1;
+      if (active) routeLimited();
+      else routeOpen();
+      if (anchor) {
+        restore(when, restoreSeconds);
+      } else {
+        speaker.gain.linearRampToValueAtTime(1, when + restoreSeconds);
+        segment = { from: 0, to: 1, start: when, end: when + restoreSeconds };
+      }
+      pendingRestoreEnd = -1;
+    };
+    if (canSuspend()) {
+      const offline = context as OfflineAudioContext;
+      void offline.suspend(when).then(() => {
+        finish(true);
+        return offline.resume();
+      });
       return;
     }
-    param.linearRampToValueAtTime(target, time + fade);
+    const offline = context as OfflineAudioContext;
+    if (typeof offline.length === 'number') {
+      finish(false);
+      return;
+    }
+    switchTimer = clearTimer(switchTimer);
+    const delay = Math.max(0, (when - context.currentTime) * 1000);
+    const waitForSilence = () => {
+      switchTimer = undefined;
+      if (token !== epoch) return;
+      const remaining = when - context.currentTime;
+      if (remaining > 0.001) {
+        switchTimer = setTimeout(waitForSilence, remaining * 1000);
+        return;
+      }
+      finish(true);
+    };
+    switchTimer = setTimeout(waitForSilence, delay);
+  }
+
+  function armTail(seconds: number): void {
+    tailTimer = clearTimer(tailTimer);
+    dropTimer = clearTimer(dropTimer);
+    const token = epoch;
+    tailTimer = setTimeout(() => {
+      tailTimer = undefined;
+      if (token !== epoch || drone || route !== 'open') return;
+      const now = context.currentTime;
+      const dropAt = now + OUTPUT_CROSSFADE;
+      scheduleFade(now, 0, OUTPUT_CROSSFADE);
+      const drop = () => {
+        dropTimer = undefined;
+        if (token !== epoch || drone || route !== 'open') return;
+        const remaining = dropAt - context.currentTime;
+        if (remaining > 0.001) {
+          dropTimer = setTimeout(drop, remaining * 1000);
+          return;
+        }
+        routeOff();
+      };
+      dropTimer = setTimeout(drop, OUTPUT_CROSSFADE * 1000);
+    }, (seconds + OUTPUT_TAIL) * 1000);
+  }
+
+  function restore(when: number, seconds: number): void {
+    const start = Math.max(when, context.currentTime);
+    speaker.gain.setValueAtTime(0, start);
+    speaker.gain.linearRampToValueAtTime(1, start + seconds);
+    segment = { from: 0, to: 1, start, end: start + seconds };
   }
 
   return {
     bus,
     limiter,
+    droneInput: stage.input,
+    chordInput: stage.chordInput,
+    get duckReady() {
+      return stage.duckReady;
+    },
+    get ownedNodes() {
+      return owned + stage.ownedNodes;
+    },
+    installDuck() {
+      return stage.installDuck();
+    },
     voicingTarget() {
-      return drone && connected ? bus : context.destination;
+      return drone && connected ? stage.chordInput : context.destination;
     },
     setDrone(active: boolean, time: number, fade = OUTPUT_CROSSFADE) {
       const seconds = Math.max(0, fade);
-      if (connected && active === drone && seconds > 0) return;
-      clearTimer();
-      if (active) {
-        taps(true);
-        drone = true;
-        ramp(dry.gain, 0, time, seconds);
-        ramp(wet.gain, 1, time, seconds);
+      if (seconds === 0) {
+        epoch += 1;
+        pendingSilence = -1;
+        pendingRestoreEnd = -1;
+        clearTimers();
+        if (active) {
+          scheduleFade(time, 1, 0);
+          routeLimited();
+        } else {
+          scheduleFade(time, 0, 0);
+          routeOff();
+        }
         return;
       }
-      drone = false;
-      if (!connected) return;
-      ramp(dry.gain, 1, time, seconds);
-      ramp(wet.gain, 0, time, seconds);
-      if (seconds <= 0) {
-        taps(false);
+      if (active && route === 'limited' && pendingSilence < 0) return;
+      if (!active && route === 'off') return;
+      if (!active && route === 'open' && pendingSilence < 0) return;
+      if (active && route === 'off') {
+        clearTimers();
+        speaker.gain.cancelScheduledValues(time);
+        speaker.gain.setValueAtTime(0, time);
+        segment = { from: 0, to: 0, start: time, end: time };
+        routeLimited();
+        speaker.gain.linearRampToValueAtTime(1, time + seconds);
+        segment = { from: 0, to: 1, start: time, end: time + seconds };
         return;
       }
-      timer = setTimeout(() => {
-        timer = undefined;
-        if (drone) return;
-        taps(false);
-      }, (seconds + OUTPUT_TAIL) * 1000);
+      scheduleFade(time, 0, seconds);
+      const silence = time + seconds;
+      atSilence(silence, seconds, active);
+      if (!active) armTail(seconds);
     },
     disconnect() {
-      clearTimer();
+      epoch += 1;
+      pendingSilence = -1;
+      pendingRestoreEnd = -1;
+      clearTimers();
+      route = 'off';
       drone = false;
-      if (!connected) {
-        bus.disconnect();
-        limiter.disconnect();
-        return;
-      }
+      connected = false;
       bus.disconnect();
       dry.disconnect();
       wet.disconnect();
+      speaker.disconnect();
       limiter.disconnect();
-      connected = false;
     },
   };
 }

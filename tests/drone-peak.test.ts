@@ -15,6 +15,7 @@ import {
 } from '../lib/drone.ts';
 import { QUALITIES, diatonicChords, voicings } from '../lib/harmony.ts';
 import { SCALES } from '../lib/music.ts';
+import { DRONE_DUCK_FLOOR, OUTPUT_KNEE } from '../lib/audio-output.ts';
 import { FULL_SCALE_MARGIN } from '../lib/drone-levels.ts';
 import { launchNamed, type BrowserName } from './browser-launch.ts';
 import { headroomSourceHash } from './headroom-sources.ts';
@@ -28,6 +29,7 @@ import {
   loudestMeasured,
   soundingCount,
   type HeadroomReport,
+  type HeadroomRow,
   type WorstCase,
 } from './drone-headroom-run.ts';
 
@@ -189,20 +191,21 @@ function startChord(context, midis, when, destination) {
   });
 }
 
-function graph(context, sound) {
+async function graph(context, sound) {
   const chain = createOutputChain(context);
+  await chain.installDuck();
   chain.setDrone(true, 0, 0);
   const master = context.createGain();
   master.gain.value = soundLinearCap(sound);
-  master.connect(chain.bus);
-  return { master, bus: chain.bus };
+  master.connect(chain.droneInput);
+  return { master, bus: chain.chordInput };
 }
 
 async function renderOverlap(buffers, root, mode, octave, sound, gap, walk) {
   const rate = 48000;
   const seconds = 0.05 + gap + 0.9;
   const context = new OfflineAudioContext(2, Math.ceil(rate * seconds), rate);
-  const { master, bus } = graph(context, sound);
+  const { master, bus } = await graph(context, sound);
   const pitches = dronePitches(root, mode, octave);
   const cello = sound === 'cello' ? buffers : null;
   const start = 0.05;
@@ -219,7 +222,7 @@ async function renderOverlap(buffers, root, mode, octave, sound, gap, walk) {
 async function renderVoice(buffers, root, mode, octave, sound, attack, seconds, walk) {
   const rate = 48000;
   const context = new OfflineAudioContext(2, Math.ceil(rate * seconds), rate);
-  const { master, bus } = graph(context, sound);
+  const { master, bus } = await graph(context, sound);
   const voice = startLiveVoice(
     context,
     master,
@@ -248,7 +251,7 @@ try {
   for (let midi = 40; midi <= 84; midi += 1) {
     const rate = 48000;
     const context = new OfflineAudioContext(2, Math.ceil(rate * 0.12), rate);
-    const { bus } = graph(context, 'reed');
+    const { bus } = await graph(context, 'reed');
     startWalkPluck(context, bus, midi, 0.01, 1);
     const value = peakOf(await context.startRendering());
     if (value.peak > walkPeak) {
@@ -530,6 +533,7 @@ async function renderInBrowser(
     const report = await waitForReport(result, limit);
     console.log(`${name} ${browser.version()}`);
     if (errors.length && !report.error) report.error = errors.join('\n');
+    await tab.close();
     return report;
   } finally {
     close();
@@ -543,11 +547,16 @@ function assertHeadroom(report: PeakReport, pluck: number) {
   assert.ok(report.walkPeak > 0.05, `walk peak ${report.walkPeak}`);
   const worst: Record<string, PeakRow> = {};
   for (const row of report.rows) {
-    const sum = row.limited + pluck;
-    const walkSum = row.limited + report.walkPeak;
+    const ducked = row.limited * DRONE_DUCK_FLOOR;
+    const sum = ducked + pluck;
+    const walkSum = ducked + report.walkPeak;
+    assert.ok(
+      row.limited <= OUTPUT_KNEE,
+      `${row.sound} ${row.root} ${row.mode} ${row.octave} ${row.via} drone peak ${row.limited} entered the limiter`,
+    );
     assert.ok(
       sum <= FULL_SCALE_MARGIN,
-      `${row.sound} ${row.root} ${row.mode} ${row.octave} ${row.via} peak ${row.limited} + pluck ${pluck} = ${sum}`,
+      `${row.sound} ${row.root} ${row.mode} ${row.octave} ${row.via} ducked ${ducked} + pluck ${pluck} = ${sum}`,
     );
     assert.ok(
       walkSum <= FULL_SCALE_MARGIN,
@@ -563,7 +572,7 @@ function assertHeadroom(report: PeakReport, pluck: number) {
       report.together[sound] <= FULL_SCALE_MARGIN,
       `${sound} drone plus walk ${report.together[sound]}`,
     );
-    const sum = row.limited + pluck;
+    const sum = row.limited * DRONE_DUCK_FLOOR + pluck;
     const mixes = report.rows.filter((item) => item.sound === sound);
     const loudestMix = mixes.reduce((best, item) =>
       item.mix > best.mix ? item : best,
@@ -591,6 +600,10 @@ function assertHeadroom(report: PeakReport, pluck: number) {
       `${sound} swept mix ${swept}`,
     );
     const worstCase = Math.max(loudestMix.mix, swept);
+    assert.ok(
+      worstCase <= OUTPUT_KNEE,
+      `${sound} worst case ${worstCase} engaged the limiter (knee ${OUTPUT_KNEE})`,
+    );
     assert.ok(
       worstCase <= SOUND_LIMIT,
       `${sound} worst case ${worstCase} vs ${SOUND_LIMIT}`,
@@ -666,14 +679,44 @@ function headroomBundle(): string {
   return outfile;
 }
 
-function headroomPage(): string {
+function rowKey(row: HeadroomRow): string {
+  return [row.sound, row.root, row.mode, row.via, row.from].join('\0');
+}
+
+function mergeHeadroom(
+  grid: HeadroomReport,
+  confirmed: HeadroomReport,
+): HeadroomReport {
+  const updates = new Map(
+    (confirmed.rows ?? []).map((row) => [rowKey(row), row]),
+  );
+  return {
+    ...grid,
+    rows: (grid.rows ?? []).map((row) => updates.get(rowKey(row)) ?? row),
+    worstCases: confirmed.worstCases,
+    comparisons: confirmed.comparisons,
+    seconds: (grid.seconds ?? 0) + (confirmed.seconds ?? 0),
+  };
+}
+
+function headroomPage(
+  mode: 'all' | 'grid' | 'confirm' = 'all',
+  rows?: HeadroomRow[],
+): string {
+  const payload = JSON.stringify(rows ?? null).replaceAll('<', '\\u003c');
+  const call =
+    mode === 'grid'
+      ? 'runHeadroom({ confirm: false })'
+      : mode === 'confirm'
+        ? `runHeadroom({ rows: ${payload} })`
+        : 'runHeadroom()';
   return `<!doctype html>
 <meta charset="utf-8" />
 <title>headroom</title>
 <script type="module">
 import { runHeadroom } from '/probe.js';
 try {
-  const report = await runHeadroom();
+  const report = await ${call};
   await fetch('/result', { method: 'POST', body: JSON.stringify(report) });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
@@ -862,6 +905,10 @@ function assertGrid(report: HeadroomReport) {
   assert.ok(revPeak > 0.5, `rev chord ${revPeak}`);
   for (const mix of report.rev?.mixes ?? []) {
     assert.ok(
+      mix.confirmed <= OUTPUT_KNEE,
+      `rev ${mix.pair} limited ${mix.confirmed} entered the limiter (knee ${OUTPUT_KNEE})`,
+    );
+    assert.ok(
       mix.confirmed <= SOUND_LIMIT,
       `rev ${mix.pair} limited ${mix.confirmed} vs ${SOUND_LIMIT}`,
     );
@@ -932,6 +979,10 @@ function assertGrid(report: HeadroomReport) {
       );
       if (row.rendered) {
         assert.ok(
+          row.confirmed <= OUTPUT_KNEE,
+          `${sound} ${row.via} from ${row.from || '-'} ${row.root} ${row.mode} ${row.kind} limited ${row.confirmed} entered the limiter`,
+        );
+        assert.ok(
           row.confirmed <= SOUND_LIMIT && row.confirmed < FULL_SCALE_MARGIN,
           `${sound} ${row.via} from ${row.from || '-'} ${row.root} ${row.mode} ${row.kind} limited ${row.confirmed} dry ${row.peak} vs ${SOUND_LIMIT}`,
         );
@@ -945,6 +996,10 @@ function assertGrid(report: HeadroomReport) {
     const rendered = ofSound.filter((row) => row.rendered);
     assert.ok(rendered.length >= CONFIRM_COUNT, sound);
     for (const row of rendered) {
+      assert.ok(
+        row.confirmed <= OUTPUT_KNEE,
+        `${sound} ${row.root} ${row.mode} ${row.via} render ${row.confirmed} entered the limiter`,
+      );
       assert.ok(
         row.confirmed <= SOUND_LIMIT,
         `${sound} ${row.root} ${row.mode} ${row.via} render ${row.confirmed}`,
@@ -962,13 +1017,26 @@ function assertGrid(report: HeadroomReport) {
   }
   for (const item of report.comparisons ?? []) {
     console.log(
-      `limiter worst ${item.sound} dry ${item.dry} limited ${item.limited} net ${item.netDb.toFixed(2)} dB reduction ${item.reductionDb.toFixed(2)} dB ${item.root} ${item.mode} ${item.via} ${item.chordFrets}`,
+      `limiter worst ${item.sound} shaped ${item.dry} limited ${item.limited} net ${item.netDb.toFixed(2)} dB reduction ${item.reductionDb.toFixed(2)} dB ${item.root} ${item.mode} ${item.via} ${item.chordFrets}`,
     );
   }
-  if (report.limiter) {
+  if (report.limiter && report.limiter.mixes > 0) {
     const sweep = report.limiter;
     console.log(
       `limiter engagement ${sweep.reduced}/${sweep.mixes} (${(sweep.reduced / sweep.mixes).toFixed(4)}) max ${sweep.maxReductionDb.toFixed(2)} dB above-knee ${sweep.aboveKnee} chords ${sweep.chordsReduced}/${sweep.chordCount} knee ${sweep.kneeStart.toFixed(4)}`,
+    );
+    assert.equal(sweep.aboveKnee, 0, `limiter engaged on ${sweep.aboveKnee} mixes`);
+    assert.equal(sweep.reduced, 0);
+    assert.ok(sweep.maxReductionDb < 0.01, `reduction ${sweep.maxReductionDb}`);
+  }
+  for (const item of report.comparisons ?? []) {
+    assert.ok(
+      item.limited <= OUTPUT_KNEE,
+      `${item.sound} comparison ${item.limited} entered the limiter`,
+    );
+    assert.ok(
+      Math.abs(item.netDb) < 0.05,
+      `${item.sound} limiter changed the peak by ${item.netDb} dB`,
     );
   }
 }
@@ -1057,6 +1125,10 @@ function assertSubset(report: HeadroomReport, cases: WorstCase[]) {
     for (const row of rendered) {
       assert.equal(row.rendered, true);
       assert.ok(
+        row.confirmed <= OUTPUT_KNEE,
+        `${sound} ${row.root} ${row.mode} ${row.via} ${row.confirmed} entered the limiter`,
+      );
+      assert.ok(
         row.confirmed <= SOUND_LIMIT,
         `${sound} ${row.root} ${row.mode} ${row.via} ${row.confirmed}`,
       );
@@ -1066,7 +1138,7 @@ function assertSubset(report: HeadroomReport, cases: WorstCase[]) {
       .sort((left, right) => right.limited - left.limited)[0];
     if (compared) {
       console.log(
-        `limiter ${sound} dry ${compared.dry} limited ${compared.limited} net ${compared.netDb.toFixed(2)} dB reduction ${compared.reductionDb.toFixed(2)} dB ${compared.root} ${compared.mode} ${compared.chordFrets}`,
+        `limiter ${sound} shaped ${compared.dry} limited ${compared.limited} net ${compared.netDb.toFixed(2)} dB reduction ${compared.reductionDb.toFixed(2)} dB ${compared.root} ${compared.mode} ${compared.chordFrets}`,
       );
       assert.ok(
         compared.limited <= SOUND_LIMIT,
@@ -1161,7 +1233,6 @@ void test(
       return;
     }
     const bundle = headroomBundle();
-    const html = headroomPage();
     const written: Omit<SweepFile, 'sources'> = {
       chromium: { seconds: 0, cases: [] },
       firefox: { seconds: 0, cases: [] },
@@ -1169,13 +1240,22 @@ void test(
     for (const name of ['chromium', 'firefox'] as const) {
       const browser = await launchNamed(name, t);
       try {
-        const report = (await renderInBrowser(
+        const grid = (await renderInBrowser(
           browser,
           name,
           bundle,
-          html,
+          headroomPage('grid'),
           3400000,
         )) as unknown as HeadroomReport;
+        assert.equal(grid.error, undefined, grid.error);
+        const confirmed = (await renderInBrowser(
+          browser,
+          name,
+          bundle,
+          headroomPage('confirm', grid.rows),
+          3400000,
+        )) as unknown as HeadroomReport;
+        const report = mergeHeadroom(grid, confirmed);
         console.log(report.ua);
         assertGrid(report);
         const seconds = report.seconds ?? 0;
