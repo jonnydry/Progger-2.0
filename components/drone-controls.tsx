@@ -294,29 +294,23 @@ function DroneVolumePopover({
       </label>
       <fieldset className="drone-sound-field">
         <legend>Sound</legend>
-        <div className="drone-sound-options" role="radiogroup" aria-label="Drone sound">
+        <div className="drone-sound-options">
           {DRONE_SOUNDS.map((choice) => {
             const unavailable = choice.id === 'cello' && !celloAvailable;
             return (
-              <label
+              <button
                 key={choice.id}
-                onClick={() => {
-                  if (!unavailable) onSound(choice.id);
-                }}
+                type="button"
+                data-sound={choice.id}
+                aria-pressed={sound === choice.id}
+                disabled={unavailable}
+                onClick={() => onSound(choice.id)}
               >
-                <input
-                  type="radio"
-                  name="drone-sound"
-                  value={choice.id}
-                  checked={sound === choice.id}
-                  disabled={unavailable}
-                  onChange={() => onSound(choice.id)}
-                />
                 {choice.label}
                 {unavailable ? (
                   <span className="sr-only">, unavailable</span>
                 ) : null}
-              </label>
+              </button>
             );
           })}
         </div>

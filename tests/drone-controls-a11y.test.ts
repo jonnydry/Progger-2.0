@@ -260,23 +260,15 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   assert.match(css, /\.drone-toggle:active/);
   assert.match(css, /\.drone-walk:active/);
   assert.match(css, /\.drone-volume-trigger:active/);
-  assert.match(
-    css,
-    /\.drone-sound-options label:hover:not\(:has\(input:disabled\)\)/,
-  );
-  assert.match(
-    css,
-    /\.drone-sound-options label:active:not\(:has\(input:disabled\)\)/,
-  );
+  assert.match(css, /\.drone-sound-options button:hover:not\(:disabled\)/);
+  assert.match(css, /\.drone-sound-options button:active:not\(:disabled\)/);
   assert.match(css, /background:\s*var\(--green\)/);
   assert.match(css, /color:\s*var\(--primary-foreground\)/);
   assert.match(css, /data-playing='true'/);
   assert.match(css, /\.drone-sound-name/);
   assert.match(css, /--drone-side:\s*100px/);
-  assert.match(
-    css,
-    /\.drone-sound-options label:has\(input:focus-visible\)/,
-  );
+  assert.match(css, /\.drone-sound-options button:focus-visible/);
+  assert.match(css, /button\[aria-pressed='true'\]/);
   assert.match(css, /display:\s*contents/);
   assert.match(css, /flex:\s*0 0 44px/);
   assert.match(css, /text-overflow:\s*ellipsis/);
@@ -331,8 +323,7 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   );
   assert.match(view, /min=\{0\}/);
   assert.match(view, /max=\{1\}/);
-  assert.match(view, /if \(!unavailable\) onSound\(choice\.id\)/);
-  assert.match(view, /onChange=\{\(\) => onSound\(choice\.id\)\}/);
+  assert.match(view, /onClick=\{\(\) => onSound\(choice\.id\)\}/);
   assert.match(view, /disabled=\{unavailable\}/);
   assert.match(view, /, unavailable/);
   assert.doesNotMatch(view, /aria-modal/);

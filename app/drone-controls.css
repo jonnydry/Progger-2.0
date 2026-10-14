@@ -376,7 +376,7 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
   gap: 4px;
 }
 
-.drone-sound-options label {
+.drone-sound-options button {
   flex: 1 1 0;
   display: inline-flex;
   align-items: center;
@@ -385,51 +385,42 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
   min-height: 32px;
   margin: 0;
   padding: 0 4px;
+  color: inherit;
+  font: inherit;
+  background: transparent;
   border: 1px solid var(--border);
   border-radius: 5px;
   cursor: pointer;
 }
 
-.drone-sound-options label:hover:not(:has(input:disabled)) {
+.drone-sound-options button:hover:not(:disabled) {
   color: var(--green);
   background: var(--accent);
   border-color: var(--green);
 }
 
-.drone-sound-options label:active:not(:has(input:disabled)) {
+.drone-sound-options button:active:not(:disabled) {
   color: var(--primary-foreground);
   background: var(--green);
   border-color: var(--green);
   transition: none;
 }
 
-.drone-sound-options label:has(input:checked) {
+.drone-sound-options button[aria-pressed='true'] {
   color: var(--green);
   background: var(--accent);
   border-color: var(--green);
 }
 
-.drone-sound-options label:has(input:disabled) {
+.drone-sound-options button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-.drone-sound-options label:has(input:focus-visible) {
+.drone-sound-options button:focus-visible {
   outline: 3px solid var(--amber);
   outline-offset: 3px;
   z-index: 1;
-}
-
-.drone-sound-options input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 .palette-note.palette-walking > span {
