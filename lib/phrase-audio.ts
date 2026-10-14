@@ -148,7 +148,14 @@ export class PhrasePlayer {
           return;
         }
         this.dropFinished(context.currentTime);
-        this.arm(input, when + this.period, run);
+        const now = context.currentTime;
+        let next = when + this.period;
+        if (next < now) {
+          // A late timer must not walk missed periods and stack them as a chord.
+          next = now + 0.05;
+          this.startedAt = next;
+        }
+        this.arm(input, next, run);
       },
       Math.max(0, until - (input.loop ? 70 : 0)),
     );

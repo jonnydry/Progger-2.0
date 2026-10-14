@@ -406,8 +406,19 @@ export default function Home() {
   );
   const phraseChord = useMemo(() => {
     if (kind === 'chords') return { symbol: `${root}${quality.symbol}`, notes };
-    if (currentChord)
-      return { symbol: currentChord.symbol, notes: currentChord.notes };
+    if (currentChord) {
+      const bassPc = currentChord.bass ? pitchClass(currentChord.bass) : null;
+      const slashBass =
+        bassPc !== null &&
+        currentChord.bass &&
+        !currentChord.notes.some((note) => note.pc === bassPc)
+          ? [
+              ...currentChord.notes,
+              { name: currentChord.bass, pc: bassPc, degree: 'bass' },
+            ]
+          : currentChord.notes;
+      return { symbol: currentChord.symbol, notes: slashBass };
+    }
     return null;
   }, [kind, root, quality, notes, currentChord]);
   const outside = soundingNotes.filter(

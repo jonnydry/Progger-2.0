@@ -577,11 +577,15 @@ function realize(
   );
   const endTarget =
     contourHeight(plan.contour, 1) * Math.max(0, ladder.length - 1);
-  // Keep the cadence off the edge of the register when another octave of the
-  // same chord tone exists, so a leap can still resolve into it.
-  const approachable = cadenceIndexes.filter(
-    (index) => index >= 2 && index <= ladder.length - 3,
-  );
+  // A low ending wants the bottom octave of the cadence tone. Inset only a
+  // high ending, so a leap can still resolve into it without skipping the
+  // lower octave that arch, fall, and wave are aiming at.
+  const lowEnding = endTarget <= (ladder.length - 1) / 2;
+  const approachable = lowEnding
+    ? cadenceIndexes
+    : cadenceIndexes.filter(
+        (index) => index >= 2 && index <= ladder.length - 3,
+      );
   const cadenceLadder = closest(
     approachable.length ? approachable : cadenceIndexes,
     endTarget,

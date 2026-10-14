@@ -69,6 +69,8 @@ export function PhrasePanel({
   const [heard, setHeard] = useState(-1);
   const player = useRef<PhrasePlayer | null>(null);
   const live = useRef(false);
+  const tempoRef = useRef(tempo);
+  const soundingTempo = useRef(tempo);
   const phrase = useMemo(
     () =>
       generatePhrase({
@@ -115,14 +117,16 @@ export function PhrasePanel({
       return;
     }
     if (!live.current || !phrase.ok) return;
+    const tempoNow = slow ? tempoRef.current / 2 : tempoRef.current;
+    soundingTempo.current = tempoNow;
     void player.current?.start({
       notes: phrase.phrase.notes,
       bars,
-      tempo: playbackTempo,
+      tempo: tempoNow,
       feel,
       loop,
     });
-  }, [active, phrase, bars, playbackTempo, feel, loop]);
+  }, [active, phrase, bars, slow, feel, loop]);
   useEffect(() => {
     if (status !== 'playing' || !notes.length) return;
     let frame = 0;
@@ -131,7 +135,7 @@ export function PhrasePanel({
       let index = -1;
       for (let note = 0; note < notes.length; note++) {
         if (
-          onsetSeconds(notes[note].beat, playbackTempo, feel) <=
+          onsetSeconds(notes[note].beat, soundingTempo.current, feel) <=
           elapsed + 0.03
         )
           index = note;
@@ -141,7 +145,7 @@ export function PhrasePanel({
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [status, notes, playbackTempo, feel]);
+  }, [status, notes, feel]);
 
   const marks = useMemo(
     () => (phrase.ok ? phraseFretMarks(notes, dots, activeIndex) : null),
@@ -167,6 +171,19 @@ export function PhrasePanel({
     setSeed(next);
     setSeedText(String(next));
   }
+  function startPlayback() {
+    if (!phrase.ok) return;
+    const tempoNow = slow ? tempo / 2 : tempo;
+    soundingTempo.current = tempoNow;
+    live.current = true;
+    void player.current?.start({
+      notes: phrase.phrase.notes,
+      bars,
+      tempo: tempoNow,
+      feel,
+      loop,
+    });
+  }
   function togglePlay() {
     if (!phrase.ok) return;
     if (live.current || status === 'playing' || status === 'starting') {
@@ -174,14 +191,10 @@ export function PhrasePanel({
       player.current?.stop();
       return;
     }
-    live.current = true;
-    void player.current?.start({
-      notes: phrase.phrase.notes,
-      bars,
-      tempo: playbackTempo,
-      feel,
-      loop,
-    });
+    startPlayback();
+  }
+  function commitTempo() {
+    if (live.current) startPlayback();
   }
   const busy = status === 'playing' || status === 'starting';
   const plan = phrase.ok ? phrase.phrase.plan : null;
@@ -252,7 +265,13 @@ export function PhrasePanel({
                 ? `${playbackTempo}, half of ${tempo}`
                 : `${tempo} beats per minute`
             }
-            onChange={(event) => setTempo(Number(event.target.value))}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              tempoRef.current = next;
+              setTempo(next);
+            }}
+            onPointerUp={commitTempo}
+            onKeyUp={commitTempo}
           />
           <output>{Math.round(playbackTempo)}</output>
         </label>

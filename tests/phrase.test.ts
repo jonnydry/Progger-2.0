@@ -6,10 +6,12 @@ import { SCALES, spell, TUNING, type Note } from '../lib/music.ts';
 import {
   PHRASE_PLANNER_TIMEOUT_MS,
   PHRASE_RANGE,
+  availableCadences,
   cadenceRole,
   contourHeight,
   defaultChordNotes,
   generatePhrase,
+  landingPitchClasses,
   generatePhraseWithPlanner,
   isStrongBeat,
   melodicMotion,
@@ -125,6 +127,50 @@ void test('timing, cadence roles, and seeds are deterministic tables', () => {
   assert.equal(locked.register, open.register);
   assert.equal(locked.cadence, open.cadence);
   assert.equal(rulePlan(3, ['root'], { cadence: 'fifth' }).cadence, 'root');
+});
+
+void test('a low wave keeps the bottom octave of the cadence', () => {
+  const result = generatePhrase({
+    seed: 4,
+    bars: 2,
+    ...contextInput('C', 'major', 'C'),
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.phrase.plan.contour, 'wave');
+  assert.equal(result.phrase.plan.register, 'low');
+  assert.equal(result.phrase.notes.at(-1)?.midi, 48);
+  assert.equal(result.phrase.notes.at(-1)?.name, 'C');
+});
+
+void test('a slash bass can land on a strong beat and cannot be the cadence', () => {
+  assert.equal(cadenceRole('bass'), null);
+  const scaleNotes = scaleOf('A', 'dorian');
+  const triad = parseChord('Am').notes;
+  const withBass = [...triad, { name: 'G', pc: 7, degree: 'bass' }];
+  assert.equal(landingPitchClasses(triad, scaleNotes).has(7), false);
+  assert.equal(landingPitchClasses(withBass, scaleNotes).has(7), true);
+  assert.deepEqual(
+    availableCadences(withBass, scaleNotes),
+    availableCadences(triad, scaleNotes),
+  );
+  const phrase = generatePhrase({
+    seed: 8,
+    bars: 2,
+    scaleNotes,
+    chordNotes: withBass,
+  });
+  assert.equal(phrase.ok, true);
+  if (!phrase.ok) return;
+  assert.notEqual(phrase.phrase.plan.cadence, undefined);
+  assert.ok(['root', 'third', 'fifth'].includes(phrase.phrase.plan.cadence));
+  const roles = new Set(
+    scaleNotes
+      .filter((note) => cadenceRole(note.degree) === phrase.phrase.plan.cadence)
+      .map((note) => note.pc),
+  );
+  assert.equal(roles.has(phrase.phrase.notes.at(-1)!.pc), true);
+  assert.notEqual(phrase.phrase.notes.at(-1)!.pc, 7);
 });
 
 void test('a harmonic-minor augmented second is a scale step', () => {
