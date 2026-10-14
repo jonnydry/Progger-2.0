@@ -1,25 +1,29 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { test } from 'node:test';
 import { parseChord } from '../lib/harmony.ts';
-import { SCALES, spell } from '../lib/music.ts';
+import { SCALES, spell, type Note } from '../lib/music.ts';
 import {
   PHRASE_SEARCH_STEP_CAP,
   canonicalSeed,
   generatePhrase,
   parseSeed,
   phraseSearchStepCount,
+  setPhraseSearchStepCapForTests,
+  type CadenceTarget,
+  type Contour,
+  type RegisterName,
   type RhythmId,
 } from '../lib/phrase.ts';
 
-/**
- * Measured on the 975fe75 engine: every contour, rhythm, register,
- * cadence, and these 12 roots, at 4 bars. Both peaks are over the cap.
- */
-const OLD_MINOR_BLUES_4_STEPS = 5398;
-const OLD_WHOLE_TONE_4_STEPS = 5402;
 const ROOTS = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
 const RHYTHMS: RhythmId[] = ['quarters', 'eighths', 'long-short', 'push'];
+const CONTOURS: Contour[] = ['arch', 'rise', 'fall', 'wave'];
+const REGISTERS: RegisterName[] = ['low', 'mid', 'high'];
+const CADENCES: CadenceTarget[] = ['root', 'third', 'fifth'];
+/** major-blues, C, 4 bars, quarters / fall / low / root. */
+const MAJOR_BLUES_PEAK_STEPS = 1803;
 
 void test('seeds are checked in one place and bar counts are only 2 or 4', () => {
   assert.equal(canonicalSeed(0), 0);
@@ -58,12 +62,49 @@ void test('seeds are checked in one place and bar counts are only 2 or 4', () =>
   if (!bad.ok) assert.equal(bad.reason, 'bad-input');
 });
 
+void test('the search cap refuses the step past 4000', () => {
+  const source = readFileSync(
+    new URL('../lib/phrase.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /function searchAtCap\(\)/);
+  assert.match(source, /phraseSearchSteps >= phraseSearchLimit/);
+  assert.equal(
+    source.includes('phraseSearchSteps > PHRASE_SEARCH_STEP_CAP'),
+    false,
+  );
+  assert.equal(source.includes('phraseSearchSteps > phraseSearchLimit'), false);
+  assert.equal(PHRASE_SEARCH_STEP_CAP, 4000);
+});
+
+void test('a search that lands on the cap keeps the line it found', () => {
+  const input = {
+    seed: 0,
+    bars: 4 as const,
+    scaleNotes: spell('C', ['1', '2', '3', '4', '5', '6', '7']),
+    chordNotes: parseChord('C').notes,
+  };
+  const open = generatePhrase(input);
+  const steps = phraseSearchStepCount();
+  assert.equal(open.ok, true);
+  assert.ok(steps < PHRASE_SEARCH_STEP_CAP);
+  try {
+    setPhraseSearchStepCapForTests(steps);
+    const atCap = generatePhrase(input);
+    assert.deepEqual(atCap, open);
+    assert.equal(phraseSearchStepCount(), steps);
+    setPhraseSearchStepCapForTests(steps - 1);
+    generatePhrase(input);
+    assert.ok(phraseSearchStepCount() <= steps - 1);
+  } finally {
+    setPhraseSearchStepCapForTests(PHRASE_SEARCH_STEP_CAP);
+  }
+});
+
 void test(
-  'every scale, root, and bar count stays under the search step cap',
+  'every scale, root, bar count, and plan stays under the search step cap',
   { timeout: 180000 },
   () => {
-    assert.ok(PHRASE_SEARCH_STEP_CAP < OLD_MINOR_BLUES_4_STEPS);
-    assert.ok(PHRASE_SEARCH_STEP_CAP < OLD_WHOLE_TONE_4_STEPS);
     let worstSteps = 0;
     let worstMs = 0;
     let worstLabel = '';
@@ -73,43 +114,47 @@ void test(
         const scaleNotes = spell(root, scale.formula);
         const chordNotes = parseChord(root).notes;
         for (const bars of [2, 4] as const) {
-          for (const rhythm of RHYTHMS) {
-            cases += 1;
-            const started = performance.now();
-            const result = generatePhrase({
-              seed: 1,
-              bars,
-              scaleNotes,
-              chordNotes,
-              locks: { rhythm },
-            });
-            const ms = performance.now() - started;
-            const steps = phraseSearchStepCount();
-            assert.ok(
-              steps <= PHRASE_SEARCH_STEP_CAP,
-              `${scale.id} ${root} ${bars} ${rhythm} used ${steps} steps`,
-            );
-            if (result.ok) {
-              for (const note of result.phrase.notes) {
-                assert.ok(note.fret >= 0 && note.fret <= 24);
+          for (const contour of CONTOURS) {
+            for (const rhythm of RHYTHMS) {
+              for (const register of REGISTERS) {
+                for (const cadence of CADENCES) {
+                  cases += 1;
+                  const started = performance.now();
+                  const result = generatePhrase({
+                    seed: 1,
+                    bars,
+                    scaleNotes,
+                    chordNotes,
+                    locks: { contour, rhythm, register, cadence },
+                  });
+                  const ms = performance.now() - started;
+                  const steps = phraseSearchStepCount();
+                  assert.ok(
+                    steps <= PHRASE_SEARCH_STEP_CAP,
+                    `${scale.id} ${root} ${bars} ${rhythm}/${contour}/${register}/${cadence} used ${steps} steps`,
+                  );
+                  if (result.ok) {
+                    for (const note of result.phrase.notes) {
+                      assert.ok(note.fret >= 0 && note.fret <= 24);
+                    }
+                  }
+                  if (steps > worstSteps) {
+                    worstSteps = steps;
+                    worstLabel = `${scale.id} ${root} ${bars} ${rhythm}/${contour}/${register}/${cadence}`;
+                  }
+                  if (ms > worstMs) worstMs = ms;
+                }
               }
             }
-            if (steps > worstSteps) {
-              worstSteps = steps;
-              worstLabel = `${scale.id} ${root} ${bars} ${rhythm}`;
-            }
-            if (ms > worstMs) worstMs = ms;
           }
         }
       }
     }
+    assert.equal(worstSteps, MAJOR_BLUES_PEAK_STEPS);
+    assert.equal(worstLabel, 'major-blues C 4 quarters/fall/low/root');
     console.log(
       JSON.stringify({
         cap: PHRASE_SEARCH_STEP_CAP,
-        oldEngine: {
-          minorBlues4: OLD_MINOR_BLUES_4_STEPS,
-          wholeTone4: OLD_WHOLE_TONE_4_STEPS,
-        },
         cases,
         worstSteps,
         worstMs,
@@ -118,6 +163,101 @@ void test(
     );
   },
 );
+
+void test('major blues at 4 bars stays under the search step cap', () => {
+  const scale = SCALES.find((entry) => entry.id === 'major-blues');
+  assert.ok(scale);
+  let worstSteps = 0;
+  for (const root of ROOTS) {
+    const scaleNotes = spell(root, scale.formula);
+    const chordNotes = parseChord(root).notes;
+    for (const contour of CONTOURS) {
+      for (const rhythm of RHYTHMS) {
+        for (const register of REGISTERS) {
+          for (const cadence of CADENCES) {
+            generatePhrase({
+              seed: 1,
+              bars: 4,
+              scaleNotes,
+              chordNotes,
+              locks: { contour, rhythm, register, cadence },
+            });
+            const steps = phraseSearchStepCount();
+            assert.ok(
+              steps <= PHRASE_SEARCH_STEP_CAP,
+              `${root} ${rhythm}/${contour}/${register}/${cadence} used ${steps}`,
+            );
+            if (steps > worstSteps) worstSteps = steps;
+          }
+        }
+      }
+    }
+  }
+  const peak = generatePhrase({
+    seed: 1,
+    bars: 4,
+    scaleNotes: spell('C', scale.formula),
+    chordNotes: parseChord('C').notes,
+    locks: {
+      contour: 'fall',
+      rhythm: 'quarters',
+      register: 'low',
+      cadence: 'root',
+    },
+  });
+  assert.equal(peak.ok, true);
+  assert.equal(phraseSearchStepCount(), MAJOR_BLUES_PEAK_STEPS);
+  assert.equal(worstSteps, MAJOR_BLUES_PEAK_STEPS);
+});
+
+void test('an unplayable plan retries once with the next seed', () => {
+  const scaleNotes: Note[] = [{ name: 'C', pc: 0, degree: '1' }];
+  const chordNotes: Note[] = scaleNotes;
+  const retried = generatePhrase({
+    seed: 7,
+    bars: 2,
+    scaleNotes,
+    chordNotes,
+  });
+  assert.equal(retried.ok, true);
+  if (retried.ok) {
+    assert.equal(retried.phrase.seed, 8);
+    assert.equal(retried.phrase.plan.register, 'low');
+  }
+  const again = generatePhrase({
+    seed: 7,
+    bars: 2,
+    scaleNotes,
+    chordNotes,
+  });
+  assert.deepEqual(again, retried);
+  assert.ok(phraseSearchStepCount() <= PHRASE_SEARCH_STEP_CAP);
+
+  const still = generatePhrase({
+    seed: 55,
+    bars: 2,
+    scaleNotes,
+    chordNotes,
+  });
+  assert.deepEqual(still, { ok: false, reason: 'unplayable' });
+
+  const outside = generatePhrase({
+    seed: 4,
+    bars: 2,
+    scaleNotes,
+    chordNotes: [{ name: 'F#', pc: 6, degree: '1' }],
+  });
+  assert.deepEqual(outside, { ok: false, reason: 'no-shared-tones' });
+
+  const wrapped = generatePhrase({
+    seed: 0xffffffff,
+    bars: 2,
+    scaleNotes: spell('C', ['1', '2', '3', '4', '5', '6', '7']),
+    chordNotes: parseChord('C').notes,
+  });
+  assert.equal(wrapped.ok, true);
+  if (wrapped.ok) assert.equal(wrapped.phrase.seed, 0xffffffff);
+});
 
 void test('a thousand seeds log time and memory without a time gate', () => {
   const scale = SCALES.find((item) => item.id === 'dorian');

@@ -87,6 +87,10 @@ export function PhrasePanel({
       }),
     [seed, bars, scaleNotes, chordNotes, locks],
   );
+  if (phrase.ok && phrase.phrase.seed !== seed && seedText === String(seed)) {
+    setSeed(phrase.phrase.seed);
+    setSeedText(String(phrase.phrase.seed));
+  }
   const playbackTempo = slow ? tempo / 2 : tempo;
   const notes = useMemo(
     () => (phrase.ok ? phrase.phrase.notes : EMPTY_NOTES),

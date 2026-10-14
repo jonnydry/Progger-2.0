@@ -14,24 +14,59 @@ export const PHRASE_PLANNER_TIMEOUT_MS = 800;
 export const PHRASE_RANGE = 18;
 /**
  * Anchor search and gap search each count one step per call.
- * On 975fe75, with every contour, rhythm, register, cadence, and the
- * 12 roots at 4 bars, minor blues peaked at 5398 steps and whole tone
- * at 5402. This cap sits under both of those scores. The memoized
- * search stays under it and keeps the best complete line if it hits.
+ * The memoized engine peaks at 1803 steps: major-blues, C, 4 bars,
+ * quarters / fall / low / root. The cap stays under the old 975fe75
+ * minor-blues and whole-tone peaks at 4 bars. A search that has used
+ * the cap refuses another step, so the count never becomes 4001, and
+ * keeps the best complete line found so far.
  */
 export const PHRASE_SEARCH_STEP_CAP = 4000;
 
 let phraseSearchSteps = 0;
+/** Highest count among the attempts inside one generate call. */
+let phraseSearchPeak = 0;
+/** A step was asked for after the cap. That step is not counted. */
+let phraseSearchRefused = false;
+let phraseSearchLimit = PHRASE_SEARCH_STEP_CAP;
 
 /** Steps used by the most recent `generatePhrase` attempt. */
 export function phraseSearchStepCount(): number {
-  return phraseSearchSteps;
+  return Math.max(phraseSearchSteps, phraseSearchPeak);
+}
+
+/**
+ * Tests pin the budget to the cost of one phrase. Production leaves this
+ * at {@link PHRASE_SEARCH_STEP_CAP}.
+ */
+export function setPhraseSearchStepCapForTests(cap: number): void {
+  phraseSearchLimit = cap;
+}
+
+/** The search has spent its budget. The next step is refused. */
+function searchAtCap(): boolean {
+  return phraseSearchSteps >= phraseSearchLimit;
 }
 
 function countSearchStep(): boolean {
-  if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return true;
+  if (searchAtCap()) {
+    phraseSearchRefused = true;
+    return true;
+  }
   phraseSearchSteps += 1;
-  return phraseSearchSteps > PHRASE_SEARCH_STEP_CAP;
+  return false;
+}
+
+function resetSearchCount(): void {
+  phraseSearchSteps = 0;
+  phraseSearchPeak = 0;
+  phraseSearchRefused = false;
+}
+
+/** Start another attempt without letting the new count hide an earlier one. */
+function nextSearchAttempt(): void {
+  phraseSearchPeak = Math.max(phraseSearchPeak, phraseSearchSteps);
+  phraseSearchSteps = 0;
+  phraseSearchRefused = false;
 }
 
 export type Contour = 'arch' | 'rise' | 'fall' | 'wave';
@@ -533,7 +568,7 @@ function fillGap(
     const state = `${pos}|${left}|${resolve}|${leapsLeft}`;
     if (missed.has(state)) return false;
     const fail = () => {
-      if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return false;
+      if (phraseSearchRefused) return false;
       missed.add(state);
       return false;
     };
@@ -596,13 +631,15 @@ function fillGap(
       )
         return true;
       path.pop();
-      if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return false;
+      if (searchAtCap()) return false;
     }
     return fail();
   };
   const found =
     intervals === 0 ? from === to : search(from, intervals, 0, leaps);
-  if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return null;
+  // Landing on the cap can still be a finished gap. Only a refused step
+  // is an abort, and that result is not cached as a real miss.
+  if (phraseSearchRefused) return null;
   const result = found ? [...path] : null;
   cache.set(key, result);
   return result;
@@ -676,7 +713,7 @@ function realize(
       const memo = `${ordinal}|${previous}|${spent}`;
       if (failedVisits.has(memo)) return false;
       const fail = () => {
-        if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return false;
+        if (phraseSearchRefused) return false;
         failedVisits.add(memo);
         return false;
       };
@@ -726,20 +763,20 @@ function realize(
           };
           return true;
         }
-        if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return false;
+        if (searchAtCap()) return false;
       }
       return fail();
     };
-    if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return best;
+    if (searchAtCap()) return best;
     return visit(0, 0) ? best : null;
   };
 
   let chosen: { anchors: number[]; leaps: number[] } | null = null;
   for (const slack of [0, 1, 2, 4, 8]) {
-    if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) break;
+    if (searchAtCap()) break;
     chosen = choose(slack, Math.min(4, chordIndexes.length));
     if (chosen) break;
-    if (slack === 8 && phraseSearchSteps <= PHRASE_SEARCH_STEP_CAP) {
+    if (slack === 8 && !searchAtCap()) {
       chosen = choose(slack, chordIndexes.length);
     }
     if (chosen) break;
@@ -931,14 +968,34 @@ function assemble(
   };
 }
 
-export function generatePhrase(input: {
+type PhraseRequest = {
   seed: number;
   bars: 2 | 4;
   scaleNotes: readonly Note[];
   chordNotes: readonly Note[];
   locks?: PhraseLocks;
-}): PhraseResult {
-  phraseSearchSteps = 0;
+};
+
+function rulesResult(
+  input: PhraseRequest,
+  available: readonly CadenceTarget[],
+): PhraseResult {
+  return assemble(input, rulePlan(input.seed, available, input.locks), 'rules');
+}
+
+/** One fresh plan when the first comes back unplayable. Other failures stay. */
+function retryUnplayable(
+  input: PhraseRequest,
+  available: readonly CadenceTarget[],
+  result: PhraseResult,
+): PhraseResult {
+  if (result.ok || result.reason !== 'unplayable') return result;
+  nextSearchAttempt();
+  return rulesResult({ ...input, seed: (input.seed + 1) >>> 0 }, available);
+}
+
+export function generatePhrase(input: PhraseRequest): PhraseResult {
+  resetSearchCount();
   if (
     canonicalSeed(input.seed) === null ||
     (input.bars !== 2 && input.bars !== 4)
@@ -947,8 +1004,7 @@ export function generatePhrase(input: {
   }
   const available = availableCadences(input.chordNotes, input.scaleNotes);
   if (!available.length) return { ok: false, reason: 'no-shared-tones' };
-  const plan = rulePlan(input.seed, available, input.locks);
-  return assemble(input, plan, 'rules');
+  return retryUnplayable(input, available, rulesResult(input, available));
 }
 
 export async function generatePhraseWithPlanner(input: {
@@ -962,7 +1018,7 @@ export async function generatePhraseWithPlanner(input: {
   scaleLabel?: string;
   chordSymbol?: string;
 }): Promise<PhraseResult> {
-  phraseSearchSteps = 0;
+  resetSearchCount();
   if (
     canonicalSeed(input.seed) === null ||
     (input.bars !== 2 && input.bars !== 4)
@@ -973,7 +1029,7 @@ export async function generatePhraseWithPlanner(input: {
   if (!available.length) return { ok: false, reason: 'no-shared-tones' };
   const rules = rulePlan(input.seed, available);
   if (!input.planner)
-    return assemble(input, applyLocks(rules, input.locks, available), 'rules');
+    return retryUnplayable(input, available, rulesResult(input, available));
   const timeoutMs = input.timeoutMs ?? PHRASE_PLANNER_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -1008,9 +1064,15 @@ export async function generatePhraseWithPlanner(input: {
   }
   const plan = applyLocks({ ...rules, ...proposal }, input.locks, available);
   const planned = assemble(input, plan, accepted ? 'planner' : 'rules');
-  if (planned.ok || !accepted) return planned;
-  phraseSearchSteps = 0;
-  return assemble(input, applyLocks(rules, input.locks, available), 'rules');
+  if (planned.ok) return planned;
+  if (!accepted) return retryUnplayable(input, available, planned);
+  nextSearchAttempt();
+  const fallback = assemble(
+    input,
+    applyLocks(rules, input.locks, available),
+    'rules',
+  );
+  return retryUnplayable(input, available, fallback);
 }
 
 export function phraseFretMarks(
