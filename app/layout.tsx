@@ -24,7 +24,6 @@ const arcade = Silkscreen({
 });
 
 export const metadata: Metadata = {
-  icons: { icon: { url: '/favicon.png', type: 'image/png', sizes: '64x64' } },
   title: 'Progger — Find your next note',
   description:
     'Explore guitar scales, modes, chords and three-notes-per-string patterns across all 24 frets.',
