@@ -332,6 +332,13 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
 }
 
+.drone-volume-popover[data-side='sheet'] {
+  right: 8px;
+  width: auto;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+}
+
 .drone-volume-field {
   display: flex;
   flex-direction: column;

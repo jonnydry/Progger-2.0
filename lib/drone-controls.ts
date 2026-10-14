@@ -3,21 +3,11 @@ export const DRONE_ICON_PX = 18;
 export const DRONE_POPOVER_MARGIN_PX = 8;
 /** The scales tab and the two pickers stay this far from the popover. */
 export const DRONE_POPOVER_GUARD_PX = 8;
-
-/** Regions the volume popover must miss. Caption and degree letters are required. */
-export const VOLUME_POPOVER_OBSTACLE_SELECTORS = [
-  '.brand',
-  '.site-header nav',
-  '.workspace-tools',
-  '.reference-tabs',
-  '.root-select',
-  '.scale-select',
-  '.scale-caption',
-  '.palette-note > span',
-  '.palette-note small',
-  '.neck-meta',
-  '.fret-grid',
-] as const;
+/**
+ * How far the menu may slide past the flush spot to clear the tab and the
+ * pickers. Farther than this is not "next to the button".
+ */
+export const DRONE_POPOVER_NUDGE_PX = 24;
 
 /** The tab and the pickers. A 4–8px graze still counts as a hit. */
 export const VOLUME_POPOVER_GUARD_SELECTORS = [
@@ -130,61 +120,68 @@ export function popoverFixedPoint(
   return { x: origin.x - frame.x, y: origin.y - frame.y };
 }
 
-// Sit against the volume button. Prefer the side that misses every obstacle.
-// A clear cell further up the page is not a place to open.
-export function volumePopoverOrigin(input: {
+export type AnchoredPopoverSide = 'below' | 'above' | 'sheet';
+
+export type AnchoredPopover = {
+  x: number;
+  y: number;
+  side: AnchoredPopoverSide;
+};
+
+/**
+ * Pin the sound menu to its button. Below, then above when below does not
+ * fit, then a bottom sheet when neither side can sit in the viewport.
+ * The menu never hunts for a gap elsewhere on the page, so it always opens.
+ */
+export function anchoredVolumePopover(input: {
   trigger: DroneBox;
   popover: { width: number; height: number };
   viewport: { width: number; height: number };
-  obstacles?: readonly DroneBox[];
   guards?: readonly DroneBox[];
   guard?: number;
-  neck?: DroneBox | null;
   margin?: number;
-}): { x: number; y: number } | null {
+}): AnchoredPopover {
   const margin = input.margin ?? DRONE_POPOVER_MARGIN_PX;
   const guard = input.guard ?? DRONE_POPOVER_GUARD_PX;
-  const obstacles = input.obstacles ?? [];
   const guards = input.guards ?? [];
-  const neck = input.neck ?? null;
-  const { width, height } = input.popover;
+  const availableW = Math.max(0, input.viewport.width - margin * 2);
+  const availableH = Math.max(0, input.viewport.height - margin * 2);
+  const width = Math.min(input.popover.width, availableW);
+  const height = Math.min(input.popover.height, availableH);
   const minX = margin;
   const maxX = input.viewport.width - width - margin;
   const minY = margin;
   const maxY = input.viewport.height - height - margin;
-  if (maxX < minX - 0.01 || maxY < minY - 0.01) return null;
 
-  let x = input.trigger.x + input.trigger.width - width;
-  if (x < minX) x = minX;
-  if (x > maxX) x = maxX;
+  let x = input.trigger.x;
+  if (maxX < minX) x = minX;
+  else {
+    if (x < minX) x = minX;
+    if (x > maxX) x = maxX;
+  }
 
-  const aboveY = input.trigger.y - height - margin;
-  const belowY = input.trigger.y + input.trigger.height + margin;
   const boxAt = (y: number): DroneBox => ({ x, y, width, height });
   const onScreen = (y: number) => y >= minY - 0.01 && y <= maxY + 0.01;
-  const hits = (y: number, regions: readonly DroneBox[]) =>
-    regions.some((region) => boxesOverlap(boxAt(y), region));
-  const hitsGuard = (y: number) =>
-    guards.some((region) => boxGap(boxAt(y), region) < guard - 0.01);
-  const clear = (y: number) =>
-    onScreen(y) &&
-    !hits(y, obstacles) &&
-    !hitsGuard(y) &&
-    !(neck && hits(y, [neck]));
+  const clears = (y: number) =>
+    guards.every((region) => boxGap(boxAt(y), region) >= guard - 0.01);
+  const slide = (flush: number, direction: 1 | -1): number | null => {
+    if (maxY < minY - 0.01 || !onScreen(flush)) return null;
+    const limit = direction === 1 ? maxY : minY;
+    const room = Math.max(0, Math.floor(Math.abs(limit - flush) + 1e-6));
+    const steps = Math.min(DRONE_POPOVER_NUDGE_PX, room);
+    for (let step = 0; step <= steps; step += 1) {
+      const y = flush + direction * step;
+      if (!onScreen(y)) return null;
+      if (clears(y)) return y;
+    }
+    return null;
+  };
 
-  if (clear(aboveY)) return { x, y: aboveY };
-  if (clear(belowY)) return { x, y: belowY };
-
-  let best: { x: number; y: number; distance: number } | null = null;
-  const steps = Math.ceil(maxY - minY);
-  for (let step = 0; step <= steps; step += 1) {
-    const y = minY + step;
-    if (!clear(y)) continue;
-    const distance = Math.min(
-      Math.abs(y - aboveY),
-      Math.abs(y - belowY),
-    );
-    if (!best || distance < best.distance) best = { x, y, distance };
-  }
-  return best ? { x: best.x, y: best.y } : null;
+  const belowY = input.trigger.y + input.trigger.height + margin;
+  const aboveY = input.trigger.y - height - margin;
+  const below = slide(belowY, 1);
+  if (below !== null) return { x, y: below, side: 'below' };
+  const above = slide(aboveY, -1);
+  if (above !== null) return { x, y: above, side: 'above' };
+  return { x: minX, y: Math.max(minY, maxY), side: 'sheet' };
 }
