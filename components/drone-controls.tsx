@@ -14,11 +14,13 @@ import { pageAudio } from '@/lib/audio-output';
 import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
 import {
   DRONE_ICON_PX,
+  VOLUME_POPOVER_GUARD_SELECTORS,
   VOLUME_POPOVER_OBSTACLE_SELECTORS,
   type DroneBox,
   droneControlName,
   droneVolumeFocusOut,
   droneVolumeOpens,
+  popoverFixedPoint,
   volumePopoverKey,
   volumePopoverOrigin,
 } from '@/lib/drone-controls';
@@ -104,15 +106,50 @@ function toBox(rect: Pick<DOMRect, 'x' | 'y' | 'width' | 'height'>): DroneBox {
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
 }
 
-function obstacleBoxes(): DroneBox[] {
+function boxesFor(selectors: readonly string[]): DroneBox[] {
   const boxes: DroneBox[] = [];
-  for (const selector of VOLUME_POPOVER_OBSTACLE_SELECTORS) {
+  for (const selector of selectors) {
     for (const node of document.querySelectorAll(selector)) {
       const rect = node.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) boxes.push(toBox(rect));
     }
   }
   return boxes;
+}
+
+function obstacleBoxes(): DroneBox[] {
+  return boxesFor(VOLUME_POPOVER_OBSTACLE_SELECTORS);
+}
+
+function guardBoxes(): DroneBox[] {
+  return boxesFor(VOLUME_POPOVER_GUARD_SELECTORS);
+}
+
+function soundLabel(id: DroneSoundId): string {
+  return DRONE_SOUNDS.find((choice) => choice.id === id)?.label ?? id;
+}
+
+/**
+ * The shell is a container query, so fixed descendants are positioned
+ * against it. Return that frame's viewport origin.
+ */
+function fixedFrame(node: HTMLElement): { x: number; y: number } | null {
+  let current: HTMLElement | null = node.parentElement;
+  while (current && current !== document.documentElement) {
+    const style = getComputedStyle(current);
+    const containsFixed =
+      style.transform !== 'none' ||
+      style.filter !== 'none' ||
+      style.perspective !== 'none' ||
+      style.containerType !== 'normal' ||
+      style.willChange.split(',').some((part) => part.trim() === 'transform');
+    if (containsFixed) {
+      const rect = current.getBoundingClientRect();
+      return { x: rect.left, y: rect.top };
+    }
+    current = current.parentElement;
+  }
+  return null;
 }
 
 function DroneVolumePopover({
@@ -158,15 +195,18 @@ function DroneVolumePopover({
         popover: { width: panel.offsetWidth, height: panel.offsetHeight },
         viewport: { width: window.innerWidth, height: window.innerHeight },
         obstacles: obstacleBoxes(),
+        guards: guardBoxes(),
       });
       if (!next) {
         onDismiss();
         return;
       }
+      const point = popoverFixedPoint(next, fixedFrame(panel));
+      const rounded = { x: Math.round(point.x), y: Math.round(point.y) };
       setOrigin((current) =>
-        current && current.x === next.x && current.y === next.y
+        current && current.x === rounded.x && current.y === rounded.y
           ? current
-          : next,
+          : rounded,
       );
     };
     const panel = panelRef.current;
@@ -293,6 +333,7 @@ export function DroneControls({
   onWalk: () => void;
 }) {
   const [volumeOpen, setVolumeOpen] = useState(false);
+  const activeSound = soundLabel(sound);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const volumeRef = useRef<HTMLButtonElement>(null);
   const restoreToggleFocus = useRef(false);
@@ -393,7 +434,9 @@ export function DroneControls({
         id="drone-volume-trigger"
         className="drone-volume-trigger"
         ref={volumeRef}
-        aria-label="Drone volume"
+        data-sound={sound}
+        data-playing={enabled ? 'true' : 'false'}
+        aria-label={`Drone sound, ${activeSound}`}
         aria-haspopup="dialog"
         aria-expanded={volumeOpen}
         aria-controls="drone-volume-popover"
@@ -409,6 +452,7 @@ export function DroneControls({
           setVolumeOpen((open) => !open);
         }}
       >
+        <span className="drone-sound-name">{activeSound}</span>
         <ChevronDown size={DRONE_ICON_PX} aria-hidden="true" />
       </button>
       {volumeOpen ? (
@@ -455,7 +499,7 @@ export function DroneControls({
         className="drone-toggle"
         ref={toggleRef}
         aria-pressed={enabled}
-        aria-label={droneControlName(enabled)}
+        aria-label={droneControlName(enabled, activeSound)}
         aria-keyshortcuts="ArrowDown ArrowUp"
         onClick={onToggle}
         onKeyDown={(event) => {

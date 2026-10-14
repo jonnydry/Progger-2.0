@@ -3,12 +3,16 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   DRONE_ICON_PX,
+  DRONE_POPOVER_GUARD_PX,
   DRONE_TAP_TARGET_PX,
+  VOLUME_POPOVER_GUARD_SELECTORS,
   VOLUME_POPOVER_OBSTACLE_SELECTORS,
+  boxGap,
   boxesOverlap,
   droneControlName,
   droneVolumeFocusOut,
   droneVolumeOpens,
+  popoverFixedPoint,
   volumePopoverKey,
   volumePopoverOrigin,
   type DroneBox,
@@ -19,9 +23,12 @@ const popover = { width: 220, height: 120 };
 void test('the toggle name says drone and whether it is on', () => {
   assert.equal(droneControlName(true), 'Drone, on');
   assert.equal(droneControlName(false), 'Drone, off');
+  assert.equal(droneControlName(true, 'Reed'), 'Drone, on, Reed');
+  assert.equal(droneControlName(false, 'Cello'), 'Drone, off, Cello');
   assert.equal(DRONE_TAP_TARGET_PX, 44);
   assert.equal(DRONE_ICON_PX, 18);
   assert.ok(DRONE_ICON_PX < DRONE_TAP_TARGET_PX);
+  assert.equal(DRONE_POPOVER_GUARD_PX, 8);
 });
 
 void test('focus leaving the volume popover closes it, and a press on the volume button does not', () => {
@@ -188,7 +195,37 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   );
   assert.match(css, /height:\s*18px/);
   assert.match(css, /border:\s*1px solid var\(--border\)/);
-  assert.match(css, /outline:\s*2px solid var\(--green\)/);
+  assert.match(css, /outline:\s*3px solid var\(--amber\)/);
+  assert.match(css, /outline-offset:\s*3px/);
+  assert.match(css, /z-index:\s*4/);
+  assert.match(
+    css,
+    /\.drone-toggle:hover:not\(\[aria-pressed='true'\]\)/,
+  );
+  assert.match(
+    css,
+    /\.drone-walk:hover:not\(\[aria-pressed='true'\]\)/,
+  );
+  assert.match(
+    css,
+    /\.drone-volume-trigger:hover:not\(\[aria-expanded='true'\]\)/,
+  );
+  assert.match(css, /\.drone-toggle:active/);
+  assert.match(css, /\.drone-walk:active/);
+  assert.match(css, /\.drone-volume-trigger:active/);
+  assert.match(
+    css,
+    /\.drone-sound-options label:hover:not\(:has\(input:disabled\)\)/,
+  );
+  assert.match(
+    css,
+    /\.drone-sound-options label:active:not\(:has\(input:disabled\)\)/,
+  );
+  assert.match(css, /background:\s*var\(--green\)/);
+  assert.match(css, /color:\s*var\(--primary-foreground\)/);
+  assert.match(css, /data-playing='true'/);
+  assert.match(css, /\.drone-sound-name/);
+  assert.match(css, /--drone-side:\s*100px/);
   assert.match(
     css,
     /\.drone-sound-options label:has\(input:focus-visible\)/,
@@ -202,7 +239,17 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   assert.doesNotMatch(css, /flex-wrap:\s*wrap/);
   assert.doesNotMatch(css, /flex:\s*1\s*0\s*100%/);
   assert.match(view, /aria-pressed=\{enabled\}/);
-  assert.match(view, /aria-label=\{droneControlName\(enabled\)\}/);
+  assert.match(
+    view,
+    /aria-label=\{droneControlName\(enabled, activeSound\)\}/,
+  );
+  assert.match(view, /data-playing=\{enabled \? 'true' : 'false'\}/);
+  assert.match(view, /data-sound=\{sound\}/);
+  assert.match(view, /className="drone-sound-name"/);
+  assert.match(view, /aria-label=\{`Drone sound, \$\{activeSound\}`\}/);
+  assert.match(view, /popoverFixedPoint/);
+  assert.match(view, /guards: guardBoxes\(\)/);
+  assert.match(view, /VOLUME_POPOVER_GUARD_SELECTORS/);
   const volumeButton = view.slice(
     view.indexOf('id="drone-volume-trigger"'),
     view.indexOf('id="drone-toggle"'),
@@ -243,4 +290,143 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   assert.match(view, /setTimeout\(\(\) => \{\s*returnTimer\.current = null;/);
   assert.ok(VOLUME_POPOVER_OBSTACLE_SELECTORS.includes('.scale-caption'));
   assert.ok(VOLUME_POPOVER_OBSTACLE_SELECTORS.includes('.palette-note small'));
+  assert.ok(VOLUME_POPOVER_GUARD_SELECTORS.includes('#scales-reference-tab'));
+  assert.ok(VOLUME_POPOVER_GUARD_SELECTORS.includes('.root-select'));
+  assert.ok(VOLUME_POPOVER_GUARD_SELECTORS.includes('.scale-select'));
+});
+
+void test('hover, focus, and the on state stay visible on the three drone buttons', () => {
+  const css = readFileSync(
+    new URL('../app/drone-controls.css', import.meta.url),
+    'utf8',
+  );
+  const view = readFileSync(
+    new URL('../components/drone-controls.tsx', import.meta.url),
+    'utf8',
+  );
+  for (const control of ['.drone-toggle', '.drone-walk', '.drone-volume-trigger']) {
+    assert.match(css, new RegExp(`${control.replace('.', '\\.')}:hover`));
+    assert.match(css, new RegExp(`${control.replace('.', '\\.')}:active`));
+    assert.match(css, new RegExp(`${control.replace('.', '\\.')}:focus-visible`));
+  }
+  assert.match(css, /\.drone-toggle\[aria-pressed='true'\]/);
+  assert.match(css, /\.drone-walk\[aria-pressed='true'\]/);
+  assert.match(css, /\.drone-volume-trigger\[data-playing='true'\]/);
+  assert.match(view, /<span className="drone-sound-name">\{activeSound\}<\/span>/);
+  assert.equal(droneControlName(true, 'Bow'), 'Drone, on, Bow');
+});
+
+void test('a fixed popover follows its container so a shell offset cannot cover the tab', () => {
+  assert.deepEqual(popoverFixedPoint({ x: 8, y: 123 }, null), { x: 8, y: 123 });
+  assert.deepEqual(popoverFixedPoint({ x: 8, y: 123 }, { x: 0, y: 0 }), {
+    x: 8,
+    y: 123,
+  });
+  assert.deepEqual(popoverFixedPoint({ x: 40, y: 200 }, { x: 16, y: -80 }), {
+    x: 24,
+    y: 280,
+  });
+});
+
+void test('the popover keeps 8px off the scales tab and the pickers at 390, 501, and desktop', () => {
+  const scenes: {
+    width: number;
+    trigger: DroneBox;
+    tab: DroneBox;
+    root: DroneBox;
+    scale: DroneBox;
+    obstacles: DroneBox[];
+  }[] = [
+    {
+      width: 390,
+      trigger: { x: 16, y: 335.375, width: 44, height: 44 },
+      tab: { x: 110.59375, y: 275.375, width: 100.8125, height: 44 },
+      root: { x: 108.5, y: 323.375, width: 44, height: 68 },
+      scale: { x: 160.5, y: 323.375, width: 121, height: 68 },
+      obstacles: [
+        { x: 18, y: 62, width: 354, height: 48 },
+        { x: 16, y: 223.375, width: 358, height: 44 },
+        { x: 16, y: 275.375, width: 358, height: 44 },
+        { x: 108.5, y: 323.375, width: 44, height: 68 },
+        { x: 160.5, y: 323.375, width: 121, height: 68 },
+        { x: 85.796875, y: 395.375, width: 218.40625, height: 19.5 },
+      ],
+    },
+    {
+      width: 501,
+      trigger: { x: 24, y: 408.390625, width: 44, height: 44 },
+      tab: { x: 160.484375, y: 338.390625, width: 109.203125, height: 44 },
+      root: { x: 137.484375, y: 392.390625, width: 51.015625, height: 76 },
+      scale: { x: 200.5, y: 392.390625, width: 163.015625, height: 76 },
+      obstacles: [
+        { x: 24, y: 64, width: 453, height: 48 },
+        { x: 24, y: 290.390625, width: 453, height: 44 },
+        { x: 24, y: 338.390625, width: 453, height: 44 },
+        { x: 137.484375, y: 392.390625, width: 51.015625, height: 76 },
+        { x: 200.5, y: 392.390625, width: 163.015625, height: 76 },
+        { x: 132.890625, y: 470.390625, width: 235.203125, height: 21 },
+      ],
+    },
+    {
+      width: 1440,
+      trigger: { x: 56, y: 628, width: 44, height: 44 },
+      tab: { x: 629.984375, y: 568, width: 109.203125, height: 44 },
+      root: { x: 547, y: 612, width: 69, height: 76 },
+      scale: { x: 628, y: 612, width: 265, height: 76 },
+      obstacles: [
+        { x: 247.015625, y: 26, width: 225.8125, height: 44 },
+        { x: 56, y: 520, width: 1328, height: 44 },
+        { x: 56, y: 568, width: 1328, height: 44 },
+        { x: 547, y: 612, width: 69, height: 76 },
+        { x: 628, y: 612, width: 265, height: 76 },
+        { x: 577.1875, y: 690, width: 285.609375, height: 25.5 },
+      ],
+    },
+  ];
+  for (const scene of scenes) {
+    const origin = volumePopoverOrigin({
+      trigger: scene.trigger,
+      popover: { width: 220, height: 100 },
+      viewport: { width: scene.width, height: 900 },
+      obstacles: scene.obstacles,
+      guards: [scene.tab, scene.root, scene.scale],
+    });
+    assert.ok(origin, `${scene.width}px popover should open`);
+    const box = { ...origin, width: 220, height: 100 };
+    for (const guard of [scene.tab, scene.root, scene.scale]) {
+      const gap = boxGap(box, guard);
+      assert.ok(
+        gap >= DRONE_POPOVER_GUARD_PX,
+        `${scene.width}px gap ${gap} is under 8px`,
+      );
+      assert.equal(boxesOverlap(box, guard), false);
+    }
+  }
+});
+
+void test('a popover that would clip the pickers by 4px opens clear of them', () => {
+  const tab: DroneBox = { x: 110, y: 275, width: 101, height: 44 };
+  const root: DroneBox = { x: 108, y: 323, width: 44, height: 68 };
+  const scale: DroneBox = { x: 160, y: 323, width: 121, height: 68 };
+  const ungarded = volumePopoverOrigin({
+    trigger: { x: 16, y: 335, width: 44, height: 44 },
+    popover: { width: 220, height: 100 },
+    viewport: { width: 390, height: 844 },
+    obstacles: [tab],
+    guards: [],
+    guard: 0,
+  });
+  assert.deepEqual(ungarded, { x: 8, y: 387 });
+  assert.ok(boxGap({ ...ungarded!, width: 220, height: 100 }, root) < 0);
+  const origin = volumePopoverOrigin({
+    trigger: { x: 16, y: 335, width: 44, height: 44 },
+    popover: { width: 220, height: 100 },
+    viewport: { width: 390, height: 844 },
+    guards: [tab, root, scale],
+  });
+  assert.ok(origin);
+  const box = { ...origin, width: 220, height: 100 };
+  for (const guard of [tab, root, scale]) {
+    assert.ok(boxGap(box, guard) >= 8);
+  }
 });

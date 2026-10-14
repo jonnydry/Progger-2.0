@@ -1,6 +1,8 @@
 export const DRONE_TAP_TARGET_PX = 44;
 export const DRONE_ICON_PX = 18;
 export const DRONE_POPOVER_MARGIN_PX = 8;
+/** The scales tab and the two pickers stay this far from the popover. */
+export const DRONE_POPOVER_GUARD_PX = 8;
 
 /** Regions the volume popover must miss. Caption and degree letters are required. */
 export const VOLUME_POPOVER_OBSTACLE_SELECTORS = [
@@ -17,6 +19,13 @@ export const VOLUME_POPOVER_OBSTACLE_SELECTORS = [
   '.fret-grid',
 ] as const;
 
+/** The tab and the pickers. A 4–8px graze still counts as a hit. */
+export const VOLUME_POPOVER_GUARD_SELECTORS = [
+  '#scales-reference-tab',
+  '.root-select',
+  '.scale-select',
+] as const;
+
 export type DroneBox = {
   x: number;
   y: number;
@@ -24,8 +33,9 @@ export type DroneBox = {
   height: number;
 };
 
-export function droneControlName(enabled: boolean): string {
-  return enabled ? 'Drone, on' : 'Drone, off';
+export function droneControlName(enabled: boolean, sound?: string): string {
+  const state = enabled ? 'Drone, on' : 'Drone, off';
+  return sound ? `${state}, ${sound}` : state;
 }
 
 export function droneVolumeKeyOpens(key: string): boolean {
@@ -84,6 +94,42 @@ export function boxesOverlap(a: DroneBox, b: DroneBox): boolean {
   );
 }
 
+/**
+ * Positive when the boxes are apart, negative by the smaller overlap
+ * when they cross. A 4px graze is −4, not a miss.
+ */
+export function boxGap(a: DroneBox, b: DroneBox): number {
+  const overlapX =
+    Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const overlapY =
+    Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  if (overlapX > 0 && overlapY > 0) return -Math.min(overlapX, overlapY);
+  const gapX =
+    overlapX > 0
+      ? 0
+      : Math.max(b.x - (a.x + a.width), a.x - (b.x + b.width));
+  const gapY =
+    overlapY > 0
+      ? 0
+      : Math.max(b.y - (a.y + a.height), a.y - (b.y + b.height));
+  if (overlapX > 0) return gapY;
+  if (overlapY > 0) return gapX;
+  return Math.hypot(gapX, gapY);
+}
+
+/**
+ * `position: fixed` inside a container query is positioned against that
+ * container, not the viewport. Subtract the container's viewport origin
+ * so a scroll or a shell offset cannot slide the popover onto the tab.
+ */
+export function popoverFixedPoint(
+  origin: { x: number; y: number },
+  container: { x: number; y: number } | null,
+): { x: number; y: number } {
+  const frame = container ?? { x: 0, y: 0 };
+  return { x: origin.x - frame.x, y: origin.y - frame.y };
+}
+
 // Sit against the volume button. Prefer the side that misses every obstacle.
 // A clear cell further up the page is not a place to open.
 export function volumePopoverOrigin(input: {
@@ -91,11 +137,15 @@ export function volumePopoverOrigin(input: {
   popover: { width: number; height: number };
   viewport: { width: number; height: number };
   obstacles?: readonly DroneBox[];
+  guards?: readonly DroneBox[];
+  guard?: number;
   neck?: DroneBox | null;
   margin?: number;
 }): { x: number; y: number } | null {
   const margin = input.margin ?? DRONE_POPOVER_MARGIN_PX;
+  const guard = input.guard ?? DRONE_POPOVER_GUARD_PX;
   const obstacles = input.obstacles ?? [];
+  const guards = input.guards ?? [];
   const neck = input.neck ?? null;
   const { width, height } = input.popover;
   const minX = margin;
@@ -114,8 +164,13 @@ export function volumePopoverOrigin(input: {
   const onScreen = (y: number) => y >= minY - 0.01 && y <= maxY + 0.01;
   const hits = (y: number, regions: readonly DroneBox[]) =>
     regions.some((region) => boxesOverlap(boxAt(y), region));
+  const hitsGuard = (y: number) =>
+    guards.some((region) => boxGap(boxAt(y), region) < guard - 0.01);
   const clear = (y: number) =>
-    onScreen(y) && !hits(y, obstacles) && !(neck && hits(y, [neck]));
+    onScreen(y) &&
+    !hits(y, obstacles) &&
+    !hitsGuard(y) &&
+    !(neck && hits(y, [neck]));
 
   if (clear(aboveY)) return { x, y: aboveY };
   if (clear(belowY)) return { x, y: belowY };

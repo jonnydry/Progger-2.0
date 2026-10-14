@@ -43,15 +43,40 @@
   min-height: 44px;
   margin: 0;
   padding: 0;
-  color: var(--quiet);
+  color: var(--foreground);
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 5px;
   cursor: pointer;
+  z-index: 1;
 }
 
 .drone-volume-trigger {
   left: 0;
+  width: max-content;
+  max-width: calc(var(--drone-side, 92px) - 8px);
+  padding-inline: 8px;
+  gap: 4px;
+}
+
+.drone-sound-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The right cluster is 92px. Eight more pixels keeps the scale picker
+   off the walk button at phone widths, where the two were touching. */
+@media (max-width: 500px) {
+  .night-swim .selection-bar:has(.drone-controls),
+  .selection-bar:has(.drone-controls) {
+    --drone-side: 100px;
+  }
 }
 
 .drone-walk {
@@ -119,9 +144,56 @@
   height: 18px;
 }
 
+.drone-toggle:hover:not([aria-pressed='true']),
+.drone-walk:hover:not([aria-pressed='true']),
+.drone-volume-trigger:hover:not([aria-expanded='true']) {
+  color: var(--green);
+  background: var(--accent);
+  border-color: var(--green);
+}
+
+.drone-toggle:active,
+.drone-walk:active,
+.drone-volume-trigger:active,
+.drone-toggle:hover:active,
+.drone-walk:hover:active,
+.drone-volume-trigger:hover:active {
+  color: var(--primary-foreground);
+  background: var(--green);
+  border-color: var(--green);
+  transition: none;
+}
+
+html[data-theme='day'] .drone-toggle,
+html[data-theme='day'] .drone-volume-trigger,
+html[data-theme='day'] .drone-walk {
+  color: var(--green);
+  border-color: var(--input);
+}
+
+html[data-theme='day'] .drone-toggle[aria-pressed='true'],
+html[data-theme='day'] .drone-walk[aria-pressed='true'] {
+  color: var(--primary-foreground);
+  background: var(--green);
+  border-color: var(--green);
+}
+
+html[data-theme='day'] .drone-volume-trigger[aria-expanded='true'],
+html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
+  color: var(--green);
+  background: var(--accent);
+  border-color: var(--green);
+}
+
 .drone-toggle[aria-pressed='true'],
-.drone-walk[aria-pressed='true'],
-.drone-volume-trigger[aria-expanded='true'] {
+.drone-walk[aria-pressed='true'] {
+  color: var(--primary-foreground);
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.drone-volume-trigger[aria-expanded='true'],
+.drone-volume-trigger[data-playing='true'] {
   color: var(--green);
   background: var(--accent);
   border-color: var(--green);
@@ -129,9 +201,12 @@
 
 .drone-toggle:focus-visible,
 .drone-walk:focus-visible,
-.drone-volume-trigger:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 4px;
+.drone-volume-trigger:focus-visible,
+.drone-level input:focus-visible,
+.drone-volume-popover input:focus-visible {
+  outline: 3px solid var(--amber);
+  outline-offset: 3px;
+  z-index: 4;
 }
 
 .night-swim .selection-bar:has(.drone-controls) .root-select,
@@ -308,6 +383,19 @@
   cursor: pointer;
 }
 
+.drone-sound-options label:hover:not(:has(input:disabled)) {
+  color: var(--green);
+  background: var(--accent);
+  border-color: var(--green);
+}
+
+.drone-sound-options label:active:not(:has(input:disabled)) {
+  color: var(--primary-foreground);
+  background: var(--green);
+  border-color: var(--green);
+  transition: none;
+}
+
 .drone-sound-options label:has(input:checked) {
   color: var(--green);
   background: var(--accent);
@@ -320,8 +408,9 @@
 }
 
 .drone-sound-options label:has(input:focus-visible) {
-  outline: 2px solid var(--green);
-  outline-offset: 1px;
+  outline: 3px solid var(--amber);
+  outline-offset: 3px;
+  z-index: 1;
 }
 
 .drone-sound-options input {
