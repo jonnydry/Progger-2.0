@@ -27,6 +27,8 @@ import { MatchChords } from '@/components/match-chords';
 import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
 import { NeckDisplay } from '@/components/neck-display';
+import { PhraseLauncher } from '@/components/phrase-launcher';
+import type { PhraseFretMark } from '@/lib/phrase-marks';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import { scaleReturnFocusId } from '@/lib/explore-focus';
 import { nearestPatternIndex } from '@/lib/practice-position';
@@ -86,6 +88,17 @@ export default function Home() {
   const [voicingStrings, setVoicingStrings] = useState('all');
   const [theoryOpen, setTheoryOpen] = useState(false);
   const [practice, setPractice] = useState(false);
+  const [phraseMarks, setPhraseMarks] = useState<
+    readonly PhraseFretMark[] | null
+  >(null);
+  const [phraseFocus, setPhraseFocus] = useState<number | null>(null);
+  const showPhraseMarks = useCallback(
+    (marks: readonly PhraseFretMark[] | null, focus: number | null) => {
+      setPhraseMarks(marks);
+      setPhraseFocus(focus);
+    },
+    [],
+  );
   const returnPoint = useRef<{ id: string; scroll: number } | null>(null);
   const matchReturnPoint = useRef<{
     element: HTMLElement | null;
@@ -387,6 +400,16 @@ export default function Home() {
     () => (kind === 'scales' ? soundingNotes.map((note) => note.pc) : []),
     [kind, soundingNotes],
   );
+  const phraseScaleNotes = useMemo(
+    () => spell(scaleRoot, scale.formula),
+    [scaleRoot, scale],
+  );
+  const phraseChord = useMemo(() => {
+    if (kind === 'chords') return { symbol: `${root}${quality.symbol}`, notes };
+    if (currentChord)
+      return { symbol: currentChord.symbol, notes: currentChord.notes };
+    return null;
+  }, [kind, root, quality, notes, currentChord]);
   const outside = soundingNotes.filter(
     (n) => !notes.some((scaleNote) => scaleNote.pc === n.pc),
   );
@@ -799,6 +822,15 @@ export default function Home() {
               </div>
             )}
             {!practice && voicingBrowser}
+            <PhraseLauncher
+              active={page === 'explore'}
+              scaleRoot={scaleRoot}
+              scaleId={scale.id}
+              scaleName={scale.name}
+              scaleNotes={phraseScaleNotes}
+              chord={phraseChord}
+              onMarks={showPhraseMarks}
+            />
             <Fretboard
               controls={instrumentControls}
               controlsAbove={practice}
@@ -819,6 +851,8 @@ export default function Home() {
               left={left}
               targets={targets}
               noteLabel={kind === 'scales' ? 'Scale note' : 'Chord note'}
+              phraseMarks={phraseMarks ?? []}
+              focusFret={phraseFocus}
             />
             {practice && voicingBrowser}
           </section>

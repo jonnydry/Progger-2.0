@@ -1,0 +1,415 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { parseChord } from '../lib/harmony.ts';
+import { SCALES, spell, TUNING, type Note } from '../lib/music.ts';
+import {
+  PHRASE_PLANNER_TIMEOUT_MS,
+  PHRASE_RANGE,
+  cadenceRole,
+  contourHeight,
+  defaultChordNotes,
+  generatePhrase,
+  generatePhraseWithPlanner,
+  isStrongBeat,
+  melodicMotion,
+  onsetSeconds,
+  parseSeed,
+  phraseFretMarks,
+  phraseOnsets,
+  phrasePeriodBeats,
+  phraseRuleReport,
+  phraseSnapshot,
+  rulePlan,
+  type CadenceTarget,
+  type Contour,
+  type Phrase,
+  type PhrasePlanner,
+} from '../lib/phrase.ts';
+
+const CONTEXTS: readonly (readonly [string, string, string])[] = [
+  ['C', 'major', 'C'],
+  ['A', 'dorian', 'Am'],
+  ['C', 'major', 'G7'],
+  ['F#', 'major', 'F#maj7'],
+  ['A', 'harmonic-minor', 'E7'],
+  ['C', 'minor-pentatonic', 'Cm'],
+  ['C', 'minor-blues', 'C7'],
+  ['Bb', 'mixolydian', 'Bb7'],
+];
+const SEEDS = Array.from({ length: 24 }, (_, index) => index + 1);
+const BARS = [2, 4] as const;
+
+function scaleOf(root: string, id: string): Note[] {
+  const scale = SCALES.find((item) => item.id === id);
+  assert.ok(scale, id);
+  return spell(root, scale.formula);
+}
+
+function contextInput(root: string, scaleId: string, symbol: string) {
+  const scaleNotes = scaleOf(root, scaleId);
+  const chordNotes = parseChord(symbol).notes;
+  return { scaleNotes, chordNotes };
+}
+
+function phrases(): {
+  phrase: Phrase;
+  scaleNotes: Note[];
+  chordNotes: Note[];
+}[] {
+  const found = [];
+  for (const [root, scaleId, symbol] of CONTEXTS) {
+    const input = contextInput(root, scaleId, symbol);
+    for (const bars of BARS) {
+      for (const seed of SEEDS) {
+        const result = generatePhrase({ seed, bars, ...input });
+        assert.equal(
+          result.ok,
+          true,
+          `${symbol} ${scaleId} seed ${seed} ${bars}`,
+        );
+        if (result.ok) found.push({ phrase: result.phrase, ...input });
+      }
+    }
+  }
+  return found;
+}
+
+function thirdMeans(midis: readonly number[]): [number, number, number] {
+  const third = Math.max(1, Math.floor(midis.length / 3));
+  const mean = (slice: readonly number[]) =>
+    slice.reduce((sum, midi) => sum + midi, 0) / slice.length;
+  return [
+    mean(midis.slice(0, third)),
+    mean(midis.slice(third, third * 2)),
+    mean(midis.slice(third * 2)),
+  ];
+}
+
+void test('timing, cadence roles, and seeds are deterministic tables', () => {
+  assert.equal(PHRASE_RANGE, 18);
+  assert.equal(PHRASE_PLANNER_TIMEOUT_MS, 800);
+  assert.equal(cadenceRole('1'), 'root');
+  assert.equal(cadenceRole('8'), 'root');
+  assert.equal(cadenceRole('b3'), 'third');
+  assert.equal(cadenceRole('#5'), 'fifth');
+  assert.equal(cadenceRole('b7'), null);
+  assert.equal(isStrongBeat(0), true);
+  assert.equal(isStrongBeat(2), true);
+  assert.equal(isStrongBeat(4), true);
+  assert.equal(isStrongBeat(0.5), false);
+  assert.equal(isStrongBeat(1), false);
+  assert.equal(isStrongBeat(3.5), false);
+  assert.deepEqual(phraseOnsets('quarters', 2), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(phraseOnsets('eighths', 2).length, 17);
+  assert.equal(phraseOnsets('long-short', 4).at(-1), 16);
+  assert.equal(phrasePeriodBeats(2), 10);
+  assert.equal(phrasePeriodBeats(4), 18);
+  assert.equal(onsetSeconds(0, 120, 'swing'), 0);
+  assert.equal(onsetSeconds(1, 120, 'straight'), 0.5);
+  assert.equal(onsetSeconds(0.5, 120, 'straight'), 0.25);
+  assert.equal(onsetSeconds(0.5, 120, 'swing'), (2 / 3) * 0.5);
+  assert.equal(onsetSeconds(2.5, 96, 'swing'), (2 + 2 / 3) * (60 / 96));
+  assert.equal(parseSeed('42'), 42);
+  assert.equal(parseSeed('0'), 0);
+  assert.equal(parseSeed('4294967295'), 0xffffffff);
+  assert.equal(parseSeed(''), null);
+  assert.equal(parseSeed('1.5'), null);
+  assert.equal(parseSeed('4294967296'), null);
+  assert.equal(parseSeed('-1'), null);
+
+  const open = rulePlan(7, ['root', 'third', 'fifth']);
+  const locked = rulePlan(7, ['root', 'third', 'fifth'], { contour: 'wave' });
+  assert.equal(locked.contour, 'wave');
+  assert.equal(locked.rhythm, open.rhythm);
+  assert.equal(locked.register, open.register);
+  assert.equal(locked.cadence, open.cadence);
+  assert.equal(rulePlan(3, ['root'], { cadence: 'fifth' }).cadence, 'root');
+});
+
+void test('a harmonic-minor augmented second is a scale step', () => {
+  const notes = scaleOf('A', 'harmonic-minor');
+  const pcs = new Set(notes.map((note) => note.pc));
+  assert.deepEqual(
+    notes.map((note) => note.name),
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G#'],
+  );
+  assert.equal(melodicMotion(65, 68, pcs), 'step');
+  assert.equal(melodicMotion(60, 64, new Set([0, 2, 4, 5, 7, 9, 11])), 'leap');
+  assert.equal(melodicMotion(60, 60, pcs), 'unison');
+});
+
+void test('the same seed replays the same phrase, and many seeds keep the rules', () => {
+  const corpus = phrases();
+  assert.equal(corpus.length, CONTEXTS.length * SEEDS.length * BARS.length);
+  let strong = 0;
+  let strongChord = 0;
+  let steps = 0;
+  let leaps = 0;
+  let maxRange = 0;
+  let cadence = 0;
+  let shifts = 0;
+  let maxShifts = 0;
+  const contourHits: Record<Contour, { hit: number; total: number }> = {
+    arch: { hit: 0, total: 0 },
+    rise: { hit: 0, total: 0 },
+    fall: { hit: 0, total: 0 },
+    wave: { hit: 0, total: 0 },
+  };
+  const ratios: number[] = [];
+
+  for (const { phrase, scaleNotes, chordNotes } of corpus) {
+    const again = generatePhrase({
+      seed: phrase.seed,
+      bars: phrase.bars,
+      scaleNotes,
+      chordNotes,
+    });
+    assert.equal(again.ok, true);
+    if (again.ok) assert.deepEqual(again.phrase, phrase);
+
+    const report = phraseRuleReport(phrase, scaleNotes, chordNotes);
+    assert.equal(report.unisons, 0);
+    assert.equal(report.unresolved, 0);
+    assert.equal(report.cadenceHit, true);
+    assert.ok(report.range <= PHRASE_RANGE);
+    assert.ok(report.strong > 0);
+    assert.ok(report.strongChord / report.strong >= 0.7);
+    strong += report.strong;
+    strongChord += report.strongChord;
+    steps += report.steps;
+    leaps += report.leaps;
+    maxRange = Math.max(maxRange, report.range);
+    cadence += 1;
+    if (report.steps + report.leaps > 0)
+      ratios.push(report.steps / (report.steps + report.leaps));
+
+    const names = new Set(scaleNotes.map((note) => note.name));
+    const low = { low: 48, mid: 55, high: 64 }[phrase.plan.register];
+    let phraseShifts = 0;
+    for (let index = 0; index < phrase.notes.length; index++) {
+      const note = phrase.notes[index];
+      assert.ok(names.has(note.name), `${note.name} leaves the scale spelling`);
+      assert.ok(note.midi >= low && note.midi <= low + PHRASE_RANGE);
+      assert.equal(note.midi, TUNING[note.string] + note.fret);
+      assert.ok(note.fret >= 0 && note.fret <= 24);
+      assert.ok(note.finger >= 0 && note.finger <= 4);
+      assert.equal(note.strong, isStrongBeat(note.beat));
+      if (note.strong) assert.equal(note.chordTone, true);
+      if (note.fret === 0) assert.equal(note.finger, 0);
+      else {
+        assert.equal(note.finger, note.fret - note.position + 1);
+        assert.ok(note.fret >= note.position && note.fret <= note.position + 3);
+      }
+      const shifted =
+        index > 0 && note.position !== phrase.notes[index - 1].position;
+      assert.equal(note.shift, shifted);
+      if (shifted) phraseShifts += 1;
+    }
+    shifts += phraseShifts;
+    maxShifts = Math.max(maxShifts, phraseShifts);
+    assert.ok(phraseShifts <= 2);
+    assert.equal(phrase.notes.at(-1)?.duration, 2);
+    assert.equal(phrase.source, 'rules');
+
+    const [first, middle, last] = thirdMeans(
+      phrase.notes.map((note) => note.midi),
+    );
+    const contour = phrase.plan.contour;
+    contourHits[contour].total += 1;
+    const hit =
+      contour === 'rise'
+        ? last > first
+        : contour === 'fall'
+          ? first > last
+          : contour === 'arch'
+            ? middle > first && middle > last
+            : middle < first && middle < last;
+    if (hit) contourHits[contour].hit += 1;
+  }
+
+  const stepRatio = steps / (steps + leaps);
+  const strongRatio = strongChord / strong;
+  console.log(
+    JSON.stringify({
+      phrases: corpus.length,
+      strongChord,
+      strong,
+      strongRatio,
+      steps,
+      leaps,
+      stepRatio,
+      maxRange,
+      cadence,
+      shifts,
+      maxShifts,
+      minStepRatio: Math.min(...ratios),
+      allSteps: ratios.filter((ratio) => ratio === 1).length,
+      contours: contourHits,
+    }),
+  );
+  assert.ok(strongRatio >= 0.7);
+  assert.ok(stepRatio >= 0.66 && stepRatio <= 0.75, `step ratio ${stepRatio}`);
+  assert.equal(cadence, corpus.length);
+  assert.ok(maxRange <= PHRASE_RANGE);
+  assert.ok(maxShifts <= 2);
+  for (const contour of Object.keys(contourHits) as Contour[]) {
+    const bucket = contourHits[contour];
+    assert.ok(bucket.total > 0, contour);
+    assert.ok(
+      bucket.hit / bucket.total >= 0.7,
+      `${contour} ${bucket.hit}/${bucket.total}`,
+    );
+  }
+  for (const contour of ['arch', 'rise', 'fall', 'wave'] as const) {
+    assert.ok(contourHeight(contour, 0) >= 0);
+    assert.ok(contourHeight(contour, 1) <= 1);
+  }
+});
+
+void test('F# major keeps scale spelling and a tonic default still lands', () => {
+  const scaleNotes = scaleOf('F#', 'major');
+  const result = generatePhrase({
+    seed: 11,
+    bars: 4,
+    scaleNotes,
+    chordNotes: parseChord('F#maj7').notes,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const allowed = new Set(['F#', 'G#', 'A#', 'B', 'C#', 'D#', 'E#']);
+  for (const note of result.phrase.notes) assert.ok(allowed.has(note.name));
+
+  const tonic = defaultChordNotes(scaleOf('C', 'major'));
+  assert.deepEqual(
+    tonic.map((note) => note.degree),
+    ['1', '3', '5'],
+  );
+  const fallback = generatePhrase({
+    seed: 4,
+    bars: 2,
+    scaleNotes: scaleOf('C', 'major'),
+    chordNotes: tonic,
+  });
+  assert.equal(fallback.ok, true);
+});
+
+void test('hidden dots, snapshots, and a chord outside the scale', () => {
+  const input = contextInput('C', 'major', 'C');
+  const result = generatePhrase({ seed: 9, bars: 2, ...input });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(phraseFretMarks(result.phrase.notes, 'hidden', 0), []);
+  const shown = phraseFretMarks(result.phrase.notes, 'shown', 0);
+  assert.ok(shown.length > 0);
+  assert.equal(
+    shown.some((mark) => mark.current),
+    true,
+  );
+
+  const snapshot = phraseSnapshot({
+    seed: 9,
+    bars: 2,
+    feel: 'swing',
+    tempo: 96,
+    slow: true,
+    scaleRoot: 'C',
+    scaleId: 'major',
+    chordSymbol: 'C',
+    plan: result.phrase.plan,
+    locks: { rhythm: 'quarters' },
+  });
+  assert.equal(snapshot.version, 1);
+  assert.equal(snapshot.locks.rhythm, 'quarters');
+
+  const outside = generatePhrase({
+    seed: 1,
+    bars: 2,
+    scaleNotes: scaleOf('C', 'major'),
+    chordNotes: parseChord('C#5').notes,
+  });
+  assert.deepEqual(outside, { ok: false, reason: 'no-shared-tones' });
+});
+
+void test('the planner makes one call, times out, and loses to locks', async () => {
+  const input = contextInput('C', 'major', 'C');
+  const rules = generatePhrase({ seed: 5, bars: 2, ...input });
+  assert.equal(rules.ok, true);
+  const bare = await generatePhraseWithPlanner({ seed: 5, bars: 2, ...input });
+  assert.deepEqual(bare, rules);
+
+  let calls = 0;
+  const hanging: PhrasePlanner = {
+    propose() {
+      calls += 1;
+      return new Promise(() => undefined);
+    },
+  };
+  const started = Date.now();
+  const timed = await generatePhraseWithPlanner({
+    seed: 5,
+    bars: 2,
+    ...input,
+    planner: hanging,
+    timeoutMs: 30,
+  });
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - started < 500);
+  assert.deepEqual(timed, rules);
+
+  const failing: PhrasePlanner = {
+    propose() {
+      calls += 1;
+      throw new Error('planner down');
+    },
+  };
+  const failed = await generatePhraseWithPlanner({
+    seed: 5,
+    bars: 2,
+    ...input,
+    planner: failing,
+    timeoutMs: 30,
+  });
+  assert.deepEqual(failed, rules);
+
+  const proposing: PhrasePlanner = {
+    propose(request) {
+      calls += 1;
+      assert.equal(request.signal.aborted, false);
+      assert.equal(request.seed, 5);
+      return Promise.resolve({
+        contour: 'rise',
+        rhythm: 'eighths',
+        register: 'high',
+        cadence: 'ninth' as CadenceTarget,
+      });
+    },
+  };
+  const planned = await generatePhraseWithPlanner({
+    seed: 5,
+    bars: 2,
+    ...input,
+    planner: proposing,
+    locks: { rhythm: 'quarters' },
+    chordSymbol: 'C',
+    scaleLabel: 'C major',
+  });
+  assert.equal(planned.ok, true);
+  if (planned.ok) {
+    assert.equal(planned.phrase.source, 'planner');
+    assert.equal(planned.phrase.plan.contour, 'rise');
+    assert.equal(planned.phrase.plan.rhythm, 'quarters');
+    assert.equal(planned.phrase.plan.register, 'high');
+    assert.ok(['root', 'third', 'fifth'].includes(planned.phrase.plan.cadence));
+  }
+  assert.equal(calls, 3);
+
+  const source = readFileSync(
+    new URL('../lib/phrase.ts', import.meta.url),
+    'utf8',
+  );
+  assert.equal(source.includes('fetch('), false);
+  assert.equal(source.includes('XMLHttpRequest'), false);
+  assert.equal(source.includes('voicing-audio'), false);
+  assert.equal(source.includes('drone'), false);
+});
