@@ -20,7 +20,10 @@ import {
 } from 'lucide-react';
 import { MusicSelect } from '@/components/music-select';
 import { mod, pretty, TUNING, type Note, type Pattern } from '@/lib/music';
-import type { PhraseFretMark } from '@/lib/phrase-marks';
+import {
+  subscribePhrasePlayhead,
+  type PhraseFretMark,
+} from '@/lib/phrase-marks';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import {
   formAtProgress,
@@ -135,6 +138,7 @@ const FretGrid = memo(function FretGrid({
                   <span className="string-line" />
                   {show && (note || phrase) && (
                     <span
+                      data-phrase-slot={phrase ? key : undefined}
                       className={`note-dot ${phrase ? 'phrase-mark' : ''} ${phrase?.current ? 'phrase-current' : ''} ${connected ? `connection-${membership}` : ''} ${phraseLabel.length > 3 ? 'wide-note' : ''} ${note?.degree === '1' ? 'is-root' : ''} ${note && targets.includes(note.pc) ? 'is-target' : ''}`}
                       title={
                         phrase
@@ -629,6 +633,19 @@ export function Fretboard({
     appliedPhraseFocus.current = token;
     jump(focusFret);
   }, [focusFret, left, viewportWidth, jump]);
+  useEffect(() => {
+    const root = viewport.current;
+    if (!root) return;
+    const apply = (slot: string | null) => {
+      const marked = root.querySelectorAll('.phrase-current');
+      for (const node of marked) node.classList.remove('phrase-current');
+      if (!slot) return;
+      root
+        .querySelector(`[data-phrase-slot="${slot}"]`)
+        ?.classList.add('phrase-current');
+    };
+    return subscribePhrasePlayhead(apply);
+  }, [phraseMarkMap]);
   const maxScrollFret = Math.max(0, 25 - viewportWidth / columnWidth);
   const moveWithKey = (event: KeyboardEvent<HTMLElement>) => {
     const el = viewport.current;

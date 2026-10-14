@@ -192,6 +192,8 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
   let strongChord = 0;
   let steps = 0;
   let leaps = 0;
+  let semitoneSteps = 0;
+  let semitoneMoves = 0;
   let maxRange = 0;
   let cadence = 0;
   let shifts = 0;
@@ -225,6 +227,8 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
     strongChord += report.strongChord;
     steps += report.steps;
     leaps += report.leaps;
+    semitoneSteps += report.semitoneSteps;
+    semitoneMoves += report.semitoneSteps + report.semitoneLeaps;
     maxRange = Math.max(maxRange, report.range);
     cadence += 1;
     if (report.steps + report.leaps > 0)
@@ -275,23 +279,29 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
   }
 
   const stepRatio = steps / (steps + leaps);
+  const semitoneRatio = semitoneSteps / semitoneMoves;
   const strongRatio = strongChord / strong;
   console.log(
     JSON.stringify({
       phrases: corpus.length,
-      strongChord,
-      strong,
-      strongRatio,
-      steps,
-      leaps,
-      stepRatio,
-      maxRange,
-      cadence,
+      scaleSteps: steps,
+      scaleLeaps: leaps,
+      scaleStepRatio: stepRatio,
+      semitoneSteps,
+      semitoneMoves,
+      semitoneRatio,
+      minScaleStepRatio: Math.min(...ratios),
+      allScaleSteps: ratios.filter((ratio) => ratio === 1).length,
       shifts,
       maxShifts,
-      minStepRatio: Math.min(...ratios),
-      allSteps: ratios.filter((ratio) => ratio === 1).length,
       contours: contourHits,
+      invariants: {
+        strongChord,
+        strong,
+        strongRatio,
+        maxRange,
+        cadence,
+      },
     }),
   );
   assert.ok(strongRatio >= 0.7);

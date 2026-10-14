@@ -108,7 +108,8 @@ export function droneSaturatorHarmonics(
     let imag = 0;
     const omega = (2 * Math.PI * frequency * harmonic) / sampleRate;
     for (let index = 0; index < length; index += 1) {
-      const input = amplitude * Math.sin((2 * Math.PI * frequency * index) / sampleRate);
+      const input =
+        amplitude * Math.sin((2 * Math.PI * frequency * index) / sampleRate);
       const sample = droneSaturateSample(input);
       if (harmonic === 1) peak = Math.max(peak, Math.abs(sample));
       real += sample * Math.cos(omega * index);
@@ -124,7 +125,10 @@ export function droneSaturatorHarmonics(
   const third = harmonics[2] ?? 0;
   return {
     thd: fundamental > 0 ? Math.sqrt(distortion) / fundamental : 0,
-    thirdDb: fundamental > 0 && third > 0 ? 20 * Math.log10(third / fundamental) : -Infinity,
+    thirdDb:
+      fundamental > 0 && third > 0
+        ? 20 * Math.log10(third / fundamental)
+        : -Infinity,
     peak,
   };
 }
@@ -312,7 +316,8 @@ export function outputLimitSample(sample: number): number {
   if (magnitude <= OUTPUT_KNEE) return sample;
   const headroom = OUTPUT_CEILING - OUTPUT_KNEE;
   const limited =
-    OUTPUT_KNEE + headroom * (1 - Math.exp(-(magnitude - OUTPUT_KNEE) / headroom));
+    OUTPUT_KNEE +
+    headroom * (1 - Math.exp(-(magnitude - OUTPUT_KNEE) / headroom));
   return Math.sign(sample) * limited;
 }
 
@@ -332,6 +337,12 @@ export type OutputChain = {
   droneInput: WaveShaperNode;
   /** Chords and walk plucks while the drone is on. */
   chordInput: GainNode;
+  /**
+   * Phrase audio stays on this gain. `setDrone` re-points it, so a loop
+   * that is already sounding follows the limiter instead of keeping the
+   * destination it picked on the first note.
+   */
+  phraseInput: GainNode;
   readonly duckReady: boolean;
   /** Chain nodes, including the sidechain once `installDuck` has connected it. */
   readonly ownedNodes: number;
@@ -355,6 +366,22 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
   };
   const bus = track(context.createGain());
   bus.gain.value = 1;
+  const phraseSend = track(context.createGain());
+  phraseSend.gain.value = 1;
+  let phrasePoint: AudioNode | null = null;
+
+  function pointPhrase(target: AudioNode): void {
+    if (phrasePoint === target) return;
+    try {
+      phraseSend.disconnect();
+    } catch {
+      // The send is connected only after the first point.
+    }
+    phraseSend.connect(target);
+    phrasePoint = target;
+  }
+
+  pointPhrase(context.destination);
   const speaker = track(context.createGain());
   speaker.gain.value = 0;
   const dry = track(context.createGain());
@@ -398,7 +425,8 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     ) {
       return 1;
     }
-    if (!(segment.end > segment.start) || time <= segment.start) return segment.from;
+    if (!(segment.end > segment.start) || time <= segment.start)
+      return segment.from;
     if (time >= segment.end) return segment.to;
     const mix = (time - segment.start) / (segment.end - segment.start);
     return segment.from + (segment.to - segment.from) * mix;
@@ -433,6 +461,7 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     route = 'limited';
     drone = true;
     connected = true;
+    pointPhrase(stage.chordInput);
   }
 
   function routeOpen(): void {
@@ -449,6 +478,7 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     route = 'open';
     drone = false;
     connected = true;
+    pointPhrase(context.destination);
   }
 
   function routeOff(): void {
@@ -463,11 +493,15 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     connected = false;
     pendingSilence = -1;
     pendingRestoreEnd = -1;
+    pointPhrase(context.destination);
   }
 
   function canSuspend(): boolean {
     const offline = context as OfflineAudioContext;
-    return typeof offline.length === 'number' && typeof offline.suspend === 'function';
+    return (
+      typeof offline.length === 'number' &&
+      typeof offline.suspend === 'function'
+    );
   }
 
   /**
@@ -479,7 +513,11 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
    * The fade back in is a new ramp, so it does not replace the event that
    * lands on zero.
    */
-  function atSilence(when: number, restoreSeconds: number, active: boolean): void {
+  function atSilence(
+    when: number,
+    restoreSeconds: number,
+    active: boolean,
+  ): void {
     pendingSilence = when;
     pendingRestoreEnd = when + restoreSeconds;
     const token = epoch;
@@ -528,24 +566,27 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     tailTimer = clearTimer(tailTimer);
     dropTimer = clearTimer(dropTimer);
     const token = epoch;
-    tailTimer = setTimeout(() => {
-      tailTimer = undefined;
-      if (token !== epoch || drone || route !== 'open') return;
-      const now = context.currentTime;
-      const dropAt = now + OUTPUT_CROSSFADE;
-      scheduleFade(now, 0, OUTPUT_CROSSFADE);
-      const drop = () => {
-        dropTimer = undefined;
+    tailTimer = setTimeout(
+      () => {
+        tailTimer = undefined;
         if (token !== epoch || drone || route !== 'open') return;
-        const remaining = dropAt - context.currentTime;
-        if (remaining > 0.001) {
-          dropTimer = setTimeout(drop, remaining * 1000);
-          return;
-        }
-        routeOff();
-      };
-      dropTimer = setTimeout(drop, OUTPUT_CROSSFADE * 1000);
-    }, (seconds + OUTPUT_TAIL) * 1000);
+        const now = context.currentTime;
+        const dropAt = now + OUTPUT_CROSSFADE;
+        scheduleFade(now, 0, OUTPUT_CROSSFADE);
+        const drop = () => {
+          dropTimer = undefined;
+          if (token !== epoch || drone || route !== 'open') return;
+          const remaining = dropAt - context.currentTime;
+          if (remaining > 0.001) {
+            dropTimer = setTimeout(drop, remaining * 1000);
+            return;
+          }
+          routeOff();
+        };
+        dropTimer = setTimeout(drop, OUTPUT_CROSSFADE * 1000);
+      },
+      (seconds + OUTPUT_TAIL) * 1000,
+    );
   }
 
   function restore(when: number, seconds: number): void {
@@ -560,6 +601,7 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     limiter,
     droneInput: stage.input,
     chordInput: stage.chordInput,
+    phraseInput: phraseSend,
     get duckReady() {
       return stage.duckReady;
     },
@@ -619,6 +661,8 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
       wet.disconnect();
       speaker.disconnect();
       limiter.disconnect();
+      phraseSend.disconnect();
+      phrasePoint = null;
     },
   };
 }

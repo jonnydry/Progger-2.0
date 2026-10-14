@@ -12,6 +12,27 @@ import type { PhraseFretMark } from './phrase-marks.ts';
 
 export const PHRASE_PLANNER_TIMEOUT_MS = 800;
 export const PHRASE_RANGE = 18;
+/**
+ * Anchor search and gap search each count one step per call.
+ * On 975fe75, with every contour, rhythm, register, cadence, and the
+ * 12 roots at 4 bars, minor blues peaked at 5398 steps and whole tone
+ * at 5402. This cap sits under both of those scores. The memoized
+ * search stays under it and keeps the best complete line if it hits.
+ */
+export const PHRASE_SEARCH_STEP_CAP = 4000;
+
+let phraseSearchSteps = 0;
+
+/** Steps used by the most recent `generatePhrase` attempt. */
+export function phraseSearchStepCount(): number {
+  return phraseSearchSteps;
+}
+
+function countSearchStep(): boolean {
+  if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return true;
+  phraseSearchSteps += 1;
+  return phraseSearchSteps > PHRASE_SEARCH_STEP_CAP;
+}
 
 export type Contour = 'arch' | 'rise' | 'fall' | 'wave';
 export type RhythmId = 'quarters' | 'eighths' | 'long-short' | 'push';
@@ -93,7 +114,7 @@ export type PhraseSnapshot = {
   locks: PhraseLocks;
 };
 
-export type PhraseFailure = 'no-shared-tones' | 'unplayable';
+export type PhraseFailure = 'no-shared-tones' | 'unplayable' | 'bad-input';
 export type PhraseResult =
   | { ok: true; phrase: Phrase }
   | { ok: false; reason: PhraseFailure };
@@ -218,6 +239,21 @@ export function phrasePeriodBeats(bars: 2 | 4): number {
   return bars * 4 + 2;
 }
 
+/** Inverse of `onsetSeconds` for a playhead. Swing's offbeat sits at two thirds of the quarter. */
+export function beatAtSeconds(
+  seconds: number,
+  tempo: number,
+  feel: Feel,
+): number {
+  const quarter = 60 / (tempo > 0 ? tempo : 96);
+  if (feel === 'straight') return seconds / quarter;
+  const quarters = seconds / quarter;
+  const whole = Math.floor(quarters + 1e-9);
+  const fraction = quarters - whole;
+  if (fraction <= 2 / 3) return whole + (fraction / (2 / 3)) * 0.5;
+  return whole + 0.5 + ((fraction - 2 / 3) / (1 / 3)) * 0.5;
+}
+
 export function onsetSeconds(beat: number, tempo: number, feel: Feel): number {
   const quarter = 60 / (tempo > 0 ? tempo : 96);
   if (feel === 'straight') return beat * quarter;
@@ -258,13 +294,16 @@ export function randomSeed(): number {
   return buffer[0] || 1;
 }
 
+/** The one seed check. Text and numbers both come through here. */
+export function canonicalSeed(seed: number): number | null {
+  if (!Number.isSafeInteger(seed) || seed < 0 || seed > 0xffffffff) return null;
+  return seed;
+}
+
 export function parseSeed(text: string): number | null {
   const trimmed = text.trim();
   if (!/^\d+$/.test(trimmed)) return null;
-  const value = Number(trimmed);
-  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffffffff)
-    return null;
-  return value;
+  return canonicalSeed(Number(trimmed));
 }
 
 export function rulePlan(
@@ -371,6 +410,10 @@ export type PhraseRuleReport = {
   strongChord: number;
   steps: number;
   leaps: number;
+  /** Intervals of 1 or 2 semitones, whatever the scale calls them. */
+  semitoneSteps: number;
+  /** Intervals of 3 semitones or more. */
+  semitoneLeaps: number;
   unisons: number;
   unresolved: number;
   range: number;
@@ -389,6 +432,8 @@ export function phraseRuleReport(
   let strongChord = 0;
   let steps = 0;
   let leaps = 0;
+  let semitoneSteps = 0;
+  let semitoneLeaps = 0;
   let unisons = 0;
   let unresolved = 0;
   for (let index = 0; index < phrase.notes.length; index++) {
@@ -400,9 +445,12 @@ export function phraseRuleReport(
     if (index === 0) continue;
     const previous = phrase.notes[index - 1];
     const motion = melodicMotion(previous.midi, note.midi, scalePcs);
+    const distance = Math.abs(note.midi - previous.midi);
     if (motion === 'step') steps += 1;
     else if (motion === 'leap') leaps += 1;
     else unisons += 1;
+    if (distance > 0 && distance <= 2) semitoneSteps += 1;
+    else if (distance > 2) semitoneLeaps += 1;
     if (motion !== 'leap') continue;
     const next = phrase.notes[index + 1];
     if (!next) {
@@ -421,6 +469,8 @@ export function phraseRuleReport(
     strongChord,
     steps,
     leaps,
+    semitoneSteps,
+    semitoneLeaps,
     unisons,
     unresolved,
     range: Math.max(...midis) - Math.min(...midis),
@@ -472,25 +522,36 @@ function fillGap(
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
   const path = [from];
+  const missed = new Set<string>();
   const search = (
     pos: number,
     left: number,
     resolve: number,
     leapsLeft: number,
   ): boolean => {
-    if (left === 0) return pos === to && leapsLeft === 0 && resolve === 0;
+    if (countSearchStep()) return false;
+    const state = `${pos}|${left}|${resolve}|${leapsLeft}`;
+    if (missed.has(state)) return false;
+    const fail = () => {
+      if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return false;
+      missed.add(state);
+      return false;
+    };
+    if (left === 0) {
+      return pos === to && leapsLeft === 0 && resolve === 0 ? true : fail();
+    }
     if (resolve !== 0) {
       const next = pos + resolve;
-      if (next < 0 || next >= length) return false;
+      if (next < 0 || next >= length) return fail();
       path.push(next);
       const ok = search(next, left - 1, 0, leapsLeft);
       if (!ok) path.pop();
-      return ok;
+      return ok || fail();
     }
-    if (leapsLeft * 2 > left) return false;
+    if (leapsLeft * 2 > left) return fail();
     if (leapsLeft === 0) {
       const distance = Math.abs(to - pos);
-      if (distance > left || (left - distance) % 2 !== 0) return false;
+      if (distance > left || (left - distance) % 2 !== 0) return fail();
     }
     const toward = Math.sign(to - pos) || 1;
     const options: { next: number; leap: boolean; resolve: number }[] = [];
@@ -535,11 +596,13 @@ function fillGap(
       )
         return true;
       path.pop();
+      if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return false;
     }
-    return false;
+    return fail();
   };
   const found =
     intervals === 0 ? from === to : search(from, intervals, 0, leaps);
+  if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return null;
   const result = found ? [...path] : null;
   cache.set(key, result);
   return result;
@@ -598,15 +661,31 @@ function realize(
   const targetLeaps = Math.round((events.length - 1) * 0.3);
   const cache = new Map<string, number[] | null>();
   const anchorCount = strongIndexes.length;
+  const failedVisits = new Set<string>();
+  let best: { anchors: number[]; leaps: number[] } | null = null;
 
   const choose = (slack: number, limit: number) => {
     const budget = targetLeaps + slack;
     const anchors = Array<number>(anchorCount).fill(-1);
     const leaps = Array<number>(Math.max(0, anchorCount - 1)).fill(0);
+    // A tighter candidate limit must not poison a later search at this budget.
+    failedVisits.clear();
     const visit = (ordinal: number, spent: number): boolean => {
+      if (countSearchStep()) return false;
+      const previous = ordinal > 0 ? anchors[ordinal - 1] : -1;
+      const memo = `${ordinal}|${previous}|${spent}`;
+      if (failedVisits.has(memo)) return false;
+      const fail = () => {
+        if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return false;
+        failedVisits.add(memo);
+        return false;
+      };
       if (ordinal === anchorCount - 1) {
         anchors[ordinal] = cadenceLadder;
-        if (ordinal === 0) return true;
+        if (ordinal === 0) {
+          best = { anchors: anchors.slice(), leaps: leaps.slice() };
+          return true;
+        }
         const need = minLeaps(
           anchors[ordinal - 1],
           cadenceLadder,
@@ -614,8 +693,9 @@ function realize(
           ladder.length,
           cache,
         );
-        if (need === null || spent + need > budget) return false;
+        if (need === null || spent + need > budget) return fail();
         leaps[ordinal - 1] = need;
+        best = { anchors: anchors.slice(), leaps: leaps.slice() };
         return true;
       }
       const noteIndex = strongIndexes[ordinal];
@@ -639,20 +719,32 @@ function realize(
           leaps[ordinal - 1] = need;
         }
         anchors[ordinal] = option;
-        if (visit(ordinal + 1, spent + need)) return true;
+        if (visit(ordinal + 1, spent + need)) {
+          best = {
+            anchors: anchors.slice(),
+            leaps: leaps.slice(),
+          };
+          return true;
+        }
+        if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return false;
       }
-      return false;
+      return fail();
     };
-    return visit(0, 0) ? { anchors, leaps } : null;
+    if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) return best;
+    return visit(0, 0) ? best : null;
   };
 
   let chosen: { anchors: number[]; leaps: number[] } | null = null;
   for (const slack of [0, 1, 2, 4, 8]) {
+    if (phraseSearchSteps > PHRASE_SEARCH_STEP_CAP) break;
     chosen = choose(slack, Math.min(4, chordIndexes.length));
     if (chosen) break;
-    if (slack === 8) chosen = choose(slack, chordIndexes.length);
+    if (slack === 8 && phraseSearchSteps <= PHRASE_SEARCH_STEP_CAP) {
+      chosen = choose(slack, chordIndexes.length);
+    }
     if (chosen) break;
   }
+  if (!chosen) chosen = best;
   if (!chosen) return null;
 
   let spare = targetLeaps - chosen.leaps.reduce((sum, count) => sum + count, 0);
@@ -846,6 +938,13 @@ export function generatePhrase(input: {
   chordNotes: readonly Note[];
   locks?: PhraseLocks;
 }): PhraseResult {
+  phraseSearchSteps = 0;
+  if (
+    canonicalSeed(input.seed) === null ||
+    (input.bars !== 2 && input.bars !== 4)
+  ) {
+    return { ok: false, reason: 'bad-input' };
+  }
   const available = availableCadences(input.chordNotes, input.scaleNotes);
   if (!available.length) return { ok: false, reason: 'no-shared-tones' };
   const plan = rulePlan(input.seed, available, input.locks);
@@ -863,6 +962,13 @@ export async function generatePhraseWithPlanner(input: {
   scaleLabel?: string;
   chordSymbol?: string;
 }): Promise<PhraseResult> {
+  phraseSearchSteps = 0;
+  if (
+    canonicalSeed(input.seed) === null ||
+    (input.bars !== 2 && input.bars !== 4)
+  ) {
+    return { ok: false, reason: 'bad-input' };
+  }
   const available = availableCadences(input.chordNotes, input.scaleNotes);
   if (!available.length) return { ok: false, reason: 'no-shared-tones' };
   const rules = rulePlan(input.seed, available);
@@ -903,6 +1009,7 @@ export async function generatePhraseWithPlanner(input: {
   const plan = applyLocks({ ...rules, ...proposal }, input.locks, available);
   const planned = assemble(input, plan, accepted ? 'planner' : 'rules');
   if (planned.ok || !accepted) return planned;
+  phraseSearchSteps = 0;
   return assemble(input, applyLocks(rules, input.locks, available), 'rules');
 }
 

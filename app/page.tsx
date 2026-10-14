@@ -865,6 +865,7 @@ export default function Home() {
               phraseMarks={phraseMarks ?? []}
               focusFret={phraseFocus}
             />
+            <div id="phrase-tab-host" className="phrase-tab-host" />
             {practice && voicingBrowser}
           </section>
           {kind === 'chords' && (

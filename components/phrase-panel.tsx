@@ -1,10 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { Play, RefreshCw, Square } from 'lucide-react';
 import { pretty, type Note } from '@/lib/music';
-import { PhrasePlayer, type PhrasePlayback } from '@/lib/phrase-audio';
 import {
+  bindPhraseLifecycle,
+  PhrasePlayer,
+  type PhrasePlayback,
+} from '@/lib/phrase-audio';
+import {
+  beatAtSeconds,
   CADENCE_LABEL,
   CONTOUR_LABEL,
   defaultChordNotes,
@@ -21,7 +27,7 @@ import {
   type PhraseDotVisibility,
   type PhraseLocks,
 } from '@/lib/phrase';
-import type { PhraseFretMark } from '@/lib/phrase-marks';
+import { publishPhrasePlayhead, type PhraseFretMark } from '@/lib/phrase-marks';
 import '@/app/phrase.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
@@ -66,7 +72,6 @@ export function PhrasePanel({
   const [seed, setSeed] = useState(() => randomSeed());
   const [seedText, setSeedText] = useState(() => String(seed));
   const [status, setStatus] = useState<PhrasePlayback>('idle');
-  const [heard, setHeard] = useState(-1);
   const player = useRef<PhrasePlayer | null>(null);
   const live = useRef(false);
   const tempoRef = useRef(tempo);
@@ -87,7 +92,6 @@ export function PhrasePanel({
     () => (phrase.ok ? phrase.phrase.notes : EMPTY_NOTES),
     [phrase],
   );
-  const activeIndex = status === 'playing' && notes.length ? heard : -1;
   useEffect(() => {
     const current = new PhrasePlayer((next) => {
       if (next === 'idle' || next === 'error') live.current = false;
@@ -98,16 +102,12 @@ export function PhrasePanel({
       live.current = false;
       current.stop();
     };
-    const hide = () => {
-      if (document.hidden) pause();
-    };
-    document.addEventListener('visibilitychange', hide);
-    window.addEventListener('pagehide', pause);
+    const unbind = bindPhraseLifecycle(document, window, pause);
     return () => {
-      document.removeEventListener('visibilitychange', hide);
-      window.removeEventListener('pagehide', pause);
+      unbind();
       current.dispose();
       player.current = null;
+      publishPhrasePlayhead(null);
     };
   }, []);
   useEffect(() => {
@@ -127,29 +127,9 @@ export function PhrasePanel({
       loop,
     });
   }, [active, phrase, bars, slow, feel, loop]);
-  useEffect(() => {
-    if (status !== 'playing' || !notes.length) return;
-    let frame = 0;
-    const tick = () => {
-      const elapsed = player.current?.elapsed() ?? 0;
-      let index = -1;
-      for (let note = 0; note < notes.length; note++) {
-        if (
-          onsetSeconds(notes[note].beat, soundingTempo.current, feel) <=
-          elapsed + 0.03
-        )
-          index = note;
-      }
-      setHeard((current) => (current === index ? current : index));
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [status, notes, feel]);
-
   const marks = useMemo(
-    () => (phrase.ok ? phraseFretMarks(notes, dots, activeIndex) : null),
-    [phrase.ok, notes, dots, activeIndex],
+    () => (phrase.ok ? phraseFretMarks(notes, dots) : null),
+    [phrase.ok, notes, dots],
   );
   const focus = phrase.ok ? phraseFocusFret(notes) : null;
   useEffect(() => {
@@ -342,106 +322,253 @@ export function PhrasePanel({
         </p>
       )}
       {phrase.ok && dots === 'shown' && (
-        <>
-          <ol className="phrase-notes" aria-label="Phrase notes">
-            {notes.map((note, index) => (
-              <li
-                key={`${note.beat}-${index}`}
-                className={note.strong ? 'is-strong' : undefined}
-              >
-                {pretty(note.name)}
-              </li>
-            ))}
-          </ol>
-          <PhraseTab notes={notes} bars={bars} activeIndex={activeIndex} />
-        </>
+        <PhraseStaff
+          notes={notes}
+          bars={bars}
+          feel={feel}
+          playing={status === 'playing'}
+          player={player}
+          tempoRef={soundingTempo}
+        />
+      )}
+      {phrase.ok && (
+        <ol className="sr-only">
+          {notes.map((note, index) => (
+            <li key={`spoken-${index}`}>
+              {pretty(note.name)}, string {6 - note.string}, fret{' '}
+              {note.fret === 0 ? 'open' : note.fret}, finger{' '}
+              {note.finger === 0 ? 'open' : note.finger}
+              {note.shift ? ', shift' : ''}
+              {note.strong ? ', strong beat' : ''}
+            </li>
+          ))}
+        </ol>
       )}
     </div>
   );
 }
 
-function PhraseTab({
+type StaffRow = {
+  id: string;
+  label: string;
+  landing: boolean;
+  notes: {
+    index: number;
+    note: FingeredNote;
+    x: string;
+    y: string;
+  }[];
+  lines: string[];
+  beats: { label: string; x: string }[];
+};
+
+function staffRows(notes: readonly FingeredNote[], bars: 2 | 4): StaffRow[] {
+  const rows: StaffRow[] = [];
+  for (let bar = 1; bar <= bars; bar++) {
+    const start = (bar - 1) * 4;
+    rows.push({
+      id: String(bar),
+      label: `Bar ${bar}`,
+      landing: false,
+      notes: notes.flatMap((note, index) =>
+        note.beat >= start && note.beat < start + 4
+          ? [
+              {
+                index,
+                note,
+                x: `${((note.beat - start) / 4) * 100}%`,
+                y: `${((5 - note.string + 0.5) / 6) * 100}%`,
+              },
+            ]
+          : [],
+      ),
+      lines: ['0%', '25%', '50%', '75%', '100%'],
+      beats: [1, 2, 3, 4].map((beat) => ({
+        label: String(beat),
+        x: `${((beat - 1) / 4) * 100}%`,
+      })),
+    });
+  }
+  const landing = notes.flatMap((note, index) =>
+    note.beat >= bars * 4
+      ? [
+          {
+            index,
+            note,
+            x: `${((note.beat - bars * 4) / 2) * 100}%`,
+            y: `${((5 - note.string + 0.5) / 6) * 100}%`,
+          },
+        ]
+      : [],
+  );
+  if (landing.length) {
+    rows.push({
+      id: 'land',
+      label: 'Lands',
+      landing: true,
+      notes: landing,
+      lines: ['0%', '50%', '100%'],
+      beats: [
+        { label: '1', x: '0%' },
+        { label: '2', x: '50%' },
+      ],
+    });
+  }
+  return rows;
+}
+
+function PhraseStaff({
   notes,
   bars,
-  activeIndex,
+  feel,
+  playing,
+  player,
+  tempoRef,
 }: {
   notes: readonly FingeredNote[];
   bars: 2 | 4;
-  activeIndex: number;
+  feel: Feel;
+  playing: boolean;
+  player: RefObject<PhrasePlayer | null>;
+  tempoRef: RefObject<number>;
 }) {
-  const groups = new Map<number, { note: FingeredNote; index: number }[]>();
-  notes.forEach((note, index) => {
-    const bar = Math.floor(note.beat / 4) + 1;
-    const group = groups.get(bar) ?? [];
-    group.push({ note, index });
-    groups.set(bar, group);
-  });
-  return (
-    <>
-      <div className="phrase-tab" aria-hidden="true">
-        {[...groups.entries()].map(([bar, group]) => (
-          <div className="phrase-tab-bar" key={bar}>
-            <span>{bar > bars ? 'Lands' : `Bar ${bar}`}</span>
-            <TabRow>
-              <b />
-              {group.map(({ note, index }) => (
-                <span
-                  key={`finger-${index}`}
-                  className={index === activeIndex ? 'is-current' : undefined}
-                >
-                  {note.finger}
-                </span>
-              ))}
-            </TabRow>
-            {group.some(({ note }) => note.shift) && (
-              <TabRow>
-                <b />
-                {group.map(({ note, index }) => (
-                  <span key={`shift-${index}`} className="phrase-shift-label">
-                    {note.shift ? 'shift' : ''}
-                  </span>
-                ))}
-              </TabRow>
-            )}
-            {[5, 4, 3, 2, 1, 0].map((string) => (
-              <TabRow key={string}>
-                <b>{['E', 'A', 'D', 'G', 'B', 'e'][string]}</b>
-                {group.map(({ note, index }) => (
-                  <span
-                    key={`${string}-${index}`}
-                    className={index === activeIndex ? 'is-current' : undefined}
-                  >
-                    {note.string === string ? note.fret : '—'}
-                  </span>
-                ))}
-              </TabRow>
+  const rootRef = useRef<HTMLDivElement>(null);
+  const rows = useMemo(() => staffRows(notes, bars), [notes, bars]);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || !playing) {
+      publishPhrasePlayhead(null);
+      root?.querySelectorAll('.is-current').forEach((node) => {
+        node.classList.remove('is-current');
+      });
+      root
+        ?.querySelectorAll<HTMLElement>('[data-phrase-playhead]')
+        .forEach((head) => {
+          head.hidden = true;
+        });
+      return;
+    }
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let frame = 0;
+    const tick = () => {
+      const elapsed = player.current?.elapsed() ?? 0;
+      const tempo = tempoRef.current ?? 96;
+      let index = -1;
+      for (let note = 0; note < notes.length; note++) {
+        if (onsetSeconds(notes[note].beat, tempo, feel) <= elapsed + 0.03)
+          index = note;
+      }
+      const beat = media.matches
+        ? (notes[index]?.beat ?? 0)
+        : beatAtSeconds(elapsed, tempo, feel);
+      const landing = beat >= bars * 4;
+      const barId = landing
+        ? 'land'
+        : String(Math.min(bars, Math.max(1, Math.floor(beat / 4) + 1)));
+      const local = landing ? beat - bars * 4 : beat - (Number(barId) - 1) * 4;
+      const span = landing ? 2 : 4;
+      const x = `${Math.min(1, Math.max(0, local / span)) * 100}%`;
+      root
+        .querySelectorAll<HTMLElement>('[data-phrase-playhead]')
+        .forEach((head) => {
+          const mine = head.dataset.phrasePlayhead === barId;
+          head.hidden = !mine;
+          if (mine) head.style.left = x;
+        });
+      root
+        .querySelectorAll<HTMLElement>('[data-phrase-note]')
+        .forEach((mark) => {
+          mark.classList.toggle(
+            'is-current',
+            mark.dataset.phraseNote === String(index),
+          );
+        });
+      const sounding = index >= 0 ? notes[index] : null;
+      publishPhrasePlayhead(
+        sounding ? `${sounding.string}:${sounding.fret}` : null,
+      );
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(frame);
+      publishPhrasePlayhead(null);
+    };
+  }, [playing, notes, feel, bars, player, tempoRef]);
+  const staff = (
+    <div className="phrase-staff" ref={rootRef} aria-hidden="true">
+      {rows.map((row) => (
+        <div
+          className={`phrase-staff-bar${row.landing ? ' is-landing' : ''}`}
+          key={row.id}
+          data-phrase-bar={row.id}
+        >
+          <div className="phrase-staff-caption">{row.label}</div>
+          <div className="phrase-staff-lane">
+            {row.notes.map(({ index, note, x }) => (
+              <span
+                key={`finger-${index}`}
+                className="phrase-staff-finger"
+                data-phrase-note={index}
+                style={{ left: x }}
+              >
+                <b>{note.finger}</b>
+                {note.shift ? <i>›</i> : null}
+              </span>
             ))}
-            <TabRow>
-              <b />
-              {group.map(({ note, index }) => (
-                <span key={`beat-${index}`}>
-                  {note.strong ? (note.beat % 4 === 0 ? '1' : '3') : ''}
+          </div>
+          <div className="phrase-staff-neck">
+            <div className="phrase-staff-names">
+              {['e', 'B', 'G', 'D', 'A', 'E'].map((name) => (
+                <span key={name}>{name}</span>
+              ))}
+            </div>
+            <div className="phrase-staff-sheet">
+              {['e', 'B', 'G', 'D', 'A', 'E'].map((name, index) => (
+                <span
+                  key={`line-${name}`}
+                  className="phrase-string-line"
+                  style={{ top: `${((index + 0.5) / 6) * 100}%` }}
+                />
+              ))}
+              {row.lines.map((left) => (
+                <span
+                  key={left}
+                  className="phrase-staff-grid"
+                  style={{ left }}
+                />
+              ))}
+              <span
+                className="phrase-playhead"
+                data-phrase-playhead={row.id}
+                hidden
+              />
+              {row.notes.map(({ index, note, x, y }) => (
+                <span
+                  key={`fret-${index}`}
+                  className="phrase-staff-fret"
+                  data-phrase-note={index}
+                  style={{ left: x, top: y }}
+                >
+                  {note.fret}
                 </span>
               ))}
-            </TabRow>
+            </div>
           </div>
-        ))}
-      </div>
-      <ol className="sr-only">
-        {notes.map((note, index) => (
-          <li key={`spoken-${index}`}>
-            {pretty(note.name)}, string {6 - note.string}, fret{' '}
-            {note.fret === 0 ? 'open' : note.fret}, finger{' '}
-            {note.finger === 0 ? 'open' : note.finger}
-            {note.shift ? ', shift' : ''}
-            {note.strong ? ', strong beat' : ''}
-          </li>
-        ))}
-      </ol>
-    </>
+          <div className="phrase-staff-beats">
+            {row.beats.map((beat) => (
+              <span key={beat.label} style={{ left: beat.x }}>
+                {beat.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
-}
-
-function TabRow({ children }: { children: ReactNode }) {
-  return <div className="phrase-tab-row">{children}</div>;
+  const host =
+    typeof document === 'undefined'
+      ? null
+      : document.getElementById('phrase-tab-host');
+  return host ? createPortal(staff, host) : staff;
 }

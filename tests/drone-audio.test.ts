@@ -384,8 +384,8 @@ void test('a low reed starts on one context and centers the root', async () => {
   const wet = limiter.connections[0] as FakeNode;
   assert.ok(wet);
   assert.ok(wet.connections.includes(context.destination));
-  assert.equal(engine.nodeCount(), 42);
-  assert.equal(createdNodes(context), 42);
+  assert.equal(engine.nodeCount(), 43);
+  assert.equal(createdNodes(context), 43);
   assert.deepEqual(
     context.oscillators.map((oscillator) => oscillator.starts),
     context.oscillators.map(() => [4.02]),
@@ -486,7 +486,7 @@ void test('playing again with the upper octave reuses the context', async () => 
   await until(() => states.at(-1) === 'playing');
   const before = createdNodes(context);
   engine.play({ root: 'A', modeId: 'dorian', octave: 'layered' });
-  await until(() => engine.nodeCount() === 48 && states.at(-1) === 'playing');
+  await until(() => engine.nodeCount() === 49 && states.at(-1) === 'playing');
   assert.equal(created(), 1);
   assert.equal(createdNodes(context) - before, 33);
   engine.dispose();
@@ -496,8 +496,8 @@ void test('Locrian drones the octave with the same reed pair', async () => {
   const { engine, context, states } = setup();
   engine.play({ root: 'A', modeId: 'locrian', octave: 'low' });
   await until(() => states.at(-1) === 'playing');
-  assert.equal(engine.nodeCount(), 42);
-  assert.equal(createdNodes(context), 42);
+  assert.equal(engine.nodeCount(), 43);
+  assert.equal(createdNodes(context), 43);
   const frequencies = context.oscillators.map(
     (oscillator) => oscillator.frequency.value,
   );

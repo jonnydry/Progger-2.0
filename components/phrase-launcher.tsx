@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ComponentType } from 'react';
+import { useEffect, useRef, useState, type ComponentType } from 'react';
 import { Music2 } from 'lucide-react';
 import type { Note } from '@/lib/music';
 import type { PhraseFretMark } from '@/lib/phrase-marks';
@@ -30,18 +30,30 @@ export function PhraseLauncher({
   const [open, setOpen] = useState(false);
   const [Panel, setPanel] = useState<ComponentType<PanelProps> | null>(null);
   const [failed, setFailed] = useState(false);
+  const opened = useRef(false);
+
+  useEffect(() => {
+    if (!open) {
+      if (opened.current) onMarks(null, null);
+      return;
+    }
+    opened.current = true;
+    if (Panel) return;
+    let cancelled = false;
+    void import('@/components/phrase-panel')
+      .then((module) => {
+        if (!cancelled) setPanel(() => module.PhrasePanel);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, Panel, onMarks]);
 
   function toggle() {
-    setOpen((current) => {
-      const next = !current;
-      if (next && !Panel) {
-        void import('@/components/phrase-panel')
-          .then((module) => setPanel(() => module.PhrasePanel))
-          .catch(() => setFailed(true));
-      }
-      if (!next) onMarks(null, null);
-      return next;
-    });
+    setOpen((current) => !current);
   }
 
   return (
