@@ -1,10 +1,24 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { access, mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  access,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
-const SHARE = '/tmp/progger-vinext-share';
+/** Lock directory for one checkout, so two worktrees do not share a vinext server. */
+export function vinextShareDir(checkout: string): string {
+  const key = createHash('sha256').update(checkout).digest('hex').slice(0, 16);
+  return `/tmp/progger-vinext-share-${key}`;
+}
+
+const SHARE = vinextShareDir(fileURLToPath(new URL('..', import.meta.url)));
 const REFS = `${SHARE}/refs`;
 const OWNER = `${SHARE}/owner`;
 const VINE_LOCK = fileURLToPath(

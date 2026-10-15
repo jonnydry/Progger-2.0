@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { createOutputChain } from '../lib/audio-output.ts';
@@ -91,12 +92,32 @@ void test('production audio does not branch on the Node runtime', () => {
     new URL('../lib/audio-output.ts', import.meta.url),
     'utf8',
   );
-  assert.doesNotMatch(source, /nodeOfflineRuntime|versions\?\.node|process\.versions/);
+  assert.doesNotMatch(
+    source,
+    /nodeOfflineRuntime|versions\?\.node|process\.versions/,
+  );
+});
+
+function invalidState(message: string): DOMException {
+  return new DOMException(message, 'InvalidStateError');
+}
+
+void test('an offline context without suspend pre-schedules the fade', () => {
+  const context = new SwitchContext();
+  Object.defineProperty(context, 'suspend', { value: undefined });
+  const chain = createOutputChain(context as unknown as BaseAudioContext);
+  chain.setDrone(true, 0, 0);
+  chain.setDrone(false, 0.2, 0.02);
+  assert.equal(context.suspends.length, 0);
+  assert.equal(chain.voicingTarget(), context.destination);
+  chain.disconnect();
 });
 
 void test('a pending future switch does not surface when suspend rejects', async () => {
   const context = new SwitchContext();
-  context.suspendError = new Error('suspend rejected while the switch is ahead');
+  context.suspendError = invalidState(
+    'suspend rejected while the switch is ahead',
+  );
   const chain = createOutputChain(context as unknown as BaseAudioContext);
   chain.setDrone(true, 0, 0);
   assert.equal(chain.voicingTarget(), chain.chordInput);
@@ -113,7 +134,7 @@ void test('a pending future switch does not surface when suspend rejects', async
 
 void test('a suspend rejection after the switch time still changes the route', async () => {
   const context = new SwitchContext();
-  context.suspendError = new Error('render clock passed the switch');
+  context.suspendError = invalidState('render clock passed the switch');
   context.onSuspend = () => {
     context.currentTime = 1;
   };
@@ -127,4 +148,46 @@ void test('a suspend rejection after the switch time still changes the route', a
   assert.ok(context.currentTime > context.suspends[0]);
   assert.equal(chain.voicingTarget(), context.destination);
   chain.disconnect();
+});
+
+void test('a suspend rejection that is not InvalidStateError is warned and surfaces', () => {
+  const child = spawnSync(
+    process.execPath,
+    [
+      '--experimental-strip-types',
+      '--input-type=module',
+      '--unhandled-rejections=strict',
+      '-e',
+      `
+        import { createOutputChain } from './lib/audio-output.ts';
+        const context = {
+          state: 'running',
+          currentTime: 0,
+          length: 48000,
+          sampleRate: 48000,
+          destination: { connections: [], connect() {}, disconnect() {} },
+          createGain() {
+            return { connect() { return this; }, disconnect() {}, gain: { value: 0, cancelScheduledValues() {}, setValueAtTime() {}, linearRampToValueAtTime() {} } };
+          },
+          createWaveShaper() {
+            return { connect() { return this; }, disconnect() {}, curve: null, oversample: 'none' };
+          },
+          createDelay() {
+            return { connect() { return this; }, disconnect() {}, delayTime: { value: 0, cancelScheduledValues() {}, setValueAtTime() {}, linearRampToValueAtTime() {} } };
+          },
+          suspend() { return Promise.reject(new Error('the render graph broke')); },
+          resume() { return Promise.resolve(); },
+        };
+        const chain = createOutputChain(context);
+        chain.setDrone(true, 0, 0);
+        chain.setDrone(false, 0.2, 0.02);
+        setTimeout(() => chain.disconnect(), 30);
+      `,
+    ],
+    { encoding: 'utf8', cwd: new URL('..', import.meta.url) },
+  );
+  const output = `${child.stdout}\n${child.stderr}`;
+  assert.match(output, /Output route switch failed/);
+  assert.match(output, /the render graph broke/);
+  assert.notEqual(child.status, 0);
 });

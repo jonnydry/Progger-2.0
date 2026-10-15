@@ -496,6 +496,10 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     pointPhrase(context.destination);
   }
 
+  function isInvalidState(error: unknown): boolean {
+    return error instanceof DOMException && error.name === 'InvalidStateError';
+  }
+
   function canSuspend(): boolean {
     const offline = context as OfflineAudioContext;
     return (
@@ -512,9 +516,10 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
    * speaker parameter, and the route is patched before the first sample.
    * The fade back in is a new ramp, so it does not replace the event that
    * lands on zero.
-   * A suspend rejection while `when` is still ahead is a pending switch:
-   * use the same pre-scheduled fade, and do not surface the rejection.
-   * A rejection after the clock has passed `when` switches on the spot.
+   * An InvalidStateError while `when` is still ahead is a pending switch:
+   * use the same pre-scheduled fade, and do not surface that error.
+   * The same error after the clock has passed `when` switches on the spot.
+   * Any other rejection is warned and rethrown.
    */
   function atSilence(
     when: number,
@@ -555,8 +560,12 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
           switchNow();
           return offline.resume();
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (switched || token !== epoch || offline.state === 'closed') return;
+          if (!isInvalidState(error)) {
+            console.warn('Output route switch failed.', error);
+            throw error;
+          }
           if (when > offline.currentTime) {
             switched = true;
             finish(false);
