@@ -9,20 +9,15 @@ import {
   type RefObject,
 } from 'react';
 import { AudioLines, ChevronDown, Footprints } from 'lucide-react';
-import {
-  DRONE_SOUNDS,
-  reedRequestForScale,
-  type DroneSoundId,
-} from '@/lib/drone';
+import { DRONE_SOUNDS, reedRequestForScale, type DroneSoundId } from '@/lib/drone';
 import { pageAudio } from '@/lib/audio-output';
-import { ReedDrone } from '@/lib/drone-audio';
+import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
 import {
   DRONE_ICON_PX,
   VOLUME_POPOVER_GUARD_SELECTORS,
   type AnchoredPopoverSide,
   type DroneBox,
   anchoredVolumePopover,
-  applyDroneSlider,
   droneControlName,
   droneVolumeFocusOut,
   droneVolumeOpens,
@@ -293,7 +288,7 @@ function DroneVolumePopover({
           value={volume}
           aria-label="Sound menu volume"
           onChange={(event) =>
-            applyDroneSlider(event.target.valueAsNumber, onVolume)
+            onVolume(clampDroneVolume(event.target.valueAsNumber))
           }
         />
       </label>
@@ -348,9 +343,7 @@ export function DroneControls({
   onWalk: () => void;
 }) {
   const [volumeOpen, setVolumeOpen] = useState(false);
-  const [volumeFocus, setVolumeFocus] = useState<'trigger' | 'slider'>(
-    'trigger',
-  );
+  const [volumeFocus, setVolumeFocus] = useState<'trigger' | 'slider'>('trigger');
   const activeSound = soundLabel(sound);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const volumeRef = useRef<HTMLButtonElement>(null);
@@ -452,30 +445,6 @@ export function DroneControls({
     <div className="drone-controls">
       <button
         type="button"
-        id="drone-toggle"
-        className="drone-toggle"
-        ref={toggleRef}
-        aria-pressed={enabled}
-        aria-label={droneControlName(enabled, activeSound)}
-        aria-keyshortcuts="ArrowDown ArrowUp"
-        onClick={onToggle}
-        onKeyDown={(event) => {
-          const next = volumePopoverKey({
-            open: volumeOpen,
-            key: event.key,
-            focus: 'toggle',
-          });
-          if (!droneVolumeOpens({ kind: 'keydown', key: event.key })) return;
-          if (!next.open || next.focus !== 'slider') return;
-          event.preventDefault();
-          setVolumeFocus('slider');
-          setVolumeOpen(true);
-        }}
-      >
-        <AudioLines size={DRONE_ICON_PX} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
         id="drone-volume-trigger"
         className="drone-volume-trigger"
         ref={volumeRef}
@@ -519,12 +488,34 @@ export function DroneControls({
         id="drone-walk"
         className="drone-walk"
         aria-pressed={walking}
-        aria-label={
-          walking ? 'Stop the scale walk' : 'Walk the scale up and down'
-        }
+        aria-label={walking ? 'Stop the scale walk' : 'Walk the scale up and down'}
         onClick={onWalk}
       >
         <Footprints size={DRONE_ICON_PX} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        id="drone-toggle"
+        className="drone-toggle"
+        ref={toggleRef}
+        aria-pressed={enabled}
+        aria-label={droneControlName(enabled, activeSound)}
+        aria-keyshortcuts="ArrowDown ArrowUp"
+        onClick={onToggle}
+        onKeyDown={(event) => {
+          const next = volumePopoverKey({
+            open: volumeOpen,
+            key: event.key,
+            focus: 'toggle',
+          });
+          if (!droneVolumeOpens({ kind: 'keydown', key: event.key })) return;
+          if (!next.open || next.focus !== 'slider') return;
+          event.preventDefault();
+          setVolumeFocus('slider');
+          setVolumeOpen(true);
+        }}
+      >
+        <AudioLines size={DRONE_ICON_PX} aria-hidden="true" />
       </button>
       {message ? (
         <output className="drone-status sr-only">{message}</output>

@@ -304,13 +304,12 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   const walkAt = view.indexOf('id="drone-walk"');
   assert.equal(view.includes('id="drone-level"'), false);
   assert.equal((view.match(/type="range"/g) ?? []).length, 1);
-  assert.ok(toggleAt >= 0 && toggleAt < volumeAt);
-  assert.ok(volumeAt < walkAt);
+  assert.ok(volumeAt >= 0 && volumeAt < walkAt && walkAt < toggleAt);
   const volumeButton = view.slice(
     volumeAt,
     view.indexOf('<DroneVolumePopover'),
   );
-  const toggle = view.slice(toggleAt, volumeAt);
+  const toggle = view.slice(toggleAt, view.indexOf('</button>', toggleAt));
   assert.match(volumeButton, /aria-haspopup="dialog"/);
   assert.match(volumeButton, /aria-expanded=\{volumeOpen\}/);
   assert.match(volumeButton, /aria-controls="drone-volume-popover"/);
@@ -339,7 +338,7 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   assert.doesNotMatch(view, /aria-modal/);
   assert.doesNotMatch(view, /createPortal/);
   assert.match(view, /id="drone-volume-trigger"[\s\S]*<DroneVolumePopover/);
-  assert.match(view, /id="drone-toggle"[\s\S]*id="drone-volume-trigger"/);
+  assert.match(view, /id="drone-volume-trigger"[\s\S]*id="drone-toggle"/);
   assert.match(view, /setTimeout\(\(\) => \{\s*leaveTimer\.current = null;/);
   assert.match(view, /setTimeout\(\(\) => \{\s*returnTimer\.current = null;/);
   assert.match(

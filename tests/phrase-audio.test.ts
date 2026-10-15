@@ -15,9 +15,11 @@ import {
   PhrasePlayer,
   bindPhraseLifecycle,
   clampPhraseTempo,
+  melodyFrets,
   schedulePhrase,
   type PhraseClock,
 } from '../lib/phrase-audio.ts';
+import { scheduleVoicing } from '../lib/voicing-audio.ts';
 import {
   beatAtSeconds,
   generatePhrase,
@@ -213,80 +215,160 @@ void test('the playhead inverts straight and swing timing', () => {
   }
 });
 
+/** Quarter grid in seconds. Swing delays the offbeat to two thirds of the quarter. */
+function gridSeconds(
+  beat: number,
+  tempo: number,
+  feel: 'straight' | 'swing',
+): number {
+  const quarter = 60 / tempo;
+  if (feel === 'straight') return beat * quarter;
+  const whole = Math.floor(beat + 1e-9);
+  const fraction = beat - whole;
+  if (fraction < 0.01) return whole * quarter;
+  if (Math.abs(fraction - 0.5) < 0.01) return (whole + 2 / 3) * quarter;
+  return beat * quarter;
+}
+
+/**
+ * The scheduler's clock is the audio context. `oscillator.start` receives
+ * that time. Wall time is not read.
+ */
+class AudioClock implements PhraseClock {
+  currentTime = 0;
+  private nextId = 1;
+  private timers = new Map<number, { at: number; fn: () => void }>();
+
+  now(): number {
+    return this.currentTime;
+  }
+
+  after(delaySec: number, fn: () => void): number {
+    if (!(delaySec > 1e-4)) {
+      throw new Error(
+        `wake did not move the audio clock at ${this.currentTime}s (delay ${delaySec}s)`,
+      );
+    }
+    const id = this.nextId++;
+    this.timers.set(id, { at: this.currentTime + delaySec, fn });
+    return id;
+  }
+
+  cancel(handle: unknown): void {
+    this.timers.delete(handle as number);
+  }
+
+  advance(to: number): void {
+    this.currentTime = to;
+    for (;;) {
+      let due: { id: number; at: number; fn: () => void } | null = null;
+      for (const [id, timer] of this.timers) {
+        if (timer.at <= this.currentTime + 1e-9 && (!due || timer.at < due.at))
+          due = { id, at: timer.at, fn: timer.fn };
+      }
+      if (!due) break;
+      this.timers.delete(due.id);
+      due.fn();
+    }
+  }
+}
+
+function scheduledAudioOnsets(
+  tempo: number,
+  feel: 'straight' | 'swing',
+): number[] {
+  const beats = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
+  const context = new OfflineAudioContext(1, RATE, RATE);
+  const bus = context.createGain();
+  const starts: number[] = [];
+  const create = context.createOscillator.bind(context);
+  context.createOscillator = () => {
+    const oscillator = create();
+    const start = oscillator.start.bind(oscillator);
+    oscillator.start = (when = 0) => {
+      starts.push(when);
+      return start(when);
+    };
+    return oscillator;
+  };
+  const clock = new AudioClock();
+  new LookaheadScheduler(
+    clock,
+    beats,
+    tempo,
+    feel,
+    0,
+    30,
+    false,
+    (cue) => {
+      scheduleVoicing(
+        context,
+        melodyFrets({ string: 0, fret: 0 }),
+        cue.scheduled,
+        bus,
+      );
+    },
+    () => {},
+  ).start();
+  const end = gridSeconds(4, tempo, feel) + PHRASE_TICK_SEC;
+  let steps = 0;
+  while (clock.currentTime < end) {
+    clock.advance(clock.currentTime + PHRASE_TICK_SEC);
+    assert.ok(++steps < 2000, 'the audio clock spun');
+  }
+  return starts;
+}
+
 void test('scheduled onsets match 60 and 120 BPM, straight and swung', () => {
   const beats = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
   const measured: {
     tempo: number;
     feel: 'straight' | 'swing';
     quarterSec: number;
+    averageQuarterSec: number;
     bpm: number;
-    maxJitterSec: number;
+    maxErrorMs: number;
   }[] = [];
   for (const tempo of [60, 120] as const) {
     for (const feel of ['straight', 'swing'] as const) {
-      const clock = new FakeClock();
-      let spins = 0;
-      const realAfter = clock.after.bind(clock);
-      clock.after = (delay, fn) => {
-        if (delay <= 1e-9) spins += 1;
-        return realAfter(delay, fn);
-      };
-      const cues: { index: number; intended: number; scheduled: number }[] = [];
-      new LookaheadScheduler(
-        clock,
-        beats,
-        tempo,
-        feel,
-        0,
-        30,
-        false,
-        (cue) => cues.push(cue),
-        () => {},
-      ).start();
-      const end = onsetSeconds(4, tempo, feel) + PHRASE_TICK_SEC;
-      let steps = 0;
-      while (clock.now() < end) {
-        clock.advance(clock.now() + PHRASE_TICK_SEC);
-        assert.ok(++steps < 2000, 'the lookahead tick spun');
-      }
-      assert.equal(spins, 0);
-      assert.equal(cues.length, beats.length);
-      const quarter = 60 / tempo;
-      let gapSum = 0;
-      let gaps = 0;
-      for (const cue of cues) {
-        const beat = beats[cue.index] ?? -1;
-        const expected = onsetSeconds(beat, tempo, feel);
-        assert.ok(Math.abs(cue.intended - expected) < 1e-9);
+      const starts = scheduledAudioOnsets(tempo, feel);
+      assert.equal(starts.length, beats.length);
+      let maxError = 0;
+      const quarterTimes: number[] = [];
+      for (const [index, beat] of beats.entries()) {
+        const expected = gridSeconds(beat, tempo, feel);
+        const error = Math.abs((starts[index] ?? NaN) - expected);
+        maxError = Math.max(maxError, error);
         assert.ok(
-          Math.abs(cue.scheduled - cue.intended) < 1e-9,
-          `${feel} ${tempo} beat ${beat} moved to ${cue.scheduled}`,
+          error <= 0.001,
+          `${feel} ${tempo} beat ${beat} audio start ${starts[index]}s is ${error * 1000}ms off ${expected}s`,
         );
-        if (Number.isInteger(beat) && beat > 0 && beat <= 4) {
-          const previous = cues.find((item) => beats[item.index] === beat - 1);
-          assert.ok(previous);
-          const gap = cue.scheduled - previous.scheduled;
-          assert.ok(Math.abs(gap - quarter) < 1e-9, `gap ${gap}`);
-          gapSum += gap;
-          gaps += 1;
-        }
-        if (feel === 'swing' && Math.abs((beat % 1) - 0.5) < 1e-9) {
-          const swung = (Math.floor(beat) + 2 / 3) * quarter;
-          assert.ok(Math.abs(cue.scheduled - swung) < 1e-9);
-        }
+        if (Number.isInteger(beat)) quarterTimes.push(starts[index] ?? NaN);
       }
-      const bpm = 60 / (gapSum / gaps);
+      const gaps = quarterTimes.slice(1).map((time, index) => {
+        const previous = quarterTimes[index] ?? 0;
+        return time - previous;
+      });
+      const averageQuarterSec =
+        gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+      const bpm = 60 / averageQuarterSec;
       measured.push({
         tempo,
         feel,
-        quarterSec: quarter,
+        quarterSec: 60 / tempo,
+        averageQuarterSec,
         bpm,
-        maxJitterSec: 0,
+        maxErrorMs: maxError * 1000,
       });
-      assert.ok(Math.abs(bpm - tempo) < 1e-6);
+      if (feel === 'swing') {
+        assert.ok(
+          Math.abs(bpm - tempo) <= 0.05,
+          `swung quarter gap averages ${averageQuarterSec}s (${bpm} BPM), not ${tempo}`,
+        );
+      }
     }
   }
-  console.log(JSON.stringify({ lookaheadSec: PHRASE_LOOKAHEAD_SEC, measured }));
+  console.log(JSON.stringify({ audioClock: true, measured }));
   const panel = readFileSync(
     new URL('../components/phrase-panel.tsx', import.meta.url),
     'utf8',

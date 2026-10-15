@@ -20,6 +20,7 @@ import {
   WALK_GAINS,
   WALK_LEAD_SECONDS,
   WALK_STOP_FADE,
+  clampDroneVolume,
   createOutputChain,
   droneMasterGain,
   soundLinearCap,
@@ -33,7 +34,7 @@ import {
 } from '../lib/drone-audio.ts';
 import { DRONE_CHORD_TRIM, DRONE_DUCK_LOOKAHEAD } from '../lib/audio-output.ts';
 import { CELLO_SAMPLES, midiHz, scaleWalk } from '../lib/drone.ts';
-import { applyDroneSlider, droneControlName } from '../lib/drone-controls.ts';
+import { droneControlName } from '../lib/drone-controls.ts';
 import { ExploreDrone } from '../lib/drone-session.ts';
 
 class Param {
@@ -694,7 +695,7 @@ void test('the sound menu slider is the only volume control and it sets the mast
   assert.equal((view.match(/type="range"/g) ?? []).length, 1);
   assert.match(
     view,
-    /applyDroneSlider\(event\.target\.valueAsNumber, onVolume\)/,
+    /onVolume\(clampDroneVolume\(event\.target\.valueAsNumber\)\)/,
   );
   const page = readFileSync(
     new URL('../app/page.tsx', import.meta.url),
@@ -707,7 +708,7 @@ void test('the sound menu slider is the only volume control and it sets the mast
   session.toggle();
   await until(() => states.at(-1) === 'playing');
   const master = masterGain(context);
-  applyDroneSlider(0.4, (level) => session.setVolume(level));
+  session.setVolume(clampDroneVolume(0.4));
   assert.equal(session.snapshot().volume, 0.4);
   assert.equal(master.gain.value, 0.4);
   const moved = master.gain.events
@@ -715,14 +716,14 @@ void test('the sound menu slider is the only volume control and it sets the mast
     .at(-1);
   assert.equal(moved?.value, 0.4);
   assert.equal(moved?.constant, VOLUME_GLIDE);
-  applyDroneSlider(2, (level) => session.setVolume(level));
+  session.setVolume(clampDroneVolume(2));
   assert.equal(session.snapshot().volume, 1);
   assert.equal(
     master.gain.events.filter((event) => event.method === 'target').at(-1)
       ?.value,
     1,
   );
-  applyDroneSlider(Number.NaN, (level) => session.setVolume(level));
+  session.setVolume(clampDroneVolume(Number.NaN));
   assert.equal(session.snapshot().volume, 0);
   assert.equal(masterGain(context), master);
   assert.equal(
