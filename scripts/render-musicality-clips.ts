@@ -461,7 +461,7 @@ async function matchPair(
 }
 
 function swingText(pair: Pair): string {
-  if (pair.swing === CLIP_STRAIGHT_SWING || pair.swing === 'straight')
+  if (typeof pair.swing !== 'number' || pair.swing === CLIP_STRAIGHT_SWING)
     return pair.swingLabel;
   const ratio = swingRatioForAmount(pair.tempo, pair.swing);
   return `swing amount ${pair.swing} (pinned light swing, the value these clips used before the session default became straight), ratio ${ratio.toFixed(4)} at ${pair.tempo} BPM`;
