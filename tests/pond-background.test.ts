@@ -1,19 +1,16 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { createConnection } from 'node:net';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import type { Browser, Page } from 'playwright';
 import { launchNamed } from './browser-launch.ts';
-
-const PORT = 4173;
-const ORIGIN = `http://127.0.0.1:${PORT}`;
+import { acquireDevServer } from './dev-server.ts';
 
 const VIEWPORTS = [
   { width: 820, height: 490 },
   { width: 820, height: 800 },
   { width: 1280, height: 800 },
   { width: 1440, height: 900 },
+  { width: 1000, height: 800 },
+  { width: 480, height: 844 },
   { width: 390, height: 844 },
   { width: 320, height: 568 },
 ] as const;
@@ -24,49 +21,9 @@ type Layer = {
   width: number;
   repeat: string;
   attachment: string;
+  artBottom: number;
+  mask: string;
 };
-
-function waitForPort(port: number, timeoutMs: number) {
-  const started = Date.now();
-  return new Promise<void>((resolve, reject) => {
-    const attempt = () => {
-      const socket = createConnection({ port, host: '127.0.0.1' }, () => {
-        socket.end();
-        resolve();
-      });
-      socket.on('error', () => {
-        socket.destroy();
-        if (Date.now() - started > timeoutMs) {
-          reject(new Error(`dev server did not open port ${port}`));
-          return;
-        }
-        setTimeout(attempt, 200);
-      });
-    };
-    attempt();
-  });
-}
-
-function startServer(): ChildProcess {
-  return spawn(
-    'npx',
-    ['vinext', 'dev', '--port', String(PORT), '--hostname', '127.0.0.1'],
-    {
-      cwd: fileURLToPath(new URL('..', import.meta.url)),
-      detached: true,
-      stdio: 'pipe',
-    },
-  );
-}
-
-function stopServer(child: ChildProcess) {
-  if (!child.pid) return;
-  try {
-    process.kill(-child.pid, 'SIGTERM');
-  } catch {
-    child.kill('SIGTERM');
-  }
-}
 
 async function readLayers(page: Page) {
   return page.evaluate(() => {
@@ -88,6 +45,7 @@ async function readLayers(page: Page) {
       const offsetY = positionY.endsWith('%')
         ? ((rect.height - height) * Number.parseFloat(positionY)) / 100
         : Number.parseFloat(positionY);
+      const mask = style.maskImage;
       return {
         left: rect.left + offsetX,
         top: rect.top + offsetY,
@@ -95,6 +53,8 @@ async function readLayers(page: Page) {
         repeat: style.backgroundRepeat,
         attachment: style.backgroundAttachment,
         display: style.display,
+        artBottom: offsetY + width / 2,
+        mask,
       };
     };
     const match = document.querySelector('.chord-entry .underwater-scene');
@@ -106,6 +66,18 @@ async function readLayers(page: Page) {
       theme: document.documentElement.dataset.theme,
     };
   });
+}
+
+function assertFadeEndsAtArt(mask: string, artBottom: number, label: string) {
+  const stops = [...mask.matchAll(/(-?\d+(?:\.\d+)?)px/g)].map((match) =>
+    Number(match[1]),
+  );
+  const end = stops.at(-1);
+  assert.ok(end !== undefined, `${label} mask has no length stop: ${mask}`);
+  assert.ok(
+    Math.abs(end - artBottom) <= 1,
+    `${label} fade ends at ${end}px, art bottom is ${artBottom}px`,
+  );
 }
 
 function assertOnePainting(pond: Layer, water: Layer, label: string) {
@@ -132,25 +104,12 @@ void test(
   { timeout: 180_000 },
   async (t) => {
     const browser: Browser = await launchNamed('chromium', t);
-    const server = startServer();
-    let serverLog = '';
-    server.stdout?.on('data', (chunk: Buffer) => {
-      serverLog = `${serverLog}${chunk.toString()}`.slice(-4000);
-    });
-    server.stderr?.on('data', (chunk: Buffer) => {
-      serverLog = `${serverLog}${chunk.toString()}`.slice(-4000);
-    });
+    const server = await acquireDevServer();
+    const { origin } = server;
     t.after(async () => {
       await browser.close();
-      stopServer(server);
+      await server.release();
     });
-    try {
-      await waitForPort(PORT, 90_000);
-    } catch (error) {
-      throw new Error(
-        `${error instanceof Error ? error.message : String(error)}\n${serverLog}`,
-      );
-    }
 
     const page = await browser.newPage({
       viewport: { width: 820, height: 800 },
@@ -158,7 +117,7 @@ void test(
     });
     for (const theme of ['night', 'day'] as const) {
       for (const scene of ['pond', 'tidepool', 'twilight'] as const) {
-        await page.goto(`${ORIGIN}/`, { waitUntil: 'domcontentloaded' });
+        await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
         await page.evaluate(
           ({ theme, scene }) => {
             localStorage.setItem('progger.theme.v1', theme);
@@ -178,6 +137,7 @@ void test(
           assert.ok(top.pond && top.water);
           const label = `${theme} ${scene} ${viewport.width}x${viewport.height} top`;
           assertOnePainting(top.pond, top.water, label);
+          assertFadeEndsAtArt(top.water.mask, top.water.artBottom, label);
           const matchWidth = Number.parseFloat(top.matchSize);
           assert.ok(
             matchWidth > top.water.width + 100,
