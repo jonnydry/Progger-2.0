@@ -277,6 +277,7 @@ export function phrasePeriodBeats(bars: 2 | 4): number {
 /** Slider amount. 0 is straight, 1 is the tempo's full swing. */
 export const SWING_AMOUNT_MIN = 0;
 export const SWING_AMOUNT_MAX = 1;
+export const SWING_AMOUNT_STEP = 0.01;
 export const SWING_AMOUNT_DEFAULT = 0.6;
 
 /** Long eighth to short eighth. 1 is straight. */
@@ -284,38 +285,55 @@ export const SWING_RATIO_STRAIGHT = 1;
 /** The previous on/off swing: the offbeat at two thirds of the quarter. */
 export const SWING_RATIO_LEGACY = 2;
 
-/** Full swing under 100 BPM. */
-export const SWING_FULL_RATIO_UNDER_100 = 1.75;
-/** Full swing from 100 through 200 BPM. */
-export const SWING_FULL_RATIO_100_TO_200 = 1.4;
-/** Full swing over 250 BPM. */
-export const SWING_FULL_RATIO_OVER_250 = 1.1;
+/** Full swing at or below this tempo. */
+export const SWING_ANCHOR_SLOW_BPM = 100;
+export const SWING_ANCHOR_SLOW_RATIO = 1.75;
+/** Full swing from here through the next anchor. */
+export const SWING_ANCHOR_MID_LOW_BPM = 150;
+export const SWING_ANCHOR_MID_HIGH_BPM = 200;
+export const SWING_ANCHOR_MID_RATIO = 1.4;
+/** Full swing at or above this tempo. */
+export const SWING_ANCHOR_FAST_BPM = 250;
+export const SWING_ANCHOR_FAST_RATIO = 1.1;
 
-export const SWING_TEMPO_SLOW = 100;
-export const SWING_TEMPO_MID = 200;
-export const SWING_TEMPO_FAST = 250;
+/**
+ * The full-swing target may drop by at most this much from one BPM to the next.
+ * The steepest anchor span is 0.35 over 50 BPM (0.007).
+ */
+export const SWING_FULL_RATIO_STEP_EPSILON = 0.01;
 
-/** The short eighth stays at least this long. */
+/** The short eighth stays at least this long. The floor lowers the ratio only. */
 export const SWING_SHORT_EIGHTH_MIN_SEC = 0.1;
 
 export type SwingInput = Feel | number;
 
 /**
- * Full-swing ratio for a tempo. Under 100 BPM it is 1.75:1, from 100 through
- * 200 it is 1.4:1, and over 250 it is 1.1:1. From 200 to 250 it moves in a
- * straight line between the middle and fast bands. The downbeat, including
- * the cadence, stays on the quarter; there is no extra swing on the phrase end.
+ * Full-swing ratio for a tempo. Anchors are 1.75:1 at or below 100 BPM,
+ * 1.4:1 from 150 through 200, and 1.1:1 at or above 250. Tempos between
+ * anchors move in a straight line, so the target never jumps and never
+ * rises as the tempo rises. The downbeat, including the cadence, stays on
+ * the quarter. There is no extra swing on the phrase end.
  */
 export function fullSwingRatio(tempo: number): number {
   const bpm = tempo > 0 ? tempo : 96;
-  if (bpm < SWING_TEMPO_SLOW) return SWING_FULL_RATIO_UNDER_100;
-  if (bpm <= SWING_TEMPO_MID) return SWING_FULL_RATIO_100_TO_200;
-  if (bpm >= SWING_TEMPO_FAST) return SWING_FULL_RATIO_OVER_250;
-  const span = SWING_TEMPO_FAST - SWING_TEMPO_MID;
-  const along = (bpm - SWING_TEMPO_MID) / span;
+  if (bpm <= SWING_ANCHOR_SLOW_BPM) return SWING_ANCHOR_SLOW_RATIO;
+  if (bpm >= SWING_ANCHOR_FAST_BPM) return SWING_ANCHOR_FAST_RATIO;
+  if (bpm <= SWING_ANCHOR_MID_LOW_BPM) {
+    const along =
+      (bpm - SWING_ANCHOR_SLOW_BPM) /
+      (SWING_ANCHOR_MID_LOW_BPM - SWING_ANCHOR_SLOW_BPM);
+    return (
+      SWING_ANCHOR_SLOW_RATIO +
+      (SWING_ANCHOR_MID_RATIO - SWING_ANCHOR_SLOW_RATIO) * along
+    );
+  }
+  if (bpm <= SWING_ANCHOR_MID_HIGH_BPM) return SWING_ANCHOR_MID_RATIO;
+  const along =
+    (bpm - SWING_ANCHOR_MID_HIGH_BPM) /
+    (SWING_ANCHOR_FAST_BPM - SWING_ANCHOR_MID_HIGH_BPM);
   return (
-    SWING_FULL_RATIO_100_TO_200 +
-    (SWING_FULL_RATIO_OVER_250 - SWING_FULL_RATIO_100_TO_200) * along
+    SWING_ANCHOR_MID_RATIO +
+    (SWING_ANCHOR_FAST_RATIO - SWING_ANCHOR_MID_RATIO) * along
   );
 }
 
@@ -331,6 +349,10 @@ export function swingRatioForAmount(tempo: number, amount: number): number {
   return clampSwingRatio(tempo, desired);
 }
 
+/**
+ * Keep the short eighth at least 100 ms by lowering the long:short ratio.
+ * The quarter stays put, so the two eighths still add up to one beat.
+ */
 export function clampSwingRatio(tempo: number, ratio: number): number {
   const quarter = 60 / (tempo > 0 ? tempo : 96);
   const maxRatio = quarter / SWING_SHORT_EIGHTH_MIN_SEC - SWING_RATIO_STRAIGHT;

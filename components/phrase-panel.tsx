@@ -28,6 +28,7 @@ import {
   SWING_AMOUNT_DEFAULT,
   SWING_AMOUNT_MAX,
   SWING_AMOUNT_MIN,
+  SWING_AMOUNT_STEP,
   type FingeredNote,
   type PhraseDotVisibility,
   type PhraseLocks,
@@ -238,7 +239,7 @@ export function PhrasePanel({
             type="range"
             min={SWING_AMOUNT_MIN}
             max={SWING_AMOUNT_MAX}
-            step={0.01}
+            step={SWING_AMOUNT_STEP}
             value={swing}
             aria-valuetext={`${Math.round(swing * 100)} percent`}
             onChange={(event) => {
