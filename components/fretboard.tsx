@@ -20,6 +20,10 @@ import {
 } from 'lucide-react';
 import { MusicSelect } from '@/components/music-select';
 import { mod, pretty, TUNING, type Note, type Pattern } from '@/lib/music';
+import {
+  subscribePhrasePlayhead,
+  type PhraseFretMark,
+} from '@/lib/phrase-marks';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import {
   formAtProgress,
@@ -53,6 +57,7 @@ const FretGrid = memo(function FretGrid({
   targets,
   noteMap,
   selected,
+  phraseMarks,
 }: {
   notes: Note[];
   columnWidth: number;
@@ -68,6 +73,7 @@ const FretGrid = memo(function FretGrid({
   targets: number[];
   noteMap: Map<number, Note>;
   selected: Set<string> | null;
+  phraseMarks: Map<string, PhraseFretMark>;
 }) {
   const frets = Array.from({ length: 25 }, (_, i) => (left ? 24 - i : i));
   return (
@@ -111,6 +117,7 @@ const FretGrid = memo(function FretGrid({
                 ? pretty(degrees ? note.degree : readableNoteName(note))
                 : '';
               const key = `${string}:${fret}`;
+              const phrase = phraseMarks.get(key);
               const membership = layers.shared.has(key)
                 ? 'shared'
                 : layers.active.has(key)
@@ -119,16 +126,35 @@ const FretGrid = memo(function FretGrid({
                     ? 'neighbor'
                     : 'context';
               const show =
-                note && (scope === 'scale' || !selected || selected.has(key));
+                Boolean(phrase) ||
+                Boolean(
+                  note && (scope === 'scale' || !selected || selected.has(key)),
+                );
+              const phraseLabel = phrase
+                ? pretty(degrees && note ? note.degree : phrase.label)
+                : label;
               return (
                 <div key={string} className={`string-cell string-${string}`}>
                   <span className="string-line" />
-                  {show && (
+                  {show && (note || phrase) && (
                     <span
-                      className={`note-dot ${connected ? `connection-${membership}` : ''} ${label.length > 3 ? 'wide-note' : ''} ${note.degree === '1' ? 'is-root' : ''} ${targets.includes(note.pc) ? 'is-target' : ''}`}
-                      title={`${noteDescription(note)} · ${pretty(note.degree)} · string ${6 - string}, fret ${fret}${connected ? ` · ${membership === 'shared' ? 'shared by active and neighboring forms' : membership === 'context' ? 'scale context' : `${membership} form`}` : ''}`}
+                      data-phrase-slot={phrase ? key : undefined}
+                      className={`note-dot ${phrase ? 'phrase-mark' : ''} ${phrase?.current ? 'phrase-current' : ''} ${connected ? `connection-${membership}` : ''} ${phraseLabel.length > 3 ? 'wide-note' : ''} ${note?.degree === '1' ? 'is-root' : ''} ${note && targets.includes(note.pc) ? 'is-target' : ''}`}
+                      title={
+                        phrase
+                          ? `${phrase.label} · finger ${phrase.finger === 0 ? 'open' : phrase.finger}${phrase.shift ? ' · shift' : ''} · string ${6 - string}, fret ${fret}`
+                          : `${noteDescription(note!)} · ${pretty(note!.degree)} · string ${6 - string}, fret ${fret}${connected ? ` · ${membership === 'shared' ? 'shared by active and neighboring forms' : membership === 'context' ? 'scale context' : `${membership} form`}` : ''}`
+                      }
                     >
-                      {label}
+                      {phraseLabel}
+                      {phrase?.shift && (
+                        <span className="phrase-shift" aria-hidden="true">
+                          ›
+                        </span>
+                      )}
+                      {phrase && (
+                        <span className="phrase-finger">{phrase.finger}</span>
+                      )}
                     </span>
                   )}
                 </div>
@@ -200,6 +226,7 @@ export function Fretboard({
   root,
   controls,
   controlsAbove = false,
+  belowNeck,
   pattern,
   availablePatterns = [],
   activePatternIndex = 0,
@@ -212,10 +239,13 @@ export function Fretboard({
   left,
   targets = [],
   noteLabel = 'Scale note',
+  phraseMarks = [],
+  focusFret = null,
 }: {
   notes: Note[];
   controls: ReactNode;
   controlsAbove?: boolean;
+  belowNeck?: ReactNode;
   root: string;
   pattern?: Pattern;
   availablePatterns?: Pattern[];
@@ -229,6 +259,8 @@ export function Fretboard({
   left: boolean;
   targets?: number[];
   noteLabel?: string;
+  phraseMarks?: readonly PhraseFretMark[];
+  focusFret?: number | null;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const [range, setRange] = useState([0, 24]);
@@ -279,6 +311,12 @@ export function Fretboard({
     () => new Map(notes.map((note) => [note.pc, note])),
     [notes],
   );
+  const phraseMarkMap = useMemo(() => {
+    const marks = new Map<string, PhraseFretMark>();
+    for (const mark of phraseMarks)
+      marks.set(`${mark.string}:${mark.fret}`, mark);
+    return marks;
+  }, [phraseMarks]);
   const selected = useMemo(
     () =>
       voicing
@@ -586,6 +624,30 @@ export function Fretboard({
     availablePatterns,
     onPatternFollow,
   ]);
+  const appliedPhraseFocus = useRef('');
+  useLayoutEffect(() => {
+    if (focusFret == null || viewportWidth <= 0) {
+      appliedPhraseFocus.current = '';
+      return;
+    }
+    const token = `${focusFret}:${left}`;
+    if (appliedPhraseFocus.current === token) return;
+    appliedPhraseFocus.current = token;
+    jump(focusFret);
+  }, [focusFret, left, viewportWidth, jump]);
+  useEffect(() => {
+    const root = viewport.current;
+    if (!root) return;
+    const apply = (slot: string | null) => {
+      const marked = root.querySelectorAll('.phrase-current');
+      for (const node of marked) node.classList.remove('phrase-current');
+      if (!slot) return;
+      root
+        .querySelector(`[data-phrase-slot="${slot}"]`)
+        ?.classList.add('phrase-current');
+    };
+    return subscribePhrasePlayhead(apply);
+  }, [phraseMarkMap]);
   const maxScrollFret = Math.max(0, 25 - viewportWidth / columnWidth);
   const moveWithKey = (event: KeyboardEvent<HTMLElement>) => {
     const el = viewport.current;
@@ -834,9 +896,12 @@ export function Fretboard({
             targets={targets}
             noteMap={noteMap}
             selected={selected}
+            phraseMarks={phraseMarkMap}
           />
         </div>
       </div>
+      {phoneNeck && scaleForm}
+      {belowNeck}
       <div className="instrument-dock">
         {!controlsAbove && controls}
         <div className="neck-navigation">
@@ -920,7 +985,6 @@ export function Fretboard({
           </div>
         </div>
       </div>
-      {phoneNeck && scaleForm}
       {scope === 'scale' && overview && (
         <NeckOverview
           id={`${titleId}-overview`}

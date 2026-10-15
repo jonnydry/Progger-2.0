@@ -563,8 +563,28 @@ main {
   color: var(--foreground);
 }
 .neck {
+  display: flex;
+  flex-direction: column;
   border-top: 1px solid #3a4031;
   padding-top: 18px;
+}
+.neck > * {
+  min-width: 0;
+  max-width: 100%;
+}
+/* The phrase cluster follows the neck in the tab order and on screen.
+   The fret transport comes after it. */
+.neck > .under-neck {
+  order: 2;
+}
+.neck > .instrument-dock:not(.practice-controls) {
+  order: 3;
+}
+.neck > .neck-overview {
+  order: 4;
+}
+.neck > .pattern-details {
+  order: 5;
 }
 .neck-meta {
   display: flex;
@@ -607,6 +627,14 @@ main {
 }
 .neck-frame {
   display: flex;
+}
+.under-neck {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 10px;
+  min-width: 0;
 }
 .string-labels {
   flex: 0 0 32px;

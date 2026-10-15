@@ -27,6 +27,8 @@ import { MatchChords } from '@/components/match-chords';
 import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
 import { NeckDisplay } from '@/components/neck-display';
+import { PhraseLauncher } from '@/components/phrase-launcher';
+import type { PhraseFretMark } from '@/lib/phrase-marks';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import { scaleReturnFocusId } from '@/lib/explore-focus';
 import { nearestPatternIndex } from '@/lib/practice-position';
@@ -86,6 +88,17 @@ export default function Home() {
   const [voicingStrings, setVoicingStrings] = useState('all');
   const [theoryOpen, setTheoryOpen] = useState(false);
   const [practice, setPractice] = useState(false);
+  const [phraseMarks, setPhraseMarks] = useState<
+    readonly PhraseFretMark[] | null
+  >(null);
+  const [phraseFocus, setPhraseFocus] = useState<number | null>(null);
+  const showPhraseMarks = useCallback(
+    (marks: readonly PhraseFretMark[] | null, focus: number | null) => {
+      setPhraseMarks(marks);
+      setPhraseFocus(focus);
+    },
+    [],
+  );
   const returnPoint = useRef<{ id: string; scroll: number } | null>(null);
   const matchReturnPoint = useRef<{
     element: HTMLElement | null;
@@ -387,6 +400,27 @@ export default function Home() {
     () => (kind === 'scales' ? soundingNotes.map((note) => note.pc) : []),
     [kind, soundingNotes],
   );
+  const phraseScaleNotes = useMemo(
+    () => spell(scaleRoot, scale.formula),
+    [scaleRoot, scale],
+  );
+  const phraseChord = useMemo(() => {
+    if (kind === 'chords') return { symbol: `${root}${quality.symbol}`, notes };
+    if (currentChord) {
+      const bassPc = currentChord.bass ? pitchClass(currentChord.bass) : null;
+      const slashBass =
+        bassPc !== null &&
+        currentChord.bass &&
+        !currentChord.notes.some((note) => note.pc === bassPc)
+          ? [
+              ...currentChord.notes,
+              { name: currentChord.bass, pc: bassPc, degree: 'bass' },
+            ]
+          : currentChord.notes;
+      return { symbol: currentChord.symbol, notes: slashBass };
+    }
+    return null;
+  }, [kind, root, quality, notes, currentChord]);
   const outside = soundingNotes.filter(
     (n) => !notes.some((scaleNote) => scaleNote.pc === n.pc),
   );
@@ -679,20 +713,6 @@ export default function Home() {
                       }
                     />
                   </label>
-                  {kind === 'scales' && (
-                    <DroneControls
-                      enabled={drone.enabled}
-                      volume={drone.volume}
-                      sound={drone.sound}
-                      celloAvailable={drone.celloAvailable}
-                      walking={drone.walking}
-                      message={drone.message}
-                      onToggle={() => drone.toggle()}
-                      onVolume={(value) => drone.setVolume(value)}
-                      onSound={(value) => drone.setSound(value)}
-                      onWalk={() => drone.walk()}
-                    />
-                  )}
                 </div>
                 <p className="scale-caption">
                   {kind === 'scales'
@@ -802,6 +822,34 @@ export default function Home() {
             <Fretboard
               controls={instrumentControls}
               controlsAbove={practice}
+              belowNeck={
+                <div className="under-neck">
+                  {kind === 'scales' && (
+                    <DroneControls
+                      enabled={drone.enabled}
+                      volume={drone.volume}
+                      sound={drone.sound}
+                      celloAvailable={drone.celloAvailable}
+                      walking={drone.walking}
+                      message={drone.message}
+                      onToggle={() => drone.toggle()}
+                      onVolume={(value) => drone.setVolume(value)}
+                      onSound={(value) => drone.setSound(value)}
+                      onWalk={() => drone.walk()}
+                    />
+                  )}
+                  <PhraseLauncher
+                    active={page === 'explore'}
+                    scaleRoot={scaleRoot}
+                    scaleId={scale.id}
+                    scaleName={scale.name}
+                    scaleNotes={phraseScaleNotes}
+                    chord={phraseChord}
+                    onMarks={showPhraseMarks}
+                  />
+                  <div id="phrase-tab-host" className="phrase-tab-host" />
+                </div>
+              }
               notes={selectedVoicing?.soundedNotes ?? notes}
               root={`${pretty(root)} ${title}`}
               pattern={shape}
@@ -819,6 +867,8 @@ export default function Home() {
               left={left}
               targets={targets}
               noteLabel={kind === 'scales' ? 'Scale note' : 'Chord note'}
+              phraseMarks={phraseMarks ?? []}
+              focusFret={phraseFocus}
             />
             {practice && voicingBrowser}
           </section>
