@@ -315,12 +315,25 @@ function sweepSymbols(root: string, scaleId: string): string[] {
   return [`${root}m`, `${FIFTH[root]}7`];
 }
 
+function baselinePhraseSource(): string {
+  const spec = `${MAIN_PHRASE}:lib/phrase.ts`;
+  const show = () => execFileSync('git', ['show', spec], { encoding: 'utf8' });
+  try {
+    return show();
+  } catch {
+    // CI checks out the pull request with a shallow history, so main's
+    // commit is not in the local object store until it is fetched.
+    execFileSync('git', ['fetch', '--depth=1', 'origin', MAIN_PHRASE], {
+      timeout: 60_000,
+    });
+    return show();
+  }
+}
+
 async function mainGenerator(): Promise<{
   generatePhrase: typeof generatePhrase;
 }> {
-  const source = execFileSync('git', ['show', `${MAIN_PHRASE}:lib/phrase.ts`], {
-    encoding: 'utf8',
-  });
+  const source = baselinePhraseSource();
   const music = pathToFileURL(join(process.cwd(), 'lib/music.ts')).href;
   const marks = pathToFileURL(join(process.cwd(), 'lib/phrase-marks.ts')).href;
   const rewritten = source
