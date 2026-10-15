@@ -15,13 +15,14 @@ import {
   type DroneSoundId,
 } from '@/lib/drone';
 import { pageAudio } from '@/lib/audio-output';
-import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
+import { ReedDrone } from '@/lib/drone-audio';
 import {
   DRONE_ICON_PX,
   VOLUME_POPOVER_GUARD_SELECTORS,
   type AnchoredPopoverSide,
   type DroneBox,
   anchoredVolumePopover,
+  applyDroneSlider,
   droneControlName,
   droneVolumeFocusOut,
   droneVolumeOpens,
@@ -292,7 +293,7 @@ function DroneVolumePopover({
           value={volume}
           aria-label="Sound menu volume"
           onChange={(event) =>
-            onVolume(clampDroneVolume(event.target.valueAsNumber))
+            applyDroneSlider(event.target.valueAsNumber, onVolume)
           }
         />
       </label>
@@ -525,21 +526,6 @@ export function DroneControls({
       >
         <Footprints size={DRONE_ICON_PX} aria-hidden="true" />
       </button>
-      <label className="drone-level">
-        <span className="sr-only">Drone level</span>
-        <input
-          id="drone-level"
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={volume}
-          aria-label="Drone level"
-          onChange={(event) =>
-            onVolume(clampDroneVolume(event.target.valueAsNumber))
-          }
-        />
-      </label>
       {message ? (
         <output className="drone-status sr-only">{message}</output>
       ) : null}

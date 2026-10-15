@@ -166,10 +166,16 @@ export class LookaheadScheduler {
         this.origin +
         onsetSeconds(this.beats[this.cursor] ?? 0, this.tempo, this.feel);
       if (intended > horizon) {
-        this.wake(
-          Math.min(intended - PHRASE_LOOKAHEAD_SEC, now + PHRASE_TICK_SEC),
+        const wakeAt = Math.min(
+          intended - PHRASE_LOOKAHEAD_SEC,
+          now + PHRASE_TICK_SEC,
         );
-        return;
+        // A hair past the horizon is still this pass. A wake that is
+        // only a rounding error ahead calls setTimeout(0) and sounds late.
+        if (wakeAt > now + 1e-4) {
+          this.wake(wakeAt);
+          return;
+        }
       }
       const nextIntended = this.nextIntended();
       // A wake that missed a run of notes would otherwise sound them as one

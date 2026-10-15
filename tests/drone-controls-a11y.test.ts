@@ -302,9 +302,10 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   const toggleAt = view.indexOf('id="drone-toggle"');
   const volumeAt = view.indexOf('id="drone-volume-trigger"');
   const walkAt = view.indexOf('id="drone-walk"');
-  const levelAt = view.indexOf('id="drone-level"');
+  assert.equal(view.includes('id="drone-level"'), false);
+  assert.equal((view.match(/type="range"/g) ?? []).length, 1);
   assert.ok(toggleAt >= 0 && toggleAt < volumeAt);
-  assert.ok(volumeAt < walkAt && walkAt < levelAt);
+  assert.ok(volumeAt < walkAt);
   const volumeButton = view.slice(
     volumeAt,
     view.indexOf('<DroneVolumePopover'),

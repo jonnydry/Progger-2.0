@@ -33,12 +33,13 @@ import {
 } from '../lib/drone-audio.ts';
 import { DRONE_CHORD_TRIM, DRONE_DUCK_LOOKAHEAD } from '../lib/audio-output.ts';
 import { CELLO_SAMPLES, midiHz, scaleWalk } from '../lib/drone.ts';
-import { droneControlName } from '../lib/drone-controls.ts';
+import { applyDroneSlider, droneControlName } from '../lib/drone-controls.ts';
 import { ExploreDrone } from '../lib/drone-session.ts';
 
 class Param {
   value = 0;
-  events: { method: string; value: number; time: number; constant?: number }[] = [];
+  events: { method: string; value: number; time: number; constant?: number }[] =
+    [];
   cancelScheduledValues(time = 0) {
     this.events.push({ method: 'cancel', value: 0, time });
   }
@@ -296,7 +297,9 @@ function masterGain(context: FakeContext) {
     return Math.abs((curve[index] ?? 0) - droneSaturateSample(0.5)) < 1e-3;
   });
   assert.ok(saturator);
-  const master = context.gains.find((gain) => gain.connections.includes(saturator));
+  const master = context.gains.find((gain) =>
+    gain.connections.includes(saturator),
+  );
   assert.ok(master);
   return master;
 }
@@ -329,10 +332,7 @@ void test('bypass waits for the voicing release and the room', () => {
     chain.setDrone(true, 1, 0);
     delays.length = 0;
     chain.setDrone(false, 1);
-    assert.deepEqual(delays, [
-      0,
-      (OUTPUT_CROSSFADE + OUTPUT_TAIL) * 1000,
-    ]);
+    assert.deepEqual(delays, [0, (OUTPUT_CROSSFADE + OUTPUT_TAIL) * 1000]);
     assert.ok(OUTPUT_TAIL > 2.6);
   } finally {
     globalThis.setTimeout = original;
@@ -351,10 +351,14 @@ void test('the limiter is off the destination until the drone is on, and a snap 
   assert.equal(chord.connections.includes(chain.droneInput), false);
   const trim = chord.connections.find((node) => {
     const gain = (node as { gain?: { value: number } }).gain;
-    return gain !== undefined && Math.abs(gain.value - DRONE_CHORD_TRIM) < 1e-12;
+    return (
+      gain !== undefined && Math.abs(gain.value - DRONE_CHORD_TRIM) < 1e-12
+    );
   }) as (FakeNode & { gain: { value: number } }) | undefined;
   assert.ok(trim);
-  const delayed = trim.connections[0] as FakeNode & { delayTime?: { value: number } };
+  const delayed = trim.connections[0] as FakeNode & {
+    delayTime?: { value: number };
+  };
   assert.equal(delayed.delayTime?.value, DRONE_DUCK_LOOKAHEAD);
   assert.ok(delayed.connections.includes(chain.bus));
   const wet = (chain.limiter as unknown as FakeNode).connections[0] as FakeNode;
@@ -449,9 +453,7 @@ void test('a low reed starts on one context and centers the root', async () => {
     'lowpass',
   ]);
   assert.deepEqual(
-    voiceFilters
-      .map((filter) => filter.frequency.value)
-      .sort((a, b) => a - b),
+    voiceFilters.map((filter) => filter.frequency.value).sort((a, b) => a - b),
     [620, 740, 1280, 1800, 2140],
   );
   assert.deepEqual(
@@ -683,6 +685,55 @@ void test('another tab updates the drone volume and an empty value returns to th
   }
 });
 
+void test('the sound menu slider is the only volume control and it sets the master gain', async () => {
+  const view = readFileSync(
+    new URL('../components/drone-controls.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.equal(view.includes('id="drone-level"'), false);
+  assert.equal((view.match(/type="range"/g) ?? []).length, 1);
+  assert.match(
+    view,
+    /applyDroneSlider\(event\.target\.valueAsNumber, onVolume\)/,
+  );
+  const page = readFileSync(
+    new URL('../app/page.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(page, /onVolume=\{\(value\) => drone\.setVolume\(value\)\}/);
+  const { engine, context, states } = setup();
+  const session = new ExploreDrone(() => engine, lowRequest);
+  session.setActive(true);
+  session.toggle();
+  await until(() => states.at(-1) === 'playing');
+  const master = masterGain(context);
+  applyDroneSlider(0.4, (level) => session.setVolume(level));
+  assert.equal(session.snapshot().volume, 0.4);
+  assert.equal(master.gain.value, 0.4);
+  const moved = master.gain.events
+    .filter((event) => event.method === 'target')
+    .at(-1);
+  assert.equal(moved?.value, 0.4);
+  assert.equal(moved?.constant, VOLUME_GLIDE);
+  applyDroneSlider(2, (level) => session.setVolume(level));
+  assert.equal(session.snapshot().volume, 1);
+  assert.equal(
+    master.gain.events.filter((event) => event.method === 'target').at(-1)
+      ?.value,
+    1,
+  );
+  applyDroneSlider(Number.NaN, (level) => session.setVolume(level));
+  assert.equal(session.snapshot().volume, 0);
+  assert.equal(masterGain(context), master);
+  assert.equal(
+    master.gain.events.filter((event) => event.method === 'target').at(-1)
+      ?.value,
+    0,
+  );
+  session.dispose();
+  engine.dispose();
+});
+
 void test('the drone saturator raises small samples and bends peaks', () => {
   assert.equal(droneSaturateSample(0), 0);
   assert.ok(Math.abs(droneSaturateSample(0.001) / 0.001 - DRONE_MAKEUP) < 0.02);
@@ -706,9 +757,14 @@ void test('volume is stored before a context exists and clamps on the master ram
   await until(() => states.at(-1) === 'playing');
   const master = masterGain(context);
   assert.equal(master.gain.value, 0.5);
-  assert.equal(fadeOf(envelopeGains(context)[0]).gain.value, DRONE_MAX_LINEAR_GAIN);
+  assert.equal(
+    fadeOf(envelopeGains(context)[0]).gain.value,
+    DRONE_MAX_LINEAR_GAIN,
+  );
   engine.setVolume(2);
-  const raised = master.gain.events.filter((event) => event.method === 'target').at(-1);
+  const raised = master.gain.events
+    .filter((event) => event.method === 'target')
+    .at(-1);
   assert.equal(raised?.value, 1);
   assert.equal(raised?.constant, VOLUME_GLIDE);
   engine.setVolume(Number.NaN);
@@ -1442,7 +1498,9 @@ void test('a scale walk is booked on the audio clock and a late timer cannot bun
       assert.equal(oscillator.frequency.value, midiHz(note.midi));
       assert.equal(oscillator.starts[0], walkNoteTime(origin, index));
     });
-    const booked = context.oscillators.map((oscillator) => oscillator.starts[0]);
+    const booked = context.oscillators.map(
+      (oscillator) => oscillator.starts[0],
+    );
     context.currentTime += 5;
     for (const timer of due()) {
       timer.ran = true;
@@ -1490,10 +1548,7 @@ void test('a scale walk is booked on the audio clock and a late timer cannot bun
     assert.equal(anchor.value, 1);
     assert.ok(cut);
     const later = context.oscillators[1];
-    assert.equal(
-      later.stops.at(-1),
-      later.starts[0] + 1 / context.sampleRate,
-    );
+    assert.equal(later.stops.at(-1), later.starts[0] + 1 / context.sampleRate);
     const playing = context.oscillators[0];
     assert.ok(
       Math.abs(
@@ -1551,7 +1606,9 @@ void test('a cello that is still loading keeps the current voice, then crossfade
   const swell = envelopesTargeting(context, REED_GAINS.envelope);
   assert.equal(swell.length, 1);
   const scheduled = swell[0].gain.events.length;
-  const stops = context.oscillators.map((oscillator) => oscillator.stops.length);
+  const stops = context.oscillators.map(
+    (oscillator) => oscillator.stops.length,
+  );
   context.currentTime = 4.02 + 0.7;
   const during = context.currentTime;
   engine.retune({ ...lowRequest, sound: 'cello' });
@@ -1569,7 +1626,9 @@ void test('a cello that is still loading keeps the current voice, then crossfade
     false,
   );
   release();
-  await until(() => envelopesTargeting(context, CELLO_GAINS.envelope).length > 0);
+  await until(
+    () => envelopesTargeting(context, CELLO_GAINS.envelope).length > 0,
+  );
   assertFadeOnly(
     swell[0],
     during,
@@ -1598,7 +1657,9 @@ void test('a rejected cello fetch keeps the sounding voice and the next choice r
   await until(
     () => envelopesTargeting(rig.context, REED_GAINS.envelope).length > 0,
   );
-  const stops = rig.context.oscillators.map((oscillator) => oscillator.stops.length);
+  const stops = rig.context.oscillators.map(
+    (oscillator) => oscillator.stops.length,
+  );
   const swell = envelopesTargeting(rig.context, REED_GAINS.envelope);
   assert.equal(swell.length, 1);
   const scheduled = swell[0].gain.events.length;
@@ -1720,7 +1781,9 @@ void test('a late cello body cannot replace the samples a retry decodes', async 
   );
   rig.controller.setSound('cello');
   await until(
-    () => calls >= CELLO_SAMPLES.length && rig.controller.snapshot().sound === 'reed',
+    () =>
+      calls >= CELLO_SAMPLES.length &&
+      rig.controller.snapshot().sound === 'reed',
   );
   rig.controller.setSound('cello');
   await until(
@@ -1801,7 +1864,9 @@ void test('a failed cello decode keeps the current sound and marks cello unavail
   await until(
     () => envelopesTargeting(rig.context, REED_GAINS.envelope).length > 0,
   );
-  const stops = rig.context.oscillators.map((oscillator) => oscillator.stops.length);
+  const stops = rig.context.oscillators.map(
+    (oscillator) => oscillator.stops.length,
+  );
   const swell = envelopesTargeting(rig.context, REED_GAINS.envelope);
   const scheduled = swell[0].gain.events.length;
   rig.controller.setSound('cello');
@@ -1889,7 +1954,10 @@ void test('a saved cello sound plays reed on the first tap when decode fails', a
     assert.equal(shot.pressed, true);
     assert.equal(shot.celloAvailable, false);
     assert.equal(shot.message, 'Cello is unavailable.');
-    assert.equal(envelopesTargeting(rig.context, CELLO_GAINS.envelope).length, 0);
+    assert.equal(
+      envelopesTargeting(rig.context, CELLO_GAINS.envelope).length,
+      0,
+    );
     assert.equal(store.get('progger.drone-sound'), 'reed');
     rig.controller.dispose();
   } finally {
@@ -1912,13 +1980,15 @@ void test('voice and dispose disconnects wait for the room after the dry fade', 
     engine.stop(REED_TIMING.hideFade);
     assert.ok(
       delays.some(
-        (delay) => Math.abs(delay - voiceTailHold(REED_TIMING.hideFade) * 1000) < 1e-6,
+        (delay) =>
+          Math.abs(delay - voiceTailHold(REED_TIMING.hideFade) * 1000) < 1e-6,
       ),
     );
     engine.dispose();
     assert.ok(
       delays.some(
-        (delay) => Math.abs(delay - voiceTailHold(REED_TIMING.hideFade) * 1000) < 1e-6,
+        (delay) =>
+          Math.abs(delay - voiceTailHold(REED_TIMING.hideFade) * 1000) < 1e-6,
       ),
     );
   } finally {
@@ -1971,7 +2041,8 @@ void test('leave, a hidden tab, bfcache, and a scale change stop the walk and ev
         return new Response(new Uint8Array(16));
       });
       rig.controller.setSound(sound);
-      if (sound === 'cello') await until(() => urls.length === CELLO_SAMPLES.length);
+      if (sound === 'cello')
+        await until(() => urls.length === CELLO_SAMPLES.length);
       else assert.equal(urls.length, 0);
       assert.equal(rig.controller.snapshot().sound, sound);
       assert.equal(rig.controller.snapshot().pressed, false);

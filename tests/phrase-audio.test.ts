@@ -9,6 +9,7 @@ import {
   PHRASE_LOOKAHEAD_SEC,
   PHRASE_TEMPO_MAX,
   PHRASE_TEMPO_MIN,
+  PHRASE_TICK_SEC,
   PHRASE_TRIM,
   LookaheadScheduler,
   PhrasePlayer,
@@ -210,6 +211,99 @@ void test('the playhead inverts straight and swing timing', () => {
       `swing ${beat}`,
     );
   }
+});
+
+void test('scheduled onsets match 60 and 120 BPM, straight and swung', () => {
+  const beats = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
+  const measured: {
+    tempo: number;
+    feel: 'straight' | 'swing';
+    quarterSec: number;
+    bpm: number;
+    maxJitterSec: number;
+  }[] = [];
+  for (const tempo of [60, 120] as const) {
+    for (const feel of ['straight', 'swing'] as const) {
+      const clock = new FakeClock();
+      let spins = 0;
+      const realAfter = clock.after.bind(clock);
+      clock.after = (delay, fn) => {
+        if (delay <= 1e-9) spins += 1;
+        return realAfter(delay, fn);
+      };
+      const cues: { index: number; intended: number; scheduled: number }[] = [];
+      new LookaheadScheduler(
+        clock,
+        beats,
+        tempo,
+        feel,
+        0,
+        30,
+        false,
+        (cue) => cues.push(cue),
+        () => {},
+      ).start();
+      const end = onsetSeconds(4, tempo, feel) + PHRASE_TICK_SEC;
+      let steps = 0;
+      while (clock.now() < end) {
+        clock.advance(clock.now() + PHRASE_TICK_SEC);
+        assert.ok(++steps < 2000, 'the lookahead tick spun');
+      }
+      assert.equal(spins, 0);
+      assert.equal(cues.length, beats.length);
+      const quarter = 60 / tempo;
+      let gapSum = 0;
+      let gaps = 0;
+      for (const cue of cues) {
+        const beat = beats[cue.index] ?? -1;
+        const expected = onsetSeconds(beat, tempo, feel);
+        assert.ok(Math.abs(cue.intended - expected) < 1e-9);
+        assert.ok(
+          Math.abs(cue.scheduled - cue.intended) < 1e-9,
+          `${feel} ${tempo} beat ${beat} moved to ${cue.scheduled}`,
+        );
+        if (Number.isInteger(beat) && beat > 0 && beat <= 4) {
+          const previous = cues.find((item) => beats[item.index] === beat - 1);
+          assert.ok(previous);
+          const gap = cue.scheduled - previous.scheduled;
+          assert.ok(Math.abs(gap - quarter) < 1e-9, `gap ${gap}`);
+          gapSum += gap;
+          gaps += 1;
+        }
+        if (feel === 'swing' && Math.abs((beat % 1) - 0.5) < 1e-9) {
+          const swung = (Math.floor(beat) + 2 / 3) * quarter;
+          assert.ok(Math.abs(cue.scheduled - swung) < 1e-9);
+        }
+      }
+      const bpm = 60 / (gapSum / gaps);
+      measured.push({
+        tempo,
+        feel,
+        quarterSec: quarter,
+        bpm,
+        maxJitterSec: 0,
+      });
+      assert.ok(Math.abs(bpm - tempo) < 1e-6);
+    }
+  }
+  console.log(JSON.stringify({ lookaheadSec: PHRASE_LOOKAHEAD_SEC, measured }));
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(panel, /min=\{PHRASE_TEMPO_MIN\}/);
+  assert.match(panel, /max=\{tempoMax\}/);
+  assert.match(
+    panel,
+    /const tempoMax = slow \? PHRASE_TEMPO_MAX \/ 2 : PHRASE_TEMPO_MAX/,
+  );
+  assert.match(
+    panel,
+    /const written = clampPhraseTempo\(slow \? sounding \* 2 : sounding\)/,
+  );
+  assert.match(panel, /value=\{playbackTempo\}/);
+  assert.doesNotMatch(panel, /min=\{40\}/);
+  assert.doesNotMatch(panel, /max=\{200\}/);
 });
 
 void test('tempo clamps to about 20–300 and playback uses that clamp', async () => {

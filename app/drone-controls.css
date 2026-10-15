@@ -202,7 +202,6 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
 .drone-toggle:focus-visible,
 .drone-walk:focus-visible,
 .drone-volume-trigger:focus-visible,
-.drone-level input:focus-visible,
 .drone-volume-popover input:focus-visible {
   outline: 3px solid var(--amber);
   outline-offset: 3px;
@@ -326,19 +325,13 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
 
 .under-neck .drone-toggle,
 .under-neck .drone-volume-trigger,
-.under-neck .drone-walk,
-.under-neck .drone-level {
+.under-neck .drone-walk {
   position: static;
   top: auto;
   right: auto;
   bottom: auto;
   left: auto;
   transform: none;
-}
-
-.under-neck .drone-level {
-  width: 92px;
-  height: 44px;
 }
 
 .under-neck .drone-volume-trigger {

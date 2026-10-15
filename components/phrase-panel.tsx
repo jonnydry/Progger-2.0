@@ -6,6 +6,9 @@ import { Play, RefreshCw, Square } from 'lucide-react';
 import { pretty, type Note } from '@/lib/music';
 import {
   bindPhraseLifecycle,
+  clampPhraseTempo,
+  PHRASE_TEMPO_MAX,
+  PHRASE_TEMPO_MIN,
   PhrasePlayer,
   type PhrasePlayback,
 } from '@/lib/phrase-audio';
@@ -91,7 +94,9 @@ export function PhrasePanel({
     setSeed(phrase.phrase.seed);
     setSeedText(String(phrase.phrase.seed));
   }
-  const playbackTempo = slow ? tempo / 2 : tempo;
+  const playbackTempo = clampPhraseTempo(slow ? tempo / 2 : tempo);
+  const tempoMax = slow ? PHRASE_TEMPO_MAX / 2 : PHRASE_TEMPO_MAX;
+  const trueHalf = slow && playbackTempo * 2 === tempo;
   const notes = useMemo(
     () => (phrase.ok ? phrase.phrase.notes : EMPTY_NOTES),
     [phrase],
@@ -121,7 +126,9 @@ export function PhrasePanel({
       return;
     }
     if (!live.current || !phrase.ok) return;
-    const tempoNow = slow ? tempoRef.current / 2 : tempoRef.current;
+    const tempoNow = clampPhraseTempo(
+      slow ? tempoRef.current / 2 : tempoRef.current,
+    );
     soundingTempo.current = tempoNow;
     void player.current?.start({
       notes: phrase.phrase.notes,
@@ -157,7 +164,7 @@ export function PhrasePanel({
   }
   function startPlayback() {
     if (!phrase.ok) return;
-    const tempoNow = slow ? tempo / 2 : tempo;
+    const tempoNow = clampPhraseTempo(slow ? tempo / 2 : tempo);
     soundingTempo.current = tempoNow;
     live.current = true;
     void player.current?.start({
@@ -198,7 +205,7 @@ export function PhrasePanel({
           {bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
           {RHYTHM_LABEL[plan.rhythm]} · {REGISTER_LABEL[plan.register]} register
           · ends on the {CADENCE_LABEL[plan.cadence]} · {feel}
-          {slow ? ` · half of ${tempo}` : ''}
+          {trueHalf ? ` · half of ${tempo}` : ''}
         </p>
       )}
       <div className="phrase-controls">
@@ -240,24 +247,25 @@ export function PhrasePanel({
           Tempo
           <input
             type="range"
-            min={40}
-            max={200}
+            min={PHRASE_TEMPO_MIN}
+            max={tempoMax}
             step={1}
-            value={tempo}
+            value={playbackTempo}
             aria-valuetext={
-              slow
-                ? `${playbackTempo}, half of ${tempo}`
-                : `${tempo} beats per minute`
+              trueHalf
+                ? `${playbackTempo} beats per minute, half of ${tempo}`
+                : `${playbackTempo} beats per minute`
             }
             onChange={(event) => {
-              const next = Number(event.target.value);
-              tempoRef.current = next;
-              setTempo(next);
+              const sounding = clampPhraseTempo(Number(event.target.value));
+              const written = clampPhraseTempo(slow ? sounding * 2 : sounding);
+              tempoRef.current = written;
+              setTempo(written);
             }}
             onPointerUp={commitTempo}
             onKeyUp={commitTempo}
           />
-          <output>{Math.round(playbackTempo)}</output>
+          <output>{playbackTempo}</output>
         </label>
         <button
           type="button"
