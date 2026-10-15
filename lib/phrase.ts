@@ -278,7 +278,8 @@ export function phrasePeriodBeats(bars: 2 | 4): number {
 export const SWING_AMOUNT_MIN = 0;
 export const SWING_AMOUNT_MAX = 1;
 export const SWING_AMOUNT_STEP = 0.01;
-export const SWING_AMOUNT_DEFAULT = 0.6;
+/** New sessions start straight. The slider can still move up from here. */
+export const SWING_AMOUNT_DEFAULT = 0;
 
 /** Long eighth to short eighth. 1 is straight. */
 export const SWING_RATIO_STRAIGHT = 1;

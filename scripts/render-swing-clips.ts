@@ -12,12 +12,13 @@ import {
   generatePhrase,
   onsetSeconds,
   swingRatioForAmount,
-  SWING_AMOUNT_DEFAULT,
   SWING_AMOUNT_MAX,
   SWING_RATIO_LEGACY,
   type SwingInput,
 } from '../lib/phrase.ts';
 
+/** Partial-swing example. The session default is straight, not this amount. */
+const SWING_CLIP_MID = 0.6;
 const RATE = 44100;
 const SEED = 2;
 const TAIL_SEC = 2.7;
@@ -82,7 +83,7 @@ const clips: {
 
 for (const tempo of [90, 160]) {
   const full = swingRatioForAmount(tempo, SWING_AMOUNT_MAX);
-  const mid = swingRatioForAmount(tempo, SWING_AMOUNT_DEFAULT);
+  const mid = swingRatioForAmount(tempo, SWING_CLIP_MID);
   const set: {
     file: string;
     swing: SwingInput;
@@ -97,8 +98,8 @@ for (const tempo of [90, 160]) {
     },
     {
       file: `swing-${tempo}-60.wav`,
-      swing: SWING_AMOUNT_DEFAULT,
-      label: 'new default 60%',
+      swing: SWING_CLIP_MID,
+      label: '60%',
       ratio: mid,
     },
     {
