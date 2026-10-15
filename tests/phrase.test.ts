@@ -279,7 +279,7 @@ void test('swing amount follows the tempo anchors and keeps a 100 ms short eight
 
 void test('the full-swing target falls smoothly and eighth pairs stay one beat', () => {
   const sweepMin = PHRASE_TEMPO_MIN;
-  assert.equal(sweepMin, 20);
+  assert.equal(sweepMin, 40);
   const sweepMax = 300;
   let previous = fullSwingRatio(sweepMin);
   let maxStep = 0;

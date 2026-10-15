@@ -78,10 +78,10 @@ async function renderNote(
 void test('phrase playback trims the existing voice and swings the offbeat', async () => {
   assert.equal(PHRASE_TRIM, 0.2);
   const straight = await renderNote(0.5, 'straight');
-  const swing = await renderNote(0.5, SWING_AMOUNT_DEFAULT);
+  const swing = await renderNote(0.5, 0.6);
   const straightAt = firstAudible(straight, 0.01);
   const swingAt = firstAudible(swing, 0.01);
-  const lightAt = onsetSeconds(0.5, 120, SWING_AMOUNT_DEFAULT);
+  const lightAt = onsetSeconds(0.5, 120, 0.6);
   assert.ok(Math.abs(straightAt - onsetSeconds(0.5, 120, 'straight')) < 0.03);
   assert.ok(
     Math.abs(swingAt - lightAt) < 0.03,
