@@ -2,8 +2,8 @@ import { pageAudio } from './audio-output.ts';
 import {
   onsetSeconds,
   phrasePeriodBeats,
-  type Feel,
   type FingeredNote,
+  type SwingInput,
 } from './phrase.ts';
 import { scheduleVoicing, type ScheduledVoicing } from './voicing-audio.ts';
 
@@ -42,7 +42,7 @@ export function schedulePhrase(
   destination: AudioNode,
   notes: readonly { string: number; fret: number; beat: number }[],
   tempo: number,
-  feel: Feel,
+  swing: SwingInput,
   when: number,
 ): { trim: GainNode; voices: ScheduledVoicing[] } {
   const trim = context.createGain();
@@ -52,7 +52,7 @@ export function schedulePhrase(
     scheduleVoicing(
       context,
       melodyFrets(note),
-      when + onsetSeconds(note.beat, clampPhraseTempo(tempo), feel),
+      when + onsetSeconds(note.beat, clampPhraseTempo(tempo), swing),
       trim,
     ),
   );
@@ -92,7 +92,7 @@ export class LookaheadScheduler {
   private readonly clock: PhraseClock;
   private readonly beats: readonly number[];
   private readonly tempo: number;
-  private readonly feel: Feel;
+  private readonly swing: SwingInput;
   private readonly period: number;
   private readonly loop: boolean;
   private readonly onCue: (cue: PhraseCue) => void;
@@ -102,7 +102,7 @@ export class LookaheadScheduler {
     clock: PhraseClock,
     beats: readonly number[],
     tempo: number,
-    feel: Feel,
+    swing: SwingInput,
     startAt: number,
     period: number,
     loop: boolean,
@@ -112,7 +112,7 @@ export class LookaheadScheduler {
     this.clock = clock;
     this.beats = beats;
     this.tempo = tempo;
-    this.feel = feel;
+    this.swing = swing;
     this.origin = startAt;
     this.period = period;
     this.loop = loop;
@@ -164,7 +164,7 @@ export class LookaheadScheduler {
       }
       const intended =
         this.origin +
-        onsetSeconds(this.beats[this.cursor] ?? 0, this.tempo, this.feel);
+        onsetSeconds(this.beats[this.cursor] ?? 0, this.tempo, this.swing);
       if (intended > horizon) {
         const wakeAt = Math.min(
           intended - PHRASE_LOOKAHEAD_SEC,
@@ -204,7 +204,7 @@ export class LookaheadScheduler {
       this.cursor + 1 < this.beats.length
         ? this.origin
         : this.origin + this.period;
-    return origin + onsetSeconds(beat ?? 0, this.tempo, this.feel);
+    return origin + onsetSeconds(beat ?? 0, this.tempo, this.swing);
   }
 
   private wake(when: number) {
@@ -222,7 +222,7 @@ type PhrasePass = {
   notes: readonly FingeredNote[];
   bars: 2 | 4;
   tempo: number;
-  feel: Feel;
+  swing: SwingInput;
   loop: boolean;
   context?: BaseAudioContext;
   destination?: AudioNode;
@@ -307,7 +307,7 @@ export class PhrasePlayer {
       this.period = onsetSeconds(
         phrasePeriodBeats(input.bars),
         tempo,
-        input.feel,
+        input.swing,
       );
       this.startedAt = context.currentTime + 0.05;
       const trim = context.createGain();
@@ -325,7 +325,7 @@ export class PhrasePlayer {
         clock,
         beats,
         tempo,
-        input.feel,
+        input.swing,
         this.startedAt,
         this.period,
         input.loop,

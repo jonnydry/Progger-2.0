@@ -98,6 +98,9 @@
   min-width: 2.5em;
   font-variant-numeric: tabular-nums;
 }
+.phrase-swing output {
+  min-width: 3.2em;
+}
 .phrase-seed {
   display: inline-flex;
   align-items: center;

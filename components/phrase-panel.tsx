@@ -25,7 +25,9 @@ import {
   randomSeed,
   REGISTER_LABEL,
   RHYTHM_LABEL,
-  type Feel,
+  SWING_AMOUNT_DEFAULT,
+  SWING_AMOUNT_MAX,
+  SWING_AMOUNT_MIN,
   type FingeredNote,
   type PhraseDotVisibility,
   type PhraseLocks,
@@ -68,7 +70,7 @@ export function PhrasePanel({
   );
   const chordSymbol = chord?.symbol ?? `${scaleRoot} tonic`;
   const [bars, setBars] = useState<2 | 4>(2);
-  const [feel, setFeel] = useState<Feel>('straight');
+  const [swing, setSwing] = useState(SWING_AMOUNT_DEFAULT);
   const [tempo, setTempo] = useState(96);
   const [slow, setSlow] = useState(false);
   const [loop, setLoop] = useState(false);
@@ -79,6 +81,8 @@ export function PhrasePanel({
   const live = useRef(false);
   const tempoRef = useRef(tempo);
   const soundingTempo = useRef(tempo);
+  const swingRef = useRef(swing);
+  const soundingSwing = useRef(swing);
   const phrase = useMemo(
     () =>
       generatePhrase({
@@ -130,14 +134,15 @@ export function PhrasePanel({
       slow ? tempoRef.current / 2 : tempoRef.current,
     );
     soundingTempo.current = tempoNow;
+    soundingSwing.current = swingRef.current;
     void player.current?.start({
       notes: phrase.phrase.notes,
       bars,
       tempo: tempoNow,
-      feel,
+      swing: swingRef.current,
       loop,
     });
-  }, [active, phrase, bars, slow, feel, loop]);
+  }, [active, phrase, bars, slow, loop]);
   const marks = useMemo(
     () => (phrase.ok ? phraseFretMarks(notes, dots) : null),
     [phrase.ok, notes, dots],
@@ -166,12 +171,13 @@ export function PhrasePanel({
     if (!phrase.ok) return;
     const tempoNow = clampPhraseTempo(slow ? tempo / 2 : tempo);
     soundingTempo.current = tempoNow;
+    soundingSwing.current = swing;
     live.current = true;
     void player.current?.start({
       notes: phrase.phrase.notes,
       bars,
       tempo: tempoNow,
-      feel,
+      swing,
       loop,
     });
   }
@@ -204,8 +210,8 @@ export function PhrasePanel({
         <p className="phrase-plan">
           {bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
           {RHYTHM_LABEL[plan.rhythm]} · {REGISTER_LABEL[plan.register]} register
-          · ends on the {CADENCE_LABEL[plan.cadence]} · {feel}
-          {trueHalf ? ` · half of ${tempo}` : ''}
+          · ends on the {CADENCE_LABEL[plan.cadence]} · swing{' '}
+          {Math.round(swing * 100)}%{trueHalf ? ` · half of ${tempo}` : ''}
         </p>
       )}
       <div className="phrase-controls">
@@ -226,23 +232,28 @@ export function PhrasePanel({
             4 bars
           </button>
         </fieldset>
-        <fieldset className="segmented">
-          <legend className="sr-only">Feel</legend>
-          <button
-            type="button"
-            aria-pressed={feel === 'straight'}
-            onClick={() => setFeel('straight')}
-          >
-            Straight
-          </button>
-          <button
-            type="button"
-            aria-pressed={feel === 'swing'}
-            onClick={() => setFeel('swing')}
-          >
-            Swing
-          </button>
-        </fieldset>
+        <label className="phrase-tempo phrase-swing">
+          Swing
+          <input
+            type="range"
+            min={SWING_AMOUNT_MIN}
+            max={SWING_AMOUNT_MAX}
+            step={0.01}
+            value={swing}
+            aria-valuetext={`${Math.round(swing * 100)} percent`}
+            onChange={(event) => {
+              const next = Math.min(
+                SWING_AMOUNT_MAX,
+                Math.max(SWING_AMOUNT_MIN, Number(event.target.value)),
+              );
+              swingRef.current = next;
+              setSwing(next);
+            }}
+            onPointerUp={commitTempo}
+            onKeyUp={commitTempo}
+          />
+          <output>{Math.round(swing * 100)}%</output>
+        </label>
         <label className="phrase-tempo">
           Tempo
           <input
@@ -337,7 +348,7 @@ export function PhrasePanel({
         <PhraseStaff
           notes={notes}
           bars={bars}
-          feel={feel}
+          swing={soundingSwing}
           playing={status === 'playing'}
           player={player}
           tempoRef={soundingTempo}
@@ -432,14 +443,14 @@ function staffRows(notes: readonly FingeredNote[], bars: 2 | 4): StaffRow[] {
 function PhraseStaff({
   notes,
   bars,
-  feel,
+  swing,
   playing,
   player,
   tempoRef,
 }: {
   notes: readonly FingeredNote[];
   bars: 2 | 4;
-  feel: Feel;
+  swing: RefObject<number>;
   playing: boolean;
   player: RefObject<PhrasePlayer | null>;
   tempoRef: RefObject<number>;
@@ -465,14 +476,15 @@ function PhraseStaff({
     const tick = () => {
       const elapsed = player.current?.elapsed() ?? 0;
       const tempo = tempoRef.current ?? 96;
+      const swingNow = swing.current ?? SWING_AMOUNT_DEFAULT;
       let index = -1;
       for (let note = 0; note < notes.length; note++) {
-        if (onsetSeconds(notes[note].beat, tempo, feel) <= elapsed + 0.03)
+        if (onsetSeconds(notes[note].beat, tempo, swingNow) <= elapsed + 0.03)
           index = note;
       }
       const beat = media.matches
         ? (notes[index]?.beat ?? 0)
-        : beatAtSeconds(elapsed, tempo, feel);
+        : beatAtSeconds(elapsed, tempo, swingNow);
       const landing = beat >= bars * 4;
       const barId = landing
         ? 'land'
@@ -506,7 +518,7 @@ function PhraseStaff({
       cancelAnimationFrame(frame);
       publishPhrasePlayhead(null);
     };
-  }, [playing, notes, feel, bars, player, tempoRef]);
+  }, [playing, notes, bars, player, tempoRef, swing]);
   const staff = (
     <div className="phrase-staff" ref={rootRef} aria-hidden="true">
       {rows.map((row) => (

@@ -274,28 +274,112 @@ export function phrasePeriodBeats(bars: 2 | 4): number {
   return bars * 4 + 2;
 }
 
-/** Inverse of `onsetSeconds` for a playhead. Swing's offbeat sits at two thirds of the quarter. */
+/** Slider amount. 0 is straight, 1 is the tempo's full swing. */
+export const SWING_AMOUNT_MIN = 0;
+export const SWING_AMOUNT_MAX = 1;
+export const SWING_AMOUNT_DEFAULT = 0.6;
+
+/** Long eighth to short eighth. 1 is straight. */
+export const SWING_RATIO_STRAIGHT = 1;
+/** The previous on/off swing: the offbeat at two thirds of the quarter. */
+export const SWING_RATIO_LEGACY = 2;
+
+/** Full swing under 100 BPM. */
+export const SWING_FULL_RATIO_UNDER_100 = 1.75;
+/** Full swing from 100 through 200 BPM. */
+export const SWING_FULL_RATIO_100_TO_200 = 1.4;
+/** Full swing over 250 BPM. */
+export const SWING_FULL_RATIO_OVER_250 = 1.1;
+
+export const SWING_TEMPO_SLOW = 100;
+export const SWING_TEMPO_MID = 200;
+export const SWING_TEMPO_FAST = 250;
+
+/** The short eighth stays at least this long. */
+export const SWING_SHORT_EIGHTH_MIN_SEC = 0.1;
+
+export type SwingInput = Feel | number;
+
+/**
+ * Full-swing ratio for a tempo. Under 100 BPM it is 1.75:1, from 100 through
+ * 200 it is 1.4:1, and over 250 it is 1.1:1. From 200 to 250 it moves in a
+ * straight line between the middle and fast bands. The downbeat, including
+ * the cadence, stays on the quarter; there is no extra swing on the phrase end.
+ */
+export function fullSwingRatio(tempo: number): number {
+  const bpm = tempo > 0 ? tempo : 96;
+  if (bpm < SWING_TEMPO_SLOW) return SWING_FULL_RATIO_UNDER_100;
+  if (bpm <= SWING_TEMPO_MID) return SWING_FULL_RATIO_100_TO_200;
+  if (bpm >= SWING_TEMPO_FAST) return SWING_FULL_RATIO_OVER_250;
+  const span = SWING_TEMPO_FAST - SWING_TEMPO_MID;
+  const along = (bpm - SWING_TEMPO_MID) / span;
+  return (
+    SWING_FULL_RATIO_100_TO_200 +
+    (SWING_FULL_RATIO_OVER_250 - SWING_FULL_RATIO_100_TO_200) * along
+  );
+}
+
+/** Blend from 1:1 up to the tempo's full ratio, then keep the short eighth audible. */
+export function swingRatioForAmount(tempo: number, amount: number): number {
+  const finite = Number.isFinite(amount) ? amount : SWING_AMOUNT_MIN;
+  const blend = Math.min(SWING_AMOUNT_MAX, Math.max(SWING_AMOUNT_MIN, finite));
+  const span = SWING_AMOUNT_MAX - SWING_AMOUNT_MIN;
+  const target = fullSwingRatio(tempo);
+  const desired =
+    SWING_RATIO_STRAIGHT +
+    (target - SWING_RATIO_STRAIGHT) * ((blend - SWING_AMOUNT_MIN) / span);
+  return clampSwingRatio(tempo, desired);
+}
+
+export function clampSwingRatio(tempo: number, ratio: number): number {
+  const quarter = 60 / (tempo > 0 ? tempo : 96);
+  const maxRatio = quarter / SWING_SHORT_EIGHTH_MIN_SEC - SWING_RATIO_STRAIGHT;
+  const room = Math.max(SWING_RATIO_STRAIGHT, maxRatio);
+  return Math.min(Math.max(ratio, SWING_RATIO_STRAIGHT), room);
+}
+
+export function swingRatioOf(tempo: number, swing: SwingInput): number {
+  if (swing === 'swing') return SWING_RATIO_LEGACY;
+  if (swing === 'straight') return SWING_RATIO_STRAIGHT;
+  return swingRatioForAmount(tempo, swing);
+}
+
+/** Where the offbeat sits in the quarter. 1:1 is halfway; 2:1 is two thirds. */
+export function swingOffbeatFraction(ratio: number): number {
+  return ratio / (ratio + SWING_RATIO_STRAIGHT);
+}
+
+/** Inverse of `onsetSeconds` for a playhead. */
 export function beatAtSeconds(
   seconds: number,
   tempo: number,
-  feel: Feel,
+  swing: SwingInput,
 ): number {
   const quarter = 60 / (tempo > 0 ? tempo : 96);
-  if (feel === 'straight') return seconds / quarter;
+  const ratio = swingRatioOf(tempo, swing);
+  if (ratio === SWING_RATIO_STRAIGHT) return seconds / quarter;
+  const long = swingOffbeatFraction(ratio);
+  const short = 1 - long;
   const quarters = seconds / quarter;
   const whole = Math.floor(quarters + 1e-9);
   const fraction = quarters - whole;
-  if (fraction <= 2 / 3) return whole + (fraction / (2 / 3)) * 0.5;
-  return whole + 0.5 + ((fraction - 2 / 3) / (1 / 3)) * 0.5;
+  if (fraction <= long) return whole + (fraction / long) * 0.5;
+  return whole + 0.5 + ((fraction - long) / short) * 0.5;
 }
 
-export function onsetSeconds(beat: number, tempo: number, feel: Feel): number {
+export function onsetSeconds(
+  beat: number,
+  tempo: number,
+  swing: SwingInput,
+): number {
   const quarter = 60 / (tempo > 0 ? tempo : 96);
-  if (feel === 'straight') return beat * quarter;
+  const ratio = swingRatioOf(tempo, swing);
+  if (ratio === SWING_RATIO_STRAIGHT) return beat * quarter;
   const whole = Math.floor(beat + 1e-9);
   const fraction = beat - whole;
   if (fraction < 0.01) return whole * quarter;
-  if (Math.abs(fraction - 0.5) < 0.01) return (whole + 2 / 3) * quarter;
+  if (Math.abs(fraction - 0.5) < 0.01)
+    return (whole + swingOffbeatFraction(ratio)) * quarter;
   return beat * quarter;
 }
 

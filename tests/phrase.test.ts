@@ -15,6 +15,8 @@ import {
   generatePhraseWithPlanner,
   isStrongBeat,
   melodicMotion,
+  beatAtSeconds,
+  fullSwingRatio,
   onsetSeconds,
   parseSeed,
   phraseFretMarks,
@@ -23,6 +25,18 @@ import {
   phraseRuleReport,
   phraseSnapshot,
   rulePlan,
+  swingRatioForAmount,
+  SWING_AMOUNT_DEFAULT,
+  SWING_AMOUNT_MAX,
+  SWING_AMOUNT_MIN,
+  SWING_FULL_RATIO_100_TO_200,
+  SWING_FULL_RATIO_OVER_250,
+  SWING_FULL_RATIO_UNDER_100,
+  SWING_RATIO_STRAIGHT,
+  SWING_SHORT_EIGHTH_MIN_SEC,
+  SWING_TEMPO_FAST,
+  SWING_TEMPO_MID,
+  SWING_TEMPO_SLOW,
   type CadenceTarget,
   type Contour,
   type Phrase,
@@ -127,6 +141,89 @@ void test('timing, cadence roles, and seeds are deterministic tables', () => {
   assert.equal(locked.register, open.register);
   assert.equal(locked.cadence, open.cadence);
   assert.equal(rulePlan(3, ['root'], { cadence: 'fifth' }).cadence, 'root');
+});
+
+void test('swing amount follows the tempo bands and keeps a 100 ms short eighth', () => {
+  assert.equal(SWING_AMOUNT_MIN, 0);
+  assert.equal(SWING_AMOUNT_MAX, 1);
+  assert.equal(SWING_AMOUNT_DEFAULT, 0.6);
+  assert.equal(SWING_RATIO_STRAIGHT, 1);
+  assert.equal(SWING_FULL_RATIO_UNDER_100, 1.75);
+  assert.equal(SWING_FULL_RATIO_100_TO_200, 1.4);
+  assert.equal(SWING_FULL_RATIO_OVER_250, 1.1);
+  assert.equal(SWING_TEMPO_SLOW, 100);
+  assert.equal(SWING_TEMPO_MID, 200);
+  assert.equal(SWING_TEMPO_FAST, 250);
+  assert.equal(SWING_SHORT_EIGHTH_MIN_SEC, 0.1);
+
+  assert.equal(fullSwingRatio(60), 1.75);
+  assert.equal(fullSwingRatio(99), 1.75);
+  assert.equal(fullSwingRatio(100), 1.4);
+  assert.equal(fullSwingRatio(120), 1.4);
+  assert.equal(fullSwingRatio(180), 1.4);
+  assert.equal(fullSwingRatio(200), 1.4);
+  assert.equal(fullSwingRatio(225), 1.25);
+  assert.equal(fullSwingRatio(250), 1.1);
+  assert.equal(fullSwingRatio(280), 1.1);
+
+  for (const tempo of [60, 120, 180, 280]) {
+    assert.equal(swingRatioForAmount(tempo, 0), 1);
+    const full = fullSwingRatio(tempo);
+    assert.equal(swingRatioForAmount(tempo, 0.6), 1 + (full - 1) * 0.6);
+    assert.equal(swingRatioForAmount(tempo, 1), full);
+  }
+
+  const fastQuarter = 60 / 300;
+  const unclampedShort = fastQuarter / (1.1 + 1);
+  assert.ok(unclampedShort < 0.1);
+  const clamped = swingRatioForAmount(300, 1);
+  const clampedShort = fastQuarter / (clamped + 1);
+  assert.ok(Math.abs(clampedShort - 0.1) < 1e-9);
+  assert.ok(clamped < 1.1);
+
+  const floorQuarter = 60 / 290;
+  const floorRatio = swingRatioForAmount(290, 1);
+  const floorShort = floorQuarter / (floorRatio + 1);
+  assert.ok(floorQuarter / 2 > 0.1);
+  assert.ok(floorQuarter / (1.1 + 1) < 0.1);
+  assert.ok(Math.abs(floorShort - 0.1) < 1e-9);
+  assert.ok(floorRatio > 1);
+
+  // 60% is blended first, then clamped. Clamping the full ratio and then
+  // taking 60% of that would leave the short eighth longer than 100 ms.
+  const partialTempo = 292;
+  const partialQuarter = 60 / partialTempo;
+  const partialCap = partialQuarter / SWING_SHORT_EIGHTH_MIN_SEC - 1;
+  const partialLinear = 1 + (fullSwingRatio(partialTempo) - 1) * 0.6;
+  assert.ok(partialLinear > partialCap);
+  const partial = swingRatioForAmount(partialTempo, 0.6);
+  assert.ok(Math.abs(partial - partialCap) < 1e-9);
+  const clampedThenBlended = 1 + (partialCap - 1) * 0.6;
+  assert.ok(Math.abs(partial - clampedThenBlended) > 0.02);
+  assert.ok(
+    Math.abs(partialQuarter / (partial + 1) - SWING_SHORT_EIGHTH_MIN_SEC) <
+      1e-9,
+  );
+
+  // Half speed hears the halved tempo, so 180 BPM in half time is the slow band.
+  assert.equal(swingRatioForAmount(180, 1), SWING_FULL_RATIO_100_TO_200);
+  assert.equal(swingRatioForAmount(180 / 2, 1), SWING_FULL_RATIO_UNDER_100);
+
+  for (const beat of [0, 0.5, 1, 4, 8]) {
+    for (const tempo of [90, 160, 225, 290]) {
+      for (const amount of [0, 0.6, 1]) {
+        const at = onsetSeconds(beat, tempo, amount);
+        assert.ok(
+          Math.abs(beatAtSeconds(at, tempo, amount) - beat) < 1e-6,
+          `${tempo} ${amount} beat ${beat}`,
+        );
+        if (Number.isInteger(beat)) {
+          assert.equal(at, beat * (60 / tempo));
+        }
+      }
+    }
+  }
+  assert.equal(swingRatioForAmount(120, Number.NaN), 1);
 });
 
 void test('a low wave keeps the bottom octave of the cadence', () => {

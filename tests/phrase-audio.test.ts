@@ -24,7 +24,19 @@ import {
   beatAtSeconds,
   generatePhrase,
   onsetSeconds,
+  SWING_AMOUNT_DEFAULT,
+  SWING_AMOUNT_MAX,
+  SWING_AMOUNT_MIN,
+  SWING_FULL_RATIO_100_TO_200,
+  SWING_FULL_RATIO_OVER_250,
+  SWING_FULL_RATIO_UNDER_100,
+  SWING_RATIO_STRAIGHT,
+  SWING_SHORT_EIGHTH_MIN_SEC,
+  SWING_TEMPO_FAST,
+  SWING_TEMPO_MID,
+  SWING_TEMPO_SLOW,
   type FingeredNote,
+  type SwingInput,
 } from '../lib/phrase.ts';
 
 const RATE = 44100;
@@ -273,10 +285,7 @@ class AudioClock implements PhraseClock {
   }
 }
 
-function scheduledAudioOnsets(
-  tempo: number,
-  feel: 'straight' | 'swing',
-): number[] {
+function scheduledAudioOnsets(tempo: number, swing: SwingInput): number[] {
   const beats = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
   const context = new OfflineAudioContext(1, RATE, RATE);
   const bus = context.createGain();
@@ -296,7 +305,7 @@ function scheduledAudioOnsets(
     clock,
     beats,
     tempo,
-    feel,
+    swing,
     0,
     30,
     false,
@@ -310,7 +319,7 @@ function scheduledAudioOnsets(
     },
     () => {},
   ).start();
-  const end = gridSeconds(4, tempo, feel) + PHRASE_TICK_SEC;
+  const end = 4 * (60 / tempo) + PHRASE_TICK_SEC;
   let steps = 0;
   while (clock.currentTime < end) {
     clock.advance(clock.currentTime + PHRASE_TICK_SEC);
@@ -386,6 +395,176 @@ void test('scheduled onsets match 60 and 120 BPM, straight and swung', () => {
   assert.match(panel, /value=\{playbackTempo\}/);
   assert.doesNotMatch(panel, /min=\{40\}/);
   assert.doesNotMatch(panel, /max=\{200\}/);
+});
+
+/** Bri's bands, written here so a wrong onsetSeconds fails this clock. */
+function briefFullRatio(bpm: number): number {
+  if (bpm < SWING_TEMPO_SLOW) return SWING_FULL_RATIO_UNDER_100;
+  if (bpm <= SWING_TEMPO_MID) return SWING_FULL_RATIO_100_TO_200;
+  if (bpm >= SWING_TEMPO_FAST) return SWING_FULL_RATIO_OVER_250;
+  const along = (bpm - SWING_TEMPO_MID) / (SWING_TEMPO_FAST - SWING_TEMPO_MID);
+  return (
+    SWING_FULL_RATIO_100_TO_200 +
+    (SWING_FULL_RATIO_OVER_250 - SWING_FULL_RATIO_100_TO_200) * along
+  );
+}
+
+function briefRatio(bpm: number, amount: number): number {
+  const desired =
+    SWING_RATIO_STRAIGHT +
+    (briefFullRatio(bpm) - SWING_RATIO_STRAIGHT) * amount;
+  const quarter = 60 / bpm;
+  const maxRatio = quarter / SWING_SHORT_EIGHTH_MIN_SEC - SWING_RATIO_STRAIGHT;
+  const room = Math.max(SWING_RATIO_STRAIGHT, maxRatio);
+  return Math.min(Math.max(desired, SWING_RATIO_STRAIGHT), room);
+}
+
+function briefOnset(beat: number, bpm: number, amount: number): number {
+  const quarter = 60 / bpm;
+  const ratio = briefRatio(bpm, amount);
+  if (ratio === SWING_RATIO_STRAIGHT) return beat * quarter;
+  const whole = Math.floor(beat + 1e-9);
+  const fraction = beat - whole;
+  if (fraction < 0.01) return whole * quarter;
+  if (Math.abs(fraction - 0.5) < 0.01) {
+    return (whole + ratio / (ratio + SWING_RATIO_STRAIGHT)) * quarter;
+  }
+  return beat * quarter;
+}
+
+void test('swing intensity ratios sit on the audio clock', () => {
+  const beats = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
+  const amounts = [SWING_AMOUNT_MIN, SWING_AMOUNT_DEFAULT, SWING_AMOUNT_MAX];
+  const measured: {
+    tempo: number;
+    amount: number;
+    ratio: number;
+    expectedRatio: number;
+    averageQuarterSec: number;
+    bpm: number;
+    maxErrorMs: number;
+    shortEighthSec: number;
+  }[] = [];
+  for (const tempo of [60, 120, 180, 280, 290]) {
+    for (const amount of amounts) {
+      if (tempo === 290 && amount !== SWING_AMOUNT_MAX) continue;
+      const starts = scheduledAudioOnsets(tempo, amount);
+      assert.equal(starts.length, beats.length);
+      let maxError = 0;
+      const quarterTimes: number[] = [];
+      const ratios: number[] = [];
+      const shorts: number[] = [];
+      for (const [index, beat] of beats.entries()) {
+        const expected = briefOnset(beat, tempo, amount);
+        const error = Math.abs((starts[index] ?? NaN) - expected);
+        maxError = Math.max(maxError, error);
+        assert.ok(
+          error <= 0.001,
+          `${tempo} BPM ${amount * 100}% beat ${beat} audio start ${starts[index]}s is ${error * 1000}ms off ${expected}s`,
+        );
+        if (Number.isInteger(beat)) quarterTimes.push(starts[index] ?? NaN);
+        if (Math.abs(beat - Math.floor(beat) - 0.5) < 0.01) {
+          const long = (starts[index] ?? NaN) - (starts[index - 1] ?? NaN);
+          const short = (starts[index + 1] ?? NaN) - (starts[index] ?? NaN);
+          ratios.push(long / short);
+          shorts.push(short);
+          assert.ok(
+            short >= SWING_SHORT_EIGHTH_MIN_SEC - 0.001,
+            `${tempo} BPM short eighth ${short}s is under 100 ms`,
+          );
+        }
+      }
+      const gaps = quarterTimes.slice(1).map((time, index) => {
+        const previous = quarterTimes[index] ?? 0;
+        return time - previous;
+      });
+      const averageQuarterSec =
+        gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+      const bpm = 60 / averageQuarterSec;
+      const ratio =
+        ratios.reduce((sum, value) => sum + value, 0) / ratios.length;
+      const shortEighthSec =
+        shorts.reduce((sum, value) => sum + value, 0) / shorts.length;
+      const expectedRatio = briefRatio(tempo, amount);
+      measured.push({
+        tempo,
+        amount,
+        ratio,
+        expectedRatio,
+        averageQuarterSec,
+        bpm,
+        maxErrorMs: maxError * 1000,
+        shortEighthSec,
+      });
+      assert.ok(
+        Math.abs(ratio - expectedRatio) <= 0.02,
+        `${tempo} BPM ${amount * 100}% ratio ${ratio} is not ${expectedRatio}`,
+      );
+      assert.ok(
+        Math.abs(bpm - tempo) <= 0.05,
+        `quarter gap averages ${averageQuarterSec}s (${bpm} BPM), not ${tempo}`,
+      );
+      if (tempo === 290) {
+        const quarter = 60 / tempo;
+        const unclamped = quarter / (SWING_FULL_RATIO_OVER_250 + 1);
+        assert.ok(unclamped < SWING_SHORT_EIGHTH_MIN_SEC);
+        assert.ok(quarter / 2 > SWING_SHORT_EIGHTH_MIN_SEC);
+        assert.ok(
+          Math.abs(shortEighthSec - SWING_SHORT_EIGHTH_MIN_SEC) <= 0.001,
+        );
+        assert.ok(ratio > SWING_RATIO_STRAIGHT);
+      }
+    }
+  }
+  const partialTempo = 292;
+  const partialStarts = scheduledAudioOnsets(
+    partialTempo,
+    SWING_AMOUNT_DEFAULT,
+  );
+  const partialShorts: number[] = [];
+  for (const beat of [0.5, 1.5, 2.5, 3.5]) {
+    const index = beats.indexOf(beat);
+    const start = partialStarts[index] ?? NaN;
+    const next = partialStarts[index + 1] ?? NaN;
+    const previous = partialStarts[index - 1] ?? NaN;
+    const expected = briefOnset(beat, partialTempo, SWING_AMOUNT_DEFAULT);
+    assert.ok(
+      Math.abs(start - expected) <= 0.001,
+      `292 BPM 60% beat ${beat} is ${Math.abs(start - expected) * 1000}ms off`,
+    );
+    const short = next - start;
+    partialShorts.push(short);
+    assert.ok(Math.abs(short - SWING_SHORT_EIGHTH_MIN_SEC) <= 0.001);
+    const cap = 60 / partialTempo / SWING_SHORT_EIGHTH_MIN_SEC - 1;
+    const blendedAfter =
+      SWING_RATIO_STRAIGHT + (cap - 1) * SWING_AMOUNT_DEFAULT;
+    const heard = (start - previous) / short;
+    assert.ok(Math.abs(heard - cap) < Math.abs(heard - blendedAfter));
+  }
+  console.log(
+    JSON.stringify({
+      swingClock: true,
+      measured,
+      partialFloor: {
+        tempo: partialTempo,
+        amount: SWING_AMOUNT_DEFAULT,
+        shortEighthSec:
+          partialShorts.reduce((sum, value) => sum + value, 0) /
+          partialShorts.length,
+      },
+    }),
+  );
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(panel, /min=\{SWING_AMOUNT_MIN\}/);
+  assert.match(panel, /max=\{SWING_AMOUNT_MAX\}/);
+  assert.match(panel, /useState\(SWING_AMOUNT_DEFAULT\)/);
+  assert.equal(panel.match(/tempo: tempoNow/g)?.length, 2);
+  assert.match(panel, /tempoRef=\{soundingTempo\}/);
+  assert.doesNotMatch(panel, /Straight/);
+  assert.doesNotMatch(panel, /setFeel/);
 });
 
 void test('tempo clamps to about 20–300 and playback uses that clamp', async () => {
@@ -505,7 +684,7 @@ void test('stop, dispose, and a rejected bar count leave no timers or nodes', as
     notes: [finger],
     bars: 3 as 2,
     tempo: 120,
-    feel: 'straight',
+    swing: 'straight',
     loop: false,
     context,
     destination,
@@ -518,7 +697,7 @@ void test('stop, dispose, and a rejected bar count leave no timers or nodes', as
     ],
     bars: 2,
     tempo: 5,
-    feel: 'straight',
+    swing: 'straight',
     loop: true,
     context,
     destination,
