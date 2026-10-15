@@ -19,10 +19,17 @@ import {
   onsetSeconds,
   phraseOnsets,
   swingRatioForAmount,
-  SWING_AMOUNT_DEFAULT,
   type RhythmId,
   type SwingInput,
 } from '../lib/phrase.ts';
+
+/** Straight clips. Amount 0 is ratio 1, the same timing as the 'straight' feel. */
+const CLIP_STRAIGHT_SWING = 0;
+/**
+ * Light swing these pairs used when 0.6 was the session default, before #27
+ * started new sessions straight. Pinned so the clips keep that timing.
+ */
+const CLIP_LIGHT_SWING = 0.6;
 
 const RATE = 44100;
 const TAIL_SEC = 2.7;
@@ -81,7 +88,7 @@ const PAIRS: readonly Pair[] = [
     scaleLabel: 'A Dorian',
     chord: 'Am',
     tempo: 90,
-    swing: 'straight',
+    swing: CLIP_STRAIGHT_SWING,
     swingLabel: 'straight (amount 0, ratio 1)',
     swappedFrom: 7,
     listen:
@@ -96,7 +103,7 @@ const PAIRS: readonly Pair[] = [
     scaleLabel: 'C major',
     chord: 'C',
     tempo: 120,
-    swing: 'straight',
+    swing: CLIP_STRAIGHT_SWING,
     swingLabel: 'straight (amount 0, ratio 1)',
     swappedFrom: 1,
     listen:
@@ -111,7 +118,7 @@ const PAIRS: readonly Pair[] = [
     scaleLabel: 'A Dorian',
     chord: 'Am',
     tempo: 120,
-    swing: 'straight',
+    swing: CLIP_STRAIGHT_SWING,
     swingLabel: 'straight (amount 0, ratio 1)',
     swappedFrom: null,
     listen:
@@ -126,7 +133,7 @@ const PAIRS: readonly Pair[] = [
     scaleLabel: 'A Dorian',
     chord: 'Am',
     tempo: 90,
-    swing: SWING_AMOUNT_DEFAULT,
+    swing: CLIP_LIGHT_SWING,
     swingLabel: '',
     swappedFrom: 8,
     listen:
@@ -141,7 +148,7 @@ const PAIRS: readonly Pair[] = [
     scaleLabel: 'A Dorian',
     chord: 'Am',
     tempo: 120,
-    swing: SWING_AMOUNT_DEFAULT,
+    swing: CLIP_LIGHT_SWING,
     swingLabel: '',
     swappedFrom: 24,
     listen:
@@ -156,7 +163,7 @@ const PAIRS: readonly Pair[] = [
     scaleLabel: 'C major',
     chord: 'C',
     tempo: 120,
-    swing: SWING_AMOUNT_DEFAULT,
+    swing: CLIP_LIGHT_SWING,
     swingLabel: '',
     swappedFrom: 8,
     listen:
@@ -454,9 +461,10 @@ async function matchPair(
 }
 
 function swingText(pair: Pair): string {
-  if (pair.swing === 'straight') return pair.swingLabel;
-  const ratio = swingRatioForAmount(pair.tempo, SWING_AMOUNT_DEFAULT);
-  return `swing amount ${SWING_AMOUNT_DEFAULT} (app default), ratio ${ratio.toFixed(4)} at ${pair.tempo} BPM`;
+  if (pair.swing === CLIP_STRAIGHT_SWING || pair.swing === 'straight')
+    return pair.swingLabel;
+  const ratio = swingRatioForAmount(pair.tempo, pair.swing);
+  return `swing amount ${pair.swing} (pinned light swing, the value these clips used before the session default became straight), ratio ${ratio.toFixed(4)} at ${pair.tempo} BPM`;
 }
 
 const outDir = process.argv[2];
