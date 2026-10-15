@@ -111,6 +111,69 @@ html:is([data-scene='pond'], [data-scene='tidepool'])
   background-size: clamp(2400px, 150cqw, 2600px) auto;
 }
 
+/* Explore paints the header illustration once. The water layer used to zoom
+   the same file (2400px wide) and park the hero behind the scale title. Keep
+   Match on the crop above, and continue Explore from the header's own origin.
+   The scene art is exactly 2:1. Header and pond offsets below are the rules
+   in this file; the vertical shift also includes the 44px practice row, its
+   4px margin, and the tabs' collapsed margin-top (2px, or 8px below 501px). */
+html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+  .night-swim
+  .explorer-panel
+  .underwater-scene {
+  background-size: min(100cqw, 1280px) auto;
+  background-repeat: no-repeat;
+  background-attachment: scroll;
+}
+@media (max-width: 463px) {
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .night-swim
+    .explorer-panel
+    .underwater-scene {
+    background-position: center calc(12px - 39vw);
+  }
+}
+@media (min-width: 464px) and (max-width: 500px) {
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .night-swim
+    .explorer-panel
+    .underwater-scene {
+    background-position: center calc(115.6px - 10vw - 238px);
+  }
+}
+@media (min-width: 501px) and (max-width: 900px) {
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .night-swim
+    .explorer-panel
+    .underwater-scene {
+    background-position: center calc(44px - 42vw);
+  }
+}
+@media (min-width: 901px) and (max-width: 1074px) {
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .night-swim
+    .explorer-panel
+    .underwater-scene {
+    background-position: center calc(28px - 42vw);
+  }
+}
+@media (min-width: 1075px) and (max-width: 1280px) {
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .night-swim
+    .explorer-panel
+    .underwater-scene {
+    background-position: center calc(-316px - 10vw);
+  }
+}
+@media (min-width: 1281px) {
+  html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
+    .night-swim
+    .explorer-panel
+    .underwater-scene {
+    background-position: center -444px;
+  }
+}
+
 @media (min-width: 1281px) {
   html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .pond-scene {
