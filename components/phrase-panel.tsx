@@ -7,6 +7,7 @@ import { pretty, type Note } from '@/lib/music';
 import {
   bindPhraseLifecycle,
   clampPhraseTempo,
+  PHRASE_TEMPO_DEFAULT,
   PHRASE_TEMPO_MAX,
   PHRASE_TEMPO_MIN,
   PhrasePlayer,
@@ -72,7 +73,7 @@ export function PhrasePanel({
   const chordSymbol = chord?.symbol ?? `${scaleRoot} tonic`;
   const [bars, setBars] = useState<2 | 4>(2);
   const [swing, setSwing] = useState(SWING_AMOUNT_DEFAULT);
-  const [tempo, setTempo] = useState(96);
+  const [tempo, setTempo] = useState(PHRASE_TEMPO_DEFAULT);
   const [slow, setSlow] = useState(false);
   const [loop, setLoop] = useState(false);
   const [seed, setSeed] = useState(() => randomSeed());
@@ -265,8 +266,8 @@ export function PhrasePanel({
             value={playbackTempo}
             aria-valuetext={
               trueHalf
-                ? `${playbackTempo} beats per minute, half of ${tempo}`
-                : `${playbackTempo} beats per minute`
+                ? `${playbackTempo} BPM, half of ${tempo}`
+                : `${playbackTempo} BPM`
             }
             onChange={(event) => {
               const sounding = clampPhraseTempo(Number(event.target.value));
@@ -277,7 +278,7 @@ export function PhrasePanel({
             onPointerUp={commitTempo}
             onKeyUp={commitTempo}
           />
-          <output>{playbackTempo}</output>
+          <output>{playbackTempo} BPM</output>
         </label>
         <button
           type="button"
@@ -476,7 +477,7 @@ function PhraseStaff({
     let frame = 0;
     const tick = () => {
       const elapsed = player.current?.elapsed() ?? 0;
-      const tempo = tempoRef.current ?? 96;
+      const tempo = tempoRef.current ?? PHRASE_TEMPO_DEFAULT;
       const swingNow = swing.current ?? SWING_AMOUNT_DEFAULT;
       let index = -1;
       for (let note = 0; note < notes.length; note++) {

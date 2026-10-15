@@ -18,13 +18,20 @@ export const PHRASE_TRIM = 0.2;
 export const PHRASE_LOOKAHEAD_SEC = 0.15;
 export const PHRASE_TICK_SEC = 0.025;
 export const PHRASE_END_RELEASE_SEC = 0.3;
-export const PHRASE_TEMPO_MIN = 20;
-export const PHRASE_TEMPO_MAX = 300;
+/**
+ * The slider number is quarter-note BPM. Beat N starts at N * (60 / BPM)
+ * seconds. Swing moves the offbeat eighth inside that quarter and does not
+ * scale the beat. 40 is largo and 240 is prestissimo.
+ */
+export const PHRASE_TEMPO_MIN = 40;
+export const PHRASE_TEMPO_MAX = 240;
+/** New sessions start here. The number is already quarter notes per minute. */
+export const PHRASE_TEMPO_DEFAULT = 96;
 
 export type PhrasePlayback = 'idle' | 'starting' | 'playing' | 'error';
 
 export function clampPhraseTempo(tempo: number): number {
-  if (!Number.isFinite(tempo)) return 96;
+  if (!Number.isFinite(tempo)) return PHRASE_TEMPO_DEFAULT;
   return Math.min(PHRASE_TEMPO_MAX, Math.max(PHRASE_TEMPO_MIN, tempo));
 }
 

@@ -164,10 +164,20 @@ void test('timing, cadence roles, and seeds are deterministic tables', () => {
   assert.equal(rulePlan(3, ['root'], { cadence: 'fifth' }).cadence, 'root');
 });
 
+void test('a new session defaults to straight swing', () => {
+  assert.equal(SWING_AMOUNT_DEFAULT, 0);
+  assert.equal(
+    swingRatioForAmount(120, SWING_AMOUNT_DEFAULT),
+    SWING_RATIO_STRAIGHT,
+  );
+  assert.equal(onsetSeconds(1, 120, SWING_AMOUNT_DEFAULT), 0.5);
+  assert.equal(onsetSeconds(0.5, 120, SWING_AMOUNT_DEFAULT), 0.25);
+});
+
 void test('swing amount follows the tempo anchors and keeps a 100 ms short eighth', () => {
   assert.equal(SWING_AMOUNT_MIN, 0);
   assert.equal(SWING_AMOUNT_MAX, 1);
-  assert.equal(SWING_AMOUNT_DEFAULT, 0.6);
+  assert.equal(SWING_AMOUNT_DEFAULT, 0);
   assert.equal(SWING_RATIO_STRAIGHT, 1);
   assert.equal(SWING_ANCHOR_SLOW_BPM, 100);
   assert.equal(SWING_ANCHOR_SLOW_RATIO, 1.75);
