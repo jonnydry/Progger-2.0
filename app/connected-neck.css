@@ -263,12 +263,6 @@ html
   .neck > .neck-frame {
     order: 2;
   }
-  .neck > .under-neck {
-    order: 2;
-  }
-  .neck > .instrument-dock:not(.practice-controls) {
-    order: 3;
-  }
   .neck > .connection-controls {
     order: 4;
   }

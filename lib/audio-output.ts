@@ -505,9 +505,23 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
   }
 
   /**
+   * node-web-audio-api can report `when` as already rendered before
+   * suspend() is installed, and the rejection arrives after the buffer
+   * is done. The non-suspend offline path schedules the same fade.
+   */
+  function nodeOfflineRuntime(): boolean {
+    const runtime = globalThis as {
+      process?: { versions?: { node?: string } };
+    };
+    return typeof runtime.process?.versions?.node === 'string';
+  }
+
+  /**
    * Change the route once the speaker has reached silence, then fade back in.
    * Contexts that can suspend do the switch on the audio clock.
    * A live context waits the same interval.
+   * node-web-audio-api's suspend races the render clock under load, so
+   * that runtime uses the same pre-scheduled fade as Firefox.
    * Firefox's offline context cannot suspend. Both fades are already on the
    * speaker parameter, and the route is patched before the first sample.
    * The fade back in is a new ramp, so it does not replace the event that
@@ -534,12 +548,30 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
       }
       pendingRestoreEnd = -1;
     };
-    if (canSuspend()) {
+    if (canSuspend() && !nodeOfflineRuntime()) {
       const offline = context as OfflineAudioContext;
-      void offline.suspend(when).then(() => {
+      // suspend() rejects once the render clock has passed `when`.
+      // Switch on the spot instead of leaving that rejection unhandled.
+      let switched = false;
+      const switchNow = () => {
+        if (switched || offline.state === 'closed') return;
+        switched = true;
         finish(true);
-        return offline.resume();
-      });
+      };
+      if (!(when > offline.currentTime)) {
+        switchNow();
+        return;
+      }
+      void offline
+        .suspend(when)
+        .then(() => {
+          switchNow();
+          return offline.resume();
+        })
+        .catch((error: unknown) => {
+          if (when > offline.currentTime) throw error;
+          switchNow();
+        });
       return;
     }
     const offline = context as OfflineAudioContext;

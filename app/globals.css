@@ -572,8 +572,8 @@ main {
   min-width: 0;
   max-width: 100%;
 }
-/* The phrase cluster is after the fret transport in the tab order, and
-   directly under the strings on screen. */
+/* The phrase cluster follows the neck in the tab order and on screen.
+   The fret transport comes after it. */
 .neck > .under-neck {
   order: 2;
 }
