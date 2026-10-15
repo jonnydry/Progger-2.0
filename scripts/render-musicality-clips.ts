@@ -3,7 +3,7 @@
  * Both sides render from this commit, through schedulePhrase.
  * A is main's phrase.ts, loaded from git into a temp file. That copy is not shipped.
  * B is lib/phrase.ts at HEAD.
- * Run: node --experimental-strip-types scripts/render-musicality-clips.ts [outDir]
+ * Run: node --experimental-strip-types scripts/render-musicality-clips.ts <outDir>
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,8 +17,10 @@ import { schedulePhrase } from '../lib/phrase-audio.ts';
 import {
   generatePhrase,
   onsetSeconds,
+  phraseOnsets,
   swingRatioForAmount,
   SWING_AMOUNT_DEFAULT,
+  type RhythmId,
   type SwingInput,
 } from '../lib/phrase.ts';
 
@@ -29,7 +31,8 @@ const BASE_SHA = '00a5de376e061a16d6ae8a09076ea2e807cd31b3';
 const SOUND =
   'plucked phrase guitar (schedulePhrase → scheduleVoicing, trim 0.2)';
 const LU_LIMIT = 0.5;
-const LU_TARGET = 0.25;
+const LU_CENTER = -16;
+const PEAK_CEILING_DB = -1;
 
 type Side = 'A' | 'B';
 
@@ -37,6 +40,7 @@ type ClipNote = {
   name: string;
   midi: number;
   beat: number;
+  duration: number;
   string: number;
   fret: number;
 };
@@ -45,7 +49,7 @@ type Generated = {
   notes: ClipNote[];
   plan: {
     contour: string;
-    rhythm: string;
+    rhythm: RhythmId;
     register: string;
     cadence: string;
   };
@@ -63,13 +67,15 @@ type Pair = {
   swing: SwingInput;
   swingLabel: string;
   listen: string;
+  /** Seed this pair used before the grid fix, when that line is now identical. */
+  swappedFrom: number | null;
 };
 
 const PAIRS: readonly Pair[] = [
   {
     id: 'pair1',
     stem: 'pair1_A-dorian_90bpm_straight',
-    seed: 7,
+    seed: 16,
     root: 'A',
     scaleId: 'dorian',
     scaleLabel: 'A Dorian',
@@ -77,13 +83,14 @@ const PAIRS: readonly Pair[] = [
     tempo: 90,
     swing: 'straight',
     swingLabel: 'straight (amount 0, ratio 1)',
+    swappedFrom: 7,
     listen:
-      'A sits on E and F# for the whole phrase. B arches up through the octave and comes back down to E.',
+      'Seed 7 is the same E–F# loop on both sides now, so this pair is seed 16. A steps B down to A, then D to C. B leaps A up to D and settles C–D–C. Same quarter-note beats.',
   },
   {
     id: 'pair2',
     stem: 'pair2_C-major_120bpm_straight',
-    seed: 1,
+    seed: 3,
     root: 'C',
     scaleId: 'major',
     scaleLabel: 'C major',
@@ -91,8 +98,9 @@ const PAIRS: readonly Pair[] = [
     tempo: 120,
     swing: 'straight',
     swingLabel: 'straight (amount 0, ratio 1)',
+    swappedFrom: 1,
     listen:
-      'A repeats G and A. B starts on C5 and falls, mostly by step, to the fifth G.',
+      'Seed 1 is the same G–A loop on both sides now, so this pair is seed 3. A ends by wobbling D and C. B walks F–E–D–C down to the root. Same quarter-note beats.',
   },
   {
     id: 'pair3',
@@ -105,13 +113,14 @@ const PAIRS: readonly Pair[] = [
     tempo: 120,
     swing: 'straight',
     swingLabel: 'straight (amount 0, ratio 1)',
+    swappedFrom: null,
     listen:
-      'A pokes out and steps back (C–G–A, then E–B–C, then C–F#–E). B falls away from that C5 and steps most of the way home to E.',
+      'Same seed as before. A leaps C up to F# into the fifth. B steps D–E–F#–E on the same quarter-note beats.',
   },
   {
     id: 'pair4',
     stem: 'pair4_A-dorian_90bpm_swing',
-    seed: 8,
+    seed: 18,
     root: 'A',
     scaleId: 'dorian',
     scaleLabel: 'A Dorian',
@@ -119,13 +128,14 @@ const PAIRS: readonly Pair[] = [
     tempo: 90,
     swing: SWING_AMOUNT_DEFAULT,
     swingLabel: '',
+    swappedFrom: 8,
     listen:
-      'Both lines have offbeat eighths, so the 60% swing is in A and in B. A leaps a fifth up (E to B) and a fifth down into the cadence (A to D). B steps between those chord tones and walks down to E.',
+      'Seed 8 matches main now, so this pair is seed 18. Both lines are long–short, so the 60% swing is in A and in B. A holds B–A into the root. B steps G up to A.',
   },
   {
     id: 'pair5',
     stem: 'pair5_A-dorian_120bpm_swing',
-    seed: 24,
+    seed: 28,
     root: 'A',
     scaleId: 'dorian',
     scaleLabel: 'A Dorian',
@@ -133,13 +143,14 @@ const PAIRS: readonly Pair[] = [
     tempo: 120,
     swing: SWING_AMOUNT_DEFAULT,
     swingLabel: '',
+    swappedFrom: 24,
     listen:
-      'Pushed eighths, swung the same way on both sides. A drops a fifth from E to A, then wobbles A–B–A. B walks E–D–C–B–A into the root.',
+      'Seed 24 is pushed eighths and matches main, as does every push seed from 1 to 64 in A Dorian and C major. This pair is seed 28, long–short. A stays on E and F#. B steps down to D, then back through E–F#–E. The 60% swing is in both.',
   },
   {
     id: 'pair6',
     stem: 'pair6_C-major_120bpm_swing',
-    seed: 8,
+    seed: 11,
     root: 'C',
     scaleId: 'major',
     scaleLabel: 'C major',
@@ -147,8 +158,9 @@ const PAIRS: readonly Pair[] = [
     tempo: 120,
     swing: SWING_AMOUNT_DEFAULT,
     swingLabel: '',
+    swappedFrom: 8,
     listen:
-      'Long–short rhythm, 60% swing on both. A leaps a fifth (G up to D, C down to F). B keeps the fourth G up to C and walks the ending B–A–G.',
+      'Seed 8 matches main now, so this pair is seed 11. Both lines are long–short with the same 60% swing. A walks D–C, then leaps to F. B turns the ending into F–E–F–E.',
   },
 ];
 
@@ -222,6 +234,7 @@ function asGenerated(result: ReturnType<typeof generatePhrase>): Generated {
       name: note.name,
       midi: note.midi,
       beat: note.beat,
+      duration: note.duration,
       string: note.string,
       fret: note.fret,
     })),
@@ -356,7 +369,7 @@ function publish(
   const mp3 = join(outDir, `${stem}_${side}.mp3`);
   const sample = writeWav(wav, samples, gain);
   encodeMp3(wav, mp3);
-  const loudness = measure(mp3);
+  const loudness = measure(wav);
   return {
     ...loudness,
     samplePeak: sample,
@@ -365,39 +378,77 @@ function publish(
   };
 }
 
+function probeLoudness(
+  samples: Float32Array,
+  gain: number,
+): { lufs: number; peakDbfs: number } {
+  const dir = mkdtempSync(join(tmpdir(), 'phrase-loudness-'));
+  const wav = join(dir, 'probe.wav');
+  try {
+    writeWav(wav, samples, gain);
+    return measure(wav);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * One gain for both sides. The average integrated loudness aims at -16 LUFS.
+ * If that would push either wav true peak over -1 dBTP, the shared gain
+ * backs off until the hotter peak sits on the ceiling. The gap cannot shrink.
+ */
 async function matchPair(
   outDir: string,
   pair: Pair,
   rendered: Record<Side, Float32Array>,
 ): Promise<Record<Side, MeasuredSide>> {
-  let gainA = 1;
-  let gainB = 1;
-  let published: Record<Side, MeasuredSide> | null = null;
-  for (let pass = 0; pass < 8; pass += 1) {
-    const hottest = Math.max(
-      samplePeak(rendered.A) * gainA,
-      samplePeak(rendered.B) * gainB,
+  const rawPeak = Math.max(samplePeak(rendered.A), samplePeak(rendered.B));
+  if (rawPeak <= 0) throw new Error(`${pair.id} is silent`);
+  const probeGain = 0.25 / rawPeak;
+  const probed = {
+    A: probeLoudness(rendered.A, probeGain),
+    B: probeLoudness(rendered.B, probeGain),
+  };
+  const rawGap = probed.A.lufs - probed.B.lufs;
+  if (Math.abs(rawGap) > LU_LIMIT) {
+    throw new Error(
+      `${pair.id} raw loudness gap ${rawGap.toFixed(2)} LU is outside ${LU_LIMIT} LU, and both sides share one gain`,
     );
-    if (hottest > 0.98) {
-      const scale = 0.98 / hottest;
-      gainA *= scale;
-      gainB *= scale;
-    }
+  }
+  const average = (probed.A.lufs + probed.B.lufs) / 2;
+  let makeupDb = LU_CENTER - average;
+  const hotter = Math.max(probed.A.peakDbfs, probed.B.peakDbfs) + makeupDb;
+  if (hotter > PEAK_CEILING_DB) makeupDb -= hotter - PEAK_CEILING_DB;
+  let gain = probeGain * dbToGain(makeupDb);
+  const sampleCeiling = 10 ** (PEAK_CEILING_DB / 20);
+  if (rawPeak * gain > sampleCeiling) gain = sampleCeiling / rawPeak;
+
+  let published: Record<Side, MeasuredSide> | null = null;
+  for (let pass = 0; pass < 4; pass += 1) {
     published = {
-      A: publish(outDir, pair.stem, 'A', rendered.A, gainA),
-      B: publish(outDir, pair.stem, 'B', rendered.B, gainB),
+      A: publish(outDir, pair.stem, 'A', rendered.A, gain),
+      B: publish(outDir, pair.stem, 'B', rendered.B, gain),
     };
-    const diff = published.A.lufs - published.B.lufs;
-    if (Math.abs(diff) <= LU_TARGET) return published;
-    if (diff > 0) gainA *= dbToGain(-diff);
-    else gainB *= dbToGain(diff);
+    const peak = Math.max(published.A.peakDbfs, published.B.peakDbfs);
+    if (peak <= PEAK_CEILING_DB) break;
+    gain *= dbToGain(PEAK_CEILING_DB - peak - 0.05);
   }
   if (!published) throw new Error(`${pair.id} produced no audio`);
-  const diff = published.A.lufs - published.B.lufs;
-  if (Math.abs(diff) > LU_LIMIT) {
+  if (published.A.gain !== published.B.gain) {
+    throw new Error(`${pair.id} applied different gains`);
+  }
+  const gap = published.A.lufs - published.B.lufs;
+  if (Math.abs(gap) > LU_LIMIT) {
     throw new Error(
-      `${pair.id} loudness gap ${diff.toFixed(2)} LU is outside ${LU_LIMIT} LU`,
+      `${pair.id} loudness gap ${gap.toFixed(2)} LU is outside ${LU_LIMIT} LU`,
     );
+  }
+  for (const side of ['A', 'B'] as const) {
+    if (published[side].peakDbfs > PEAK_CEILING_DB) {
+      throw new Error(
+        `${pair.id} ${side} true peak ${published[side].peakDbfs.toFixed(2)} dBTP is above ${PEAK_CEILING_DB}`,
+      );
+    }
   }
   return published;
 }
@@ -408,7 +459,12 @@ function swingText(pair: Pair): string {
   return `swing amount ${SWING_AMOUNT_DEFAULT} (app default), ratio ${ratio.toFixed(4)} at ${pair.tempo} BPM`;
 }
 
-const outDir = process.argv[2] ?? '/opt/cursor/artifacts';
+const outDir = process.argv[2];
+if (!outDir) {
+  throw new Error(
+    'Output folder is required: node --experimental-strip-types scripts/render-musicality-clips.ts <outDir>',
+  );
+}
 const identity = requireCleanHead();
 mkdirSync(outDir, { recursive: true });
 const mainRules = await loadMainRules();
@@ -428,6 +484,25 @@ for (const pair of PAIRS) {
   if (spellLine(before.notes) === spellLine(after.notes)) {
     throw new Error(`${pair.id} A and B are the same line`);
   }
+  const beatsA = before.notes.map((note) => note.beat);
+  const beatsB = after.notes.map((note) => note.beat);
+  const durationsA = before.notes.map((note) => note.duration);
+  const durationsB = after.notes.map((note) => note.duration);
+  if (
+    beatsA.join(',') !== beatsB.join(',') ||
+    durationsA.join(',') !== durationsB.join(',')
+  ) {
+    throw new Error(`${pair.id} A and B onsets or durations differ`);
+  }
+  const planBeats = phraseOnsets(after.plan.rhythm, BARS);
+  if (beatsB.join(',') !== planBeats.join(',')) {
+    throw new Error(
+      `${pair.id} leaves the ${after.plan.rhythm} grid: ${beatsB.join(',')}`,
+    );
+  }
+  if (JSON.stringify(before.plan) !== JSON.stringify(after.plan)) {
+    throw new Error(`${pair.id} plans differ`);
+  }
   const rendered = {
     A: await render(before.notes, pair.tempo, pair.swing),
     B: await render(after.notes, pair.tempo, pair.swing),
@@ -441,21 +516,28 @@ for (const pair of PAIRS) {
   const measured = await matchPair(outDir, pair, rendered);
   const gap = Math.abs(measured.A.lufs - measured.B.lufs);
   const swing = swingText(pair);
+  const swap =
+    pair.swappedFrom === null
+      ? 'Seed kept from the previous render.'
+      : `Swapped from seed ${pair.swappedFrom}, which now matches main.`;
   const block = [
     `## ${pair.id}`,
     '',
     pair.listen,
     '',
     `- Head: \`${identity.head}\``,
-    `- Seed: ${pair.seed}`,
+    `- Seed: ${pair.seed}. ${swap}`,
     `- Key/scale: ${pair.scaleLabel}`,
     `- Chords: ${pair.chord} for ${BARS} bars`,
     `- BPM: ${pair.tempo}`,
     `- Swing: ${swing}`,
     `- Sound: ${SOUND}`,
     `- Plan (same seed on A and B): ${before.plan.rhythm}, ${before.plan.contour}, ${before.plan.register}, cadence ${before.plan.cadence}`,
-    `- A gain ${measured.A.gain.toFixed(4)}, ${measured.A.seconds.toFixed(2)}s, ${measured.A.lufs.toFixed(1)} LUFS, true peak ${measured.A.peakDbfs.toFixed(1)} dBFS, sample peak ${measured.A.samplePeak.toFixed(3)}`,
-    `- B gain ${measured.B.gain.toFixed(4)}, ${measured.B.seconds.toFixed(2)}s, ${measured.B.lufs.toFixed(1)} LUFS, true peak ${measured.B.peakDbfs.toFixed(1)} dBFS, sample peak ${measured.B.samplePeak.toFixed(3)}`,
+    `- Onsets: identical on A and B, and equal to the ${after.plan.rhythm} plan (${beatsB.join(', ')})`,
+    `- Durations: identical on A and B`,
+    `- Shared gain ${measured.A.gain.toFixed(4)}`,
+    `- A ${measured.A.seconds.toFixed(2)}s, ${measured.A.lufs.toFixed(1)} LUFS, wav true peak ${measured.A.peakDbfs.toFixed(1)} dBTP`,
+    `- B ${measured.B.seconds.toFixed(2)}s, ${measured.B.lufs.toFixed(1)} LUFS, wav true peak ${measured.B.peakDbfs.toFixed(1)} dBTP`,
     `- Integrated gap: ${gap.toFixed(2)} LU`,
     `- A notes: ${spellLine(before.notes)}`,
     `- B notes: ${spellLine(after.notes)}`,
@@ -475,7 +557,7 @@ const clips = [
   `A uses main's rules at \`${BASE_SHA}\`, loaded by this script with \`git show\` into a temp module. That copy is not in the repo.`,
   'B uses `lib/phrase.ts` at the head above.',
   'Both sides use the same render: `OfflineAudioContext` at 44100 Hz mono, `schedulePhrase` into `scheduleVoicing`. One fixed seed per pair. The generator has no other randomness.',
-  'Loudness is integrated EBU R128 on the mp3. A and B of each pair are within 0.5 LU. Peak is the mp3 true peak, plus the wav sample peak.',
+  'A and B of each pair share one gain. Integrated EBU R128 is measured on the source wav and aims at -16 LUFS. The gap stays within 0.5 LU. True peak is the wav true peak and stays at or under -1 dBTP. Onsets and durations match in every pair.',
   '',
   ...rows,
 ].join('\n');

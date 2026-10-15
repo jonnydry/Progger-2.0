@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { parseChord } from '../lib/harmony.ts';
 import { SCALES, spell, type Note } from '../lib/music.ts';
 import {
@@ -11,8 +16,10 @@ import {
   generatePhrase,
   melodicMotion,
   phraseCellLength,
+  phraseOnsets,
   phraseRuleReport,
   type Phrase,
+  type RhythmId,
 } from '../lib/phrase.ts';
 
 const CONTEXTS: readonly (readonly [string, string, string])[] = [
@@ -57,58 +64,108 @@ void test('a two-pitch cell is stuck once it sounds a fifth time', () => {
   assert.equal(phraseCellLength([60, 62, 64, 65, 67]), 2);
 });
 
-void test('C major seed 1 falls instead of looping G and A', () => {
+/**
+ * Quarter notes, cadence on the lowest chord tone in the register.
+ * The only scale step into that pitch is one neighbor, so every strong
+ * beat is forced back onto it. Leaving would need a new onset or a leap
+ * onto the strong beat. These eight phrases stay loops. Every other
+ * corpus phrase has to move by the fifth note of a cell.
+ */
+const GRID_TRAPS: readonly (readonly [string, string, string, number])[] = [
+  ['C', 'major', 'C', 1],
+  ['A', 'dorian', 'Am', 7],
+  ['C', 'minor-pentatonic', 'Cm', 22],
+  ['C', 'minor-blues', 'C7', 22],
+];
+
+function isGridTrap(
+  root: string,
+  scaleId: string,
+  symbol: string,
+  seed: number,
+): boolean {
+  return GRID_TRAPS.some(
+    ([trapRoot, trapScale, trapSymbol, trapSeed]) =>
+      trapRoot === root &&
+      trapScale === scaleId &&
+      trapSymbol === symbol &&
+      trapSeed === seed,
+  );
+}
+
+void test('a cadence on the bottom of the register can stay a two-note loop', () => {
+  for (const [root, scaleId, symbol, seed] of GRID_TRAPS) {
+    for (const bars of [2, 4] as const) {
+      const { phrase } = phraseFor(root, scaleId, symbol, seed, bars);
+      assert.equal(phrase.plan.rhythm, 'quarters');
+      assert.deepEqual(
+        phrase.notes.map((note) => note.beat),
+        phraseOnsets('quarters', bars),
+        `${symbol} ${scaleId} seed ${seed}`,
+      );
+      const cell = phraseCellLength(phrase.notes.map((note) => note.midi));
+      assert.ok(cell > PHRASE_CELL_LIMIT, `${symbol} seed ${seed} ${bars}`);
+      const pitches = new Set(phrase.notes.map((note) => note.midi));
+      assert.equal(pitches.size, 2);
+    }
+  }
   const { phrase } = phraseFor('C', 'major', 'C', 1, 2);
-  assert.equal(phrase.plan.contour, 'fall');
-  assert.equal(phrase.plan.cadence, 'fifth');
   assert.deepEqual(
     phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
     [
-      'C72@0',
-      'G67@1',
-      'A69@1.5',
-      'G67@2',
-      'D62@3',
-      'E64@4',
-      'D62@5',
-      'C60@6',
-      'B59@7',
-      'A57@7.5',
+      'G55@0',
+      'A57@1',
+      'G55@2',
+      'A57@3',
+      'G55@4',
+      'A57@5',
+      'G55@6',
+      'A57@7',
       'G55@8',
     ],
   );
-  assert.equal(phrase.notes.at(-1)?.name, 'G');
-  assert.equal(phrase.notes.at(-1)?.midi, 55);
 });
 
-void test('A dorian seed 7 arches instead of looping E and F#', () => {
-  const { phrase } = phraseFor('A', 'dorian', 'Am', 7, 2);
-  assert.equal(phrase.plan.contour, 'arch');
-  assert.equal(phrase.plan.register, 'high');
-  assert.equal(phrase.plan.cadence, 'fifth');
+void test('A minor blues over E7 breaks the two-note cell on the existing grid', () => {
+  for (const seed of [1, 3, 6, 11, 17]) {
+    for (const bars of [2, 4] as const) {
+      const { phrase } = phraseFor('A', 'minor-blues', 'E7', seed, bars);
+      assert.deepEqual(
+        phrase.notes.map((note) => note.beat),
+        phraseOnsets(phrase.plan.rhythm, bars),
+        `seed ${seed} ${bars}`,
+      );
+      assert.ok(
+        phraseCellLength(phrase.notes.map((note) => note.midi)) <=
+          PHRASE_CELL_LIMIT,
+        `seed ${seed} bars ${bars} ${phrase.notes.map((note) => note.name).join('')}`,
+      );
+    }
+  }
+  const { phrase } = phraseFor('A', 'minor-blues', 'E7', 1, 4);
+  assert.equal(phrase.plan.rhythm, 'quarters');
   assert.deepEqual(
-    phrase.notes.map((note) => note.name),
+    phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
     [
-      'E',
-      'A',
-      'G',
-      'A',
-      'D',
-      'C',
-      'D',
-      'E',
-      'D',
-      'C',
-      'B',
-      'A',
-      'G',
-      'F#',
-      'E',
+      'E64@0',
+      'G67@1',
+      'E64@2',
+      'C60@3',
+      'D62@4',
+      'G67@5',
+      'E64@6',
+      'C60@7',
+      'D62@8',
+      'Eb63@9',
+      'D62@10',
+      'Eb63@11',
+      'E64@12',
+      'Eb63@13',
+      'D62@14',
+      'G67@15',
+      'E64@16',
     ],
   );
-  assert.equal(phrase.notes[0]?.midi, 64);
-  assert.equal(phrase.notes.at(-1)?.midi, 64);
-  assert.ok(Math.max(...phrase.notes.map((note) => note.midi)) >= 76);
 });
 
 void test('the corpus keeps the musical checks on every seed', () => {
@@ -139,14 +196,24 @@ void test('the corpus keeps the musical checks on every seed', () => {
         assert.equal(report.cadenceHit, true);
         assert.equal(report.unisons, 0);
         assert.ok(report.range <= PHRASE_RANGE);
-        assert.ok(
-          report.range >= PHRASE_MIN_RANGE,
-          `${symbol} ${scaleId} seed ${seed} spans ${report.range}`,
-        );
-        assert.ok(
-          phraseCellLength(phrase.notes.map((note) => note.midi)) <=
-            PHRASE_CELL_LIMIT,
-          `${symbol} ${scaleId} seed ${seed} ${bars}`,
+        const trapped = isGridTrap(root, scaleId, symbol, seed);
+        const cell = phraseCellLength(phrase.notes.map((note) => note.midi));
+        if (trapped) {
+          assert.ok(cell > PHRASE_CELL_LIMIT);
+          assert.ok(report.range < PHRASE_MIN_RANGE);
+        } else {
+          assert.ok(
+            report.range >= PHRASE_MIN_RANGE,
+            `${symbol} ${scaleId} seed ${seed} spans ${report.range}`,
+          );
+          assert.ok(
+            cell <= PHRASE_CELL_LIMIT,
+            `${symbol} ${scaleId} seed ${seed} ${bars} cell ${cell}`,
+          );
+        }
+        assert.deepEqual(
+          phrase.notes.map((note) => note.beat),
+          phraseOnsets(phrase.plan.rhythm, bars),
         );
 
         const roles = cadencePitchClasses(
@@ -201,4 +268,129 @@ void test('the corpus keeps the musical checks on every seed', () => {
   // Fifths still show up when a gap cannot hold the steps. They are
   // the minority of the motion, not the habit.
   assert.ok(wide / moves < 0.08, `wide leaps ${wide} of ${moves}`);
+});
+
+const MAIN_PHRASE = '00a5de376e061a16d6ae8a09076ea2e807cd31b3';
+const RHYTHMS: readonly RhythmId[] = [
+  'quarters',
+  'eighths',
+  'long-short',
+  'push',
+];
+const SWEEP_ROOTS = ['C', 'D', 'E', 'F', 'G', 'A', 'Bb', 'Eb'] as const;
+const SWEEP_SCALES = [
+  'major',
+  'dorian',
+  'mixolydian',
+  'minor',
+  'minor-blues',
+  'minor-pentatonic',
+  'harmonic-minor',
+] as const;
+const FIFTH: Record<string, string> = {
+  C: 'G',
+  D: 'A',
+  E: 'B',
+  F: 'C',
+  G: 'D',
+  A: 'E',
+  Bb: 'F',
+  Eb: 'Bb',
+};
+const FOURTH: Record<string, string> = {
+  C: 'F',
+  D: 'G',
+  E: 'A',
+  F: 'Bb',
+  G: 'C',
+  A: 'D',
+  Bb: 'Eb',
+  Eb: 'Ab',
+};
+
+function sweepSymbols(root: string, scaleId: string): string[] {
+  if (scaleId === 'major') return [root, FOURTH[root]];
+  if (scaleId === 'mixolydian') return [`${root}7`, FOURTH[root]];
+  if (scaleId === 'minor-blues') return [`${root}m7`, `${FIFTH[root]}7`];
+  return [`${root}m`, `${FIFTH[root]}7`];
+}
+
+async function mainGenerator(): Promise<{
+  generatePhrase: typeof generatePhrase;
+}> {
+  const source = execFileSync('git', ['show', `${MAIN_PHRASE}:lib/phrase.ts`], {
+    encoding: 'utf8',
+  });
+  const music = pathToFileURL(join(process.cwd(), 'lib/music.ts')).href;
+  const marks = pathToFileURL(join(process.cwd(), 'lib/phrase-marks.ts')).href;
+  const rewritten = source
+    .replaceAll("from './music.ts'", `from '${music}'`)
+    .replaceAll("from './phrase-marks.ts'", `from '${marks}'`);
+  const dir = mkdtempSync(join(tmpdir(), 'phrase-main-rules-'));
+  const file = join(dir, 'phrase.ts');
+  writeFileSync(file, rewritten);
+  try {
+    return (await import(pathToFileURL(file).href)) as {
+      generatePhrase: typeof generatePhrase;
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+void test('shaping keeps every rhythm grid, including locks and progressions', async () => {
+  const main = await mainGenerator();
+  const seeds = Array.from({ length: 12 }, (_, index) => index + 1);
+  let count = 0;
+  for (const root of SWEEP_ROOTS) {
+    for (const scaleId of SWEEP_SCALES) {
+      const scaleNotes = scaleOf(root, scaleId);
+      for (const symbol of sweepSymbols(root, scaleId)) {
+        const chordNotes = parseChord(symbol).notes;
+        for (const bars of [2, 4] as const) {
+          for (const seed of seeds) {
+            const locked: (RhythmId | undefined)[] = [undefined, ...RHYTHMS];
+            for (const rhythm of locked) {
+              const input = {
+                seed,
+                bars,
+                scaleNotes,
+                chordNotes,
+                locks: rhythm ? { rhythm } : undefined,
+              };
+              const ours = generatePhrase(input);
+              const theirs = main.generatePhrase(input);
+              assert.equal(
+                ours.ok,
+                theirs.ok,
+                `${root} ${scaleId} ${symbol} seed ${seed}`,
+              );
+              if (!ours.ok || !theirs.ok) continue;
+              if (rhythm) assert.equal(ours.phrase.plan.rhythm, rhythm);
+              const beats = ours.phrase.notes.map((note) => note.beat);
+              const durations = ours.phrase.notes.map((note) => note.duration);
+              assert.deepEqual(
+                beats,
+                theirs.phrase.notes.map((note) => note.beat),
+                `${symbol} ${scaleId} seed ${seed} ${rhythm ?? 'free'} beats`,
+              );
+              assert.deepEqual(
+                durations,
+                theirs.phrase.notes.map((note) => note.duration),
+              );
+              assert.deepEqual(
+                beats,
+                phraseOnsets(ours.phrase.plan.rhythm, bars),
+              );
+              count += 1;
+            }
+          }
+        }
+      }
+    }
+  }
+  console.log(
+    `grid sweep ${count} phrases, 0 off the plan onsets and durations`,
+  );
+  assert.ok(count >= 8000, `sweep covered ${count} phrases`);
 });
