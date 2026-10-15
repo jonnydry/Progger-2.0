@@ -168,6 +168,27 @@ void test('A minor blues over E7 breaks the two-note cell on the existing grid',
   );
 });
 
+void test('an arch over the IV keeps its highest note', () => {
+  const cases = [
+    ['D', 'major', 'G', 7, 81, 'A'],
+    ['Bb', 'major', 'Eb', 8, 65, 'F'],
+  ] as const;
+  for (const [root, scaleId, symbol, seed, peak, name] of cases) {
+    const { phrase } = phraseFor(root, scaleId, symbol, seed, 4);
+    assert.equal(phrase.plan.contour, 'arch', `${symbol} seed ${seed}`);
+    assert.deepEqual(
+      phrase.notes.map((note) => note.beat),
+      phraseOnsets(phrase.plan.rhythm, 4),
+    );
+    const highest = Math.max(...phrase.notes.map((note) => note.midi));
+    assert.equal(highest, peak, `${symbol} seed ${seed}`);
+    assert.equal(
+      phrase.notes.some((note) => note.midi === peak && note.name === name),
+      true,
+    );
+  }
+});
+
 void test('the corpus keeps the musical checks on every seed', () => {
   let wide = 0;
   let moves = 0;

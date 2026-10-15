@@ -1624,7 +1624,12 @@ function shapeMelody(
   let current = indexes.slice();
   if (needsContour(current, ladder)) {
     const rebuilt = rebuildContour(current, ladder, grid, plan);
-    if (rebuilt && lineIsLegal(rebuilt, grid, ladder, cadence)) {
+    const keepsPeak =
+      plan.contour !== 'arch' ||
+      (!!rebuilt &&
+        Math.max(...lineMidis(rebuilt, ladder)) >=
+          Math.max(...lineMidis(current, ladder)));
+    if (rebuilt && keepsPeak && lineIsLegal(rebuilt, grid, ladder, cadence)) {
       current = addModestLeap(rebuilt, ladder, grid) ?? rebuilt;
     }
   }
