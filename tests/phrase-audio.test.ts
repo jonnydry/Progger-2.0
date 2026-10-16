@@ -7,6 +7,7 @@ import { SCALES, spell } from '../lib/music.ts';
 import {
   PHRASE_END_RELEASE_SEC,
   PHRASE_LOOKAHEAD_SEC,
+  PHRASE_TEMPO_DEFAULT,
   PHRASE_TEMPO_MAX,
   PHRASE_TEMPO_MIN,
   PHRASE_TICK_SEC,
@@ -394,8 +395,9 @@ void test('scheduled onsets match 60 and 120 BPM, straight and swung', () => {
     /const written = clampPhraseTempo\(slow \? sounding \* 2 : sounding\)/,
   );
   assert.match(panel, /value=\{playbackTempo\}/);
-  assert.doesNotMatch(panel, /min=\{40\}/);
-  assert.doesNotMatch(panel, /max=\{200\}/);
+  assert.equal(PHRASE_TEMPO_MIN, 40);
+  assert.equal(PHRASE_TEMPO_MAX, 240);
+  assert.match(panel, /<output>\{playbackTempo\} BPM<\/output>/);
 });
 
 /** Anchor curve, written here so a wrong onsetSeconds fails this clock. */
@@ -446,7 +448,8 @@ function briefOnset(beat: number, bpm: number, amount: number): number {
 
 void test('swing intensity ratios sit on the audio clock', () => {
   const beats = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
-  const amounts = [SWING_AMOUNT_MIN, SWING_AMOUNT_DEFAULT, SWING_AMOUNT_MAX];
+  const sixtyPercent = 0.6;
+  const amounts = [SWING_AMOUNT_MIN, sixtyPercent, SWING_AMOUNT_MAX];
   const measured: {
     tempo: number;
     amount: number;
@@ -538,17 +541,14 @@ void test('swing intensity ratios sit on the audio clock', () => {
     }
   }
   const partialTempo = 292;
-  const partialStarts = scheduledAudioOnsets(
-    partialTempo,
-    SWING_AMOUNT_DEFAULT,
-  );
+  const partialStarts = scheduledAudioOnsets(partialTempo, sixtyPercent);
   const partialShorts: number[] = [];
   for (const beat of [0.5, 1.5, 2.5, 3.5]) {
     const index = beats.indexOf(beat);
     const start = partialStarts[index] ?? NaN;
     const next = partialStarts[index + 1] ?? NaN;
     const previous = partialStarts[index - 1] ?? NaN;
-    const expected = briefOnset(beat, partialTempo, SWING_AMOUNT_DEFAULT);
+    const expected = briefOnset(beat, partialTempo, sixtyPercent);
     assert.ok(
       Math.abs(start - expected) <= 0.001,
       `292 BPM 60% beat ${beat} is ${Math.abs(start - expected) * 1000}ms off`,
@@ -557,8 +557,7 @@ void test('swing intensity ratios sit on the audio clock', () => {
     partialShorts.push(short);
     assert.ok(Math.abs(short - SWING_SHORT_EIGHTH_MIN_SEC) <= 0.001);
     const cap = 60 / partialTempo / SWING_SHORT_EIGHTH_MIN_SEC - 1;
-    const blendedAfter =
-      SWING_RATIO_STRAIGHT + (cap - 1) * SWING_AMOUNT_DEFAULT;
+    const blendedAfter = SWING_RATIO_STRAIGHT + (cap - 1) * sixtyPercent;
     const heard = (start - previous) / short;
     assert.ok(Math.abs(heard - cap) < Math.abs(heard - blendedAfter));
     assert.ok(Math.abs(next - previous - 60 / partialTempo) <= 1e-9);
@@ -587,7 +586,7 @@ void test('swing intensity ratios sit on the audio clock', () => {
       measured,
       partialFloor: {
         tempo: partialTempo,
-        amount: SWING_AMOUNT_DEFAULT,
+        amount: sixtyPercent,
         shortEighthSec:
           partialShorts.reduce((sum, value) => sum + value, 0) /
           partialShorts.length,
@@ -613,17 +612,24 @@ void test('swing intensity ratios sit on the audio clock', () => {
   assert.doesNotMatch(panel, /setFeel/);
 });
 
-void test('tempo clamps to about 20–300 and playback uses that clamp', async () => {
+void test('tempo clamps to 40–240 BPM and playback uses that clamp', async () => {
+  assert.equal(PHRASE_TEMPO_MIN, 40);
+  assert.equal(PHRASE_TEMPO_MAX, 240);
+  assert.equal(PHRASE_TEMPO_DEFAULT, 96);
   assert.equal(clampPhraseTempo(5), PHRASE_TEMPO_MIN);
-  assert.equal(clampPhraseTempo(20), 20);
-  assert.equal(clampPhraseTempo(300), 300);
+  assert.equal(clampPhraseTempo(20), 40);
+  assert.equal(clampPhraseTempo(40), 40);
+  assert.equal(clampPhraseTempo(120), 120);
+  assert.equal(clampPhraseTempo(240), 240);
+  assert.equal(clampPhraseTempo(300), 240);
   assert.equal(clampPhraseTempo(900), PHRASE_TEMPO_MAX);
-  assert.equal(clampPhraseTempo(Number.NaN), 96);
+  assert.equal(clampPhraseTempo(Number.NaN), PHRASE_TEMPO_DEFAULT);
   assert.equal(PHRASE_END_RELEASE_SEC, 0.3);
-  const slow = await renderNote(1, 'straight', 300);
-  const fast = await renderNote(1, 'straight', 5000);
+  const atCeiling = await renderNote(1, 'straight', 240);
+  const aboveCeiling = await renderNote(1, 'straight', 5000);
   assert.ok(
-    Math.abs(firstAudible(slow, 0.01) - firstAudible(fast, 0.01)) < 0.02,
+    Math.abs(firstAudible(atCeiling, 0.01) - firstAudible(aboveCeiling, 0.01)) <
+      0.02,
   );
 });
 
@@ -814,4 +820,148 @@ void test('hiding the page and restoring from bfcache only pauses', () => {
   assert.equal(docListeners.get('visibilitychange')?.size ?? 0, 0);
   assert.equal(hostListeners.get('pagehide')?.size ?? 0, 0);
   assert.equal(hostListeners.get('pageshow')?.size ?? 0, 0);
+});
+
+const QUARTER_BEATS = [0, 1, 2, 3, 4];
+
+/** Live playback path: lookahead scheduler hands each quarter to the voice. */
+function scheduledQuarterOnsets(tempo: number): number[] {
+  const context = new OfflineAudioContext(1, RATE, RATE);
+  const bus = context.createGain();
+  const starts: number[] = [];
+  const create = context.createOscillator.bind(context);
+  context.createOscillator = () => {
+    const oscillator = create();
+    const start = oscillator.start.bind(oscillator);
+    oscillator.start = (when = 0) => {
+      starts.push(when);
+      return start(when);
+    };
+    return oscillator;
+  };
+  const clock = new AudioClock();
+  const quarter = 60 / tempo;
+  new LookaheadScheduler(
+    clock,
+    QUARTER_BEATS,
+    tempo,
+    0,
+    0,
+    QUARTER_BEATS[QUARTER_BEATS.length - 1] * quarter + 1,
+    false,
+    (cue) => {
+      scheduleVoicing(
+        context,
+        melodyFrets({ string: 0, fret: 0 }),
+        cue.scheduled,
+        bus,
+      );
+    },
+    () => {},
+  ).start();
+  const end = 4 * quarter + PHRASE_TICK_SEC;
+  let steps = 0;
+  while (clock.currentTime < end) {
+    clock.advance(clock.currentTime + PHRASE_TICK_SEC);
+    assert.ok(++steps < 4000, 'the audio clock spun');
+  }
+  return starts;
+}
+
+/** Render path: schedulePhrase places the same quarters on the audio clock. */
+function renderedQuarterOnsets(tempo: number): number[] {
+  const seconds = 4 * (60 / tempo) + 0.1;
+  const context = new OfflineAudioContext(1, Math.ceil(RATE * seconds), RATE);
+  const starts: number[] = [];
+  const create = context.createOscillator.bind(context);
+  context.createOscillator = () => {
+    const oscillator = create();
+    const start = oscillator.start.bind(oscillator);
+    oscillator.start = (when = 0) => {
+      starts.push(when);
+      return start(when);
+    };
+    return oscillator;
+  };
+  schedulePhrase(
+    context,
+    context.destination,
+    QUARTER_BEATS.map((beat) => ({ string: 0, fret: 0, beat })),
+    tempo,
+    0,
+    0,
+  );
+  return starts;
+}
+
+async function audibleQuarterOnset(
+  beat: number,
+  tempo: number,
+): Promise<number> {
+  const seconds = beat * (60 / tempo) + 0.05;
+  const context = new OfflineAudioContext(
+    1,
+    Math.ceil(RATE * Math.max(seconds, 0.05)),
+    RATE,
+  );
+  schedulePhrase(
+    context,
+    context.destination,
+    [{ string: 0, fret: 0, beat }],
+    tempo,
+    0,
+    0,
+  );
+  const rendered = await context.startRendering();
+  return firstAudible(rendered.getChannelData(0), 0.01);
+}
+
+void test('quarter-note gaps at 40, 120 and 240 BPM equal 60/BPM with swing at 0', async () => {
+  assert.equal(SWING_AMOUNT_DEFAULT, 0);
+  for (const tempo of [40, 120, 240] as const) {
+    const expected = 60 / tempo;
+    for (const starts of [
+      scheduledQuarterOnsets(tempo),
+      renderedQuarterOnsets(tempo),
+    ]) {
+      assert.equal(starts.length, QUARTER_BEATS.length);
+      for (let index = 1; index < starts.length; index++) {
+        const gap = (starts[index] ?? NaN) - (starts[index - 1] ?? NaN);
+        assert.ok(
+          Math.abs(gap - expected) <= 0.001,
+          `${tempo} BPM quarter gap ${gap}s is not ${expected}s`,
+        );
+      }
+    }
+    const downbeat = await audibleQuarterOnset(0, tempo);
+    const nextBeat = await audibleQuarterOnset(1, tempo);
+    const heard = nextBeat - downbeat;
+    assert.ok(
+      Math.abs(heard - expected) <= 0.001,
+      `${tempo} BPM rendered quarter gap ${heard}s is not ${expected}s`,
+    );
+  }
+});
+
+void test('a new session starts straight and does not restore swing or tempo', () => {
+  assert.equal(SWING_AMOUNT_DEFAULT, 0);
+  assert.equal(PHRASE_TEMPO_DEFAULT, 96);
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  const launcher = readFileSync(
+    new URL('../components/phrase-launcher.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(panel, /useState\(SWING_AMOUNT_DEFAULT\)/);
+  assert.match(panel, /useState\(PHRASE_TEMPO_DEFAULT\)/);
+  // Tempo and swing live only in this session. There is no saved number
+  // whose old meaning would need a conversion.
+  for (const source of [panel, launcher]) {
+    assert.equal(source.includes('localStorage'), false, source);
+    assert.equal(source.includes('sessionStorage'), false);
+    assert.equal(source.includes('searchParams'), false);
+    assert.equal(source.includes('location.hash'), false);
+  }
 });
