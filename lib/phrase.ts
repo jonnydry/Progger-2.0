@@ -2415,7 +2415,7 @@ function openNarrowRun(
       baseFigure >= 12 && nextFigure < baseFigure && nextExcess <= baseExcess;
     if (!opensPocket && !breaksFigure) return;
     const outside = trial.filter(
-      (note, index) => note.midi < low || note.midi > high,
+      (note) => note.midi < low || note.midi > high,
     ).length;
     const clears = nextFigure < 12 ? 0 : 1;
     const bestClears = bestFigure < 12 ? 0 : 1;
@@ -2753,11 +2753,15 @@ function chainVariety(
       prevAnchor.length ? prevAnchor : [placed[prevIndex].position],
       null,
     );
+    // The search writes `best` from inside `walk`, which control-flow
+    // analysis does not see, so this read needs an explicit union.
+    const chosen = best as PhraseNote[] | null;
     if (
-      best &&
-      narrowSpan(best.map((note) => note.midi)).length <= PHRASE_VARIETY_RUN &&
+      chosen !== null &&
+      narrowSpan(chosen.map((note) => note.midi)).length <=
+        PHRASE_VARIETY_RUN &&
       periodSpan(
-        best.map((note) => note.midi),
+        chosen.map((note) => note.midi),
         4,
       ).length < 12
     )

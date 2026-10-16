@@ -39,20 +39,6 @@ const SEEDS = Array.from({ length: 24 }, (_, index) => index + 1);
 
 const REGISTER_LOW = { low: 48, mid: 55, high: 64 } as const;
 
-/** Longest run that stays on three pitches or fewer. */
-function narrowRun(midis: readonly number[]): number {
-  let longest = midis.length > 0 ? 1 : 0;
-  for (let start = 0; start < midis.length; start++) {
-    const seen = new Set<number>();
-    for (let end = start; end < midis.length; end++) {
-      seen.add(midis[end]);
-      if (seen.size > 3) break;
-      longest = Math.max(longest, end - start + 1);
-    }
-  }
-  return longest;
-}
-
 function pitchClass(midi: number): number {
   return ((midi % 12) + 12) % 12;
 }
