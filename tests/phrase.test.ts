@@ -711,38 +711,154 @@ void test('the planner makes one call, times out, and loses to locks', async () 
   assert.equal(source.includes('drone'), false);
 });
 
-void test('reach checks and the shift cost stay wired into the editor', () => {
-  const source = readFileSync(
-    new URL('../lib/phrase.ts', import.meta.url),
-    'utf8',
-  );
-  assert.equal(
-    source.includes(
-      'withinHand(target, anchor, handSlack(notes[index].duration))',
-    ),
-    true,
-  );
-  assert.equal(
-    source.includes(
-      'withinHand(second, firstPos, handSlack(following.duration))',
-    ),
-    true,
-  );
-  assert.equal(
-    source.includes('handShiftCost(to.position - from.position, fast)'),
-    true,
-  );
-  assert.equal(source.includes('if (fast) cost += SHIFT_COST * 10'), true);
-});
-
-void test('a reach of three frets is not a shift, and a fast shift costs more', () => {
+void test('a reach of three frets costs a shift, and an eighth costs ten more', () => {
+  // Staying put is free. Any real move pays the shift cost plus the frets
+  // traveled. The label still starts at 4: three frets is not a shift.
+  // Onto an eighth the shift cost is paid again ten times.
   assert.equal(handShiftCost(0, false), 0);
   assert.equal(handShiftCost(0, true), 0);
-  assert.equal(handShiftCost(3, true), 3);
-  assert.equal(handShiftCost(-3, false), 3);
+  assert.equal(handShiftCost(3, false), 23);
+  assert.equal(handShiftCost(-3, false), 23);
+  assert.equal(handShiftCost(3, true), 223);
   assert.equal(handShiftCost(4, false), 24);
   assert.equal(handShiftCost(-5, false), 25);
   assert.equal(handShiftCost(4, true), 224);
+});
+
+void test('C major seed 3 does not slide finger 4 from position 6 to 5', () => {
+  const result = generatePhrase({
+    seed: 3,
+    bars: 2,
+    scaleNotes: scaleOf('C', 'major'),
+    chordNotes: parseChord('C').notes,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.phrase.plan.rhythm, 'quarters');
+  assert.deepEqual(
+    result.phrase.notes.map((note) => [
+      note.midi,
+      note.position,
+      note.finger,
+      note.fret,
+      note.string,
+    ]),
+    [
+      [72, 7, 2, 8, 5],
+      [65, 7, 4, 10, 3],
+      [67, 7, 2, 8, 4],
+      [62, 7, 1, 7, 3],
+      [64, 7, 3, 9, 3],
+      [59, 7, 3, 9, 2],
+      [60, 7, 4, 10, 2],
+      [62, 7, 1, 7, 3],
+      [60, 7, 4, 10, 2],
+    ],
+  );
+  assert.equal(
+    result.phrase.notes.some((note) => note.shift),
+    false,
+  );
+});
+
+const FINGER_ROOTS = ['C', 'D', 'E', 'F', 'G', 'A', 'Bb', 'Eb'] as const;
+const FINGER_SCALES = [
+  'major',
+  'dorian',
+  'mixolydian',
+  'minor',
+  'minor-blues',
+  'minor-pentatonic',
+  'harmonic-minor',
+] as const;
+const FINGER_FIFTH: Record<string, string> = {
+  C: 'G',
+  D: 'A',
+  E: 'B',
+  F: 'C',
+  G: 'D',
+  A: 'E',
+  Bb: 'F',
+  Eb: 'Bb',
+};
+const FINGER_FOURTH: Record<string, string> = {
+  C: 'F',
+  D: 'G',
+  E: 'A',
+  F: 'Bb',
+  G: 'C',
+  A: 'D',
+  Bb: 'Eb',
+  Eb: 'Ab',
+};
+
+function fingerSymbols(root: string, scaleId: string): string[] {
+  if (scaleId === 'major') return [root, FINGER_FOURTH[root]];
+  if (scaleId === 'mixolydian') return [`${root}7`, FINGER_FOURTH[root]];
+  if (scaleId === 'minor-blues') return [`${root}m7`, `${FINGER_FIFTH[root]}7`];
+  return [`${root}m`, `${FINGER_FIFTH[root]}7`];
+}
+
+void test('no eighth is played by sliding the same finger', () => {
+  // Position changes of 1–3 frets, and same-finger fret changes whose
+  // arriving note is an eighth or shorter. Dropping the ×10 eighth term
+  // leaves 32 of those slides and 337 reaches.
+  let small = 0;
+  let sameFingerEighth = 0;
+  for (const root of FINGER_ROOTS) {
+    for (const scaleId of FINGER_SCALES) {
+      const scaleNotes = scaleOf(root, scaleId);
+      for (const symbol of fingerSymbols(root, scaleId)) {
+        const chordNotes = parseChord(symbol).notes;
+        for (const bars of [2, 4] as const) {
+          for (let seed = 1; seed <= 12; seed++) {
+            const result = generatePhrase({
+              seed,
+              bars,
+              scaleNotes,
+              chordNotes,
+            });
+            assert.equal(result.ok, true);
+            if (!result.ok) continue;
+            const notes = result.phrase.notes;
+            for (let index = 1; index < notes.length; index++) {
+              const from = notes[index - 1];
+              const to = notes[index];
+              const moved = Math.abs(to.position - from.position);
+              if (moved >= 1 && moved <= 3) small += 1;
+              if (
+                from.finger > 0 &&
+                to.finger === from.finger &&
+                to.fret !== from.fret &&
+                to.duration <= 0.5
+              )
+                sameFingerEighth += 1;
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.equal(sameFingerEighth, 0);
+  assert.equal(small, 281);
+});
+
+void test('an eighth may reach three frets, so a push line is not stuck in the box', () => {
+  // C major over F, 2 bars, push, seed 10. Forcing eighth slack to 0
+  // rewrites the notes after the second C.
+  const result = generatePhrase({
+    seed: 10,
+    bars: 2,
+    scaleNotes: scaleOf('C', 'major'),
+    chordNotes: parseChord('F').notes,
+    locks: { rhythm: 'push' },
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(
+    result.phrase.notes.map((note) => note.midi),
+    [81, 77, 79, 77, 72, 74, 72, 71, 67, 69, 72, 71, 72],
+  );
 });
 
 void test('an eighth reaches three frets and a quarter may slide one box', () => {

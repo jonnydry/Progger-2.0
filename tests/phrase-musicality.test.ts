@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { parseChord } from '../lib/harmony.ts';
-import { SCALES, spell, type Note } from '../lib/music.ts';
+import { SCALES, TUNING, spell, type Note } from '../lib/music.ts';
 import {
   PHRASE_CELL_LIMIT,
   PHRASE_MIN_RANGE,
@@ -21,6 +21,7 @@ import {
   phraseCellLength,
   phraseOnsets,
   phraseRuleReport,
+  withinHand,
   type Phrase,
   type RhythmId,
 } from '../lib/phrase.ts';
@@ -44,17 +45,25 @@ function pitchClass(midi: number): number {
 }
 
 /** Longest run on three note names or fewer. Octave copies share a name. */
-function pcRun(midis: readonly number[]): number {
-  let longest = midis.length > 0 ? 1 : 0;
-  for (let start = 0; start < midis.length; start++) {
+function pcSpan(midis: readonly number[]): { start: number; length: number } {
+  let start = 0;
+  let length = midis.length > 0 ? 1 : 0;
+  for (let from = 0; from < midis.length; from++) {
     const seen = new Set<number>();
-    for (let end = start; end < midis.length; end++) {
+    for (let end = from; end < midis.length; end++) {
       seen.add(pitchClass(midis[end]));
       if (seen.size > 3) break;
-      longest = Math.max(longest, end - start + 1);
+      if (end - from + 1 > length) {
+        length = end - from + 1;
+        start = from;
+      }
     }
   }
-  return longest;
+  return { start, length };
+}
+
+function pcRun(midis: readonly number[]): number {
+  return pcSpan(midis).length;
 }
 
 /** Longest stretch whose note names repeat every 4 notes. Twice is 8. */
@@ -742,7 +751,7 @@ void test('the arch guard and the circle break hold on the measured sets', async
     progressions.archHit >= 640,
     `arches ${progressions.archHit}/${progressions.arch}`,
   );
-  assert.ok(progressions.circling <= 380, `circling ${progressions.circling}`);
+  assert.ok(progressions.circling <= 329, `circling ${progressions.circling}`);
   assert.ok(progressions.loops <= 92, `loops ${progressions.loops}`);
 });
 
@@ -985,10 +994,16 @@ void test('an octave copy may leave the window and a non-octave leap may not', (
   // becomes A69 and the F53 octave copy disappears.
   assert.equal(phrase.notes.at(-1)?.midi, 57);
   assert.equal(phrase.notes.at(-1)?.duration, 2);
-  assert.ok(53 + 12 >= low && 53 + 12 <= high);
+  // F53 is a major third below the previous note. F65, the octave above,
+  // sits in the window's range and is not a note of this phrase.
   const index = phrase.notes.findIndex((note) => note.midi === 53);
   const gap = Math.abs(phrase.notes[index].midi - phrase.notes[index - 1].midi);
-  assert.ok(gap !== 0 && gap <= 12);
+  assert.equal(gap, 4);
+  assert.equal(
+    phrase.notes.some((note) => note.midi === 53 + 12),
+    false,
+  );
+  assert.ok(53 + 12 >= low && 53 + 12 <= high);
   assertRegister(phrase);
   const inside = phraseFor('Eb', 'dorian', 'Bb7', 27, 2);
   // No lock here: the point is a non-octave leap still cannot be the way out.
@@ -1004,6 +1019,182 @@ void test('an octave copy may leave the window and a non-octave leap may not', (
   }
 });
 
+/** Lowest scale chord tone inside the register window. */
+function lowestChordTone(
+  scaleNotes: readonly Note[],
+  chordNotes: readonly Note[],
+  low: number,
+  high: number,
+): number {
+  const scalePcs = new Set(scaleNotes.map((note) => note.pc));
+  const chordPcs = new Set(chordNotes.map((note) => note.pc));
+  let lowest = Infinity;
+  for (let midi = low; midi <= high; midi++) {
+    if (scalePcs.has(pitchClass(midi)) && chordPcs.has(pitchClass(midi)))
+      lowest = Math.min(lowest, midi);
+  }
+  return lowest;
+}
+
+/** Scale steps from `midi` that stay inside the register window. */
+function scaleStepsInWindow(
+  midi: number,
+  scalePcs: ReadonlySet<number>,
+  low: number,
+  high: number,
+): number[] {
+  const found: number[] = [];
+  for (const sign of [-1, 1] as const) {
+    let cursor = midi + sign;
+    while (cursor >= low - 12 && cursor <= high + 12) {
+      if (scalePcs.has(pitchClass(cursor))) {
+        if (cursor >= low && cursor <= high) found.push(cursor);
+        break;
+      }
+      cursor += sign;
+    }
+  }
+  return found;
+}
+
+function positionsOf(midi: number): number[] {
+  const found = new Set<number>();
+  for (const open of TUNING) {
+    const fret = midi - open;
+    if (fret < 0 || fret > 24) continue;
+    if (fret === 0) {
+      for (let position = 0; position <= 17; position++) found.add(position);
+      continue;
+    }
+    for (let finger = 1; finger <= 4; finger++) {
+      const position = fret - (finger - 1);
+      if (position >= 0 && position <= 21) found.add(position);
+    }
+  }
+  return [...found];
+}
+
+function scaleWalk(
+  midi: number,
+  sign: number,
+  steps: number,
+  scalePcs: ReadonlySet<number>,
+): number | null {
+  let cursor = midi;
+  for (let left = steps; left > 0; left--) {
+    let next = cursor + sign;
+    let guard = 0;
+    while (guard++ < 24 && !scalePcs.has(pitchClass(next))) next += sign;
+    if (!scalePcs.has(pitchClass(next))) return null;
+    cursor = next;
+  }
+  return cursor;
+}
+
+function contourHolds(
+  midis: readonly number[],
+  contour: Phrase['plan']['contour'],
+): boolean {
+  const third = Math.max(1, Math.floor(midis.length / 3));
+  const mean = (slice: readonly number[]) =>
+    slice.reduce((sum, midi) => sum + midi, 0) / slice.length;
+  const first = mean(midis.slice(0, third));
+  const middle = mean(midis.slice(third, third * 2));
+  const last = mean(midis.slice(third * 2));
+  if (contour === 'rise') return last > first;
+  if (contour === 'fall') return first > last;
+  if (contour === 'arch') return middle > first && middle > last;
+  return middle < first && middle < last;
+}
+
+/**
+ * A scale step or third onto a pitch class outside the long run that would
+ * bring that run to 6 or under, and that the hand, the eighth gap, leap
+ * resolution, the strong-beat step, the contour, and a 12-note figure
+ * would all still allow.
+ */
+function clearingStep(
+  phrase: Phrase,
+  scalePcs: ReadonlySet<number>,
+  chordPcs: ReadonlySet<number>,
+): boolean {
+  const notes = phrase.notes;
+  const midis = notes.map((note) => note.midi);
+  const run = pcSpan(midis);
+  const low = REGISTER_LOW[phrase.plan.register];
+  const high = low + PHRASE_RANGE;
+  const windowPcs = new Set(
+    midis.slice(run.start, run.start + run.length).map(pitchClass),
+  );
+  const baseFigure = figureRun(midis);
+  for (
+    let index = Math.max(1, run.start);
+    index < Math.min(notes.length - 1, run.start + run.length);
+    index++
+  ) {
+    if (notes[index].strong) continue;
+    const previous = notes[index - 1];
+    const slack = notes[index].duration <= 0.5 ? 3 : 5;
+    for (const sign of [-1, 1]) {
+      for (const steps of [1, 2]) {
+        const target = scaleWalk(previous.midi, sign, steps, scalePcs);
+        if (target === null || target < low || target > high) continue;
+        if (windowPcs.has(pitchClass(target))) continue;
+        const gap = Math.abs(target - previous.midi);
+        if (gap === 0 || gap > 12) continue;
+        if (notes[index].duration <= 0.5 && gap > 5) continue;
+        const reached = positionsOf(target).filter(
+          (position) => Math.abs(position - previous.position) <= slack,
+        );
+        if (!reached.length) continue;
+        const next = notes[index + 1];
+        const nextSlack = next.duration <= 0.5 ? 3 : 5;
+        if (
+          !reached.some((position) =>
+            withinHand(next.midi, position, nextSlack),
+          )
+        )
+          continue;
+        const motion = melodicMotion(previous.midi, target, scalePcs);
+        if (motion === 'leap') {
+          const resolution = melodicMotion(target, next.midi, scalePcs);
+          const opposite =
+            Math.sign(next.midi - target) ===
+            -Math.sign(target - previous.midi);
+          if (resolution !== 'step' || !opposite) continue;
+        }
+        const leave = Math.abs(next.midi - target);
+        if (leave === 0 || leave > 12) continue;
+        if (next.duration <= 0.5 && leave > 5) continue;
+        const nextMotion = melodicMotion(target, next.midi, scalePcs);
+        if (next.strong && (nextMotion !== 'step' || !chordPcs.has(next.pc)))
+          continue;
+        if (nextMotion === 'leap') {
+          const after = notes[index + 2];
+          if (!after) continue;
+          const resolution = melodicMotion(next.midi, after.midi, scalePcs);
+          const opposite =
+            Math.sign(after.midi - next.midi) ===
+            -Math.sign(next.midi - target);
+          if (resolution !== 'step' || !opposite) continue;
+        }
+        const trial = midis.slice();
+        trial[index] = target;
+        if (pcRun(trial) > PHRASE_VARIETY_RUN) continue;
+        if (
+          contourHolds(midis, phrase.plan.contour) &&
+          !contourHolds(trial, phrase.plan.contour)
+        )
+          continue;
+        const nextFigure = figureRun(trial);
+        if (baseFigure >= 12 && nextFigure >= baseFigure) continue;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void test('the pitch-class floor and the four-note figure have a reason each', () => {
   let over = 0;
   let twoPitch = 0;
@@ -1013,8 +1204,10 @@ void test('the pitch-class floor and the four-note figure have a reason each', (
   for (const root of SWEEP_ROOTS) {
     for (const scaleId of SWEEP_SCALES) {
       const scaleNotes = scaleOf(root, scaleId);
+      const scalePcs = new Set(scaleNotes.map((note) => note.pc));
       for (const symbol of sweepSymbols(root, scaleId)) {
         const chordNotes = parseChord(symbol).notes;
+        const chordPcs = new Set(chordNotes.map((note) => note.pc));
         for (const bars of [2, 4] as const) {
           for (let seed = 1; seed <= 12; seed++) {
             const phrase = generatePhrase({
@@ -1044,29 +1237,55 @@ void test('the pitch-class floor and the four-note figure have a reason each', (
             }
             if (run <= PHRASE_VARIETY_RUN) continue;
             over += 1;
+            const low = REGISTER_LOW[phrase.phrase.plan.register];
+            const high = low + PHRASE_RANGE;
             if (names === 2) {
-              // The cadence is the lowest chord tone. The only scale step
-              // into it is one neighbor, so the line stays on two names.
+              const cadence = notes[notes.length - 1].midi;
+              assert.equal(
+                cadence,
+                lowestChordTone(scaleNotes, chordNotes, low, high),
+                `${id} cadence is not the lowest chord tone`,
+              );
+              assert.equal(
+                scaleStepsInWindow(cadence, scalePcs, low, high).length,
+                1,
+                `${id} has more than one scale step into the cadence`,
+              );
               twoPitch += 1;
               continue;
             }
             if (scaleId === 'minor-pentatonic' && bars === 2 && run === 7) {
-              // A fourth name is already in the line. One pocket is a
-              // single note over six, and the next strong beat can only
-              // be approached by the chord-tone step.
+              assert.ok(names >= 4, `${id} has no fourth pitch class`);
+              for (let index = 1; index < notes.length; index++) {
+                if (!notes[index].strong) continue;
+                assert.equal(notes[index].chordTone, true, id);
+                assert.equal(
+                  melodicMotion(
+                    notes[index - 1].midi,
+                    notes[index].midi,
+                    scalePcs,
+                  ),
+                  'step',
+                  `${id} strong beat is not a scale step`,
+                );
+              }
               pentatonicSeventh += 1;
               continue;
             }
             const weakEighth = notes
               .filter((note) => !note.strong)
               .every((note) => note.duration <= 0.5);
-            if (weakEighth) {
-              // A step or third that would add a name is wider than a
-              // fourth on the next eighth, so the hand cannot take it.
-              eighthPocket += 1;
-              continue;
-            }
-            assert.fail(`${id} is over the floor with no stated reason`);
+            assert.equal(
+              weakEighth,
+              true,
+              `${id} weak note is longer than an eighth`,
+            );
+            assert.equal(
+              clearingStep(phrase.phrase, scalePcs, chordPcs),
+              false,
+              `${id} has a step onto a new name that the hand could take`,
+            );
+            eighthPocket += 1;
           }
         }
       }

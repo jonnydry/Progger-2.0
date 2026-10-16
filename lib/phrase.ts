@@ -175,14 +175,15 @@ const SHIFT_COST = 20;
 const SHIFT_FRETS = 4;
 
 /**
- * Cost of moving the fretting hand. A reach of 3 frets or less is only the
- * fret distance. A shift pays the shift cost, and a shift onto an eighth
- * pays it again ten times so the hand waits for a longer note.
+ * Cost of moving the fretting hand. Staying put is free. Any real move,
+ * including a reach of 1–3 frets, pays the shift cost plus the frets
+ * traveled. A move onto an eighth pays that shift cost again ten times,
+ * so the hand waits for a longer note. The shift label still starts at 4
+ * frets: a shorter move is a reach, and it is not drawn as a shift.
  */
 export function handShiftCost(frets: number, fast: boolean): number {
   const moved = Math.abs(frets);
   if (moved === 0) return 0;
-  if (moved < SHIFT_FRETS) return moved;
   let cost = SHIFT_COST + moved;
   if (fast) cost += SHIFT_COST * 10;
   return cost;
@@ -2103,7 +2104,6 @@ function spreadVariety(
         scalePcs,
         chordPcs,
         plan,
-        placed,
         low,
         high,
       ) ??
@@ -2378,7 +2378,6 @@ function openNarrowRun(
   scalePcs: ReadonlySet<number>,
   chordPcs: ReadonlySet<number>,
   plan: PhrasePlan,
-  placed: readonly FingeredNote[],
   low: number,
   high: number,
 ): PhraseNote[] | null {
@@ -2450,11 +2449,7 @@ function openNarrowRun(
     bestOutside = outside;
   };
 
-  const land = (
-    index: number,
-    target: number,
-    anchor: number,
-  ): number | null => {
+  const land = (index: number, target: number): number | null => {
     if (!pitchAllowed(target, notes[index].midi, low, high)) return null;
     if (
       !arrivalOk(
@@ -2462,8 +2457,6 @@ function openNarrowRun(
         notes[index].duration,
       )
     )
-      return null;
-    if (!withinHand(target, anchor, handSlack(notes[index].duration)))
       return null;
     return target;
   };
@@ -2475,7 +2468,6 @@ function openNarrowRun(
   ) {
     if (index >= notes.length - 1 || notes[index].strong) continue;
     const previous = notes[index - 1].midi;
-    const anchor = placed[index - 1].position;
     const atEnd = index + 1 === notes.length - 1;
     const options = new Set<number>([
       ...degreesFrom(previous, 1, scalePcs, low, high),
@@ -2485,7 +2477,7 @@ function openNarrowRun(
       notes[index].midi + 12,
     ]);
     for (const target of options) {
-      if (land(index, target, anchor) === null) continue;
+      if (land(index, target) === null) continue;
       const arrived = retone(target, notes[index], spelled, chordPcs);
       if (!arrived) continue;
       const gap = Math.abs(target - previous);
@@ -2521,18 +2513,10 @@ function openNarrowRun(
         following.midi + 12,
       ]);
       if (stepped !== null) seconds.add(stepped);
-      const firstPos = nearestPosition(
-        target,
-        anchor,
-        handSlack(notes[index].duration),
-      );
-      if (firstPos === null) continue;
       for (const second of seconds) {
         if (!pitchAllowed(second, following.midi, low, high)) continue;
         if (second === following.midi && target === notes[index].midi) continue;
         if (!arrivalOk(Math.abs(second - target), following.duration)) continue;
-        if (!withinHand(second, firstPos, handSlack(following.duration)))
-          continue;
         const next = notes[index + 2];
         if (next && !arrivalOk(Math.abs(second - next.midi), next.duration))
           continue;
@@ -2781,22 +2765,6 @@ function positionsFrom(
       found.add(spot.position);
   }
   return [...found];
-}
-
-function nearestPosition(
-  midi: number,
-  anchor: number,
-  slack: number,
-): number | null {
-  let best: number | null = null;
-  let bestDist = Infinity;
-  for (const spot of spotsFor(midi)) {
-    const dist = Math.abs(spot.position - anchor);
-    if (dist > slack || dist >= bestDist) continue;
-    best = spot.position;
-    bestDist = dist;
-  }
-  return best;
 }
 
 function fingerNotes(
