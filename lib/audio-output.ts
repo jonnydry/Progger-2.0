@@ -50,7 +50,9 @@ export const OUTPUT_TAIL = outputTailSeconds();
 /**
  * Drone-only loudness. A gentle tanh bend, then the small-signal slope.
  * Chords and walk plucks enter at `chordInput`, so they are not saturated.
- * Their envelope ducks the drone. The safety clip stays after the sum.
+ * Their envelope ducks the drone. Phrase notes join the chord bus after
+ * that key, so a line over the drone does not move the VCA. The safety
+ * clip stays after the sum.
  * Drive 3 keeps a cap-level sine under about 2% THD. Drive 16 was near 18%.
  * Makeup is the small-signal slope. 4.26 puts the default reed near −14 LUFS,
  * about 12 dB over main. The loudest bowed sustain stays under the 0.8 knee.
@@ -219,6 +221,11 @@ export type DroneStage = {
   input: WaveShaperNode;
   /** Chords and walk plucks. They duck the drone and skip the saturator. */
   chordInput: GainNode;
+  /**
+   * Chord bus after the sidechain key. Phrase notes connect here so they
+   * take the chord trim and lookahead without moving the drone VCA.
+   */
+  phraseBus: GainNode;
   /** The signal added to the drone VCA. Null until `installDuck` resolves. */
   duck: AudioNode | null;
   readonly duckReady: boolean;
@@ -277,6 +284,7 @@ export function createDroneStage(
   return {
     input,
     chordInput,
+    phraseBus: chordLevel,
     get duck() {
       return duck;
     },
@@ -340,7 +348,8 @@ export type OutputChain = {
   /**
    * Phrase audio stays on this gain. `setDrone` re-points it, so a loop
    * that is already sounding follows the limiter instead of keeping the
-   * destination it picked on the first note.
+   * destination it picked on the first note. While the drone is on, the
+   * send joins `phraseBus`, after the sidechain key.
    */
   phraseInput: GainNode;
   readonly duckReady: boolean;
@@ -461,7 +470,7 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     route = 'limited';
     drone = true;
     connected = true;
-    pointPhrase(stage.chordInput);
+    pointPhrase(stage.phraseBus);
   }
 
   function routeOpen(): void {
