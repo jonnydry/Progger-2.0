@@ -1608,11 +1608,216 @@ function needsContour(
   );
 }
 
+function thirdMeans(midis: readonly number[]): [number, number, number] {
+  const third = Math.max(1, Math.floor(midis.length / 3));
+  const mean = (slice: readonly number[]) =>
+    slice.reduce((sum, midi) => sum + midi, 0) / slice.length;
+  return [
+    mean(midis.slice(0, third)),
+    mean(midis.slice(third, third * 2)),
+    mean(midis.slice(third * 2)),
+  ];
+}
+
+/** Same third-means test the corpus uses for arch, rise, fall, and wave. */
+function contourHits(midis: readonly number[], contour: Contour): boolean {
+  const [first, middle, last] = thirdMeans(midis);
+  if (contour === 'rise') return last > first;
+  if (contour === 'fall') return first > last;
+  if (contour === 'arch') return middle > first && middle > last;
+  return middle < first && middle < last;
+}
+
+/**
+ * A later repair can keep the highest note and still flatten the arch:
+ * the middle third's average falls, or an end rises. Refuse that edit.
+ * The peak check stays as well, so the top note cannot drop either.
+ */
+function harmsArch(
+  before: readonly number[],
+  after: readonly number[],
+  ladder: readonly LadderTone[],
+  plan: PhrasePlan,
+): boolean {
+  if (plan.contour !== 'arch') return false;
+  const beforeMidis = lineMidis(before, ladder);
+  const afterMidis = lineMidis(after, ladder);
+  if (Math.max(...afterMidis) < Math.max(...beforeMidis)) return true;
+  return contourHits(beforeMidis, 'arch') && !contourHits(afterMidis, 'arch');
+}
+
+/**
+ * Longest run of more than four notes that uses exactly three pitches,
+ * stays inside a major third, and repeats every three notes.
+ */
+function longestCircle(
+  midis: readonly number[],
+): { start: number; end: number } | null {
+  let best: { start: number; end: number } | null = null;
+  for (let start = 0; start < midis.length; start++) {
+    const seen = new Set<number>([midis[start]]);
+    for (let end = start + 1; end < midis.length; end++) {
+      if (end - start >= 3 && midis[end] !== midis[end - 3]) break;
+      seen.add(midis[end]);
+      if (seen.size > 3) break;
+      if (Math.max(...seen) - Math.min(...seen) > 4) break;
+      if (end - start + 1 > 4 && seen.size === 3) {
+        if (!best || end - start > best.end - best.start)
+          best = { start, end };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Break a three-pitch circle by moving one pitch that is already on the
+ * grid. Weak beats first. The two-pitch cell limit still holds, a fifth
+ * is not added, and an arch that already lands is left landing.
+ */
+function breakCircles(
+  indexes: readonly number[],
+  ladder: readonly LadderTone[],
+  events: readonly GridEvent[],
+  plan: PhrasePlan,
+): number[] {
+  let current = indexes.slice();
+  const cadence = current[current.length - 1];
+  for (let guard = 0; guard < 6; guard++) {
+    const midis = lineMidis(current, ladder);
+    const run = longestCircle(midis);
+    if (!run) return current;
+    const beforeLen = run.end - run.start;
+    const baseWide = wideLeapCount(current, ladder);
+    const baseMax = Math.max(...midis);
+    const baseHit = plan.contour === 'arch' && contourHits(midis, 'arch');
+    const positions: number[] = [];
+    for (
+      let index = run.start;
+      index <= run.end && index < current.length - 1;
+      index++
+    )
+      positions.push(index);
+    positions.sort(
+      (a, b) => Number(events[a].strong) - Number(events[b].strong) || a - b,
+    );
+    let changed = false;
+    for (const index of positions) {
+      for (let distance = 1; distance <= 3; distance++) {
+        for (const option of [
+          current[index] + distance,
+          current[index] - distance,
+        ]) {
+          if (option < 0 || option >= ladder.length) continue;
+          if (events[index].strong && !ladder[option].chordTone) continue;
+          const trial = current.slice();
+          trial[index] = option;
+          if (!lineIsLegal(trial, events, ladder, cadence)) continue;
+          const nextMidis = lineMidis(trial, ladder);
+          if (phraseCellLength(nextMidis) > PHRASE_CELL_LIMIT) continue;
+          if (wideLeapCount(trial, ladder) > baseWide) continue;
+          if (plan.contour === 'arch' && Math.max(...nextMidis) < baseMax)
+            continue;
+          if (baseHit && !contourHits(nextMidis, 'arch')) continue;
+          const nextRun = longestCircle(nextMidis);
+          const nextLen = nextRun ? nextRun.end - nextRun.start : 0;
+          if (nextLen >= beforeLen) continue;
+          current = trial;
+          changed = true;
+          break;
+        }
+        if (changed) break;
+      }
+      if (changed) break;
+    }
+    if (!changed) return current;
+  }
+  return current;
+}
+
+function directedChoices(
+  current: number,
+  length: number,
+  upFirst: boolean,
+): number[] {
+  const options: number[] = [];
+  for (let distance = 1; distance <= 4 && distance < length; distance++) {
+    const pair = upFirst
+      ? [current + distance, current - distance]
+      : [current - distance, current + distance];
+    for (const option of pair) {
+      if (option >= 0 && option < length) options.push(option);
+    }
+  }
+  return options;
+}
+
+/**
+ * One existing pitch moves so the plan's third-means land. Weak beats
+ * first, at most four scale steps. A line that is already a stuck cell
+ * is left alone: breaking that cell is a different rule, and the grid
+ * traps at the bottom of the register have to stay two pitches.
+ */
+function liftContour(
+  indexes: readonly number[],
+  ladder: readonly LadderTone[],
+  events: readonly GridEvent[],
+  plan: PhrasePlan,
+): number[] {
+  const current = indexes.slice();
+  const midis = lineMidis(current, ladder);
+  if (contourHits(midis, plan.contour)) return current;
+  if (phraseCellLength(midis) > PHRASE_CELL_LIMIT) return current;
+  const cadence = current[current.length - 1];
+  const third = Math.max(1, Math.floor(current.length / 3));
+  const regions: number[][] = [[], [], []];
+  for (let index = 0; index < current.length - 1; index++) {
+    const region = index < third ? 0 : index < third * 2 ? 1 : 2;
+    regions[region].push(index);
+  }
+  const preferUp = plan.contour !== 'wave';
+  const regionOrder =
+    plan.contour === 'rise'
+      ? [2, 1, 0]
+      : plan.contour === 'fall'
+        ? [0, 2, 1]
+        : [1, 0, 2];
+  const baseWide = wideLeapCount(current, ladder);
+  const ordered: number[] = [];
+  for (const region of regionOrder) {
+    const notes = regions[region].slice().sort((a, b) => {
+      const strong = Number(events[a].strong) - Number(events[b].strong);
+      return strong || a - b;
+    });
+    ordered.push(...notes);
+  }
+  for (const index of ordered) {
+    for (const option of directedChoices(
+      current[index],
+      ladder.length,
+      preferUp,
+    )) {
+      if (events[index].strong && !ladder[option].chordTone) continue;
+      const trial = current.slice();
+      trial[index] = option;
+      if (!lineIsLegal(trial, events, ladder, cadence)) continue;
+      if (phraseCellLength(lineMidis(trial, ladder)) > PHRASE_CELL_LIMIT)
+        continue;
+      if (wideLeapCount(trial, ladder) > baseWide) continue;
+      if (!contourHits(lineMidis(trial, ladder), plan.contour)) continue;
+      return trial;
+    }
+  }
+  return current;
+}
+
 /**
  * Search still picks the skeleton and the rhythm grid. This pass only
  * rewrites pitches on those onsets: a stuck cell moves to another scale
  * or chord tone, and a leap of a fifth or wider becomes a scale walk when
- * the gap can already hold the steps.
+ * the gap can already hold the steps. An arch that already lands is not
+ * a legal casualty of those repairs. A three-pitch circle is broken on
+ * the same grid, then one pitch may still move toward the plan.
  */
 function shapeMelody(
   indexes: readonly number[],
@@ -1631,12 +1836,19 @@ function shapeMelody(
         Math.max(...lineMidis(rebuilt, ladder)) >=
           Math.max(...lineMidis(current, ladder)));
     if (rebuilt && keepsPeak && lineIsLegal(rebuilt, grid, ladder, cadence)) {
-      current = addModestLeap(rebuilt, ladder, grid) ?? rebuilt;
+      const leaped = addModestLeap(rebuilt, ladder, grid);
+      current =
+        leaped && !harmsArch(rebuilt, leaped, ladder, plan) ? leaped : rebuilt;
     }
   }
   if (phraseCellLength(lineMidis(current, ladder)) > PHRASE_CELL_LIMIT) {
     const opened = breakCell(current, grid, ladder, cadence);
-    if (opened && lineIsLegal(opened, grid, ladder, cadence)) current = opened;
+    if (
+      opened &&
+      lineIsLegal(opened, grid, ladder, cadence) &&
+      !harmsArch(current, opened, ladder, plan)
+    )
+      current = opened;
   }
   for (let repair = 0; repair < 3; repair++) {
     const before = widestLeap(current, ladder, scalePcsOf(ladder));
@@ -1650,6 +1862,7 @@ function shapeMelody(
     if (!lineIsLegal(next, grid, ladder, cadence)) break;
     if (phraseCellLength(lineMidis(next, ladder)) > PHRASE_CELL_LIMIT) break;
     if (wideLeapCount(next, ladder) >= wideLeapCount(current, ladder)) break;
+    if (harmsArch(current, next, ladder, plan)) break;
     current = next;
   }
   if (current.length > 8 && leapCount(current, ladder) < 4) {
@@ -1657,10 +1870,13 @@ function shapeMelody(
     if (
       extra &&
       lineIsLegal(extra, grid, ladder, cadence) &&
-      phraseCellLength(lineMidis(extra, ladder)) <= PHRASE_CELL_LIMIT
+      phraseCellLength(lineMidis(extra, ladder)) <= PHRASE_CELL_LIMIT &&
+      !harmsArch(current, extra, ladder, plan)
     )
       current = extra;
   }
+  current = breakCircles(current, ladder, grid, plan);
+  current = liftContour(current, ladder, grid, plan);
   return grid[grid.length - 1].duration === 2
     ? { indexes: current, events: grid }
     : {
