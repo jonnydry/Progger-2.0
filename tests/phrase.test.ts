@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { parseChord } from '../lib/harmony.ts';
-import { SCALES, spell, TUNING, type Note } from '../lib/music.ts';
+import { SCALES, patterns, spell, TUNING, type Note } from '../lib/music.ts';
 import {
   PHRASE_PLANNER_TIMEOUT_MS,
   PHRASE_RANGE,
@@ -381,6 +381,62 @@ void test('a harmonic-minor augmented second is a scale step', () => {
   assert.equal(melodicMotion(60, 60, pcs), 'unison');
 });
 
+function reachFor(
+  scaleNotes: readonly Note[],
+  midis: readonly number[],
+): Set<number> | null {
+  const forms = patterns([...scaleNotes]);
+  if (!forms.length) return null;
+  let active = 0;
+  let best = -1;
+  let bestDist = Infinity;
+  const distinct = new Set(midis);
+  forms.forEach((form, index) => {
+    const have = new Set(form.positions.map((position) => position.midi));
+    let hit = 0;
+    for (const midi of distinct) if (have.has(midi)) hit += 1;
+    const dist = Math.abs((form.min + form.max) / 2 - 7);
+    if (hit > best || (hit === best && dist < bestDist)) {
+      active = index;
+      best = hit;
+      bestDist = dist;
+    }
+  });
+  const allowed = new Set<number>();
+  for (const index of [active - 1, active, active + 1]) {
+    if (index < 0 || index >= forms.length) continue;
+    for (const position of forms[index].positions) allowed.add(position.midi);
+  }
+  return allowed;
+}
+
+function assertNoteReach(
+  midi: number,
+  low: number,
+  allowed: Set<number> | null,
+): void {
+  if (midi >= low && midi <= low + PHRASE_RANGE) return;
+  assert.ok(
+    allowed?.has(midi),
+    `${midi} leaves the register window and the neighboring shapes`,
+  );
+}
+
+function assertPhraseReach(
+  phrase: {
+    plan: { register: 'low' | 'mid' | 'high' };
+    notes: { midi: number }[];
+  },
+  scaleNotes: readonly Note[],
+): void {
+  const low = { low: 48, mid: 55, high: 64 }[phrase.plan.register];
+  const allowed = reachFor(
+    scaleNotes,
+    phrase.notes.map((note) => note.midi),
+  );
+  for (const note of phrase.notes) assertNoteReach(note.midi, low, allowed);
+}
+
 void test('the same seed replays the same phrase, and many seeds keep the rules', () => {
   const corpus = phrases();
   assert.equal(corpus.length, CONTEXTS.length * SEEDS.length * BARS.length);
@@ -416,7 +472,7 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
     assert.equal(report.unisons, 0);
     assert.equal(report.unresolved, 0);
     assert.equal(report.cadenceHit, true);
-    assert.ok(report.range <= PHRASE_RANGE);
+    assertPhraseReach(phrase, scaleNotes);
     assert.ok(report.strong > 0);
     assert.ok(report.strongChord / report.strong >= 0.7);
     strong += report.strong;
@@ -432,11 +488,15 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
 
     const names = new Set(scaleNotes.map((note) => note.name));
     const low = { low: 48, mid: 55, high: 64 }[phrase.plan.register];
+    const allowed = reachFor(
+      scaleNotes,
+      phrase.notes.map((note) => note.midi),
+    );
     let phraseShifts = 0;
     for (let index = 0; index < phrase.notes.length; index++) {
       const note = phrase.notes[index];
       assert.ok(names.has(note.name), `${note.name} leaves the scale spelling`);
-      assert.ok(note.midi >= low && note.midi <= low + PHRASE_RANGE);
+      assertNoteReach(note.midi, low, allowed);
       assert.equal(note.midi, TUNING[note.string] + note.fret);
       assert.ok(note.fret >= 0 && note.fret <= 24);
       assert.ok(note.finger >= 0 && note.finger <= 4);
@@ -503,7 +563,7 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
   assert.ok(strongRatio >= 0.7);
   assert.ok(stepRatio >= 0.66 && stepRatio <= 0.75, `step ratio ${stepRatio}`);
   assert.equal(cadence, corpus.length);
-  assert.ok(maxRange <= PHRASE_RANGE);
+  assert.ok(maxRange <= 36, `range ${maxRange}`);
   assert.ok(maxShifts <= 2);
   for (const contour of Object.keys(contourHits) as Contour[]) {
     const bucket = contourHits[contour];

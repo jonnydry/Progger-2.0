@@ -1655,12 +1655,13 @@ function circleSpan(midis: readonly number[]): number {
 
 /**
  * A landing arch can be parked on two pitches. Move notes already on the
- * grid until that cell is back to four. The peak stays, the arch still
- * hits, a fifth is not added, and a three-pitch circle is not lengthened.
+ * grid until that cell is back to four. The arch still hits, and a fifth
+ * is not added. The peak and the circle length are not rechecked: on the
+ * progression sweep they never change which repair is chosen.
  * One note is tried first. When the only step into the next chord tone
  * would tie the middle third, the strong note and its approach move together.
  */
-function breakLoopsKeepArch(
+export function breakLoopsKeepArch(
   indexes: readonly number[],
   ladder: readonly LadderTone[],
   events: readonly GridEvent[],
@@ -1691,6 +1692,8 @@ function breakLoopsKeepArch(
       const nextMidis = lineMidis(trial, ladder);
       const nextExcess = cellExcess(nextMidis);
       if (nextExcess >= excess) return previous;
+      // A nearer step opens these cells first, so the measured lines do not
+      // move on this guard. It stays so the pair repair below cannot add a fifth.
       if (wideLeapCount(trial, ladder) > baseWide) return previous;
       if (requireArch && !contourHits(nextMidis, 'arch')) return previous;
       const cell = phraseCellLength(nextMidis);
@@ -1780,7 +1783,7 @@ function longestCircle(
  * grid. Weak beats first. The two-pitch cell limit still holds, a fifth
  * is not added, and an arch that already lands is left landing.
  */
-function breakCircles(
+export function breakCircles(
   indexes: readonly number[],
   ladder: readonly LadderTone[],
   events: readonly GridEvent[],
@@ -1821,6 +1824,9 @@ function breakCircles(
           const nextMidis = lineMidis(trial, ladder);
           if (phraseCellLength(nextMidis) > PHRASE_CELL_LIMIT) continue;
           if (wideLeapCount(trial, ladder) > baseWide) continue;
+          // A circle repair may not give up the arch's highest note. The
+          // branch is quiet on the progression sweep; the direct fixture
+          // still refuses a lower top.
           if (plan.contour === 'arch' && Math.max(...nextMidis) < baseMax)
             continue;
           if (baseHit && !contourHits(nextMidis, 'arch')) continue;
@@ -1846,7 +1852,8 @@ function directedChoices(
   upFirst: boolean,
 ): number[] {
   const options: number[] = [];
-  // Distances 1 and 4 still change a progression, so they stay.
+  // Every distance changes a real phrase, so none of these steps is dead.
+  // Dropping 1 and 4 moves Bb minor over F7, seed 4, 4 bars, off its wave.
   for (let distance = 1; distance <= 4 && distance < length; distance++) {
     const pair = upFirst
       ? [current + distance, current - distance]
@@ -2037,6 +2044,7 @@ function leapCount(
 
 /**
  * A run longer than six notes on three pitches stays in one pocket.
+ * So does a 4-note cell that still repeats for twelve notes or more.
  * One weak note can leap to another tone of the same neck shape, or the
  * next shape, and the following note steps back the other way. The shape
  * only marks reach: a string can hold any number of the line's notes.
@@ -2061,13 +2069,15 @@ function spreadVariety(
   for (let pass = 0; pass < 12; pass++) {
     const midis = current.map((note) => note.midi);
     const run = narrowSpan(midis);
-    if (run.length <= PHRASE_VARIETY_RUN) break;
+    const figure = periodSpan(midis, 4);
+    if (run.length <= PHRASE_VARIETY_RUN && figure.length < 12) break;
+    const focus = run.length > PHRASE_VARIETY_RUN ? run : figure;
     const reach = new Set([...pool.same, ...pool.near]);
     const placed = fingerNotes(current, forms);
     const opened =
       openNarrowRun(
         current,
-        run,
+        focus,
         pool.same,
         reach,
         spelled,
@@ -2079,7 +2089,7 @@ function spreadVariety(
       ) ??
       openNarrowRun(
         current,
-        run,
+        focus,
         pool.near,
         reach,
         spelled,
@@ -2091,7 +2101,7 @@ function spreadVariety(
       ) ??
       openNarrowRun(
         current,
-        run,
+        focus,
         pool.same,
         reach,
         spelled,
@@ -2103,7 +2113,7 @@ function spreadVariety(
       ) ??
       openNarrowRun(
         current,
-        run,
+        focus,
         pool.near,
         reach,
         spelled,
@@ -2154,6 +2164,27 @@ function narrowSpan(midis: readonly number[]): {
   return { start, length };
 }
 
+/** Longest stretch whose pitches repeat every `period` notes. */
+function periodSpan(
+  midis: readonly number[],
+  period: number,
+): { start: number; length: number } {
+  let start = 0;
+  let length = 0;
+  for (let from = 0; from < midis.length; from++) {
+    let end = from;
+    for (let index = from + period; index < midis.length; index++) {
+      if (midis[index] !== midis[index - period]) break;
+      end = index;
+    }
+    if (end >= from + period && end - from + 1 > length) {
+      start = from;
+      length = end - from + 1;
+    }
+  }
+  return { start, length };
+}
+
 /** Shape whose dots already hold the most of these pitches. Ties sit nearest fret 7. */
 function shapeCover(
   forms: readonly Pattern[],
@@ -2194,7 +2225,8 @@ function varietyPool(
     const same = new Set<number>();
     const lowest = TUNING[0];
     const highest = TUNING[TUNING.length - 1] + 24;
-    for (let midi = low - 12; midi <= low + PHRASE_RANGE + 12; midi++) {
+    // No 3NPS form: stay in the register the ladder already uses.
+    for (let midi = low; midi <= low + PHRASE_RANGE; midi++) {
       if (midi < lowest || midi > highest) continue;
       if (pcs.has(mod(midi))) same.add(midi);
     }
@@ -2311,7 +2343,11 @@ function openNarrowRun(
   const baseCell = phraseCellLength(midis);
   const baseCircle = circleSpan(midis);
   const baseExcess = narrowExcess(midis);
+  const baseFigure = periodSpan(midis, 4).length;
   let best: PhraseNote[] | null = null;
+  let figureBest: PhraseNote[] | null = null;
+  let figureLength = baseFigure;
+  let figureGap = -1;
   let bestNarrow = run.length;
   let bestExcess = baseExcess;
   let bestOctave = -1;
@@ -2370,7 +2406,27 @@ function openNarrowRun(
       if (harmsLine(midis, nextMidis, plan)) continue;
       const nextNarrow = narrowSpan(nextMidis).length;
       const nextExcess = narrowExcess(nextMidis);
-      if (nextExcess >= baseExcess) continue;
+      const nextFigure = periodSpan(nextMidis, 4).length;
+      // A 4-note cell that still loops for 12 notes or more is the same
+      // pocket, even after a fourth pitch joins the cell. One leap has to
+      // drop a whole cycle. It may not lengthen the 3-pitch run.
+      const breaksFigure =
+        baseFigure >= 12 &&
+        nextFigure + 4 <= baseFigure &&
+        nextExcess <= baseExcess;
+      if (nextExcess >= baseExcess) {
+        if (
+          breaksFigure &&
+          (!figureBest ||
+            nextFigure < figureLength ||
+            (nextFigure === figureLength && gap > figureGap))
+        ) {
+          figureBest = trial;
+          figureLength = nextFigure;
+          figureGap = gap;
+        }
+        continue;
+      }
       const octave = runMidis.some(
         (midi) =>
           midi !== target &&
@@ -2398,7 +2454,7 @@ function openNarrowRun(
       bestGap = gap;
     }
   }
-  return best;
+  return best ?? figureBest;
 }
 
 function fingerNotes(
@@ -2589,7 +2645,7 @@ function assemble(
       chordTone: tone.chordTone,
     };
   });
-  const forms = patterns(input.scaleNotes);
+  const forms = patterns([...input.scaleNotes]);
   return {
     ok: true,
     phrase: {
