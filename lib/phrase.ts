@@ -1646,6 +1646,112 @@ function harmsArch(
   return contourHits(beforeMidis, 'arch') && !contourHits(afterMidis, 'arch');
 }
 
+function circleSpan(midis: readonly number[]): number {
+  const run = longestCircle(midis);
+  return run ? run.end - run.start : 0;
+}
+
+/**
+ * A landing arch can be parked on two pitches. Move notes already on the
+ * grid until that cell is back to four. The peak stays, the arch still
+ * hits, a fifth is not added, and a three-pitch circle is not lengthened.
+ * One note is tried first. When the only step into the next chord tone
+ * would tie the middle third, the strong note and its approach move together.
+ */
+function breakLoopsKeepArch(
+  indexes: readonly number[],
+  ladder: readonly LadderTone[],
+  events: readonly GridEvent[],
+  plan: PhrasePlan,
+): number[] {
+  const current = indexes.slice();
+  const cadence = current[current.length - 1];
+  const baseMidis = lineMidis(current, ladder);
+  const basePeak = Math.max(...baseMidis);
+  const requireArch = plan.contour === 'arch' && contourHits(baseMidis, 'arch');
+  const baseWide = wideLeapCount(current, ladder);
+  const baseCircle = circleSpan(baseMidis);
+  for (let guard = 0; guard < 12; guard++) {
+    if (phraseCellLength(lineMidis(current, ladder)) <= PHRASE_CELL_LIMIT)
+      return current;
+    const excess = cellExcess(lineMidis(current, ladder));
+    type LoopCandidate = {
+      trial: number[];
+      cell: number;
+      excess: number;
+      dist: number;
+    };
+    let best: LoopCandidate | null = null;
+    const consider = (
+      previous: LoopCandidate | null,
+      trial: number[],
+      dist: number,
+    ): LoopCandidate | null => {
+      if (!lineIsLegal(trial, events, ladder, cadence)) return previous;
+      const nextMidis = lineMidis(trial, ladder);
+      const nextExcess = cellExcess(nextMidis);
+      if (nextExcess >= excess) return previous;
+      if (wideLeapCount(trial, ladder) > baseWide) return previous;
+      if (Math.max(...nextMidis) < basePeak) return previous;
+      if (requireArch && !contourHits(nextMidis, 'arch')) return previous;
+      if (circleSpan(nextMidis) > baseCircle) return previous;
+      const cell = phraseCellLength(nextMidis);
+      if (
+        !previous ||
+        cell < previous.cell ||
+        (cell === previous.cell && nextExcess < previous.excess) ||
+        (cell === previous.cell && nextExcess === previous.excess && dist < previous.dist)
+      )
+        return { trial, cell, excess: nextExcess, dist };
+      return previous;
+    };
+    for (let index = 0; index < current.length - 1; index++) {
+      for (const option of pitchChoices(current[index], ladder.length)) {
+        if (index > 0 && option === current[index - 1]) continue;
+        if (events[index].strong && !ladder[option].chordTone) continue;
+        if (
+          events[index].strong &&
+          index > 0 &&
+          Math.abs(option - current[index - 1]) !== 1
+        )
+          continue;
+        const following = current[index + 1];
+        if (
+          following !== undefined &&
+          events[index + 1]?.strong &&
+          Math.abs(option - following) !== 1
+        )
+          continue;
+        const trial = current.slice();
+        trial[index] = option;
+        best = consider(best, trial, Math.abs(option - current[index]));
+      }
+    }
+    if (!best) {
+      for (let index = 1; index < current.length - 1; index++) {
+        if (!events[index].strong) continue;
+        const chord = ladder.flatMap((tone, toneIndex) =>
+          tone.chordTone ? [toneIndex] : [],
+        );
+        for (const option of chord) {
+          if (option === current[index]) continue;
+          for (const approach of [option - 1, option + 1]) {
+            if (approach < 0 || approach >= ladder.length) continue;
+            if (approach === current[index - 2]) continue;
+            const trial = current.slice();
+            trial[index - 1] = approach;
+            trial[index] = option;
+            best = consider(best, trial, Math.abs(option - current[index]));
+          }
+        }
+      }
+    }
+    if (!best) return current;
+    current.splice(0, current.length, ...best.trial);
+  }
+  return current;
+}
+
 /**
  * Longest run of more than four notes that uses exactly three pitches,
  * stays inside a major third, and repeats every three notes.
@@ -1818,6 +1924,8 @@ function liftContour(
  * the gap can already hold the steps. An arch that already lands is not
  * a legal casualty of those repairs. A three-pitch circle is broken on
  * the same grid, then one pitch may still move toward the plan.
+ * A two-pitch cell left under a landing arch is opened without giving
+ * that arch back.
  */
 function shapeMelody(
   indexes: readonly number[],
@@ -1877,6 +1985,7 @@ function shapeMelody(
   }
   current = breakCircles(current, ladder, grid, plan);
   current = liftContour(current, ladder, grid, plan);
+  current = breakLoopsKeepArch(current, ladder, grid, plan);
   return grid[grid.length - 1].duration === 2
     ? { indexes: current, events: grid }
     : {

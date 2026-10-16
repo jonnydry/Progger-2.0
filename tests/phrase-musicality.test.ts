@@ -468,26 +468,97 @@ void test('an arch repair keeps the middle third above both ends', () => {
   const [first, middle, last] = thirdMeans(midis);
   assert.ok(middle > first && middle > last);
   assert.equal(Math.max(...midis), 57);
+  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
   assert.deepEqual(
     phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
     [
       'D50@0',
       'A57@1.5',
       'G55@2',
-      'A57@3.5',
+      'F53@3.5',
       'G55@4',
       'A57@5.5',
       'G55@6',
-      'A57@7.5',
+      'F53@7.5',
       'G55@8',
       'A57@9.5',
       'G55@10',
-      'A57@11.5',
+      'F53@11.5',
       'G55@12',
       'A57@13.5',
       'G55@14',
       'C48@15.5',
       'D50@16',
+    ],
+  );
+});
+
+void test('a landing arch that uses a third pitch has no two-pitch cell past four notes', () => {
+  let floorLoops = 0;
+  for (const root of SWEEP_ROOTS) {
+    for (const scaleId of SWEEP_SCALES) {
+      const scaleNotes = scaleOf(root, scaleId);
+      for (const symbol of sweepSymbols(root, scaleId)) {
+        const chordNotes = parseChord(symbol).notes;
+        for (const bars of [2, 4] as const) {
+          for (let seed = 1; seed <= 12; seed++) {
+            const phrase = generatePhrase({ seed, bars, scaleNotes, chordNotes });
+            assert.equal(phrase.ok, true);
+            if (!phrase.ok || phrase.phrase.plan.contour !== 'arch') continue;
+            const midis = phrase.phrase.notes.map((note) => note.midi);
+            const [first, middle, last] = thirdMeans(midis);
+            if (!(middle > first && middle > last)) continue;
+            const cell = phraseCellLength(midis);
+            if (cell <= PHRASE_CELL_LIMIT) continue;
+            const id = `${root} ${scaleId} ${symbol} seed ${seed} bars ${bars}`;
+            assert.equal(
+              new Set(midis).size,
+              2,
+              `${id} lands with a cell of ${cell} and another pitch`,
+            );
+            floorLoops += 1;
+          }
+        }
+      }
+    }
+  }
+  // These 44 are the whole phrase: two adjacent pitches, usually on the
+  // register floor. The middle third is higher by one extra upper note.
+  // The other step into that chord tone flattens the arch, so they stay.
+  assert.equal(floorLoops, 44);
+
+  const { phrase } = phraseFor('C', 'minor-pentatonic', 'G7', 7, 4);
+  assert.equal(phrase.plan.contour, 'arch');
+  assert.equal(phrase.plan.rhythm, 'quarters');
+  assert.deepEqual(
+    phrase.notes.map((note) => note.beat),
+    phraseOnsets('quarters', 4),
+  );
+  const midis = phrase.notes.map((note) => note.midi);
+  const [first, middle, last] = thirdMeans(midis);
+  assert.ok(middle > first && middle > last);
+  assert.equal(Math.max(...midis), 70);
+  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
+  assert.deepEqual(
+    phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
+    [
+      'F65@0',
+      'Bb70@1',
+      'G67@2',
+      'F65@3',
+      'G67@4',
+      'Bb70@5',
+      'G67@6',
+      'F65@7',
+      'G67@8',
+      'Bb70@9',
+      'G67@10',
+      'F65@11',
+      'G67@12',
+      'Bb70@13',
+      'G67@14',
+      'F65@15',
+      'G67@16',
     ],
   );
 });
@@ -591,8 +662,8 @@ void test('the arch guard and the circle break hold on the measured sets', async
     archHit: 644,
     arch: 672,
     circling: 379,
-    loops: 126,
-    changed: 1489,
+    loops: 92,
+    changed: 1523,
     eighthChanged: 151,
     onset: 0,
   });
