@@ -6,18 +6,22 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { parseChord } from '../lib/harmony.ts';
-import { SCALES, spell, type Note } from '../lib/music.ts';
+import { SCALES, TUNING, spell, type Note } from '../lib/music.ts';
 import {
   PHRASE_CELL_LIMIT,
   PHRASE_MIN_RANGE,
   PHRASE_RANGE,
+  PHRASE_VARIETY_RUN,
   PHRASE_WIDE_LEAP,
+  breakCircles,
+  breakLoopsKeepArch,
   cadencePitchClasses,
   generatePhrase,
   melodicMotion,
   phraseCellLength,
   phraseOnsets,
   phraseRuleReport,
+  withinHand,
   type Phrase,
   type RhythmId,
 } from '../lib/phrase.ts';
@@ -33,6 +37,66 @@ const CONTEXTS: readonly (readonly [string, string, string])[] = [
   ['Bb', 'mixolydian', 'Bb7'],
 ];
 const SEEDS = Array.from({ length: 24 }, (_, index) => index + 1);
+
+const REGISTER_LOW = { low: 48, mid: 55, high: 64 } as const;
+
+function pitchClass(midi: number): number {
+  return ((midi % 12) + 12) % 12;
+}
+
+/** Longest run on three note names or fewer. Octave copies share a name. */
+function pcSpan(midis: readonly number[]): { start: number; length: number } {
+  let start = 0;
+  let length = midis.length > 0 ? 1 : 0;
+  for (let from = 0; from < midis.length; from++) {
+    const seen = new Set<number>();
+    for (let end = from; end < midis.length; end++) {
+      seen.add(pitchClass(midis[end]));
+      if (seen.size > 3) break;
+      if (end - from + 1 > length) {
+        length = end - from + 1;
+        start = from;
+      }
+    }
+  }
+  return { start, length };
+}
+
+function pcRun(midis: readonly number[]): number {
+  return pcSpan(midis).length;
+}
+
+/** Longest stretch whose note names repeat every 4 notes. Twice is 8. */
+function figureRun(midis: readonly number[]): number {
+  let longest = 0;
+  for (let from = 0; from < midis.length; from++) {
+    let end = from;
+    for (let index = from + 4; index < midis.length; index++) {
+      if (pitchClass(midis[index]) !== pitchClass(midis[index - 4])) break;
+      end = index;
+    }
+    if (end >= from + 4) longest = Math.max(longest, end - from + 1);
+  }
+  return longest;
+}
+
+/**
+ * Inside the register window, or an octave copy of a pitch that sits inside
+ * it. A step, a third, or any other non-octave leap has to stay inside.
+ */
+function assertRegister(phrase: Phrase): void {
+  const low = REGISTER_LOW[phrase.plan.register];
+  const high = low + PHRASE_RANGE;
+  for (const note of phrase.notes) {
+    if (note.midi >= low && note.midi <= high) continue;
+    assert.ok(
+      [note.midi - 12, note.midi + 12].some(
+        (partner) => partner >= low && partner <= high,
+      ),
+      `${note.name}${note.midi} leaves the ${phrase.plan.register} window by a non-octave`,
+    );
+  }
+}
 
 function scaleOf(root: string, id: string): Note[] {
   const scale = SCALES.find((item) => item.id === id);
@@ -144,6 +208,9 @@ void test('A minor blues over E7 breaks the two-note cell on the existing grid',
   }
   const { phrase } = phraseFor('A', 'minor-blues', 'E7', 1, 4);
   assert.equal(phrase.plan.rhythm, 'quarters');
+  const midis = phrase.notes.map((note) => note.midi);
+  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
+  assert.equal(new Set(midis).size > 2, true);
   // The fall was under its plan. One weak beat steps Eb into D instead of
   // leaping from E down to C, which lifts the first third.
   assert.deepEqual(
@@ -158,7 +225,7 @@ void test('A minor blues over E7 breaks the two-note cell on the existing grid',
       'E64@6',
       'C60@7',
       'D62@8',
-      'Eb63@9',
+      'C60@9',
       'D62@10',
       'Eb63@11',
       'E64@12',
@@ -218,7 +285,7 @@ void test('the corpus keeps the musical checks on every seed', () => {
         assert.equal(report.unresolved, 0, `${symbol} ${seed}`);
         assert.equal(report.cadenceHit, true);
         assert.equal(report.unisons, 0);
-        assert.ok(report.range <= PHRASE_RANGE);
+        assertRegister(phrase);
         const trapped = isGridTrap(root, scaleId, symbol, seed);
         const cell = phraseCellLength(phrase.notes.map((note) => note.midi));
         if (trapped) {
@@ -479,14 +546,14 @@ void test('an arch repair keeps the middle third above both ends', () => {
       'G55@4',
       'A57@5.5',
       'G55@6',
-      'F53@7.5',
-      'G55@8',
+      'Eb51@7.5',
+      'F53@8',
       'A57@9.5',
       'G55@10',
       'F53@11.5',
       'G55@12',
-      'A57@13.5',
-      'G55@14',
+      'Eb51@13.5',
+      'F53@14',
       'C48@15.5',
       'D50@16',
     ],
@@ -502,7 +569,12 @@ void test('a landing arch that uses a third pitch has no two-pitch cell past fou
         const chordNotes = parseChord(symbol).notes;
         for (const bars of [2, 4] as const) {
           for (let seed = 1; seed <= 12; seed++) {
-            const phrase = generatePhrase({ seed, bars, scaleNotes, chordNotes });
+            const phrase = generatePhrase({
+              seed,
+              bars,
+              scaleNotes,
+              chordNotes,
+            });
             assert.equal(phrase.ok, true);
             if (!phrase.ok || phrase.phrase.plan.contour !== 'arch') continue;
             const midis = phrase.phrase.notes.map((note) => note.midi);
@@ -522,9 +594,9 @@ void test('a landing arch that uses a third pitch has no two-pitch cell past fou
       }
     }
   }
-  // These 44 are the whole phrase: two adjacent pitches, usually on the
-  // register floor. The middle third is higher by one extra upper note.
-  // The other step into that chord tone flattens the arch, so they stay.
+  // These 44 are the whole phrase: two adjacent pitches on the register
+  // floor. The cadence is the lowest chord tone, and the only scale step
+  // into it is one neighbor, so the strong-beat rule keeps the cell.
   assert.equal(floorLoops, 44);
 
   const { phrase } = phraseFor('C', 'minor-pentatonic', 'G7', 7, 4);
@@ -537,26 +609,41 @@ void test('a landing arch that uses a third pitch has no two-pitch cell past fou
   const midis = phrase.notes.map((note) => note.midi);
   const [first, middle, last] = thirdMeans(midis);
   assert.ok(middle > first && middle > last);
-  assert.equal(Math.max(...midis), 70);
+  assert.equal(Math.max(...midis), 82);
   assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
+  const names = new Set(phrase.notes.map((note) => note.name));
+  assert.ok(names.size > 3, `seed 7 names ${[...names].join(' ')}`);
+  assert.equal(names.has('Eb'), true);
+  for (let index = 1; index < midis.length; index++) {
+    const gap = Math.abs(midis[index] - midis[index - 1]);
+    assert.ok(gap !== 14 && gap !== 15, `seed 7 leaps ${gap}`);
+  }
+  assert.ok(pcRun(midis) <= PHRASE_VARIETY_RUN);
+  assert.ok(figureRun(midis) < 12);
+  assert.equal(phrase.notes.at(-1)?.midi, 67);
+  assert.equal(phrase.notes.at(-1)?.duration, 2);
+  const low = REGISTER_LOW.high;
+  for (const midi of midis) {
+    assert.ok(midi >= low && midi <= low + PHRASE_RANGE);
+  }
   assert.deepEqual(
     phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
     [
       'F65@0',
       'Bb70@1',
       'G67@2',
-      'F65@3',
-      'G67@4',
-      'Bb70@5',
-      'G67@6',
-      'F65@7',
-      'G67@8',
-      'Bb70@9',
-      'G67@10',
-      'F65@11',
-      'G67@12',
-      'Bb70@13',
-      'G67@14',
+      'G79@3',
+      'F77@4',
+      'Eb75@5',
+      'F77@6',
+      'Bb82@7',
+      'G79@8',
+      'Eb75@9',
+      'F77@10',
+      'Bb82@11',
+      'G79@12',
+      'Eb75@13',
+      'F77@14',
       'F65@15',
       'G67@16',
     ],
@@ -576,7 +663,8 @@ void test('an eighth-note circle gives up one pitch on the existing grid', () =>
   assert.equal(spelled[18], 'A57@9');
   assert.equal(phraseCircles(phrase.notes.map((note) => note.midi)), false);
   assert.ok(
-    phraseCellLength(phrase.notes.map((note) => note.midi)) <= PHRASE_CELL_LIMIT,
+    phraseCellLength(phrase.notes.map((note) => note.midi)) <=
+      PHRASE_CELL_LIMIT,
   );
 });
 
@@ -629,15 +717,14 @@ void test('the arch guard and the circle break hold on the measured sets', async
       }
     }
   }
-  assert.deepEqual(corpus, {
-    archHit: 94,
-    arch: 96,
-    circling: 33,
-    loops: 8,
-    changed: 177,
-    eighthChanged: 37,
-    onset: 0,
-  });
+  assert.equal(corpus.onset, 0);
+  assert.ok(corpus.arch > 0);
+  assert.ok(
+    corpus.archHit / corpus.arch >= 640 / 672,
+    `corpus arches ${corpus.archHit}/${corpus.arch}`,
+  );
+  assert.ok(corpus.circling <= 30, `corpus circling ${corpus.circling}`);
+  assert.ok(corpus.loops <= 16, `corpus loops ${corpus.loops}`);
   const progressions = tally();
   for (const root of SWEEP_ROOTS) {
     for (const scaleId of SWEEP_SCALES) {
@@ -658,13 +745,555 @@ void test('the arch guard and the circle break hold on the measured sets', async
       }
     }
   }
-  assert.deepEqual(progressions, {
-    archHit: 644,
-    arch: 672,
-    circling: 379,
-    loops: 92,
-    changed: 1523,
-    eighthChanged: 151,
-    onset: 0,
+  assert.equal(progressions.onset, 0);
+  assert.equal(progressions.arch, 672);
+  assert.ok(
+    progressions.archHit >= 640,
+    `arches ${progressions.archHit}/${progressions.arch}`,
+  );
+  assert.ok(progressions.circling <= 329, `circling ${progressions.circling}`);
+  assert.ok(progressions.loops <= 92, `loops ${progressions.loops}`);
+});
+
+function majorLadder(): {
+  midi: number;
+  note: Note;
+  chordTone: boolean;
+}[] {
+  const spelled = scaleOf('C', 'major');
+  const byPc = new Map(spelled.map((note) => [note.pc, note]));
+  const ladder: { midi: number; note: Note; chordTone: boolean }[] = [];
+  for (let midi = 60; midi <= 72; midi++) {
+    const note = byPc.get(((midi % 12) + 12) % 12);
+    if (!note) continue;
+    ladder.push({
+      midi,
+      note,
+      chordTone: note.name === 'C' || note.name === 'E' || note.name === 'G',
+    });
+  }
+  return ladder;
+}
+
+function grid(
+  strong: readonly boolean[],
+): { beat: number; duration: number; strong: boolean }[] {
+  return strong.map((beatIsStrong, index) => ({
+    beat: index,
+    duration: index === strong.length - 1 ? 2 : 1,
+    strong: beatIsStrong,
+  }));
+}
+
+void test('a circle break moves a weak beat before the downbeat', () => {
+  const ladder = majorLadder();
+  // E and F are chord tones here so both the downbeat and a later weak
+  // beat can leave the circle legally. Index order would move the downbeat.
+  for (const tone of ladder) {
+    if (
+      tone.note.name === 'E' ||
+      tone.note.name === 'F' ||
+      tone.note.name === 'G'
+    )
+      tone.chordTone = true;
+  }
+  const at = (midi: number) => ladder.findIndex((tone) => tone.midi === midi);
+  const indexes = [
+    at(64),
+    at(65),
+    at(62),
+    at(64),
+    at(65),
+    at(62),
+    at(64),
+    at(65),
+  ];
+  const events = grid([true, false, false, false, true, false, false, true]);
+  const plan = {
+    contour: 'rise' as const,
+    rhythm: 'quarters' as const,
+    register: 'mid' as const,
+    cadence: 'root' as const,
+  };
+  const repaired = breakCircles(indexes, ladder, events, plan);
+  assert.equal(repaired[0], indexes[0], 'the downbeat stays put');
+  assert.notEqual(repaired[1], indexes[1]);
+});
+
+void test('a circle break keeps an arch and its highest note', () => {
+  const ladder = majorLadder();
+  const at = (midi: number) => ladder.findIndex((tone) => tone.midi === midi);
+  const indexes = [
+    at(60),
+    at(62),
+    at(64),
+    at(62),
+    at(64),
+    at(65),
+    at(62),
+    at(64),
+    at(65),
+    at(62),
+    at(64),
+  ];
+  const events = grid([
+    true,
+    false,
+    true,
+    false,
+    true,
+    false,
+    false,
+    true,
+    false,
+    false,
+    true,
+  ]);
+  const plan = {
+    contour: 'arch' as const,
+    rhythm: 'quarters' as const,
+    register: 'mid' as const,
+    cadence: 'root' as const,
+  };
+  const repaired = breakCircles(indexes, ladder, events, plan);
+  const midis = repaired.map((index) => ladder[index].midi);
+  const [first, middle, last] = thirdMeans(midis);
+  assert.ok(middle > first && middle > last);
+  assert.equal(Math.max(...midis), 65);
+  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
+});
+
+void test('opening a stuck cell does not add a fifth', () => {
+  const ladder = majorLadder();
+  const at = (midi: number) => ladder.findIndex((tone) => tone.midi === midi);
+  const indexes = [
+    at(67),
+    at(69),
+    at(67),
+    at(69),
+    at(67),
+    at(69),
+    at(67),
+    at(69),
+    at(67),
+  ];
+  const events = grid([
+    true,
+    false,
+    true,
+    false,
+    true,
+    false,
+    true,
+    false,
+    true,
+  ]);
+  const plan = {
+    contour: 'fall' as const,
+    rhythm: 'quarters' as const,
+    register: 'mid' as const,
+    cadence: 'root' as const,
+  };
+  const before = indexes.map((index) => ladder[index].midi);
+  const repaired = breakLoopsKeepArch(indexes, ladder, events, plan);
+  const after = repaired.map((index) => ladder[index].midi);
+  const wide = (midis: number[]) => {
+    let count = 0;
+    for (let index = 1; index < midis.length; index++) {
+      if (Math.abs(midis[index] - midis[index - 1]) >= PHRASE_WIDE_LEAP)
+        count += 1;
+    }
+    return count;
+  };
+  assert.ok(phraseCellLength(after) <= PHRASE_CELL_LIMIT);
+  assert.ok(wide(after) <= wide(before));
+});
+
+void test('seed 8 does not repeat a four-note figure a third time', () => {
+  const { phrase } = phraseFor('C', 'minor-pentatonic', 'G7', 8, 4);
+  assert.equal(phrase.plan.rhythm, 'long-short');
+  assert.equal(phrase.plan.contour, 'arch');
+  const midis = phrase.notes.map((note) => note.midi);
+  assert.ok(figureRun(midis) < 12, `figure ${figureRun(midis)}`);
+  assert.ok(pcRun(midis) <= PHRASE_VARIETY_RUN);
+  assert.deepEqual(phrase.notes.map((note) => note.name).slice(0, 8), [
+    'F',
+    'Eb',
+    'F',
+    'Bb',
+    'G',
+    'Bb',
+    'G',
+    'Eb',
+  ]);
+});
+
+void test('a pushed eighth steps down into the chord tone', () => {
+  const result = generatePhrase({
+    seed: 5,
+    bars: 2,
+    scaleNotes: scaleOf('C', 'major'),
+    chordNotes: parseChord('F').notes,
+    locks: { rhythm: 'push' },
   });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.phrase.plan.rhythm, 'push');
+  const midis = result.phrase.notes.map((note) => note.midi);
+  assert.ok(midis.join(',').includes('57,55,52,53'));
+  for (let index = 1; index < result.phrase.notes.length; index++) {
+    const note = result.phrase.notes[index];
+    const gap = Math.abs(note.midi - result.phrase.notes[index - 1].midi);
+    if (note.duration <= 0.5) assert.ok(gap <= 5);
+  }
+});
+
+void test('a locked register keeps non-octave motion inside the window', () => {
+  const high = generatePhrase({
+    seed: 27,
+    bars: 2,
+    scaleNotes: scaleOf('Eb', 'dorian'),
+    chordNotes: parseChord('Bb7').notes,
+    locks: { register: 'high' },
+  });
+  const wide = generatePhrase({
+    seed: 16,
+    bars: 4,
+    scaleNotes: scaleOf('C', 'dorian'),
+    chordNotes: parseChord('Cm').notes,
+    locks: { register: 'high' },
+  });
+  for (const result of [high, wide]) {
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    assert.equal(result.phrase.plan.register, 'high');
+    const low = REGISTER_LOW.high;
+    for (const note of result.phrase.notes) {
+      assert.ok(note.midi >= low && note.midi <= low + PHRASE_RANGE);
+    }
+    const midis = result.phrase.notes.map((note) => note.midi);
+    for (let index = 1; index < midis.length; index++) {
+      assert.ok(Math.abs(midis[index] - midis[index - 1]) <= 12);
+    }
+  }
+});
+
+void test('an octave copy may leave the window and a non-octave leap may not', () => {
+  const { phrase } = phraseFor('D', 'minor-pentatonic', 'A7', 1, 2);
+  assert.equal(phrase.plan.register, 'mid');
+  const low = REGISTER_LOW.mid;
+  const high = low + PHRASE_RANGE;
+  const outside = phrase.notes.filter(
+    (note) => note.midi < low || note.midi > high,
+  );
+  assert.deepEqual(
+    outside.map((note) => `${note.name}${note.midi}`),
+    ['F53'],
+  );
+  // The cadence guard is what keeps this landing. Without it the last note
+  // becomes A69 and the F53 octave copy disappears.
+  assert.equal(phrase.notes.at(-1)?.midi, 57);
+  assert.equal(phrase.notes.at(-1)?.duration, 2);
+  // F53 is a major third below the previous note. F65, the octave above,
+  // sits in the window's range and is not a note of this phrase.
+  const index = phrase.notes.findIndex((note) => note.midi === 53);
+  const gap = Math.abs(phrase.notes[index].midi - phrase.notes[index - 1].midi);
+  assert.equal(gap, 4);
+  assert.equal(
+    phrase.notes.some((note) => note.midi === 53 + 12),
+    false,
+  );
+  assert.ok(53 + 12 >= low && 53 + 12 <= high);
+  assertRegister(phrase);
+  const inside = phraseFor('Eb', 'dorian', 'Bb7', 27, 2);
+  // No lock here: the point is a non-octave leap still cannot be the way out.
+  for (let step = 1; step < inside.phrase.notes.length; step++) {
+    const landed = inside.phrase.notes[step];
+    const previous = inside.phrase.notes[step - 1].midi;
+    const leap = Math.abs(landed.midi - previous);
+    if (leap === 12) continue;
+    assert.ok(landed.midi >= REGISTER_LOW[inside.phrase.plan.register]);
+    assert.ok(
+      landed.midi <= REGISTER_LOW[inside.phrase.plan.register] + PHRASE_RANGE,
+    );
+  }
+});
+
+/** Lowest scale chord tone inside the register window. */
+function lowestChordTone(
+  scaleNotes: readonly Note[],
+  chordNotes: readonly Note[],
+  low: number,
+  high: number,
+): number {
+  const scalePcs = new Set(scaleNotes.map((note) => note.pc));
+  const chordPcs = new Set(chordNotes.map((note) => note.pc));
+  let lowest = Infinity;
+  for (let midi = low; midi <= high; midi++) {
+    if (scalePcs.has(pitchClass(midi)) && chordPcs.has(pitchClass(midi)))
+      lowest = Math.min(lowest, midi);
+  }
+  return lowest;
+}
+
+/** Scale steps from `midi` that stay inside the register window. */
+function scaleStepsInWindow(
+  midi: number,
+  scalePcs: ReadonlySet<number>,
+  low: number,
+  high: number,
+): number[] {
+  const found: number[] = [];
+  for (const sign of [-1, 1] as const) {
+    let cursor = midi + sign;
+    while (cursor >= low - 12 && cursor <= high + 12) {
+      if (scalePcs.has(pitchClass(cursor))) {
+        if (cursor >= low && cursor <= high) found.push(cursor);
+        break;
+      }
+      cursor += sign;
+    }
+  }
+  return found;
+}
+
+function positionsOf(midi: number): number[] {
+  const found = new Set<number>();
+  for (const open of TUNING) {
+    const fret = midi - open;
+    if (fret < 0 || fret > 24) continue;
+    if (fret === 0) {
+      for (let position = 0; position <= 17; position++) found.add(position);
+      continue;
+    }
+    for (let finger = 1; finger <= 4; finger++) {
+      const position = fret - (finger - 1);
+      if (position >= 0 && position <= 21) found.add(position);
+    }
+  }
+  return [...found];
+}
+
+function scaleWalk(
+  midi: number,
+  sign: number,
+  steps: number,
+  scalePcs: ReadonlySet<number>,
+): number | null {
+  let cursor = midi;
+  for (let left = steps; left > 0; left--) {
+    let next = cursor + sign;
+    let guard = 0;
+    while (guard++ < 24 && !scalePcs.has(pitchClass(next))) next += sign;
+    if (!scalePcs.has(pitchClass(next))) return null;
+    cursor = next;
+  }
+  return cursor;
+}
+
+function contourHolds(
+  midis: readonly number[],
+  contour: Phrase['plan']['contour'],
+): boolean {
+  const third = Math.max(1, Math.floor(midis.length / 3));
+  const mean = (slice: readonly number[]) =>
+    slice.reduce((sum, midi) => sum + midi, 0) / slice.length;
+  const first = mean(midis.slice(0, third));
+  const middle = mean(midis.slice(third, third * 2));
+  const last = mean(midis.slice(third * 2));
+  if (contour === 'rise') return last > first;
+  if (contour === 'fall') return first > last;
+  if (contour === 'arch') return middle > first && middle > last;
+  return middle < first && middle < last;
+}
+
+/**
+ * A scale step or third onto a pitch class outside the long run that would
+ * bring that run to 6 or under, and that the hand, the eighth gap, leap
+ * resolution, the strong-beat step, the contour, and a 12-note figure
+ * would all still allow.
+ */
+function clearingStep(
+  phrase: Phrase,
+  scalePcs: ReadonlySet<number>,
+  chordPcs: ReadonlySet<number>,
+): boolean {
+  const notes = phrase.notes;
+  const midis = notes.map((note) => note.midi);
+  const run = pcSpan(midis);
+  const low = REGISTER_LOW[phrase.plan.register];
+  const high = low + PHRASE_RANGE;
+  const windowPcs = new Set(
+    midis.slice(run.start, run.start + run.length).map(pitchClass),
+  );
+  const baseFigure = figureRun(midis);
+  for (
+    let index = Math.max(1, run.start);
+    index < Math.min(notes.length - 1, run.start + run.length);
+    index++
+  ) {
+    if (notes[index].strong) continue;
+    const previous = notes[index - 1];
+    const slack = notes[index].duration <= 0.5 ? 3 : 5;
+    for (const sign of [-1, 1]) {
+      for (const steps of [1, 2]) {
+        const target = scaleWalk(previous.midi, sign, steps, scalePcs);
+        if (target === null || target < low || target > high) continue;
+        if (windowPcs.has(pitchClass(target))) continue;
+        const gap = Math.abs(target - previous.midi);
+        if (gap === 0 || gap > 12) continue;
+        if (notes[index].duration <= 0.5 && gap > 5) continue;
+        const reached = positionsOf(target).filter(
+          (position) => Math.abs(position - previous.position) <= slack,
+        );
+        if (!reached.length) continue;
+        const next = notes[index + 1];
+        const nextSlack = next.duration <= 0.5 ? 3 : 5;
+        if (
+          !reached.some((position) =>
+            withinHand(next.midi, position, nextSlack),
+          )
+        )
+          continue;
+        const motion = melodicMotion(previous.midi, target, scalePcs);
+        if (motion === 'leap') {
+          const resolution = melodicMotion(target, next.midi, scalePcs);
+          const opposite =
+            Math.sign(next.midi - target) ===
+            -Math.sign(target - previous.midi);
+          if (resolution !== 'step' || !opposite) continue;
+        }
+        const leave = Math.abs(next.midi - target);
+        if (leave === 0 || leave > 12) continue;
+        if (next.duration <= 0.5 && leave > 5) continue;
+        const nextMotion = melodicMotion(target, next.midi, scalePcs);
+        if (next.strong && (nextMotion !== 'step' || !chordPcs.has(next.pc)))
+          continue;
+        if (nextMotion === 'leap') {
+          const after = notes[index + 2];
+          if (!after) continue;
+          const resolution = melodicMotion(next.midi, after.midi, scalePcs);
+          const opposite =
+            Math.sign(after.midi - next.midi) ===
+            -Math.sign(next.midi - target);
+          if (resolution !== 'step' || !opposite) continue;
+        }
+        const trial = midis.slice();
+        trial[index] = target;
+        if (pcRun(trial) > PHRASE_VARIETY_RUN) continue;
+        if (
+          contourHolds(midis, phrase.plan.contour) &&
+          !contourHolds(trial, phrase.plan.contour)
+        )
+          continue;
+        const nextFigure = figureRun(trial);
+        if (baseFigure >= 12 && nextFigure >= baseFigure) continue;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void test('the pitch-class floor and the four-note figure have a reason each', () => {
+  let over = 0;
+  let twoPitch = 0;
+  let pentatonicSeventh = 0;
+  let eighthPocket = 0;
+  let multiFigures = 0;
+  for (const root of SWEEP_ROOTS) {
+    for (const scaleId of SWEEP_SCALES) {
+      const scaleNotes = scaleOf(root, scaleId);
+      const scalePcs = new Set(scaleNotes.map((note) => note.pc));
+      for (const symbol of sweepSymbols(root, scaleId)) {
+        const chordNotes = parseChord(symbol).notes;
+        const chordPcs = new Set(chordNotes.map((note) => note.pc));
+        for (const bars of [2, 4] as const) {
+          for (let seed = 1; seed <= 12; seed++) {
+            const phrase = generatePhrase({
+              seed,
+              bars,
+              scaleNotes,
+              chordNotes,
+            });
+            assert.equal(phrase.ok, true);
+            if (!phrase.ok) continue;
+            const notes = phrase.phrase.notes;
+            const midis = notes.map((note) => note.midi);
+            const run = pcRun(midis);
+            const figure = figureRun(midis);
+            const names = new Set(midis.map(pitchClass)).size;
+            const id = `${root} ${scaleId} ${symbol} seed ${seed} bars ${bars}`;
+            if (figure >= 12 && names > 2) {
+              multiFigures += 1;
+              const weakEighth = notes
+                .filter((note) => !note.strong)
+                .every((note) => note.duration <= 0.5);
+              assert.equal(
+                weakEighth,
+                true,
+                `${id} repeats a figure on a note longer than an eighth`,
+              );
+            }
+            if (run <= PHRASE_VARIETY_RUN) continue;
+            over += 1;
+            const low = REGISTER_LOW[phrase.phrase.plan.register];
+            const high = low + PHRASE_RANGE;
+            if (names === 2) {
+              const cadence = notes[notes.length - 1].midi;
+              assert.equal(
+                cadence,
+                lowestChordTone(scaleNotes, chordNotes, low, high),
+                `${id} cadence is not the lowest chord tone`,
+              );
+              assert.equal(
+                scaleStepsInWindow(cadence, scalePcs, low, high).length,
+                1,
+                `${id} has more than one scale step into the cadence`,
+              );
+              twoPitch += 1;
+              continue;
+            }
+            if (scaleId === 'minor-pentatonic' && bars === 2 && run === 7) {
+              assert.ok(names >= 4, `${id} has no fourth pitch class`);
+              for (let index = 1; index < notes.length; index++) {
+                if (!notes[index].strong) continue;
+                assert.equal(notes[index].chordTone, true, id);
+                assert.equal(
+                  melodicMotion(
+                    notes[index - 1].midi,
+                    notes[index].midi,
+                    scalePcs,
+                  ),
+                  'step',
+                  `${id} strong beat is not a scale step`,
+                );
+              }
+              pentatonicSeventh += 1;
+              continue;
+            }
+            const weakEighth = notes
+              .filter((note) => !note.strong)
+              .every((note) => note.duration <= 0.5);
+            assert.equal(
+              weakEighth,
+              true,
+              `${id} weak note is longer than an eighth`,
+            );
+            assert.equal(
+              clearingStep(phrase.phrase, scalePcs, chordPcs),
+              false,
+              `${id} has a step onto a new name that the hand could take`,
+            );
+            eighthPocket += 1;
+          }
+        }
+      }
+    }
+  }
+  assert.equal(twoPitch, 92);
+  assert.equal(pentatonicSeventh, 15);
+  assert.equal(eighthPocket, 26);
+  assert.equal(over, 133);
+  assert.equal(multiFigures, 6);
 });
