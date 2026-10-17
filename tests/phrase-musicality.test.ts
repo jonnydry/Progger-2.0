@@ -144,13 +144,15 @@ void test('A minor blues over E7 breaks the two-note cell on the existing grid',
   }
   const { phrase } = phraseFor('A', 'minor-blues', 'E7', 1, 4);
   assert.equal(phrase.plan.rhythm, 'quarters');
+  // The fall was under its plan. One weak beat steps Eb into D instead of
+  // leaping from E down to C, which lifts the first third.
   assert.deepEqual(
     phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
     [
       'E64@0',
       'G67@1',
       'E64@2',
-      'C60@3',
+      'Eb63@3',
       'D62@4',
       'G67@5',
       'E64@6',
@@ -427,4 +429,242 @@ void test('shaping keeps every rhythm grid, including locks and progressions', a
     `grid sweep ${count} phrases, 0 off the plan onsets and durations`,
   );
   assert.ok(count >= 8000, `sweep covered ${count} phrases`);
+});
+
+function thirdMeans(midis: readonly number[]): [number, number, number] {
+  const third = Math.max(1, Math.floor(midis.length / 3));
+  const mean = (slice: readonly number[]) =>
+    slice.reduce((sum, midi) => sum + midi, 0) / slice.length;
+  return [
+    mean(midis.slice(0, third)),
+    mean(midis.slice(third, third * 2)),
+    mean(midis.slice(third * 2)),
+  ];
+}
+
+function phraseCircles(midis: readonly number[]): boolean {
+  for (let start = 0; start < midis.length; start++) {
+    const seen = new Set<number>([midis[start]]);
+    for (let end = start + 1; end < midis.length; end++) {
+      if (end - start >= 3 && midis[end] !== midis[end - 3]) break;
+      seen.add(midis[end]);
+      if (seen.size > 3) break;
+      if (Math.max(...seen) - Math.min(...seen) > 4) break;
+      if (end - start + 1 > 4 && seen.size === 3) return true;
+    }
+  }
+  return false;
+}
+
+void test('an arch repair keeps the middle third above both ends', () => {
+  const { phrase } = phraseFor('C', 'dorian', 'G7', 8, 4);
+  assert.equal(phrase.plan.contour, 'arch');
+  assert.equal(phrase.plan.rhythm, 'long-short');
+  assert.deepEqual(
+    phrase.notes.map((note) => note.beat),
+    phraseOnsets('long-short', 4),
+  );
+  const midis = phrase.notes.map((note) => note.midi);
+  const [first, middle, last] = thirdMeans(midis);
+  assert.ok(middle > first && middle > last);
+  assert.equal(Math.max(...midis), 57);
+  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
+  assert.deepEqual(
+    phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
+    [
+      'D50@0',
+      'A57@1.5',
+      'G55@2',
+      'F53@3.5',
+      'G55@4',
+      'A57@5.5',
+      'G55@6',
+      'F53@7.5',
+      'G55@8',
+      'A57@9.5',
+      'G55@10',
+      'F53@11.5',
+      'G55@12',
+      'A57@13.5',
+      'G55@14',
+      'C48@15.5',
+      'D50@16',
+    ],
+  );
+});
+
+void test('a landing arch that uses a third pitch has no two-pitch cell past four notes', () => {
+  let floorLoops = 0;
+  for (const root of SWEEP_ROOTS) {
+    for (const scaleId of SWEEP_SCALES) {
+      const scaleNotes = scaleOf(root, scaleId);
+      for (const symbol of sweepSymbols(root, scaleId)) {
+        const chordNotes = parseChord(symbol).notes;
+        for (const bars of [2, 4] as const) {
+          for (let seed = 1; seed <= 12; seed++) {
+            const phrase = generatePhrase({ seed, bars, scaleNotes, chordNotes });
+            assert.equal(phrase.ok, true);
+            if (!phrase.ok || phrase.phrase.plan.contour !== 'arch') continue;
+            const midis = phrase.phrase.notes.map((note) => note.midi);
+            const [first, middle, last] = thirdMeans(midis);
+            if (!(middle > first && middle > last)) continue;
+            const cell = phraseCellLength(midis);
+            if (cell <= PHRASE_CELL_LIMIT) continue;
+            const id = `${root} ${scaleId} ${symbol} seed ${seed} bars ${bars}`;
+            assert.equal(
+              new Set(midis).size,
+              2,
+              `${id} lands with a cell of ${cell} and another pitch`,
+            );
+            floorLoops += 1;
+          }
+        }
+      }
+    }
+  }
+  // These 44 are the whole phrase: two adjacent pitches, usually on the
+  // register floor. The middle third is higher by one extra upper note.
+  // The other step into that chord tone flattens the arch, so they stay.
+  assert.equal(floorLoops, 44);
+
+  const { phrase } = phraseFor('C', 'minor-pentatonic', 'G7', 7, 4);
+  assert.equal(phrase.plan.contour, 'arch');
+  assert.equal(phrase.plan.rhythm, 'quarters');
+  assert.deepEqual(
+    phrase.notes.map((note) => note.beat),
+    phraseOnsets('quarters', 4),
+  );
+  const midis = phrase.notes.map((note) => note.midi);
+  const [first, middle, last] = thirdMeans(midis);
+  assert.ok(middle > first && middle > last);
+  assert.equal(Math.max(...midis), 70);
+  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
+  assert.deepEqual(
+    phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
+    [
+      'F65@0',
+      'Bb70@1',
+      'G67@2',
+      'F65@3',
+      'G67@4',
+      'Bb70@5',
+      'G67@6',
+      'F65@7',
+      'G67@8',
+      'Bb70@9',
+      'G67@10',
+      'F65@11',
+      'G67@12',
+      'Bb70@13',
+      'G67@14',
+      'F65@15',
+      'G67@16',
+    ],
+  );
+});
+
+void test('an eighth-note circle gives up one pitch on the existing grid', () => {
+  const { phrase } = phraseFor('A', 'dorian', 'Am', 2, 4);
+  assert.equal(phrase.plan.rhythm, 'eighths');
+  assert.deepEqual(
+    phrase.notes.map((note) => note.beat),
+    phraseOnsets('eighths', 4),
+  );
+  const spelled = phrase.notes.map(
+    (note) => `${note.name}${note.midi}@${note.beat}`,
+  );
+  assert.equal(spelled[18], 'A57@9');
+  assert.equal(phraseCircles(phrase.notes.map((note) => note.midi)), false);
+  assert.ok(
+    phraseCellLength(phrase.notes.map((note) => note.midi)) <= PHRASE_CELL_LIMIT,
+  );
+});
+
+void test('the arch guard and the circle break hold on the measured sets', async () => {
+  const main = await mainGenerator();
+  const tally = () => ({
+    archHit: 0,
+    arch: 0,
+    circling: 0,
+    loops: 0,
+    changed: 0,
+    eighthChanged: 0,
+    onset: 0,
+  });
+  const fold = (
+    bucket: ReturnType<typeof tally>,
+    ours: Phrase,
+    theirs: Phrase,
+  ) => {
+    if (ours.plan.contour === 'arch') {
+      bucket.arch += 1;
+      const [first, middle, last] = thirdMeans(
+        ours.notes.map((note) => note.midi),
+      );
+      if (middle > first && middle > last) bucket.archHit += 1;
+    }
+    const midis = ours.notes.map((note) => note.midi);
+    if (phraseCircles(midis)) bucket.circling += 1;
+    if (phraseCellLength(midis) > PHRASE_CELL_LIMIT) bucket.loops += 1;
+    const samePitch =
+      midis.join(',') === theirs.notes.map((note) => note.midi).join(',');
+    if (!samePitch) bucket.changed += 1;
+    if (ours.plan.rhythm === 'eighths' && !samePitch) bucket.eighthChanged += 1;
+    const grid = (phrase: Phrase) =>
+      phrase.notes.map((note) => `${note.beat}:${note.duration}`).join(',');
+    if (grid(ours) !== grid(theirs)) bucket.onset += 1;
+  };
+  const corpus = tally();
+  for (const [root, scaleId, symbol] of CONTEXTS) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(symbol).notes;
+    for (const bars of [2, 4] as const) {
+      for (const seed of SEEDS) {
+        const input = { seed, bars, scaleNotes, chordNotes };
+        const ours = generatePhrase(input);
+        const theirs = main.generatePhrase(input);
+        assert.equal(ours.ok, true);
+        assert.equal(theirs.ok, true);
+        if (ours.ok && theirs.ok) fold(corpus, ours.phrase, theirs.phrase);
+      }
+    }
+  }
+  assert.deepEqual(corpus, {
+    archHit: 94,
+    arch: 96,
+    circling: 33,
+    loops: 8,
+    changed: 177,
+    eighthChanged: 37,
+    onset: 0,
+  });
+  const progressions = tally();
+  for (const root of SWEEP_ROOTS) {
+    for (const scaleId of SWEEP_SCALES) {
+      const scaleNotes = scaleOf(root, scaleId);
+      for (const symbol of sweepSymbols(root, scaleId)) {
+        const chordNotes = parseChord(symbol).notes;
+        for (const bars of [2, 4] as const) {
+          for (let seed = 1; seed <= 12; seed++) {
+            const input = { seed, bars, scaleNotes, chordNotes };
+            const ours = generatePhrase(input);
+            const theirs = main.generatePhrase(input);
+            assert.equal(ours.ok, true);
+            assert.equal(theirs.ok, true);
+            if (ours.ok && theirs.ok)
+              fold(progressions, ours.phrase, theirs.phrase);
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual(progressions, {
+    archHit: 644,
+    arch: 672,
+    circling: 379,
+    loops: 92,
+    changed: 1523,
+    eighthChanged: 151,
+    onset: 0,
+  });
 });
