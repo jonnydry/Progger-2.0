@@ -900,7 +900,6 @@ export function Fretboard({
           />
         </div>
       </div>
-      {phoneNeck && scaleForm}
       {belowNeck}
       <div className="instrument-dock">
         {!controlsAbove && controls}
@@ -985,6 +984,7 @@ export function Fretboard({
           </div>
         </div>
       </div>
+      {phoneNeck && scaleForm}
       {scope === 'scale' && overview && (
         <NeckOverview
           id={`${titleId}-overview`}

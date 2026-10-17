@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { PHRASE_TEMPO_MIN } from '../lib/phrase-audio.ts';
 import { parseChord } from '../lib/harmony.ts';
 import { SCALES, spell, TUNING, type Note } from '../lib/music.ts';
 import {
@@ -127,11 +128,28 @@ void test('timing, cadence roles, and seeds are deterministic tables', () => {
   assert.equal(phraseOnsets('long-short', 4).at(-1), 16);
   assert.equal(phrasePeriodBeats(2), 10);
   assert.equal(phrasePeriodBeats(4), 18);
-  assert.equal(onsetSeconds(0, 120, 'swing'), 0);
+  const full120 =
+    SWING_ANCHOR_SLOW_RATIO +
+    (SWING_ANCHOR_MID_RATIO - SWING_ANCHOR_SLOW_RATIO) *
+      ((120 - SWING_ANCHOR_SLOW_BPM) /
+        (SWING_ANCHOR_MID_LOW_BPM - SWING_ANCHOR_SLOW_BPM));
+  const light120 = 1 + (full120 - 1) * SWING_AMOUNT_DEFAULT;
+  const light96 = 1 + (SWING_ANCHOR_SLOW_RATIO - 1) * SWING_AMOUNT_DEFAULT;
+  assert.equal(onsetSeconds(0, 120, SWING_AMOUNT_DEFAULT), 0);
   assert.equal(onsetSeconds(1, 120, 'straight'), 0.5);
   assert.equal(onsetSeconds(0.5, 120, 'straight'), 0.25);
-  assert.equal(onsetSeconds(0.5, 120, 'swing'), (2 / 3) * 0.5);
-  assert.equal(onsetSeconds(2.5, 96, 'swing'), (2 + 2 / 3) * (60 / 96));
+  assert.equal(
+    onsetSeconds(0.5, 120, SWING_AMOUNT_DEFAULT),
+    (light120 / (light120 + 1)) * 0.5,
+  );
+  assert.equal(
+    onsetSeconds(2.5, 96, SWING_AMOUNT_DEFAULT),
+    (2 + light96 / (light96 + 1)) * (60 / 96),
+  );
+  assert.ok(
+    Math.abs(onsetSeconds(0.5, 120, SWING_AMOUNT_DEFAULT) - (2 / 3) * 0.5) >
+      0.02,
+  );
   assert.equal(parseSeed('42'), 42);
   assert.equal(parseSeed('0'), 0);
   assert.equal(parseSeed('4294967295'), 0xffffffff);
@@ -263,7 +281,8 @@ void test('swing amount follows the tempo anchors and keeps a 100 ms short eight
 });
 
 void test('the full-swing target falls smoothly and eighth pairs stay one beat', () => {
-  const sweepMin = 40;
+  const sweepMin = PHRASE_TEMPO_MIN;
+  assert.equal(sweepMin, 40);
   const sweepMax = 300;
   let previous = fullSwingRatio(sweepMin);
   let maxStep = 0;

@@ -121,16 +121,29 @@ html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
   .night-swim
   .explorer-panel
   .underwater-scene {
-  background-size: min(100cqw, 1280px) auto;
+  /* Same box as the header art: min(100cqw, 1280px), not the viewport. */
+  --pond-art-width: min(100cqw, 1280px);
+  background-size: var(--pond-art-width) auto;
   background-repeat: no-repeat;
   background-attachment: scroll;
+  background-position: center var(--pond-art-shift, 0px);
+  /* The painted tail ends above the box. A fade that runs to 100% leaves
+     the illustration's bottom edge as a hard line. */
+  --pond-art-bottom: calc(var(--pond-art-shift, 0px) + var(--pond-art-width) / 2);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 24%,
+    black calc(var(--pond-art-bottom) - 20px),
+    transparent var(--pond-art-bottom)
+  );
 }
 @media (max-width: 463px) {
   html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .night-swim
     .explorer-panel
     .underwater-scene {
-    background-position: center calc(12px - 39vw);
+    --pond-art-shift: calc(12px - 0.39 * var(--pond-art-width));
   }
 }
 @media (min-width: 464px) and (max-width: 500px) {
@@ -138,7 +151,7 @@ html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .night-swim
     .explorer-panel
     .underwater-scene {
-    background-position: center calc(115.6px - 10vw - 238px);
+    --pond-art-shift: calc(115.6px - 0.1 * var(--pond-art-width) - 238px);
   }
 }
 @media (min-width: 501px) and (max-width: 900px) {
@@ -146,7 +159,7 @@ html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .night-swim
     .explorer-panel
     .underwater-scene {
-    background-position: center calc(44px - 42vw);
+    --pond-art-shift: calc(44px - 0.42 * var(--pond-art-width));
   }
 }
 @media (min-width: 901px) and (max-width: 1074px) {
@@ -154,23 +167,32 @@ html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .night-swim
     .explorer-panel
     .underwater-scene {
-    background-position: center calc(28px - 42vw);
+    --pond-art-shift: calc(28px - 0.42 * var(--pond-art-width));
   }
 }
-@media (min-width: 1075px) and (max-width: 1280px) {
+@media (min-width: 1075px) {
   html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .night-swim
     .explorer-panel
     .underwater-scene {
-    background-position: center calc(-316px - 10vw);
+    --pond-art-shift: calc(-316px - 0.1 * var(--pond-art-width));
   }
 }
-@media (min-width: 1281px) {
+@media (min-width: 1601px) {
   html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .night-swim
     .explorer-panel
     .underwater-scene {
-    background-position: center -444px;
+    mask-image:
+      linear-gradient(to right, transparent, black 12%, black 88%, transparent),
+      linear-gradient(
+        to bottom,
+        transparent 0,
+        black 24%,
+        black calc(var(--pond-art-bottom) - 20px),
+        transparent var(--pond-art-bottom)
+      );
+    mask-composite: intersect;
   }
 }
 
