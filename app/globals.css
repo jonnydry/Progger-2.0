@@ -652,11 +652,6 @@ main {
   height: 28px;
   background: var(--border);
 }
-.under-neck .phrase-launcher {
-  width: 100%;
-  min-width: 0;
-  margin: 0;
-}
 .phrase-open {
   display: inline-flex;
   align-items: center;

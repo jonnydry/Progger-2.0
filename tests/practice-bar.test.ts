@@ -21,6 +21,8 @@ type Row = {
   volume: Box | null;
   rule: Box | null;
   overflow: number;
+  sideScroll: number;
+  controls: string | null;
   soundNameShown: boolean;
   phrasesLabel: string;
   droneOn: string | null;
@@ -77,6 +79,10 @@ async function readRow(page: Page): Promise<Row> {
       volume: read(document.querySelector('#drone-volume-trigger')),
       rule: read(document.querySelector('.practice-bar-rule')),
       overflow: bar.scrollWidth - bar.clientWidth,
+      sideScroll:
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+      controls: phrases.getAttribute('aria-controls'),
       soundNameShown,
       phrasesLabel: phrases.textContent?.replace(/\s+/g, ' ').trim() ?? '',
       droneOn: document
@@ -128,16 +134,21 @@ function assertSharedRow(row: Row, width: number) {
   }
   assert.equal(
     row.soundNameShown,
-    width > 500,
+    width > 340,
     `${width}px sound name shown ${row.soundNameShown}`,
+  );
+  assert.ok(
+    row.sideScroll <= 0,
+    `${width}px page scrolls sideways by ${row.sideScroll}px`,
   );
 }
 
+for (const name of ['chromium', 'firefox'] as const) {
 void test(
-  'phrases and the drone toggle share one row at desktop and phone widths',
+  `phrases and the drone toggle share one row at desktop and phone widths in ${name}`,
   { timeout: 120_000 },
   async (t) => {
-    const browser: Browser = await launchNamed('chromium', t);
+    const browser: Browser = await launchNamed(name, t);
     const server = await acquireDevServer();
     t.after(async () => {
       await browser.close();
@@ -156,6 +167,7 @@ void test(
       await page.waitForSelector('#drone-toggle');
       const closed = await readRow(page);
       assert.equal(closed.expanded, 'false', `${width}px starts closed`);
+      assert.equal(closed.controls, null, `${width}px names a missing panel`);
       assert.equal(closed.droneOn, 'false', `${width}px drone stays off`);
       assertSharedRow(closed, width);
 
@@ -214,6 +226,7 @@ void test(
       });
       const open = await readRow(page);
       assert.equal(open.expanded, 'true', `${width}px phrases opens`);
+      assert.equal(open.controls, 'phrase-practice', `${width}px panel id`);
       assert.equal(open.droneOn, 'false', `${width}px opening phrases starts the drone`);
       assertSharedRow(open, width);
       assert.ok(open.panel, `${width}px panel`);
@@ -245,6 +258,7 @@ void test(
       assert.equal(chords.toggle, null, `${width}px chord mode still shows the drone`);
       assert.equal(chords.rule, null, `${width}px chord mode still shows the divider`);
       assert.equal(chords.expanded, 'false');
+      assert.equal(chords.controls, null, `${width}px chord mode names a missing panel`);
       assert.ok(
         Math.abs(chords.phrases.top - chords.bar.top) <= 4,
         `${width}px chord phrases leaves the bar`,
@@ -254,6 +268,10 @@ void test(
         `${width}px chord phrases right ${chords.phrases.right} bar ${chords.bar.right}`,
       );
       assert.ok(chords.overflow <= 1, `${width}px chord bar overflow`);
+      assert.ok(
+        chords.sideScroll <= 0,
+        `${width}px chord page scrolls sideways by ${chords.sideScroll}px`,
+      );
       assert.equal(chords.phrasesLabel, 'Phrases');
 
       await page.locator('#scales-reference-tab').click();
@@ -262,3 +280,4 @@ void test(
     await page.close();
   },
 );
+}

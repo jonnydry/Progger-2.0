@@ -340,7 +340,7 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
   max-width: 120px;
 }
 
-@media (max-width: 500px) {
+@media (max-width: 340px) {
   .under-neck .drone-sound-name {
     display: none;
   }

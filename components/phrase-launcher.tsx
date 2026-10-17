@@ -74,7 +74,7 @@ export function PhraseLauncher({
           type="button"
           className="phrase-open"
           aria-expanded={open}
-          aria-controls="phrase-practice"
+          aria-controls={open ? 'phrase-practice' : undefined}
           onClick={toggle}
         >
           <Music2 size={18} aria-hidden="true" /> Phrases
