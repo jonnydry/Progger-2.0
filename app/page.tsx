@@ -824,21 +824,23 @@ export default function Home() {
               controlsAbove={practice}
               belowNeck={
                 <div className="under-neck">
-                  {kind === 'scales' && (
-                    <DroneControls
-                      enabled={drone.enabled}
-                      volume={drone.volume}
-                      sound={drone.sound}
-                      celloAvailable={drone.celloAvailable}
-                      walking={drone.walking}
-                      message={drone.message}
-                      onToggle={() => drone.toggle()}
-                      onVolume={(value) => drone.setVolume(value)}
-                      onSound={(value) => drone.setSound(value)}
-                      onWalk={() => drone.walk()}
-                    />
-                  )}
                   <PhraseLauncher
+                    leading={
+                      kind === 'scales' ? (
+                        <DroneControls
+                          enabled={drone.enabled}
+                          volume={drone.volume}
+                          sound={drone.sound}
+                          celloAvailable={drone.celloAvailable}
+                          walking={drone.walking}
+                          message={drone.message}
+                          onToggle={() => drone.toggle()}
+                          onVolume={(value) => drone.setVolume(value)}
+                          onSound={(value) => drone.setSound(value)}
+                          onWalk={() => drone.walk()}
+                        />
+                      ) : null
+                    }
                     active={page === 'explore'}
                     scaleRoot={scaleRoot}
                     scaleId={scale.id}

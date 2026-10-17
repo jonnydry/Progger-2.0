@@ -1,6 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState, type ComponentType } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from 'react';
 import { Music2 } from 'lucide-react';
 import type { Note } from '@/lib/music';
 import type { PhraseFretMark } from '@/lib/phrase-marks';
@@ -19,6 +25,7 @@ type PanelProps = {
 };
 
 export function PhraseLauncher({
+  leading,
   active,
   scaleRoot,
   scaleId,
@@ -26,7 +33,7 @@ export function PhraseLauncher({
   scaleNotes,
   chord,
   onMarks,
-}: PanelProps) {
+}: PanelProps & { leading?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [Panel, setPanel] = useState<ComponentType<PanelProps> | null>(null);
   const [failed, setFailed] = useState(false);
@@ -57,30 +64,45 @@ export function PhraseLauncher({
   }
 
   return (
-    <section className="phrase-launcher" aria-label="Phrase practice">
-      <button
-        type="button"
-        className="practice-toggle phrase-open"
-        aria-expanded={open}
-        onClick={toggle}
-      >
-        <Music2 size={16} aria-hidden="true" /> Phrases
-      </button>
-      {open && failed && (
-        <p className="muted">Phrases didn’t load. Try again.</p>
+    <>
+      <div className="practice-bar">
+        {leading}
+        {leading ? (
+          <span className="practice-bar-rule" aria-hidden="true" />
+        ) : null}
+        <button
+          type="button"
+          className="phrase-open"
+          aria-expanded={open}
+          aria-controls="phrase-practice"
+          onClick={toggle}
+        >
+          <Music2 size={18} aria-hidden="true" /> Phrases
+        </button>
+      </div>
+      {open && (
+        <section
+          id="phrase-practice"
+          className="phrase-launcher"
+          aria-label="Phrase practice"
+        >
+          {failed && (
+            <p className="muted">Phrases didn’t load. Try again.</p>
+          )}
+          {!failed && !Panel && <p className="muted">Loading phrases…</p>}
+          {Panel && (
+            <Panel
+              active={active}
+              scaleRoot={scaleRoot}
+              scaleId={scaleId}
+              scaleName={scaleName}
+              scaleNotes={scaleNotes}
+              chord={chord}
+              onMarks={onMarks}
+            />
+          )}
+        </section>
       )}
-      {open && !failed && !Panel && <p className="muted">Loading phrases…</p>}
-      {open && Panel && (
-        <Panel
-          active={active}
-          scaleRoot={scaleRoot}
-          scaleId={scaleId}
-          scaleName={scaleName}
-          scaleNotes={scaleNotes}
-          chord={chord}
-          onMarks={onMarks}
-        />
-      )}
-    </section>
+    </>
   );
 }

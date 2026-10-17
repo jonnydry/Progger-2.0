@@ -42,9 +42,6 @@
 .under-neck .phrase-staff {
   gap: 8px;
 }
-.phrase-open {
-  min-height: 44px;
-}
 .phrase-panel {
   display: grid;
   gap: 14px;

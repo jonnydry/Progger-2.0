@@ -340,6 +340,20 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
   max-width: 120px;
 }
 
+@media (max-width: 500px) {
+  .under-neck .drone-sound-name {
+    display: none;
+  }
+
+  .under-neck .drone-volume-trigger {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    padding-inline: 0;
+  }
+}
+
 .drone-volume-popover {
   position: fixed;
   inset: auto;
