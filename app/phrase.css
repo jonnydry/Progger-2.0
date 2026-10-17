@@ -2,6 +2,8 @@
   margin: 0 0 18px;
 }
 .under-neck .phrase-launcher {
+  width: 100%;
+  min-width: 0;
   margin: 0;
 }
 .under-neck .phrase-panel {
@@ -41,9 +43,6 @@
 }
 .under-neck .phrase-staff {
   gap: 8px;
-}
-.phrase-open {
-  min-height: 44px;
 }
 .phrase-panel {
   display: grid;
