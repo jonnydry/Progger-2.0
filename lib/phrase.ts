@@ -2064,9 +2064,9 @@ function leapCount(
  * So does a 4-note figure that sounds more than twice in a row. Variety is
  * the note name: an octave of a name already in the pocket does not count.
  * A weak note can step, move by a third, or leap inside the register
- * window, and the next note can move with it. An octave copy of the note
- * being rewritten (±12, same name) may land outside that window. Other
- * motion stays inside. The shape only marks reach.
+ * window, and the next note can move with it. Jonny, 2026-10-16: an octave
+ * jump (the same note an octave up or down) may leave the locked register.
+ * Every other leap stays inside it. The shape only marks reach.
  * Two-pitch lines that remain are stuck by the strong-beat step rule at
  * the bottom of the register: the cadence is the lowest chord tone, and
  * the only scale step into it is one neighbor.
@@ -2358,7 +2358,11 @@ function arrivalOk(gap: number, duration: number): boolean {
   return !(duration <= 0.5 && gap > 5);
 }
 
-/** Outside the window only as an octave copy of the note being rewritten. */
+/**
+ * Jonny, 2026-10-16, 1:10am ET: octave jumps may leave the locked register.
+ * An octave jump is the same note an octave up or down (±12 from the note
+ * being rewritten). Every other leap stays inside the register window.
+ */
 function pitchAllowed(
   midi: number,
   original: number,

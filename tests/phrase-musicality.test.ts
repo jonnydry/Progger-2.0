@@ -588,15 +588,28 @@ void test('a landing arch that uses a third pitch has no two-pitch cell past fou
               2,
               `${id} lands with a cell of ${cell} and another pitch`,
             );
+            const low = REGISTER_LOW[phrase.phrase.plan.register];
+            const high = low + PHRASE_RANGE;
+            const scalePcs = new Set(scaleNotes.map((note) => note.pc));
+            const cadence = phrase.phrase.notes.at(-1)?.midi;
+            assert.equal(
+              cadence,
+              lowestChordTone(scaleNotes, chordNotes, low, high),
+              `${id} cadence is not the lowest chord tone`,
+            );
+            assert.equal(
+              scaleStepsInWindow(cadence ?? -1, scalePcs, low, high).length,
+              1,
+              `${id} has more than one scale step into the cadence`,
+            );
             floorLoops += 1;
           }
         }
       }
     }
   }
-  // These 44 are the whole phrase: two adjacent pitches on the register
-  // floor. The cadence is the lowest chord tone, and the only scale step
-  // into it is one neighbor, so the strong-beat rule keeps the cell.
+  // Each of these 44 asserts the reason above: two pitch classes, the
+  // cadence is the lowest chord tone, and one scale step reaches it.
   assert.equal(floorLoops, 44);
 
   const { phrase } = phraseFor('C', 'minor-pentatonic', 'G7', 7, 4);
@@ -751,7 +764,7 @@ void test('the arch guard and the circle break hold on the measured sets', async
     progressions.archHit >= 640,
     `arches ${progressions.archHit}/${progressions.arch}`,
   );
-  assert.ok(progressions.circling <= 329, `circling ${progressions.circling}`);
+  assert.equal(progressions.circling, 329);
   assert.ok(progressions.loops <= 92, `loops ${progressions.loops}`);
 });
 

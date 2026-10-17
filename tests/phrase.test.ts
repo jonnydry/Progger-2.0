@@ -843,21 +843,77 @@ void test('no eighth is played by sliding the same finger', () => {
   assert.equal(small, 281);
 });
 
-void test('an eighth may reach three frets, so a push line is not stuck in the box', () => {
-  // C major over F, 2 bars, push, seed 10. Forcing eighth slack to 0
-  // rewrites the notes after the second C.
+void test('a locked eighth-note rhythm still slides one finger onto 35 eighths', () => {
+  // Same count as the free-phrase test: a fretted finger plays the next
+  // note on a different fret, and that note is an eighth or shorter.
+  // Locking each rhythm on the 2,688 contexts leaves 35 of those slides,
+  // all of them with the eighth-note rhythm locked. Quarters, long-short,
+  // and push add none. #29 measures 28 on this count: 23 eighths, 4 push,
+  // and 1 long-short. The free set stays at 0.
+  const rhythms = ['quarters', 'eighths', 'long-short', 'push'] as const;
+  const slides = { quarters: 0, eighths: 0, 'long-short': 0, push: 0 };
+  for (const rhythm of rhythms) {
+    for (const root of FINGER_ROOTS) {
+      for (const scaleId of FINGER_SCALES) {
+        const scaleNotes = scaleOf(root, scaleId);
+        for (const symbol of fingerSymbols(root, scaleId)) {
+          const chordNotes = parseChord(symbol).notes;
+          for (const bars of [2, 4] as const) {
+            for (let seed = 1; seed <= 12; seed++) {
+              const result = generatePhrase({
+                seed,
+                bars,
+                scaleNotes,
+                chordNotes,
+                locks: { rhythm },
+              });
+              assert.equal(result.ok, true);
+              if (!result.ok) continue;
+              const notes = result.phrase.notes;
+              for (let index = 1; index < notes.length; index++) {
+                const from = notes[index - 1];
+                const to = notes[index];
+                if (
+                  from.finger > 0 &&
+                  to.finger === from.finger &&
+                  to.fret !== from.fret &&
+                  to.duration <= 0.5
+                )
+                  slides[rhythm] += 1;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.equal(slides.quarters, 0);
+  assert.equal(slides.eighths, 35);
+  assert.equal(slides['long-short'], 0);
+  assert.equal(slides.push, 0);
+});
+
+void test('eighth slack of three frets keeps the step that slack 0 rewrites', () => {
+  // D dorian over A7, 2 bars, seed 8, cadence locked to the root. The
+  // second note is F53, an eighth a step above E, in the same position.
+  // Forcing eighth slack from 3 to 0 rewrites that note as B59 and changes
+  // every later pitch. The same rewrite, transposed, is Bb dorian over F7
+  // and Eb dorian over Bb7. C major over F, push, seed 10 does not move,
+  // and neither do the 2,688 free phrases or the 10,752 rhythm locks.
   const result = generatePhrase({
-    seed: 10,
+    seed: 8,
     bars: 2,
-    scaleNotes: scaleOf('C', 'major'),
-    chordNotes: parseChord('F').notes,
-    locks: { rhythm: 'push' },
+    scaleNotes: scaleOf('D', 'dorian'),
+    chordNotes: parseChord('A7').notes,
+    locks: { cadence: 'root' },
   });
   assert.equal(result.ok, true);
   if (!result.ok) return;
+  assert.equal(result.phrase.plan.cadence, 'root');
+  assert.equal(result.phrase.plan.rhythm, 'long-short');
   assert.deepEqual(
     result.phrase.notes.map((note) => note.midi),
-    [81, 77, 79, 77, 72, 74, 72, 71, 67, 69, 72, 71, 72],
+    [52, 53, 55, 59, 57, 59, 57, 55, 57],
   );
 });
 
