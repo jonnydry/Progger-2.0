@@ -89,12 +89,23 @@ jobs:
             cat "$HEADROOM_CHECK_RESULT"
             echo "${delimiter}"
           } >> "$GITHUB_OUTPUT"
-          if git diff --quiet -- tests/fixtures/headroom-worst.json; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            echo 'worst cases unchanged'
-            exit 0
-          fi
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          # Parsed cases, not git diff. Seconds, one-per-line arrays, float
+          # noise within 1e-6, and near-tie order swaps are not a change.
+          # A real change is rewritten in the committed fixture style.
+          decision=$(node --experimental-strip-types scripts/headroom-fixture-changed.ts tests/fixtures/headroom-worst.json)
+          printf '%s\n' "$decision" >> "$GITHUB_OUTPUT"
+          case "$decision" in
+            changed=false)
+              echo 'worst cases unchanged'
+              exit 0
+              ;;
+            changed=true)
+              ;;
+            *)
+              echo 'the fixture comparison did not record a result'
+              exit 1
+              ;;
+          esac
           echo "fixture=$(base64 -w 0 tests/fixtures/headroom-worst.json)" >> "$GITHUB_OUTPUT"
 
       # Outputs are already recorded. Failing here keeps the nightly red
