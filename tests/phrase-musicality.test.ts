@@ -608,7 +608,7 @@ void test('a landing arch that uses a third pitch has no two-pitch cell past fou
       }
     }
   }
-  // Each of these 44 asserts the reason above: two pitch classes, the
+  // Each of these 44 asserts the reason above: two distinct MIDI pitches, the
   // cadence is the lowest chord tone, and one scale step reaches it.
   assert.equal(floorLoops, 44);
 

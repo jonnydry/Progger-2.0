@@ -981,7 +981,7 @@ export const PHRASE_MIN_RANGE = 5;
 
 type GridEvent = { beat: number; duration: number; strong: boolean };
 
-/** Longest two-pitch alternation, in notes. G–A–G–A is 4. G–A–G–A–G is 5. */
+/** Longest alternation of two distinct MIDI pitches, in notes. G–A–G–A is 4. G–A–G–A–G is 5. */
 export function phraseCellLength(midis: readonly number[]): number {
   let longest = midis.length > 0 ? 1 : 0;
   for (let start = 0; start + 1 < midis.length; start++) {
