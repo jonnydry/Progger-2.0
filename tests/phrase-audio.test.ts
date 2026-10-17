@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { OfflineAudioContext } from 'node-web-audio-api';
 import { parseChord } from '../lib/harmony.ts';
-import { SCALES, spell } from '../lib/music.ts';
+import { SCALES, TUNING, spell } from '../lib/music.ts';
 import {
   PHRASE_END_RELEASE_SEC,
   PHRASE_LOOKAHEAD_SEC,
@@ -110,6 +110,52 @@ void test('phrase playback trims the existing voice and swings the offbeat', asy
   const rendered = await context.startRendering();
   const peak = peakOf(rendered.getChannelData(0));
   assert.ok(peak > 0.01 && peak < 0.5, `phrase peak ${peak}`);
+});
+
+void test('playback sounds the fingered phrase at its beats', () => {
+  const scale = SCALES.find((item) => item.id === 'major');
+  assert.ok(scale);
+  const phrase = generatePhrase({
+    seed: 3,
+    bars: 2,
+    scaleNotes: spell('C', scale.formula),
+    chordNotes: parseChord('C').notes,
+  });
+  assert.equal(phrase.ok, true);
+  if (!phrase.ok) return;
+  const sounded: { midi: number; when: number }[] = [];
+  const context = new OfflineAudioContext(1, RATE * 4, RATE);
+  const create = context.createOscillator.bind(context);
+  context.createOscillator = () => {
+    const oscillator = create();
+    const start = oscillator.start.bind(oscillator);
+    oscillator.start = (when = 0) => {
+      const midi = Math.round(
+        69 + 12 * Math.log2(oscillator.frequency.value / 440),
+      );
+      sounded.push({ midi, when });
+      return start(when);
+    };
+    return oscillator;
+  };
+  schedulePhrase(
+    context,
+    context.destination,
+    phrase.phrase.notes,
+    96,
+    'straight',
+    0,
+  );
+  assert.deepEqual(
+    sounded,
+    phrase.phrase.notes.map((note) => ({
+      midi: TUNING[note.string] + note.fret,
+      when: onsetSeconds(note.beat, 96, 'straight'),
+    })),
+  );
+  for (const note of phrase.phrase.notes) {
+    assert.equal(TUNING[note.string] + note.fret, note.midi);
+  }
 });
 
 void test('phrase playback never starts the drone and stays out of the first load', () => {
