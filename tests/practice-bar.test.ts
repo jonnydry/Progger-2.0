@@ -147,7 +147,7 @@ void test(
       viewport: { width: 1280, height: 900 },
       deviceScaleFactor: 1,
     });
-    await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${server.origin}/`, { waitUntil: 'networkidle' });
     await page.waitForSelector('#drone-toggle');
     await page.waitForSelector('.phrase-open');
 
