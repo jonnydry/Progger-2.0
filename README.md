@@ -53,7 +53,7 @@ prescribed fingerings.
 
 ## Run it locally
 
-Requires Node 22.6 or later (`.nvmrc` pins 22.6.0).
+Requires Node 22.13 or later.
 
 ```sh
 npm ci
