@@ -290,6 +290,41 @@ export function dispatchPhraseStop(
   target.dispatchEvent(new CustomEvent(PHRASE_STOP_EVENT, { detail: owner }));
 }
 
+/**
+ * Load the phrase player, then start it only if this play is still current.
+ * A panel or restore stop during the load must leave `current()` ahead of `mine`.
+ */
+export async function settleTrayPlay<T>(input: {
+  mine: number;
+  current: () => number;
+  load: () => Promise<T>;
+  begin: (loaded: T) => void;
+  start: () => Promise<void>;
+  stop: () => void;
+}): Promise<boolean> {
+  const loaded = await input.load();
+  if (input.current() !== input.mine) return false;
+  input.begin(loaded);
+  if (input.current() !== input.mine) {
+    input.stop();
+    return false;
+  }
+  try {
+    await input.start();
+  } catch (error) {
+    if (input.current() !== input.mine) {
+      input.stop();
+      return false;
+    }
+    throw error;
+  }
+  if (input.current() !== input.mine) {
+    input.stop();
+    return false;
+  }
+  return true;
+}
+
 /** Panel and tray players share this listener so each ignores its own stop. */
 export function bindPhraseStop(
   target: EventTarget,
@@ -833,19 +868,18 @@ function commit(next: TrayDoc): boolean {
   if (!next.writable) return false;
   const storage = browserStorage();
   if (!storage) return false;
+  const payload = JSON.stringify({
+    version: 1,
+    items: next.slots.map((slot) => slot.raw),
+  });
   try {
-    storage.setItem(
-      TRAY_KEY,
-      JSON.stringify({
-        version: 1,
-        items: next.slots.map((slot) => slot.raw),
-      }),
-    );
+    storage.setItem(TRAY_KEY, payload);
   } catch {
     return false;
   }
-  doc = next;
-  cache = project(next);
+  const refreshed = interpret(payload);
+  doc = refreshed.writable ? refreshed : next;
+  cache = project(doc);
   emit();
   return true;
 }
@@ -971,26 +1005,32 @@ export function renameTrayItem(id: string, name: string): void {
   commit({ writable: true, slots });
 }
 
-export function removeTrayItem(
-  id: string,
-): { item: TrayItem; index: number } | null {
+export function removeTrayItem(id: string): {
+  item: TrayItem;
+  index: number;
+  raw: unknown;
+} | null {
   const open = current();
   if (!open.writable) return null;
   const index = open.slots.findIndex((slot) => slot.item?.id === id);
   if (index < 0) return null;
-  const item = open.slots[index]?.item;
-  if (!item) return null;
-  const slots = open.slots.filter((_, slot) => slot !== index);
+  const slot = open.slots[index];
+  if (!slot?.item) return null;
+  const slots = open.slots.filter((_, entry) => entry !== index);
   if (!commit({ writable: true, slots })) return null;
-  return { item, index };
+  return { item: slot.item, index, raw: slot.raw };
 }
 
-export function insertTrayItem(item: TrayItem, index: number): void {
+export function insertTrayItem(
+  item: TrayItem,
+  index: number,
+  raw: unknown,
+): void {
   const open = current();
   if (!open.writable) return;
   const slots = open.slots.filter((slot) => slot.item?.id !== item.id);
   const at = Math.max(0, Math.min(index, slots.length));
-  slots.splice(at, 0, { raw: item, item });
+  slots.splice(at, 0, { raw, item });
   commit({ writable: true, slots });
 }
 

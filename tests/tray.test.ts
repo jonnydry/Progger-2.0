@@ -21,6 +21,7 @@ import {
   renameTrayItem,
   savePhrase,
   saveView,
+  settleTrayPlay,
   trayFilename,
   trayFocusMove,
   trayRenameCommand,
@@ -465,7 +466,7 @@ void test('undo puts a deleted item back at its original slot', () => {
       stored.items.map((item: { id: string }) => item.id),
       ['a', 'future-1', 'c'],
     );
-    insertTrayItem(removed.item, removed.index);
+    insertTrayItem(removed.item, removed.index, removed.raw);
     stored = JSON.parse(held.raw() ?? '');
     assert.deepEqual(
       stored.items.map((item: { id: string }) => item.id),
@@ -612,6 +613,148 @@ void test('a duplicate id stays in storage and counts once', () => {
   } finally {
     held.restore();
   }
+});
+
+void test('removing the known copy reveals the stored duplicate', () => {
+  const first = phrase();
+  const duplicate = {
+    ...phrase(),
+    name: 'Copy',
+    savedAt: 3,
+    extra: { keep: true },
+  };
+  const held = installTray(
+    JSON.stringify({ version: 1, items: [first, duplicate] }),
+  );
+  try {
+    const removed = removeTrayItem(first.id);
+    assert.ok(removed);
+    assert.equal(
+      getTray()
+        .items.map((item) => item.name)
+        .join(),
+      'Copy',
+    );
+    const stored = JSON.parse(held.raw() ?? '') as { items: unknown[] };
+    assert.equal(stored.items.length, 1);
+    assert.equal(JSON.stringify(stored.items[0]), JSON.stringify(duplicate));
+    assert.ok(removeTrayItem(first.id));
+    assert.deepEqual(getTray().items, []);
+  } finally {
+    held.restore();
+  }
+});
+
+void test('evicting a known item reveals a raw duplicate of that id', () => {
+  const first = { ...phrase(), id: 'old', name: 'Old', savedAt: 1 };
+  const duplicate = { ...first, name: 'Copy', extra: { keep: true } };
+  const unknowns = Array.from({ length: 78 }, (_item, index) =>
+    futureScale(`future-dup-${index}`),
+  );
+  const items = [first, duplicate, ...unknowns];
+  const held = installTray(JSON.stringify({ version: 1, items }));
+  try {
+    const saved = savePhrase(phraseInput());
+    assert.equal(saved.status, 'evicted');
+    assert.equal(
+      getTray().items.some((item) => item.name === 'Copy'),
+      true,
+    );
+    const stored = JSON.parse(held.raw() ?? '') as {
+      items: { name?: string }[];
+    };
+    const found = stored.items.find((item) => item.name === 'Copy');
+    assert.equal(JSON.stringify(found), JSON.stringify(duplicate));
+  } finally {
+    held.restore();
+  }
+});
+
+void test('undo writes the original raw item back', () => {
+  const extra = {
+    ...phrase(),
+    id: 'b',
+    name: 'B',
+    extra: { keep: true },
+    note: 'stay',
+  };
+  const first = { ...phrase(), id: 'a', name: 'A' };
+  const third = { ...phrase(), id: 'c', name: 'C', savedAt: 3 };
+  const held = installTray(
+    JSON.stringify({ version: 1, items: [first, extra, third] }),
+  );
+  try {
+    const removed = removeTrayItem('b');
+    assert.ok(removed);
+    insertTrayItem(removed.item, removed.index, removed.raw);
+    const stored = JSON.parse(held.raw() ?? '') as { items: { id: string }[] };
+    assert.deepEqual(
+      stored.items.map((item) => item.id),
+      ['a', 'b', 'c'],
+    );
+    assert.equal(JSON.stringify(stored.items[1]), JSON.stringify(extra));
+  } finally {
+    held.restore();
+  }
+});
+
+void test('a tray play stopped while the player loads does not start', async () => {
+  let generation = 1;
+  let started = 0;
+  let stopped = 0;
+  let release = () => {};
+  const loading = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const pending = settleTrayPlay({
+    mine: 1,
+    current: () => generation,
+    load: () => loading,
+    begin: () => {},
+    start: async () => {
+      started += 1;
+    },
+    stop: () => {
+      stopped += 1;
+    },
+  });
+  generation += 1;
+  release();
+  assert.equal(await pending, false);
+  assert.equal(started, 0);
+  assert.equal(stopped, 0);
+
+  const duringStart = settleTrayPlay({
+    mine: generation,
+    current: () => generation,
+    load: async () => 'ready',
+    begin: () => {},
+    start: async () => {
+      generation += 1;
+      started += 1;
+    },
+    stop: () => {
+      stopped += 1;
+    },
+  });
+  assert.equal(await duringStart, false);
+  assert.equal(started, 1);
+  assert.equal(stopped, 1);
+  assert.equal(
+    await settleTrayPlay({
+      mine: generation,
+      current: () => generation,
+      load: async () => 'ready',
+      begin: () => {},
+      start: async () => {
+        started += 1;
+      },
+      stop: () => {
+        stopped += 1;
+      },
+    }),
+    true,
+  );
 });
 
 void test('escape then enter still commits the next rename', () => {

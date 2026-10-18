@@ -28,6 +28,7 @@ import {
   removeTrayItem,
   renameTrayItem,
   saveView,
+  settleTrayPlay,
   subscribeTray,
   TRAY_UNREADABLE_NOTE,
   trayFilename,
@@ -113,13 +114,16 @@ export function PracticeTray({
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
-  const [undo, setUndo] = useState<{ item: TrayItem; index: number } | null>(
-    null,
-  );
+  const [undo, setUndo] = useState<{
+    item: TrayItem;
+    index: number;
+    raw: unknown;
+  } | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const panelRef = useRef<HTMLDialogElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const playerRef = useRef<Player | null>(null);
+  const playToken = useRef(0);
   const closeAction = useRef(onClose);
   const renameCancelled = useRef(false);
 
@@ -181,10 +185,12 @@ export function PracticeTray({
 
   useEffect(() => {
     const unbind = bindPhraseStop(window, 'tray', () => {
+      playToken.current += 1;
       playerRef.current?.stop();
       setPlayingId(null);
     });
     return () => {
+      playToken.current += 1;
       unbind();
       playerRef.current?.dispose();
       playerRef.current = null;
@@ -199,26 +205,40 @@ export function PracticeTray({
 
   async function togglePlay(item: TrayPhrase) {
     if (playingId === item.id) {
+      playToken.current += 1;
       playerRef.current?.stop();
       setPlayingId(null);
       return;
     }
+    const mine = (playToken.current += 1);
     dispatchPhraseStop(window, 'tray');
     setPlayingId(item.id);
     try {
-      const { PhrasePlayer } = await import('@/lib/phrase-audio');
-      playerRef.current ??= new PhrasePlayer((state) => {
-        if (state === 'idle' || state === 'error') setPlayingId(null);
+      const started = await settleTrayPlay({
+        mine,
+        current: () => playToken.current,
+        load: () => import('@/lib/phrase-audio'),
+        begin: ({ PhrasePlayer }) => {
+          playerRef.current ??= new PhrasePlayer((state) => {
+            if (state === 'idle' || state === 'error') setPlayingId(null);
+          });
+        },
+        start: () => {
+          const player = playerRef.current;
+          if (!player) return Promise.resolve();
+          return player.start({
+            notes: item.notes,
+            bars: item.bars,
+            tempo: traySoundingTempo(item.tempo, item.slow),
+            swing: item.swing,
+            loop: false,
+          });
+        },
+        stop: () => playerRef.current?.stop(),
       });
-      await playerRef.current.start({
-        notes: item.notes,
-        bars: item.bars,
-        tempo: traySoundingTempo(item.tempo, item.slow),
-        swing: item.swing,
-        loop: false,
-      });
+      if (!started && playToken.current === mine) setPlayingId(null);
     } catch {
-      setPlayingId(null);
+      if (playToken.current === mine) setPlayingId(null);
     }
   }
 
@@ -271,6 +291,7 @@ export function PracticeTray({
     const index = visible.findIndex((entry) => entry.id === item.id);
     const neighbor = visible[index + 1] ?? visible[index - 1] ?? null;
     if (playingId === item.id) {
+      playToken.current += 1;
       playerRef.current?.stop();
       setPlayingId(null);
     }
@@ -527,7 +548,7 @@ export function PracticeTray({
             <button
               type="button"
               onClick={() => {
-                insertTrayItem(undo.item, undo.index);
+                insertTrayItem(undo.item, undo.index, undo.raw);
                 setUndo(null);
               }}
             >
