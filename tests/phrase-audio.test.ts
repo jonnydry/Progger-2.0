@@ -17,12 +17,13 @@ import {
   bindPhraseLifecycle,
   clampPhraseTempo,
   melodyFrets,
+  phraseClosingIndex,
   phraseLoopBeats,
   phraseLoopSeconds,
   schedulePhrase,
   type PhraseClock,
 } from '../lib/phrase-audio.ts';
-import { scheduleVoicing } from '../lib/voicing-audio.ts';
+import { scheduleVoicing, voicingMidi } from '../lib/voicing-audio.ts';
 import {
   beatAtSeconds,
   generatePhrase,
@@ -1029,6 +1030,7 @@ function loopDownbeats(
   swing: SwingInput,
   period: number,
   passes: number,
+  loopBeats = Number.POSITIVE_INFINITY,
 ): number[] {
   const clock = new AudioClock();
   const cues: { index: number; intended: number; scheduled: number }[] = [];
@@ -1044,6 +1046,7 @@ function loopDownbeats(
     () => {
       throw new Error('a loop ended');
     },
+    loopBeats,
   ).start();
   const end = period * passes;
   let steps = 0;
@@ -1055,6 +1058,21 @@ function loopDownbeats(
   assert.ok(downs.length >= passes, `saw ${downs.length} downbeats`);
   for (const cue of downs) {
     assert.equal(cue.scheduled, cue.intended);
+  }
+  if (loopBeats < Infinity) {
+    const heard = new Map<number, number>();
+    for (const cue of cues) {
+      const beat = beats[cue.index] ?? 0;
+      assert.ok(
+        beat < loopBeats - 1e-9,
+        `beat ${beat} is at or after the ${loopBeats}-beat loop`,
+      );
+      const key = Math.round(cue.scheduled * 1e9);
+      heard.set(key, (heard.get(key) ?? 0) + 1);
+    }
+    for (const [time, count] of heard) {
+      assert.equal(count, 1, `two notes share ${time / 1e9}s`);
+    }
   }
   return downs.slice(0, passes).map((cue) => cue.scheduled);
 }
@@ -1070,7 +1088,7 @@ void test('a loop restarts on the next bar line, on the audio clock, with no gap
       swing: 0,
       notes: [
         { beat: 0, duration: 4 },
-        { beat: 4, duration: 4 },
+        { beat: 6, duration: 1 },
         { beat: 8, duration: 2 },
       ],
     },
@@ -1079,7 +1097,7 @@ void test('a loop restarts on the next bar line, on the audio clock, with no gap
       swing: 'straight',
       notes: [
         { beat: 0, duration: 8 },
-        { beat: 8, duration: 8 },
+        { beat: 14, duration: 1 },
         { beat: 16, duration: 2 },
       ],
     },
@@ -1105,25 +1123,32 @@ void test('a loop restarts on the next bar line, on the audio clock, with no gap
       notes: [
         { beat: 0, duration: 0.5 },
         { beat: 0.5, duration: 6.5 },
-        { beat: 7, duration: 0.5 },
+        { beat: 7.5, duration: 0.5 },
       ],
     },
   ];
   for (const item of cases) {
     const length = phraseLoopSeconds(item.notes, item.tempo);
-    const last = item.notes[item.notes.length - 1];
-    assert.ok(last);
-    const noteEnd = last.beat + last.duration;
     const beats = phraseLoopBeats(item.notes);
+    const closing = phraseClosingIndex(item.notes);
     assert.equal(beats % 4, 0);
-    assert.ok(beats + 1e-9 >= noteEnd);
-    if (noteEnd % 4 !== 0) assert.ok(beats > noteEnd);
+    if (closing >= 0) {
+      const landing = item.notes[closing];
+      assert.ok(landing);
+      assert.ok(Math.abs(landing.beat - beats) < 1e-9);
+    }
     assert.equal(length, beats * (60 / item.tempo));
     const quarter = 60 / item.tempo;
     assert.equal(length, onsetSeconds(beats, item.tempo, item.swing));
-    if (item.swing !== 0 && item.swing !== 'straight' && noteEnd % 1 !== 0) {
+    const content = item.notes.filter((_, index) => index !== closing);
+    const lastOnset = content.reduce(
+      (max, note) => Math.max(max, note.beat),
+      0,
+    );
+    if (item.swing !== 0 && item.swing !== 'straight' && lastOnset % 1 !== 0) {
       assert.ok(
-        Math.abs(length - onsetSeconds(noteEnd, item.tempo, item.swing)) > 1e-6,
+        Math.abs(length - onsetSeconds(lastOnset, item.tempo, item.swing)) >
+          1e-6,
         `${item.tempo} BPM loop length followed the swung last note`,
       );
     }
@@ -1133,6 +1158,7 @@ void test('a loop restarts on the next bar line, on the audio clock, with no gap
       item.swing,
       length,
       4,
+      beats,
     );
     assert.equal(downs[0], 0);
     for (let pass = 0; pass < downs.length - 1; pass++) {
@@ -1161,14 +1187,31 @@ void test('a loop restarts on the next bar line, on the audio clock, with no gap
     const tail = phrase.phrase.notes[phrase.phrase.notes.length - 1];
     assert.ok(tail);
     assert.equal(tail.beat + tail.duration, phrasePeriodBeats(bars));
-    const loopBeats = bars === 2 ? 12 : 20;
+    const loopBeats = bars * 4;
     assert.equal(phraseLoopBeats(phrase.phrase.notes), loopBeats);
+    assert.equal(
+      phraseClosingIndex(phrase.phrase.notes),
+      phrase.phrase.notes.length - 1,
+    );
+    assert.equal(
+      phrase.phrase.notes[phrase.phrase.notes.length - 1]?.beat,
+      loopBeats,
+    );
     for (const tempo of [40, 96, 240]) {
       assert.equal(
         phraseLoopSeconds(phrase.phrase.notes, tempo),
         onsetSeconds(loopBeats, tempo, 'swing'),
       );
     }
+    const played = loopDownbeats(
+      phrase.phrase.notes.map((note) => note.beat),
+      96,
+      0,
+      phraseLoopSeconds(phrase.phrase.notes, 96),
+      3,
+      loopBeats,
+    );
+    assert.equal(played.length, 3);
   }
 });
 
@@ -1224,10 +1267,11 @@ void test('loop off keeps the 10-beat and 18-beat cadence hold', () => {
     const period = onsetSeconds(hold, tempo, swing);
     const notes = [
       { beat: 0, duration: 1 },
+      { beat: bars * 4 - 1, duration: 1 },
       { beat: bars * 4, duration: 2 },
     ];
-    assert.equal(phraseLoopBeats(notes), bars * 4 + 4);
-    assert.ok(phraseLoopSeconds(notes, tempo) > period);
+    assert.equal(phraseLoopBeats(notes), bars * 4);
+    assert.ok(period > phraseLoopSeconds(notes, tempo));
     const clock = new AudioClock();
     const cues: { index: number; scheduled: number }[] = [];
     let endedAt = -1;
@@ -1256,35 +1300,52 @@ void test('loop off keeps the 10-beat and 18-beat cadence hold', () => {
     }
     assert.equal(cues.length, notes.length);
     assert.equal(cues[0]?.scheduled, 0);
-    assert.equal(cues[1]?.scheduled, onsetSeconds(bars * 4, tempo, swing));
+    assert.equal(cues[2]?.scheduled, onsetSeconds(bars * 4, tempo, swing));
     assert.ok(endedAt <= period);
     assert.ok(
       endedAt + PHRASE_LOOKAHEAD_SEC + 1e-9 >= period,
       `${bars} bars stopped at ${endedAt}s, before the ${period}s hold`,
     );
-    assert.ok(endedAt < loopAt);
+    assert.ok(endedAt > loopAt);
   }
 });
 
-void test('a 3/4 loop rounds up by bars of three and 4/4 stays at 12 and 20', () => {
-  const onTheBar = [{ beat: 0, duration: 3 }];
-  assert.equal(phraseLoopBeats(onTheBar, 3), 3);
-  const spill = [
+void test('a 3/4 loop uses bars of three and a 4/4 phrase loops at 8 or 16', () => {
+  assert.equal(phraseLoopBeats([{ beat: 0, duration: 3 }], 3), 3);
+  const pastTheBar = [
     { beat: 0, duration: 3 },
-    { beat: 3, duration: 1.5 },
+    { beat: 4, duration: 0.5 },
   ];
-  assert.equal(spill[1]!.beat + spill[1]!.duration, 4.5);
-  assert.equal(phraseLoopBeats(spill, 3), 6);
-  assert.equal(phraseLoopBeats(spill), 8);
+  assert.equal(phraseLoopBeats(pastTheBar, 3), 6);
+  assert.equal(
+    phraseLoopBeats(
+      [
+        { beat: 0, duration: 1 },
+        { beat: 5, duration: 1 },
+      ],
+      4,
+    ),
+    8,
+  );
+  const twoBars = [
+    { beat: 0, duration: 2 },
+    { beat: 2, duration: 1 },
+    { beat: 3, duration: 2 },
+    { beat: 5, duration: 1 },
+    { beat: 6, duration: 2 },
+  ];
+  assert.equal(phraseClosingIndex(twoBars, 3), twoBars.length - 1);
+  assert.equal(phraseLoopBeats(twoBars, 3), 6);
   const tempo = 90;
-  const length = phraseLoopSeconds(spill, tempo, 3);
+  const length = phraseLoopSeconds(twoBars, tempo, 3);
   assert.equal(length, 6 * (60 / tempo));
   const downs = loopDownbeats(
-    spill.map((note) => note.beat),
+    twoBars.map((note) => note.beat),
     tempo,
     0,
     length,
     4,
+    6,
   );
   assert.equal(downs[0], 0);
   for (let pass = 0; pass < downs.length - 1; pass++) {
@@ -1302,9 +1363,272 @@ void test('a 3/4 loop rounds up by bars of three and 4/4 stays at 12 and 20', ()
     });
     assert.equal(phrase.ok, true);
     if (!phrase.ok) return;
-    assert.equal(phraseLoopBeats(phrase.phrase.notes), bars === 2 ? 12 : 20);
-    assert.equal(phraseLoopBeats(phrase.phrase.notes, 4), bars === 2 ? 12 : 20);
+    assert.equal(phraseLoopBeats(phrase.phrase.notes), bars * 4);
+    assert.equal(phraseLoopBeats(phrase.phrase.notes, 4), bars * 4);
   }
+});
+
+function pitchHz(fret: number): number {
+  const midi = voicingMidi(melodyFrets({ string: 0, fret }))[0] ?? 0;
+  return 440 * 2 ** ((midi - 69) / 12);
+}
+
+void test('turning loop off mid-pass lands on the closing note and schedules no new pass', async () => {
+  const tempo = 120;
+  const swing: SwingInput = 0;
+  const sample = new OfflineAudioContext(1, RATE, RATE).createGain();
+  const proto = Object.getPrototypeOf(sample.gain);
+  const original = proto.linearRampToValueAtTime;
+  const ramps: { value: number; when: number }[] = [];
+  proto.linearRampToValueAtTime = function (
+    this: AudioParam,
+    value: number,
+    when: number,
+  ) {
+    ramps.push({ value, when });
+    return original.call(this, value, when);
+  };
+  try {
+    for (const bars of [2, 4] as const) {
+      ramps.length = 0;
+      const endBeat = bars * 4;
+      const landingFret = 8;
+      const notes: FingeredNote[] = [
+        { ...finger, string: 0, fret: 0, beat: 0, duration: 1 },
+        { ...finger, string: 0, fret: 3, beat: endBeat - 1, duration: 1 },
+        {
+          ...finger,
+          string: 0,
+          fret: landingFret,
+          beat: endBeat,
+          duration: 2,
+        },
+      ];
+      assert.equal(phraseLoopBeats(notes), endBeat);
+      const loopSec = phraseLoopSeconds(notes, tempo);
+      const hold = onsetSeconds(phrasePeriodBeats(bars), tempo, swing);
+      assert.equal(hold, (endBeat + 2) * (60 / tempo));
+      assert.ok(hold > loopSec);
+      const context = new OfflineAudioContext(1, RATE * 20, RATE);
+      context.resume = () => Promise.resolve();
+      const destination = context.createGain();
+      const clock = new AudioClock();
+      const starts: {
+        when: number;
+        frequency: number;
+        oscillator: OscillatorNode;
+      }[] = [];
+      const dropped = new Set<OscillatorNode>();
+      const create = context.createOscillator.bind(context);
+      context.createOscillator = () => {
+        const oscillator = create();
+        const start = oscillator.start.bind(oscillator);
+        const disconnect = oscillator.disconnect.bind(oscillator);
+        oscillator.start = (when = 0) => {
+          starts.push({
+            when,
+            frequency: oscillator.frequency.value,
+            oscillator,
+          });
+          return start(when);
+        };
+        oscillator.disconnect = () => {
+          dropped.add(oscillator);
+          return disconnect();
+        };
+        return oscillator;
+      };
+      const states: string[] = [];
+      const player = new PhrasePlayer((state) => states.push(state));
+      await player.start({
+        notes,
+        bars,
+        tempo,
+        swing,
+        loop: true,
+        context,
+        destination,
+        clock,
+      });
+      const lead = 0.05;
+      const boundary = lead + loopSec;
+      const holdEnd = lead + hold;
+      const roll = (target: AudioClock, to: number) => {
+        let steps = 0;
+        while (target.currentTime + 1e-9 < to) {
+          target.advance(Math.min(to, target.currentTime + PHRASE_TICK_SEC));
+          assert.ok(++steps < 40000, 'the clock spun');
+        }
+      };
+      roll(clock, lead + 60 / tempo);
+      const queued = starts.filter(
+        (item) => Math.abs(item.when - boundary) < 1e-9,
+      );
+      assert.equal(
+        queued.length,
+        1,
+        `${bars} bars did not queue the next downbeat`,
+      );
+      assert.ok(Math.abs((queued[0]?.frequency ?? 0) - pitchHz(0)) < 1e-3);
+      assert.equal(
+        starts.some(
+          (item) =>
+            Math.abs(item.when - boundary) < 1e-9 &&
+            Math.abs(item.frequency - pitchHz(landingFret)) < 1e-3,
+        ),
+        false,
+      );
+      player.finishPass();
+      assert.equal(states.at(-1), 'playing');
+      for (const item of queued) assert.ok(dropped.has(item.oscillator));
+      roll(clock, holdEnd - 0.5);
+      assert.equal(
+        states.at(-1),
+        'playing',
+        `${bars} bars ended before the cadence hold`,
+      );
+      roll(clock, holdEnd + 1);
+      assert.equal(states.at(-1), 'idle');
+      const landing = starts.filter(
+        (item) =>
+          !dropped.has(item.oscillator) &&
+          Math.abs(item.when - boundary) < 1e-9,
+      );
+      assert.equal(landing.length, 1);
+      assert.ok(
+        Math.abs((landing[0]?.frequency ?? 0) - pitchHz(landingFret)) < 1e-3,
+      );
+      const approach = starts.find(
+        (item) => Math.abs(item.frequency - pitchHz(3)) < 1e-3,
+      );
+      assert.ok(approach, `${bars} bars dropped the note before the landing`);
+      assert.equal(dropped.has(approach.oscillator), false);
+      assert.equal(
+        starts.filter((item) => item.when > boundary + 1e-6).length,
+        0,
+        `${bars} bars scheduled a note after the landing`,
+      );
+      assert.equal(
+        starts.some(
+          (item) => Math.abs(item.when - (lead + loopSec * 2)) < 1e-6,
+        ),
+        false,
+      );
+      const releaseAt = holdEnd + PHRASE_END_RELEASE_SEC;
+      assert.ok(
+        ramps.some(
+          (ramp) => ramp.value === 0 && Math.abs(ramp.when - releaseAt) < 1e-9,
+        ),
+        `${bars} bars did not release at the loop-off end`,
+      );
+
+      ramps.length = 0;
+      const plain = new OfflineAudioContext(1, RATE * 20, RATE);
+      plain.resume = () => Promise.resolve();
+      const plainClock = new AudioClock();
+      const plainStarts: number[] = [];
+      const plainCreate = plain.createOscillator.bind(plain);
+      plain.createOscillator = () => {
+        const oscillator = plainCreate();
+        const start = oscillator.start.bind(oscillator);
+        oscillator.start = (when = 0) => {
+          plainStarts.push(when);
+          return start(when);
+        };
+        return oscillator;
+      };
+      const plainPlayer = new PhrasePlayer(() => {});
+      await plainPlayer.start({
+        notes,
+        bars,
+        tempo,
+        swing,
+        loop: false,
+        context: plain,
+        destination: plain.createGain(),
+        clock: plainClock,
+      });
+      roll(plainClock, holdEnd + 1);
+      assert.ok(
+        plainStarts.some((when) => Math.abs(when - boundary) < 1e-9),
+        `${bars} bars loop-off missed the landing`,
+      );
+      assert.equal(
+        plainStarts.some((when) => when > boundary + 1e-6),
+        false,
+      );
+      assert.ok(
+        ramps.some(
+          (ramp) => ramp.value === 0 && Math.abs(ramp.when - releaseAt) < 1e-9,
+        ),
+        `${bars} bars loop-off released at a different time`,
+      );
+      plainPlayer.stop();
+      player.stop();
+    }
+  } finally {
+    proto.linearRampToValueAtTime = original;
+  }
+});
+
+void test('every generated phrase has a note on beat 1', () => {
+  // Beat 1 of the bar is onset 0. The loop seam uses that onset as the
+  // landing, so a phrase that starts later would open a gap.
+  const rhythms = [
+    undefined,
+    'quarters',
+    'eighths',
+    'long-short',
+    'push',
+  ] as const;
+  const roots = ['C', 'F#', 'Bb', 'E'] as const;
+  const scaleIds = ['major', 'dorian', 'mixolydian', 'minor'] as const;
+  let count = 0;
+  for (const rhythm of rhythms) {
+    for (const root of roots) {
+      for (const scaleId of scaleIds) {
+        const scale = SCALES.find((item) => item.id === scaleId);
+        assert.ok(scale);
+        if (!scale) continue;
+        const chord =
+          scaleId === 'major'
+            ? root
+            : scaleId === 'mixolydian'
+              ? `${root}7`
+              : `${root}m`;
+        for (const bars of [2, 4] as const) {
+          for (let seed = 1; seed <= 8; seed += 1) {
+            const result = generatePhrase({
+              seed,
+              bars,
+              scaleNotes: spell(root, scale.formula),
+              chordNotes: parseChord(chord).notes,
+              locks: rhythm ? { rhythm } : undefined,
+            });
+            assert.equal(
+              result.ok,
+              true,
+              `${root} ${scaleId} ${chord} ${rhythm ?? 'free'} ${bars} bars seed ${seed}`,
+            );
+            if (!result.ok) continue;
+            const label = `${root} ${scaleId} ${rhythm ?? 'free'} ${bars} bars seed ${seed}`;
+            assert.equal(
+              result.phrase.notes.some((note) => note.beat === 0),
+              true,
+              `${label} misses beat 1`,
+            );
+            assert.equal(
+              phraseLoopBeats(result.phrase.notes),
+              bars * 4,
+              `${label} loop is not ${bars * 4} beats`,
+            );
+            count += 1;
+          }
+        }
+      }
+    }
+  }
+  assert.equal(count, rhythms.length * roots.length * scaleIds.length * 2 * 8);
 });
 
 void test('stop and regenerate cancel every note still waiting on the clock', async () => {

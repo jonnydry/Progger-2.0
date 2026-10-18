@@ -38,29 +38,65 @@ export function clampPhraseTempo(tempo: number): number {
 /** Quarter-note meter. Callers can pass another bar size; there is no control for it. */
 export const PHRASE_BEATS_PER_BAR = 4;
 
+function barSize(beatsPerBar: number): number {
+  return beatsPerBar > 0 ? beatsPerBar : PHRASE_BEATS_PER_BAR;
+}
+
+/** A downbeat after the start. Beat 0 is the first note, not the cadence. */
+function onLaterDownbeat(beat: number, bar: number): boolean {
+  if (!(beat > 1e-9) || !(bar > 0)) return false;
+  const bars = beat / bar;
+  return Math.abs(bars - Math.round(bars)) < 1e-9;
+}
+
 /**
- * Beats from the downbeat to the bar line at or after the last note.
- * A note that already ends on beat 1 keeps that bar. Anything later
- * rounds up, and the beats after the last slot are rest.
- * `beatsPerBar` defaults to 4. A 3/4 bar is 3.
+ * The closing cadence, when the last note starts on a later downbeat.
+ * Generated phrases put that landing on the bar after the last bar.
  */
-export function phraseLoopBeats(
-  notes: readonly { beat: number; duration: number }[],
+export function phraseClosingIndex(
+  notes: readonly { beat: number; duration?: number }[],
   beatsPerBar: number = PHRASE_BEATS_PER_BAR,
 ): number {
-  const bar = beatsPerBar > 0 ? beatsPerBar : PHRASE_BEATS_PER_BAR;
-  let end = 0;
+  const bar = barSize(beatsPerBar);
+  const index = notes.length - 1;
+  const last = notes[index];
+  if (!last || !onLaterDownbeat(last.beat, bar)) return -1;
+  return index;
+}
+
+/**
+ * Beats from the downbeat to the bar line at or after the last note
+ * that is not the closing cadence. The landing sits on that line and
+ * is left out of a loop, so the next pass's first note is the landing.
+ * `beatsPerBar` defaults to 4. A 3/4 bar is 3. An onset on beat 0
+ * still fills its bar.
+ */
+export function phraseLoopBeats(
+  notes: readonly { beat: number; duration?: number }[],
+  beatsPerBar: number = PHRASE_BEATS_PER_BAR,
+): number {
+  const bar = barSize(beatsPerBar);
+  const closing = phraseClosingIndex(notes, bar);
+  const closingBeat = closing >= 0 ? notes[closing]?.beat : null;
+  let onset = -1;
   for (const note of notes) {
-    const noteEnd = note.beat + note.duration;
-    if (Number.isFinite(noteEnd) && noteEnd > end) end = noteEnd;
+    if (
+      closingBeat != null &&
+      Number.isFinite(note.beat) &&
+      Math.abs(note.beat - closingBeat) < 1e-9
+    ) {
+      continue;
+    }
+    if (Number.isFinite(note.beat) && note.beat > onset) onset = note.beat;
   }
-  if (!(end > 0)) return 0;
-  return Math.ceil(end / bar - 1e-12) * bar;
+  if (!(onset >= 0)) return 0;
+  const bars = Math.ceil(onset / bar - 1e-12);
+  return Math.max(1, bars) * bar;
 }
 
 /** Straight seconds for `phraseLoopBeats`. Swing does not move a bar line. */
 export function phraseLoopSeconds(
-  notes: readonly { beat: number; duration: number }[],
+  notes: readonly { beat: number; duration?: number }[],
   tempo: number,
   beatsPerBar: number = PHRASE_BEATS_PER_BAR,
 ): number {
@@ -118,8 +154,10 @@ export type PhraseWake = { expected: number; actual: number };
  * Schedules cues whose audio time is inside the horizon.
  * One pass looks ahead by `PHRASE_LOOKAHEAD_SEC`. A loop looks ahead by
  * that plus one whole period, so the next downbeat is already on the audio
- * clock a period before it sounds. The wake is at most one tick away.
- * A late tick cannot move a note that was queued inside the horizon.
+ * clock a period before it sounds. Notes at or after `loopBeats` are the
+ * closing cadence: a loop skips them so that downbeat is not struck twice.
+ * The wake is at most one tick away. A late tick cannot move a note that
+ * was queued inside the horizon.
  */
 export class LookaheadScheduler {
   readonly cues: PhraseCue[] = [];
@@ -134,8 +172,10 @@ export class LookaheadScheduler {
   private readonly beats: readonly number[];
   private readonly tempo: number;
   private readonly swing: SwingInput;
-  private readonly period: number;
-  private readonly loop: boolean;
+  private period: number;
+  private loop: boolean;
+  /** While looping, beats at or after this value are not played. */
+  private loopBeats: number;
   private readonly onCue: (cue: PhraseCue) => void;
   private readonly onEnd: () => void;
 
@@ -149,6 +189,7 @@ export class LookaheadScheduler {
     loop: boolean,
     onCue: (cue: PhraseCue) => void,
     onEnd: () => void,
+    loopBeats = Number.POSITIVE_INFINITY,
   ) {
     this.clock = clock;
     this.beats = beats;
@@ -157,6 +198,7 @@ export class LookaheadScheduler {
     this.origin = startAt;
     this.period = period;
     this.loop = loop;
+    this.loopBeats = loopBeats;
     this.onCue = onCue;
     this.onEnd = onEnd;
   }
@@ -175,6 +217,26 @@ export class LookaheadScheduler {
     this.clear();
   }
 
+  /**
+   * Stop wrapping. Drop cues already queued at or after this pass's loop
+   * end, then play the rest of the pass the way Loop off does, including
+   * the closing note, and stop at `holdPeriod`.
+   */
+  releaseLoop(passOrigin: number, holdPeriod: number, landingIndex: number) {
+    const boundary = passOrigin + this.period;
+    for (let index = this.cues.length - 1; index >= 0; index -= 1) {
+      const cue = this.cues[index];
+      if (cue && cue.intended >= boundary - 1e-4) this.cues.splice(index, 1);
+    }
+    this.loop = false;
+    this.loopBeats = Number.POSITIVE_INFINITY;
+    this.origin = passOrigin;
+    if (holdPeriod > 1e-4) this.period = holdPeriod;
+    this.cursor = landingIndex >= 0 ? landingIndex : this.beats.length;
+    this.ended = false;
+    this.pump();
+  }
+
   private clear() {
     if (this.timer != null) this.clock.cancel(this.timer);
     this.timer = null;
@@ -188,6 +250,14 @@ export class LookaheadScheduler {
     const horizon = now + PHRASE_LOOKAHEAD_SEC + (looping ? this.period : 0);
     let guard = 0;
     while (guard++ < 10000) {
+      if (this.loop && this.loopBeats < Infinity) {
+        while (
+          this.cursor < this.beats.length &&
+          (this.beats[this.cursor] ?? 0) >= this.loopBeats - 1e-9
+        ) {
+          this.cursor += 1;
+        }
+      }
       if (this.cursor >= this.beats.length) {
         const end = this.origin + this.period;
         if (!looping) {
@@ -235,18 +305,24 @@ export class LookaheadScheduler {
   }
 
   private nextIntended(): number {
-    const beat =
-      this.cursor + 1 < this.beats.length
-        ? this.beats[this.cursor + 1]
-        : this.loop
-          ? this.beats[0]
-          : undefined;
-    if (beat === undefined) return Number.POSITIVE_INFINITY;
-    const origin =
-      this.cursor + 1 < this.beats.length
-        ? this.origin
-        : this.origin + this.period;
-    return origin + onsetSeconds(beat ?? 0, this.tempo, this.swing);
+    let index = this.cursor + 1;
+    let origin = this.origin;
+    const guardMax = this.beats.length * 2 + 2;
+    for (let guard = 0; guard < guardMax; guard += 1) {
+      if (index >= this.beats.length) {
+        if (!(this.loop && this.period > 1e-4)) return Number.POSITIVE_INFINITY;
+        index = 0;
+        origin += this.period;
+        continue;
+      }
+      const beat = this.beats[index] ?? 0;
+      if (this.loop && beat >= this.loopBeats - 1e-9) {
+        index += 1;
+        continue;
+      }
+      return origin + onsetSeconds(beat, this.tempo, this.swing);
+    }
+    return Number.POSITIVE_INFINITY;
   }
 
   private wake(when: number) {
@@ -268,9 +344,15 @@ type PhrasePass = {
   loop: boolean;
   context?: BaseAudioContext;
   destination?: AudioNode;
+  /** Test clock. Playback uses the audio context when this is omitted. */
+  clock?: PhraseClock;
 };
 
-type LiveVoice = { voice: ScheduledVoicing; ends: number };
+type LiveVoice = {
+  voice: ScheduledVoicing;
+  ends: number;
+  scheduled: number;
+};
 
 export class PhrasePlayer {
   private serial = 0;
@@ -286,7 +368,11 @@ export class PhrasePlayer {
   private voices: LiveVoice[] = [];
   private startedAt = 0;
   private period = 0;
+  /** Loop-off length, including the two-beat cadence hold. */
+  private holdPeriod = 0;
+  private landingIndex = -1;
   private looping = false;
+  private clock: PhraseClock | null = null;
   private readonly onState: (state: PhrasePlayback) => void;
 
   constructor(onState: (state: PhrasePlayback) => void) {
@@ -311,11 +397,52 @@ export class PhrasePlayer {
     return voices + (this.trim ? 1 : 0);
   }
 
+  get isLooping(): boolean {
+    return this.looping;
+  }
+
   elapsed(): number {
-    if (!this.context || this.startedAt === 0) return 0;
-    const time = Math.max(0, this.context.currentTime - this.startedAt);
+    const now = this.clock?.now() ?? this.context?.currentTime;
+    if (now === undefined || this.startedAt === 0) return 0;
+    const time = Math.max(0, now - this.startedAt);
     if (!this.looping || this.period <= 0) return time;
     return time % this.period;
+  }
+
+  /**
+   * Loop was turned off during this pass. Drop the repeat that was already
+   * queued, play the closing note, and run out the cadence hold. Nothing
+   * from a later pass is scheduled.
+   */
+  finishPass() {
+    if (!this.looping || !this.scheduler || !this.context || !this.trim) return;
+    const now = this.clock?.now() ?? this.context.currentTime;
+    const loopPeriod = this.period;
+    if (!(loopPeriod > 1e-4)) return;
+    const elapsed = now - this.startedAt;
+    const pass = Math.max(0, Math.floor(elapsed / loopPeriod + 1e-9));
+    const passOrigin = this.startedAt + pass * loopPeriod;
+    const boundary = passOrigin + loopPeriod;
+    this.looping = false;
+    this.startedAt = passOrigin;
+    this.period = this.holdPeriod > 1e-4 ? this.holdPeriod : loopPeriod;
+    const keep: LiveVoice[] = [];
+    for (const entry of this.voices) {
+      if (entry.scheduled >= boundary - 1e-4 && entry.scheduled > now + 1e-4) {
+        disconnectVoice(entry.voice);
+      } else {
+        keep.push(entry);
+      }
+    }
+    this.voices = keep;
+    const end = passOrigin + this.period;
+    try {
+      this.trim.gain.setValueAtTime(PHRASE_TRIM, end);
+      this.trim.gain.linearRampToValueAtTime(0, end + PHRASE_END_RELEASE_SEC);
+    } catch {
+      // The context may already be closed.
+    }
+    this.scheduler.releaseLoop(passOrigin, this.period, this.landingIndex);
   }
 
   stop() {
@@ -353,29 +480,33 @@ export class PhrasePlayer {
         throw new Error('Audio is unavailable.');
       }
       this.context = context;
-      this.looping = input.loop;
-      const barPeriod = onsetSeconds(
+      const loopBeats = phraseLoopBeats(input.notes);
+      const loopPeriod = phraseLoopSeconds(input.notes, tempo);
+      const looping = input.loop && loopPeriod > 1e-4;
+      this.looping = looping;
+      this.holdPeriod = onsetSeconds(
         phrasePeriodBeats(input.bars),
         tempo,
         input.swing,
       );
-      const loopPeriod = phraseLoopSeconds(input.notes, tempo);
-      // A loop restarts on the next bar line. The tail after the last slot
-      // is rest, so the repeat lands on beat 1. One pass still runs out
-      // the two-beat cadence hold, then stops.
-      this.period = input.loop && loopPeriod > 1e-4 ? loopPeriod : barPeriod;
-      this.startedAt = context.currentTime + 0.05;
-      const trim = context.createGain();
-      trim.gain.setValueAtTime(PHRASE_TRIM, this.startedAt);
-      trim.connect(destination);
-      this.trim = trim;
-      const beats = input.notes.map((note) => note.beat);
-      const clock: PhraseClock = {
+      this.landingIndex = phraseClosingIndex(input.notes);
+      // A loop ends on the bar line of the last non-closing note and
+      // skips the cadence, so the next pass's first note is that landing.
+      // Loop off plays the cadence and holds it for two beats.
+      this.period = looping ? loopPeriod : this.holdPeriod;
+      const clock: PhraseClock = input.clock ?? {
         now: () => context.currentTime,
         after: (delay, fn) => setTimeout(fn, Math.max(0, delay) * 1000),
         cancel: (handle) =>
           clearTimeout(handle as ReturnType<typeof setTimeout>),
       };
+      this.clock = clock;
+      this.startedAt = clock.now() + 0.05;
+      const trim = context.createGain();
+      trim.gain.setValueAtTime(PHRASE_TRIM, this.startedAt);
+      trim.connect(destination);
+      this.trim = trim;
+      const beats = input.notes.map((note) => note.beat);
       this.scheduler = new LookaheadScheduler(
         clock,
         beats,
@@ -383,10 +514,10 @@ export class PhrasePlayer {
         input.swing,
         this.startedAt,
         this.period,
-        input.loop,
+        looping,
         (cue) => {
           if (run !== this.serial || this.disposed || !this.trim) return;
-          this.dropFinished(context.currentTime);
+          this.dropFinished(this.clock?.now() ?? context.currentTime);
           const note = input.notes[cue.index];
           if (!note) return;
           const voice = scheduleVoicing(
@@ -395,8 +526,12 @@ export class PhrasePlayer {
             cue.scheduled,
             this.trim,
           );
-          this.voices.push({ voice, ends: cue.scheduled + 2.6 });
-          if (!input.loop && cue.index === input.notes.length - 1) {
+          this.voices.push({
+            voice,
+            ends: cue.scheduled + 2.6,
+            scheduled: cue.scheduled,
+          });
+          if (!looping && cue.index === input.notes.length - 1) {
             const end = this.startedAt + this.period;
             this.trim.gain.setValueAtTime(PHRASE_TRIM, end);
             this.trim.gain.linearRampToValueAtTime(
@@ -413,11 +548,12 @@ export class PhrasePlayer {
             this.startedAt + this.period + PHRASE_END_RELEASE_SEC;
           const waitMs = Math.max(
             0,
-            (releaseEnds - context.currentTime) * 1000,
+            (releaseEnds - (this.clock?.now() ?? context.currentTime)) * 1000,
           );
           this.armDetach(waitMs);
           this.onState('idle');
         },
+        looping ? loopBeats : Number.POSITIVE_INFINITY,
       );
       this.scheduler.start();
       if (run !== this.serial || this.disposed) return;
