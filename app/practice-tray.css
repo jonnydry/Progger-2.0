@@ -108,8 +108,9 @@ dialog.practice-tray-panel::before {
   z-index: 0;
   pointer-events: none;
   background: color-mix(in srgb, var(--card) var(--tray-tint), transparent);
-  backdrop-filter: blur(var(--tray-blur)) saturate(1.15);
+  /* Prefixed first. The production minifier drops an unprefixed backdrop-filter written before this line. */
   -webkit-backdrop-filter: blur(var(--tray-blur)) saturate(1.15);
+  backdrop-filter: blur(var(--tray-blur)) saturate(1.15);
 }
 
 @supports not

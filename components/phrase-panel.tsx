@@ -36,8 +36,8 @@ import {
 } from '@/lib/phrase';
 import { publishPhrasePlayhead, type PhraseFretMark } from '@/lib/phrase-marks';
 import {
-  PHRASE_STOP_EVENT,
-  phraseStopApplies,
+  bindPhraseStop,
+  dispatchPhraseStop,
   savePhrase,
   traySaveMessage,
   type TrayPhrase,
@@ -170,15 +170,12 @@ export function PhrasePanel({
       current.stop();
     };
     const unbind = bindPhraseLifecycle(document, window, pause);
-    const onStop = (event: Event) => {
-      const detail = event instanceof CustomEvent ? event.detail : undefined;
-      if (!phraseStopApplies('panel', detail)) return;
+    const unbindStop = bindPhraseStop(window, 'panel', () => {
       live.current = false;
       current.stop();
-    };
-    window.addEventListener(PHRASE_STOP_EVENT, onStop);
+    });
     return () => {
-      window.removeEventListener(PHRASE_STOP_EVENT, onStop);
+      unbindStop();
       unbind();
       current.dispose();
       player.current = null;
@@ -291,13 +288,11 @@ export function PhrasePanel({
       seed: phrase.phrase.seed,
       ...capture,
     });
-    setNotice(traySaveMessage(saved.status));
+    setNotice(traySaveMessage(saved.status, 'phrase', saved.removed));
   }
   function startPlayback() {
     if (!phrase.ok) return;
-    window.dispatchEvent(
-      new CustomEvent(PHRASE_STOP_EVENT, { detail: 'panel' }),
-    );
+    dispatchPhraseStop(window, 'panel');
     const tempoNow = clampPhraseTempo(slow ? tempo / 2 : tempo);
     soundingTempo.current = tempoNow;
     soundingSwing.current = swing;

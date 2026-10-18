@@ -19,17 +19,19 @@ import { SCALES, pretty } from '@/lib/music';
 import { encodePhraseMidi } from '@/lib/tray-midi';
 import { phraseTabText } from '@/lib/tray-tab';
 import {
-  PHRASE_STOP_EVENT,
+  bindPhraseStop,
+  dispatchPhraseStop,
   emptyTray,
+  focusTrayTab,
   getTray,
   insertTrayItem,
-  phraseStopApplies,
   removeTrayItem,
   renameTrayItem,
   saveView,
   subscribeTray,
   trayFilename,
-  trayFocusMove,
+  trayRenameCommand,
+  trayRenameStart,
   traySaveMessage,
   traySoundingTempo,
   type TrayChordBookmark,
@@ -159,14 +161,7 @@ export function PracticeTray({
       }
       const active = document.activeElement;
       const index = items.findIndex((node) => node === active);
-      const move = trayFocusMove({
-        count: items.length,
-        index,
-        shift: event.shiftKey,
-      });
-      if (move === null) return;
-      event.preventDefault();
-      items[move]?.focus();
+      if (focusTrayTab(items, index, event.shiftKey)) event.preventDefault();
     }
     document.addEventListener('keydown', onKey);
     return () => {
@@ -178,15 +173,12 @@ export function PracticeTray({
   }, []);
 
   useEffect(() => {
-    const onStop = (event: Event) => {
-      const detail = event instanceof CustomEvent ? event.detail : undefined;
-      if (!phraseStopApplies('tray', detail)) return;
+    const unbind = bindPhraseStop(window, 'tray', () => {
       playerRef.current?.stop();
       setPlayingId(null);
-    };
-    window.addEventListener(PHRASE_STOP_EVENT, onStop);
+    });
     return () => {
-      window.removeEventListener(PHRASE_STOP_EVENT, onStop);
+      unbind();
       playerRef.current?.dispose();
       playerRef.current = null;
     };
@@ -204,9 +196,7 @@ export function PracticeTray({
       setPlayingId(null);
       return;
     }
-    window.dispatchEvent(
-      new CustomEvent(PHRASE_STOP_EVENT, { detail: 'tray' }),
-    );
+    dispatchPhraseStop(window, 'tray');
     setPlayingId(item.id);
     try {
       const { PhrasePlayer } = await import('@/lib/phrase-audio');
@@ -252,17 +242,19 @@ export function PracticeTray({
   }
 
   function beginRename(item: TrayItem) {
-    renameCancelled.current = false;
+    renameCancelled.current = trayRenameStart().cancelled;
     setEditing(item.id);
     setDraft(item.name);
   }
 
   function commitRename() {
-    if (renameCancelled.current) {
-      renameCancelled.current = false;
-      return;
-    }
-    if (!editing) return;
+    const next = trayRenameCommand(
+      renameCancelled.current,
+      'blur',
+      Boolean(editing),
+    );
+    renameCancelled.current = next.cancelled;
+    if (!next.commit || !editing) return;
     renameTrayItem(editing, draft);
     setEditing(null);
   }
@@ -345,7 +337,8 @@ export function PracticeTray({
             disabled={!view}
             onClick={() => {
               if (!view) return;
-              setBanner(traySaveMessage(saveView(view).status, 'view'));
+              const saved = saveView(view);
+              setBanner(traySaveMessage(saved.status, 'view', saved.removed));
             }}
           >
             <Bookmark size={16} aria-hidden="true" /> {bookmarkLabel}
@@ -405,18 +398,23 @@ export function PracticeTray({
                           onChange={(event) => setDraft(event.target.value)}
                           onBlur={commitRename}
                           onKeyDown={(event) => {
+                            if (event.key !== 'Enter' && event.key !== 'Escape')
+                              return;
+                            const next = trayRenameCommand(
+                              renameCancelled.current,
+                              event.key,
+                              true,
+                            );
+                            renameCancelled.current = next.cancelled;
                             if (event.key === 'Enter') {
-                              renameCancelled.current = false;
                               event.currentTarget.blur();
+                              return;
                             }
-                            if (event.key === 'Escape') {
-                              event.stopPropagation();
-                              event.preventDefault();
-                              renameCancelled.current = true;
-                              const id = editing;
-                              setEditing(null);
-                              if (id) focusRename(id);
-                            }
+                            event.stopPropagation();
+                            event.preventDefault();
+                            const id = editing;
+                            setEditing(null);
+                            if (id) focusRename(id);
                           }}
                         />
                       ) : (

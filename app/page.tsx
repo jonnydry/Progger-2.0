@@ -31,7 +31,7 @@ import { PhraseLauncher } from '@/components/phrase-launcher';
 import { PracticeTrayHost } from '@/components/practice-tray-host';
 import type { PhraseFretMark } from '@/lib/phrase-marks';
 import {
-  PHRASE_STOP_EVENT,
+  dispatchPhraseStop,
   type TrayChordRef,
   type TrayItem,
   type TrayPhrase,
@@ -621,9 +621,7 @@ export default function Home() {
               : null,
           };
   function restoreTrayItem(item: TrayItem) {
-    window.dispatchEvent(
-      new CustomEvent(PHRASE_STOP_EVENT, { detail: 'restore' }),
-    );
+    dispatchPhraseStop(window, 'restore');
     setLocalChoice(null);
     const fit = (
       rootNote: string,

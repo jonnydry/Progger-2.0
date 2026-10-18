@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
+  PHRASE_STOP_EVENT,
   TRAY_KEY,
+  bindPhraseStop,
+  bindTrayStorage,
+  dispatchPhraseStop,
   emptyTray,
+  focusTrayTab,
   getTray,
   insertTrayItem,
   onTrayStorage,
@@ -13,8 +18,11 @@ import {
   removeTrayItem,
   renameTrayItem,
   savePhrase,
+  saveView,
   trayFilename,
   trayFocusMove,
+  trayRenameCommand,
+  trayRenameStart,
   traySaveMessage,
   writeTray,
   type TrayChordBookmark,
@@ -312,8 +320,9 @@ void test('the cap evicts the oldest known item and never an unknown one', () =>
   try {
     const saved = savePhrase(phraseInput());
     assert.equal(saved.status, 'evicted');
+    assert.equal(saved.removed, 'phrase');
     assert.equal(
-      traySaveMessage(saved.status),
+      traySaveMessage(saved.status, 'phrase', saved.removed),
       'Tray full, removed the oldest phrase.',
     );
     const stored = JSON.parse(held.raw() ?? '');
@@ -387,8 +396,9 @@ void test('undo puts a deleted item back at its original slot', () => {
   const unknown = futureScale();
   const first = { ...phrase(), id: 'a', name: 'A' };
   const second = { ...phrase(), id: 'b', name: 'B', savedAt: 2 };
+  const third = { ...phrase(), id: 'c', name: 'C', savedAt: 3 };
   const held = installTray(
-    JSON.stringify({ version: 1, items: [first, unknown, second] }),
+    JSON.stringify({ version: 1, items: [first, unknown, second, third] }),
   );
   try {
     const removed = removeTrayItem('b');
@@ -397,17 +407,252 @@ void test('undo puts a deleted item back at its original slot', () => {
     let stored = JSON.parse(held.raw() ?? '');
     assert.deepEqual(
       stored.items.map((item: { id: string }) => item.id),
-      ['a', 'future-1'],
+      ['a', 'future-1', 'c'],
     );
     insertTrayItem(removed.item, removed.index);
     stored = JSON.parse(held.raw() ?? '');
     assert.deepEqual(
       stored.items.map((item: { id: string }) => item.id),
-      ['a', 'future-1', 'b'],
+      ['a', 'future-1', 'b', 'c'],
     );
     assert.equal(JSON.stringify(stored.items[1]), JSON.stringify(unknown));
   } finally {
     held.restore();
+  }
+});
+
+void test('eviction names the bookmark that was removed', () => {
+  const cases = [
+    {
+      oldest: { ...scaleMark(), id: 'old-scale', savedAt: 1 },
+      noun: 'scale' as const,
+    },
+    {
+      oldest: { ...chordMark(), id: 'old-chord', savedAt: 1 },
+      noun: 'chord' as const,
+    },
+  ];
+  for (const { oldest, noun } of cases) {
+    const newer = { ...phrase(), id: 'newer', name: 'Newer', savedAt: 50 };
+    const unknowns = Array.from({ length: 78 }, (_item, index) =>
+      futureScale(`future-${noun}-${index}`),
+    );
+    const items = [
+      newer,
+      ...unknowns.slice(0, 10),
+      oldest,
+      ...unknowns.slice(10),
+    ];
+    const held = installTray(JSON.stringify({ version: 1, items }));
+    try {
+      const saved = savePhrase(phraseInput());
+      assert.equal(saved.status, 'evicted');
+      assert.equal(saved.removed, noun);
+      const message = traySaveMessage(saved.status, 'phrase', saved.removed);
+      assert.equal(message, `Tray full, removed the oldest ${noun}.`);
+      assert.equal(message.includes('phrase'), false);
+    } finally {
+      held.restore();
+    }
+  }
+  assert.equal(
+    traySaveMessage('evicted'),
+    'Tray full, removed the oldest item.',
+  );
+});
+
+void test('unavailable storage does not report a saved phrase', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    get() {
+      throw new Error('blocked');
+    },
+  });
+  onTrayStorage(TRAY_KEY);
+  try {
+    const saved = savePhrase(phraseInput());
+    assert.equal(saved.status, 'failed');
+    assert.equal(saved.item, null);
+    assert.equal(traySaveMessage(saved.status), 'Could not save this phrase.');
+    assert.notEqual(traySaveMessage(saved.status), 'Saved to tray.');
+    assert.deepEqual(getTray().items, []);
+    const view = saveView({
+      kind: 'scale',
+      scaleRoot: 'A',
+      scaleId: 'dorian',
+      scaleName: 'Dorian',
+      view: 'pattern',
+      position: 2,
+      degrees: true,
+      left: false,
+      chord: null,
+    });
+    assert.equal(view.status, 'failed');
+    assert.equal(
+      traySaveMessage(view.status, 'view'),
+      'Could not save this view.',
+    );
+    assert.notEqual(traySaveMessage(view.status, 'view'), 'Saved to tray.');
+  } finally {
+    if (descriptor) {
+      Object.defineProperty(globalThis, 'localStorage', descriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, 'localStorage');
+    }
+    onTrayStorage(TRAY_KEY);
+  }
+});
+
+void test('rename keeps extra fields on a known item byte for byte', () => {
+  const extra = { ...phrase(), extra: { keep: true }, note: 'stay' };
+  const held = installTray(JSON.stringify({ version: 1, items: [extra] }));
+  try {
+    renameTrayItem(extra.id, 'Renamed line');
+    const stored = JSON.parse(held.raw() ?? '') as {
+      items: { name: string }[];
+    };
+    const item = stored.items[0];
+    assert.ok(item);
+    assert.equal(item.name, 'Renamed line');
+    assert.equal(
+      JSON.stringify({ ...item, name: extra.name }),
+      JSON.stringify(extra),
+    );
+  } finally {
+    held.restore();
+  }
+});
+
+void test('a duplicate id stays in storage and counts once', () => {
+  const first = phrase();
+  const duplicate = {
+    ...phrase(),
+    name: 'Copy',
+    savedAt: 3,
+    extra: { keep: true },
+  };
+  const raw = JSON.stringify({ version: 1, items: [first, duplicate] });
+  assert.deepEqual(
+    parseTray(raw).state.items.map((item) => item.name),
+    ['A Dorian phrase'],
+  );
+  const held = installTray(raw);
+  try {
+    assert.equal(getTray().items.length, 1);
+    const saved = savePhrase(phraseInput());
+    assert.equal(saved.status, 'saved');
+    const stored = JSON.parse(held.raw() ?? '') as { items: unknown[] };
+    assert.equal(stored.items.length, 3);
+    assert.equal(JSON.stringify(stored.items[2]), JSON.stringify(duplicate));
+    assert.equal(
+      getTray().items.filter((item) => item.id === first.id).length,
+      1,
+    );
+    assert.equal(getTray().items.length, 2);
+  } finally {
+    held.restore();
+  }
+});
+
+void test('escape then enter still commits the next rename', () => {
+  const escaped = trayRenameCommand(false, 'Escape', true);
+  assert.equal(escaped.commit, false);
+  assert.equal(escaped.cancelled, true);
+  const started = trayRenameStart();
+  const blurred = trayRenameCommand(started.cancelled, 'blur', true);
+  assert.equal(blurred.commit, true);
+  const entered = trayRenameCommand(escaped.cancelled, 'Enter', true);
+  assert.equal(entered.cancelled, false);
+  assert.equal(entered.commit, true);
+  const saved = trayRenameCommand(entered.cancelled, 'blur', true);
+  assert.equal(saved.commit, true);
+  const dropped = trayRenameCommand(escaped.cancelled, 'blur', true);
+  assert.equal(dropped.commit, false);
+});
+
+void test('tab wrap focuses the other end through the tray helper', () => {
+  const order: string[] = [];
+  const items = ['close', 'play', 'open', 'delete'].map((id) => ({
+    id,
+    focus() {
+      order.push(id);
+    },
+  }));
+  assert.equal(focusTrayTab(items, 3, false), true);
+  assert.deepEqual(order, ['close']);
+  assert.equal(focusTrayTab(items, 0, true), true);
+  assert.deepEqual(order, ['close', 'delete']);
+  assert.equal(focusTrayTab(items, 1, false), false);
+  assert.deepEqual(order, ['close', 'delete']);
+  assert.equal(focusTrayTab([], 0, false), false);
+});
+
+void test('a storage event re-reads and does not write', () => {
+  const held = installTray(JSON.stringify({ version: 1, items: [phrase()] }));
+  const target = new EventTarget();
+  const unbind = bindTrayStorage(target);
+  try {
+    const unknown = futureScale();
+    const added = { ...phrase(), id: 'from-other-tab', name: 'Other tab' };
+    const next = JSON.stringify({
+      version: 1,
+      items: [phrase(), added, unknown],
+    });
+    held.value = next;
+    const event = new Event('storage');
+    Object.defineProperty(event, 'key', { value: TRAY_KEY });
+    target.dispatchEvent(event);
+    assert.equal(held.writes.length, 0);
+    assert.equal(held.raw(), next);
+    assert.deepEqual(
+      getTray().items.map((item) => item.id),
+      ['phrase-1', 'from-other-tab'],
+    );
+    assert.equal(
+      JSON.stringify(JSON.parse(next).items[2]),
+      JSON.stringify(unknown),
+    );
+    const other = new Event('storage');
+    Object.defineProperty(other, 'key', { value: 'progger.other' });
+    target.dispatchEvent(other);
+    assert.equal(held.writes.length, 0);
+    assert.equal(getTray().items.length, 2);
+  } finally {
+    unbind();
+    held.restore();
+  }
+});
+
+void test('a tray stop leaves the tray player running and stops the panel', () => {
+  const bus = new EventTarget();
+  let panelStops = 0;
+  let trayStops = 0;
+  const unpanel = bindPhraseStop(bus, 'panel', () => {
+    panelStops += 1;
+  });
+  const untray = bindPhraseStop(bus, 'tray', () => {
+    trayStops += 1;
+  });
+  try {
+    dispatchPhraseStop(bus, 'tray');
+    assert.equal(panelStops, 1);
+    assert.equal(trayStops, 0);
+    dispatchPhraseStop(bus, 'panel');
+    assert.equal(panelStops, 1);
+    assert.equal(trayStops, 1);
+    dispatchPhraseStop(bus, 'restore');
+    assert.equal(panelStops, 2);
+    assert.equal(trayStops, 2);
+    bus.dispatchEvent(new CustomEvent(PHRASE_STOP_EVENT, { detail: 'tray' }));
+    assert.equal(trayStops, 2);
+    assert.equal(panelStops, 3);
+  } finally {
+    unpanel();
+    untray();
   }
 });
 
@@ -553,17 +798,8 @@ void test('the tray stays out of the eager phrase graph', () => {
   assert.equal(launcher.includes('localStorage'), false);
   assert.match(host, /import\('@\/components\/practice-tray'\)/);
   assert.match(tray, /import\('@\/lib\/phrase-audio'\)/);
-  assert.match(tray, /phraseStopApplies\('tray'/);
-  assert.match(tray, /detail: 'tray'/);
-  assert.match(panel, /phraseStopApplies\('panel'/);
-  assert.match(panel, /traySaveMessage\(saved\.status\)/);
+  assert.match(panel, /traySaveMessage\(saved\.status/);
   assert.equal(panel.includes("saved ? 'Saved to tray.'"), false);
-  const trayLib = readFileSync(
-    new URL('../lib/tray.ts', import.meta.url),
-    'utf8',
-  );
-  assert.match(trayLib, /addEventListener\(\s*'storage'/);
-  assert.match(trayLib, /onTrayStorage\(event\.key\)/);
   assert.equal(page.includes("from '@/components/practice-tray'"), false);
   assert.match(page, /PracticeTrayHost/);
   for (const file of [

@@ -237,14 +237,23 @@ export type TraySaveStatus = 'saved' | 'evicted' | 'full' | 'failed';
 export type TraySaveResult = {
   status: TraySaveStatus;
   item: TrayItem | null;
+  /** Set when a known item was dropped to make room. */
+  removed?: 'phrase' | 'scale' | 'chord';
 };
 
 export function traySaveMessage(
   status: TraySaveStatus,
   subject: 'phrase' | 'view' = 'phrase',
+  removed?: 'phrase' | 'scale' | 'chord',
 ): string {
   if (status === 'saved') return 'Saved to tray.';
-  if (status === 'evicted') return 'Tray full, removed the oldest phrase.';
+  if (status === 'evicted') {
+    const noun =
+      removed === 'phrase' || removed === 'scale' || removed === 'chord'
+        ? removed
+        : 'item';
+    return `Tray full, removed the oldest ${noun}.`;
+  }
   if (status === 'full') return 'Tray is full.';
   return subject === 'view'
     ? 'Could not save this view.'
@@ -270,6 +279,58 @@ export function phraseStopApplies(
   detail: unknown,
 ): boolean {
   return detail !== owner;
+}
+
+export function dispatchPhraseStop(
+  target: EventTarget,
+  owner: 'panel' | 'tray' | 'restore',
+): void {
+  target.dispatchEvent(new CustomEvent(PHRASE_STOP_EVENT, { detail: owner }));
+}
+
+/** Panel and tray players share this listener so each ignores its own stop. */
+export function bindPhraseStop(
+  target: EventTarget,
+  owner: 'panel' | 'tray',
+  stop: () => void,
+): () => void {
+  const onStop = (event: Event) => {
+    const detail = event instanceof CustomEvent ? event.detail : undefined;
+    if (!phraseStopApplies(owner, detail)) return;
+    stop();
+  };
+  target.addEventListener(PHRASE_STOP_EVENT, onStop);
+  return () => target.removeEventListener(PHRASE_STOP_EVENT, onStop);
+}
+
+/** Tab from either end of the tray. Returns whether focus moved. */
+export function focusTrayTab(
+  items: readonly { focus(): void }[],
+  index: number,
+  shift: boolean,
+): boolean {
+  const move = trayFocusMove({ count: items.length, index, shift });
+  if (move === null) return false;
+  items[move]?.focus();
+  return true;
+}
+
+export function trayRenameStart(): { cancelled: false } {
+  return { cancelled: false };
+}
+
+/**
+ * Escape cancels the open rename. Enter clears a leftover cancel so the
+ * following blur still saves. Blur saves only when the edit is still open.
+ */
+export function trayRenameCommand(
+  cancelled: boolean,
+  key: 'Enter' | 'Escape' | 'blur',
+  editing: boolean,
+): { cancelled: boolean; commit: boolean } {
+  if (key === 'Escape') return { cancelled: true, commit: false };
+  if (key === 'Enter') return { cancelled: false, commit: editing };
+  return { cancelled: false, commit: !cancelled && editing };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -713,7 +774,7 @@ function emit(): void {
 
 function loadDoc(): TrayDoc {
   const storage = browserStorage();
-  if (!storage) return { writable: true, slots: [] };
+  if (!storage) return { writable: false, slots: [] };
   try {
     return interpret(storage.getItem(TRAY_KEY));
   } catch {
@@ -746,21 +807,35 @@ export function onTrayStorage(key: string | null): void {
   emit();
 }
 
+function storageEventKey(event: Event): string | null {
+  if (!('key' in event)) return null;
+  const key = (event as { key?: unknown }).key;
+  return typeof key === 'string' ? key : null;
+}
+
+/** Cross-tab storage events re-read. The handler does not write. */
+export function bindTrayStorage(target: EventTarget): () => void {
+  const onStorage = (event: Event) => {
+    onTrayStorage(storageEventKey(event));
+  };
+  target.addEventListener('storage', onStorage);
+  return () => target.removeEventListener('storage', onStorage);
+}
+
 function commit(next: TrayDoc): boolean {
   if (!next.writable) return false;
   const storage = browserStorage();
-  if (storage) {
-    try {
-      storage.setItem(
-        TRAY_KEY,
-        JSON.stringify({
-          version: 1,
-          items: next.slots.map((slot) => slot.raw),
-        }),
-      );
-    } catch {
-      return false;
-    }
+  if (!storage) return false;
+  try {
+    storage.setItem(
+      TRAY_KEY,
+      JSON.stringify({
+        version: 1,
+        items: next.slots.map((slot) => slot.raw),
+      }),
+    );
+  } catch {
+    return false;
   }
   doc = next;
   cache = project(next);
@@ -795,17 +870,19 @@ function remember(item: TrayItem): TraySaveResult {
   const checked = itemOf(item);
   if (!checked) return { status: 'failed', item: null };
   const slots = open.slots.filter((slot) => slot.item?.id !== checked.id);
-  let status: TraySaveStatus = 'saved';
+  let removed: TrayItem['type'] | undefined;
   if (slots.length >= TRAY_MAX_ITEMS) {
     const drop = oldestKnown(slots);
     if (drop < 0) return { status: 'full', item: null };
+    removed = slots[drop]?.item?.type;
     slots.splice(drop, 1);
-    status = 'evicted';
   }
   slots.unshift({ raw: checked, item: checked });
   if (!commit({ writable: true, slots }))
     return { status: 'failed', item: null };
-  return { status, item: checked };
+  return removed
+    ? { status: 'evicted', item: checked, removed }
+    : { status: 'saved', item: checked };
 }
 
 function newId(): string {
@@ -910,8 +987,4 @@ export function insertTrayItem(item: TrayItem, index: number): void {
   commit({ writable: true, slots });
 }
 
-if (typeof window !== 'undefined') {
-  window.addEventListener('storage', (event) => {
-    onTrayStorage(event.key);
-  });
-}
+if (typeof window !== 'undefined') bindTrayStorage(window);
