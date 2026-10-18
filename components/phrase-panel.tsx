@@ -37,7 +37,9 @@ import {
 import { publishPhrasePlayhead, type PhraseFretMark } from '@/lib/phrase-marks';
 import {
   PHRASE_STOP_EVENT,
+  phraseStopApplies,
   savePhrase,
+  traySaveMessage,
   type TrayPhrase,
   type TrayPhraseCapture,
 } from '@/lib/tray';
@@ -169,7 +171,8 @@ export function PhrasePanel({
     };
     const unbind = bindPhraseLifecycle(document, window, pause);
     const onStop = (event: Event) => {
-      if (event instanceof CustomEvent && event.detail === 'panel') return;
+      const detail = event instanceof CustomEvent ? event.detail : undefined;
+      if (!phraseStopApplies('panel', detail)) return;
       live.current = false;
       current.stop();
     };
@@ -288,7 +291,7 @@ export function PhrasePanel({
       seed: phrase.phrase.seed,
       ...capture,
     });
-    setNotice(saved ? 'Saved to tray.' : 'Could not save this phrase.');
+    setNotice(traySaveMessage(saved.status));
   }
   function startPlayback() {
     if (!phrase.ok) return;

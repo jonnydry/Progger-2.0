@@ -23,11 +23,14 @@ import {
   emptyTray,
   getTray,
   insertTrayItem,
+  phraseStopApplies,
   removeTrayItem,
   renameTrayItem,
   saveView,
   subscribeTray,
   trayFilename,
+  trayFocusMove,
+  traySaveMessage,
   traySoundingTempo,
   type TrayChordBookmark,
   type TrayItem,
@@ -104,6 +107,7 @@ export function PracticeTray({
   const [undo, setUndo] = useState<{ item: TrayItem; index: number } | null>(
     null,
   );
+  const [banner, setBanner] = useState<string | null>(null);
   const panelRef = useRef<HTMLDialogElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const playerRef = useRef<Player | null>(null);
@@ -154,19 +158,15 @@ export function PracticeTray({
         return;
       }
       const active = document.activeElement;
-      const inside = active instanceof Node && !!panel?.contains(active);
-      if (!inside) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-        return;
-      }
-      if (event.shiftKey && active === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      const index = items.findIndex((node) => node === active);
+      const move = trayFocusMove({
+        count: items.length,
+        index,
+        shift: event.shiftKey,
+      });
+      if (move === null) return;
+      event.preventDefault();
+      items[move]?.focus();
     }
     document.addEventListener('keydown', onKey);
     return () => {
@@ -179,7 +179,8 @@ export function PracticeTray({
 
   useEffect(() => {
     const onStop = (event: Event) => {
-      if (event instanceof CustomEvent && event.detail === 'tray') return;
+      const detail = event instanceof CustomEvent ? event.detail : undefined;
+      if (!phraseStopApplies('tray', detail)) return;
       playerRef.current?.stop();
       setPlayingId(null);
     };
@@ -224,7 +225,34 @@ export function PracticeTray({
     }
   }
 
+  function focusRename(id: string) {
+    requestAnimationFrame(() => {
+      panelRef.current
+        ?.querySelector<HTMLButtonElement>(
+          `[data-tray-rename="${CSS.escape(id)}"]`,
+        )
+        ?.focus();
+    });
+  }
+
+  function focusAfterDelete(nextId: string | null) {
+    requestAnimationFrame(() => {
+      const root = panelRef.current;
+      if (!root) return;
+      if (!nextId) {
+        root.querySelector<HTMLElement>('#practice-tray-empty')?.focus();
+        return;
+      }
+      root
+        .querySelector<HTMLElement>(
+          `[data-tray-item="${CSS.escape(nextId)}"] button`,
+        )
+        ?.focus();
+    });
+  }
+
   function beginRename(item: TrayItem) {
+    renameCancelled.current = false;
     setEditing(item.id);
     setDraft(item.name);
   }
@@ -240,6 +268,9 @@ export function PracticeTray({
   }
 
   function remove(item: TrayItem) {
+    const visible = tray.items;
+    const index = visible.findIndex((entry) => entry.id === item.id);
+    const neighbor = visible[index + 1] ?? visible[index - 1] ?? null;
     if (playingId === item.id) {
       playerRef.current?.stop();
       setPlayingId(null);
@@ -247,6 +278,7 @@ export function PracticeTray({
     const removed = removeTrayItem(item.id);
     if (removed) setUndo(removed);
     if (editing === item.id) setEditing(null);
+    if (removed) focusAfterDelete(neighbor?.id ?? null);
   }
 
   const groups: { label: string; items: TrayItem[] }[] = [
@@ -312,7 +344,8 @@ export function PracticeTray({
             className="practice-tray-bookmark"
             disabled={!view}
             onClick={() => {
-              if (view) saveView(view);
+              if (!view) return;
+              setBanner(traySaveMessage(saveView(view).status, 'view'));
             }}
           >
             <Bookmark size={16} aria-hidden="true" /> {bookmarkLabel}
@@ -322,11 +355,25 @@ export function PracticeTray({
               Open Explore to bookmark a scale or chord.
             </p>
           )}
-          {tray.items.length === 0 && (
-            <p className="practice-tray-intro">
-              Nothing saved yet. Save a phrase from the phrase panel, or
-              bookmark the view you are practicing.
+          {banner && (
+            <p className="practice-tray-intro" aria-live="polite">
+              {banner}
             </p>
+          )}
+          {tray.items.length === 0 && (
+            <>
+              <h3
+                id="practice-tray-empty"
+                className="practice-tray-empty"
+                tabIndex={-1}
+              >
+                Nothing saved yet
+              </h3>
+              <p className="practice-tray-intro">
+                Save a phrase from the phrase panel, or bookmark the view you
+                are practicing.
+              </p>
+            </>
           )}
           {groups.map((group) =>
             group.items.length ? (
@@ -336,26 +383,39 @@ export function PracticeTray({
                 aria-label={group.label}
               >
                 <h3>{group.label}</h3>
+                {group.label === 'Phrases' && (
+                  <p className="practice-tray-export-note">
+                    Exports ignore swing and half speed.
+                  </p>
+                )}
                 <ul>
                   {group.items.map((item) => (
-                    <li className="practice-tray-item" key={item.id}>
+                    <li
+                      className="practice-tray-item"
+                      key={item.id}
+                      data-tray-item={item.id}
+                    >
                       {editing === item.id ? (
                         <input
                           className="practice-tray-rename"
                           value={draft}
                           aria-label={`Rename ${item.name}`}
                           autoFocus
+                          maxLength={80}
                           onChange={(event) => setDraft(event.target.value)}
                           onBlur={commitRename}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter') {
+                              renameCancelled.current = false;
                               event.currentTarget.blur();
                             }
                             if (event.key === 'Escape') {
                               event.stopPropagation();
                               event.preventDefault();
                               renameCancelled.current = true;
+                              const id = editing;
                               setEditing(null);
+                              if (id) focusRename(id);
                             }
                           }}
                         />
@@ -429,7 +489,11 @@ export function PracticeTray({
                             </button>
                           </>
                         )}
-                        <button type="button" onClick={() => beginRename(item)}>
+                        <button
+                          type="button"
+                          data-tray-rename={item.id}
+                          onClick={() => beginRename(item)}
+                        >
                           <Pencil size={14} aria-hidden="true" /> Rename
                         </button>
                         <button type="button" onClick={() => remove(item)}>

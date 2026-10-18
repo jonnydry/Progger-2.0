@@ -4,8 +4,18 @@ import { test } from 'node:test';
 import {
   TRAY_KEY,
   emptyTray,
+  getTray,
+  insertTrayItem,
+  onTrayStorage,
   parseTray,
+  phraseStopApplies,
   readTray,
+  removeTrayItem,
+  renameTrayItem,
+  savePhrase,
+  trayFilename,
+  trayFocusMove,
+  traySaveMessage,
   writeTray,
   type TrayChordBookmark,
   type TrayPhrase,
@@ -144,45 +154,319 @@ void test('tray storage round-trips phrases, scale bookmarks, and chord bookmark
   const loaded = readTray(storage);
   assert.deepEqual(loaded, state);
   assert.deepEqual(parseTray(storage.raw()).state, state);
-  assert.equal(parseTray(storage.raw()).reset, false);
-  assert.deepEqual(parseTray(null), { state: emptyTray(), reset: false });
+  assert.equal(parseTray(storage.raw()).writable, true);
+  assert.deepEqual(parseTray(null), { state: emptyTray(), writable: true });
 });
 
-void test('corrupt or old tray payloads reset storage to an empty tray', () => {
-  const broken = [
-    '{',
-    '[]',
-    'null',
-    '"tray"',
-    '',
-    JSON.stringify({ version: 0, items: [] }),
-    JSON.stringify({ version: 2, items: [] }),
-    JSON.stringify({ version: 1, items: [{ type: 'phrase' }] }),
-    JSON.stringify({
-      version: 1,
-      items: [phrase(), { ...phrase(), notes: [] }],
-    }),
-    JSON.stringify({
-      version: 1,
-      items: [phrase(), { ...phrase(), id: 'phrase-1' }],
-    }),
-  ];
-  for (const raw of broken) {
+function futureScale(id = 'future-1') {
+  return {
+    type: 'scale',
+    id,
+    name: 'Future mode',
+    savedAt: 42,
+    scaleRoot: 'A',
+    scaleId: 'super-lydian',
+    view: 'pattern',
+    position: 1,
+    degrees: false,
+    left: false,
+    chord: null,
+    extra: { keep: true },
+  };
+}
+
+function phraseInput() {
+  const {
+    id: _id,
+    type: _type,
+    savedAt: _savedAt,
+    name: _name,
+    ...rest
+  } = phrase();
+  return rest;
+}
+
+void test('one unknown item among three stays in storage on read', () => {
+  const unknown = futureScale();
+  const raw = JSON.stringify({
+    version: 1,
+    items: [phrase(), unknown, chordMark()],
+  });
+  const storage = memory();
+  storage.setItem(TRAY_KEY, raw);
+  const loaded = readTray(storage);
+  assert.deepEqual(
+    loaded.items.map((item) => item.id),
+    ['phrase-1', 'chord-1'],
+  );
+  assert.equal(storage.raw(), raw);
+  assert.equal(parseTray(raw).writable, true);
+});
+
+void test('corrupt JSON stays byte-identical and is not written over', () => {
+  for (const raw of ['{', '[]', 'null', '"tray"', '']) {
     const storage = memory();
     storage.setItem(TRAY_KEY, raw);
-    const loaded = readTray(storage);
-    assert.deepEqual(loaded, emptyTray(), raw);
-    assert.equal(storage.raw(), JSON.stringify(emptyTray()), raw);
+    assert.deepEqual(readTray(storage), emptyTray());
+    assert.equal(storage.raw(), raw);
+    assert.equal(parseTray(raw).writable, false);
   }
-  const untouched = memory();
-  assert.deepEqual(readTray(untouched), emptyTray());
-  assert.equal(untouched.raw(), null);
-  const valid = memory();
-  const raw = JSON.stringify({ version: 1, items: [scaleMark()] });
-  valid.setItem(TRAY_KEY, raw);
-  assert.deepEqual(readTray(valid).items, [scaleMark()]);
-  assert.equal(valid.raw(), raw);
+  const held = installTray('{');
+  try {
+    const result = savePhrase(phraseInput());
+    assert.equal(result.status, 'failed');
+    assert.equal(result.item, null);
+    assert.equal(held.raw(), '{');
+    assert.notEqual(traySaveMessage(result.status), 'Saved to tray.');
+  } finally {
+    held.restore();
+  }
 });
+
+void test('an unknown tray version is left untouched and read-only', () => {
+  for (const version of [0, 2]) {
+    const raw = JSON.stringify({ version, items: [phrase(), futureScale()] });
+    const storage = memory();
+    storage.setItem(TRAY_KEY, raw);
+    assert.deepEqual(readTray(storage), emptyTray());
+    assert.equal(storage.raw(), raw);
+    assert.equal(parseTray(raw).writable, false);
+    const held = installTray(raw);
+    try {
+      const result = savePhrase(phraseInput());
+      assert.equal(result.status, 'failed');
+      assert.equal(held.raw(), raw);
+    } finally {
+      held.restore();
+    }
+  }
+});
+
+void test('a cross-tab update carrying a new scale never writes', () => {
+  const held = installTray(JSON.stringify({ version: 1, items: [phrase()] }));
+  try {
+    assert.equal(getTray().items.length, 1);
+    assert.equal(held.writes.length, 0);
+    const unknown = futureScale();
+    const next = JSON.stringify({
+      version: 1,
+      items: [phrase(), unknown],
+    });
+    held.value = next;
+    onTrayStorage(TRAY_KEY);
+    const shown = getTray();
+    assert.equal(held.writes.length, 0);
+    assert.equal(held.raw(), next);
+    assert.deepEqual(
+      shown.items.map((item) => item.id),
+      ['phrase-1'],
+    );
+    assert.equal(
+      JSON.stringify(JSON.parse(next).items[1]),
+      JSON.stringify(unknown),
+    );
+  } finally {
+    held.restore();
+  }
+});
+
+void test('unknown items survive save, rename, and delete byte for byte', () => {
+  const unknown = futureScale();
+  const held = installTray(JSON.stringify({ version: 1, items: [unknown] }));
+  try {
+    const saved = savePhrase(phraseInput());
+    assert.equal(saved.status, 'saved');
+    assert.ok(saved.item);
+    let stored = JSON.parse(held.raw() ?? '');
+    assert.equal(JSON.stringify(stored.items[1]), JSON.stringify(unknown));
+
+    renameTrayItem(saved.item.id, 'Morning line');
+    stored = JSON.parse(held.raw() ?? '');
+    assert.equal(stored.items[0].name, 'Morning line');
+    assert.equal(JSON.stringify(stored.items[1]), JSON.stringify(unknown));
+
+    const removed = removeTrayItem(saved.item.id);
+    assert.ok(removed);
+    stored = JSON.parse(held.raw() ?? '');
+    assert.equal(stored.items.length, 1);
+    assert.equal(JSON.stringify(stored.items[0]), JSON.stringify(unknown));
+  } finally {
+    held.restore();
+  }
+});
+
+void test('the cap evicts the oldest known item and never an unknown one', () => {
+  const oldest = { ...phrase(), id: 'old', name: 'Old', savedAt: 1 };
+  const newer = { ...phrase(), id: 'newer', name: 'Newer', savedAt: 50 };
+  const unknowns = Array.from({ length: 78 }, (_item, index) =>
+    futureScale(`future-${index}`),
+  );
+  const items = [
+    newer,
+    ...unknowns.slice(0, 10),
+    oldest,
+    ...unknowns.slice(10),
+  ];
+  assert.equal(items.length, 80);
+  const held = installTray(JSON.stringify({ version: 1, items }));
+  try {
+    const saved = savePhrase(phraseInput());
+    assert.equal(saved.status, 'evicted');
+    assert.equal(
+      traySaveMessage(saved.status),
+      'Tray full, removed the oldest phrase.',
+    );
+    const stored = JSON.parse(held.raw() ?? '');
+    assert.equal(stored.items.length, 80);
+    const ids = stored.items.map((item: { id: string }) => item.id);
+    assert.equal(ids.includes('old'), false);
+    assert.equal(ids.includes('newer'), true);
+    assert.equal(ids[0], saved.item?.id);
+    for (const unknown of unknowns) {
+      const found = stored.items.find(
+        (item: { id: string }) => item.id === unknown.id,
+      );
+      assert.equal(JSON.stringify(found), JSON.stringify(unknown));
+    }
+  } finally {
+    held.restore();
+  }
+});
+
+void test('a tray of only unknown items refuses the next save', () => {
+  const items = Array.from({ length: 80 }, (_item, index) =>
+    futureScale(`future-${index}`),
+  );
+  const raw = JSON.stringify({ version: 1, items });
+  const held = installTray(raw);
+  try {
+    const saved = savePhrase(phraseInput());
+    assert.equal(saved.status, 'full');
+    assert.equal(saved.item, null);
+    assert.equal(traySaveMessage(saved.status), 'Tray is full.');
+    assert.equal(held.raw(), raw);
+    assert.deepEqual(getTray().items, []);
+  } finally {
+    held.restore();
+  }
+});
+
+void test('a storage-full throw does not report success or change data', () => {
+  const raw = JSON.stringify({ version: 1, items: [phrase()] });
+  const value = raw;
+  const previous = globalThis.localStorage;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem(key: string) {
+        return key === TRAY_KEY ? value : null;
+      },
+      setItem() {
+        throw new Error('QuotaExceededError');
+      },
+    },
+  });
+  onTrayStorage(TRAY_KEY);
+  try {
+    const saved = savePhrase(phraseInput());
+    assert.equal(saved.status, 'failed');
+    assert.equal(saved.item, null);
+    assert.equal(value, raw);
+    assert.equal(getTray().items[0]?.id, 'phrase-1');
+    assert.notEqual(traySaveMessage(saved.status), 'Saved to tray.');
+  } finally {
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: previous,
+    });
+    onTrayStorage(TRAY_KEY);
+  }
+});
+
+void test('undo puts a deleted item back at its original slot', () => {
+  const unknown = futureScale();
+  const first = { ...phrase(), id: 'a', name: 'A' };
+  const second = { ...phrase(), id: 'b', name: 'B', savedAt: 2 };
+  const held = installTray(
+    JSON.stringify({ version: 1, items: [first, unknown, second] }),
+  );
+  try {
+    const removed = removeTrayItem('b');
+    assert.ok(removed);
+    assert.equal(removed.index, 2);
+    let stored = JSON.parse(held.raw() ?? '');
+    assert.deepEqual(
+      stored.items.map((item: { id: string }) => item.id),
+      ['a', 'future-1'],
+    );
+    insertTrayItem(removed.item, removed.index);
+    stored = JSON.parse(held.raw() ?? '');
+    assert.deepEqual(
+      stored.items.map((item: { id: string }) => item.id),
+      ['a', 'future-1', 'b'],
+    );
+    assert.equal(JSON.stringify(stored.items[1]), JSON.stringify(unknown));
+  } finally {
+    held.restore();
+  }
+});
+
+void test('export filenames keep letters and numbers and drop path characters', () => {
+  assert.equal(trayFilename('Café / ligne\n', 'txt'), 'café-ligne.txt');
+  assert.equal(trayFilename('../A Dorian', 'mid'), 'a-dorian.mid');
+  assert.equal(trayFilename('riffs_01', 'txt'), 'riffs-01.txt');
+  assert.equal(trayFilename('   \u0000', 'mid'), 'phrase.mid');
+});
+
+void test('focus wrap moves off either end and stops a foreign player', () => {
+  assert.equal(trayFocusMove({ count: 4, index: 3, shift: false }), 0);
+  assert.equal(trayFocusMove({ count: 4, index: 0, shift: true }), 3);
+  assert.equal(trayFocusMove({ count: 4, index: -1, shift: false }), 0);
+  assert.equal(trayFocusMove({ count: 4, index: -1, shift: true }), 3);
+  assert.equal(trayFocusMove({ count: 4, index: 1, shift: false }), null);
+  assert.equal(trayFocusMove({ count: 4, index: 2, shift: true }), null);
+  assert.equal(phraseStopApplies('panel', 'tray'), true);
+  assert.equal(phraseStopApplies('panel', 'panel'), false);
+  assert.equal(phraseStopApplies('tray', 'panel'), true);
+  assert.equal(phraseStopApplies('tray', 'tray'), false);
+});
+
+function installTray(initial: string | null) {
+  let value = initial;
+  const writes: string[] = [];
+  const previous = globalThis.localStorage;
+  const storage = {
+    getItem(key: string) {
+      return key === TRAY_KEY ? value : null;
+    },
+    setItem(key: string, next: string) {
+      if (key !== TRAY_KEY) return;
+      writes.push(next);
+      value = next;
+    },
+    writes,
+    raw: () => value,
+    restore() {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: previous,
+      });
+      onTrayStorage(TRAY_KEY);
+    },
+  };
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: storage,
+  });
+  Object.defineProperty(storage, 'value', {
+    get: () => value,
+    set: (next: string) => {
+      value = next;
+    },
+  });
+  onTrayStorage(TRAY_KEY);
+  return storage as typeof storage & { value: string };
+}
 
 void test('tab text uses the known phrase fingering and onsets', () => {
   const text = phraseTabText({
@@ -269,6 +553,17 @@ void test('the tray stays out of the eager phrase graph', () => {
   assert.equal(launcher.includes('localStorage'), false);
   assert.match(host, /import\('@\/components\/practice-tray'\)/);
   assert.match(tray, /import\('@\/lib\/phrase-audio'\)/);
+  assert.match(tray, /phraseStopApplies\('tray'/);
+  assert.match(tray, /detail: 'tray'/);
+  assert.match(panel, /phraseStopApplies\('panel'/);
+  assert.match(panel, /traySaveMessage\(saved\.status\)/);
+  assert.equal(panel.includes("saved ? 'Saved to tray.'"), false);
+  const trayLib = readFileSync(
+    new URL('../lib/tray.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(trayLib, /addEventListener\(\s*'storage'/);
+  assert.match(trayLib, /onTrayStorage\(event\.key\)/);
   assert.equal(page.includes("from '@/components/practice-tray'"), false);
   assert.match(page, /PracticeTrayHost/);
   for (const file of [

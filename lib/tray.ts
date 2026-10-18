@@ -3,9 +3,10 @@ import { ROOTS, SCALES, pretty } from './music.ts';
 
 /**
  * Practice tray, version 1.
- * One localStorage key. A missing key is an empty tray. Corrupt or older
- * payloads reset that key to an empty tray. This module does not import
- * the phrase generator.
+ * One localStorage key. A missing key is an empty tray. A blob this version
+ * cannot read stays in storage and this tab does not write. Items this
+ * version does not understand stay in the saved list and are written back
+ * in their original places. This module does not import the phrase generator.
  */
 export const TRAY_KEY = 'progger.tray.v1';
 export const TRAY_MAX_ITEMS = 80;
@@ -212,13 +213,63 @@ export function defaultChordName(input: {
   return `${symbol} · ${where}`;
 }
 
+function withoutPathOrControls(name: string): string {
+  let kept = '';
+  for (const char of name) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code <= 31 || code === 127 || char === '/' || char === '\\') continue;
+    kept += char;
+  }
+  return kept;
+}
+
 export function trayFilename(name: string, extension: 'txt' | 'mid'): string {
-  const slug = name
+  const slug = withoutPathOrControls(name)
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 48);
   return `${slug || 'phrase'}.${extension}`;
+}
+
+export type TraySaveStatus = 'saved' | 'evicted' | 'full' | 'failed';
+
+export type TraySaveResult = {
+  status: TraySaveStatus;
+  item: TrayItem | null;
+};
+
+export function traySaveMessage(
+  status: TraySaveStatus,
+  subject: 'phrase' | 'view' = 'phrase',
+): string {
+  if (status === 'saved') return 'Saved to tray.';
+  if (status === 'evicted') return 'Tray full, removed the oldest phrase.';
+  if (status === 'full') return 'Tray is full.';
+  return subject === 'view'
+    ? 'Could not save this view.'
+    : 'Could not save this phrase.';
+}
+
+/** Where Tab should land. `null` leaves the browser on its next control. */
+export function trayFocusMove(input: {
+  count: number;
+  index: number;
+  shift: boolean;
+}): number | null {
+  if (input.count <= 0) return null;
+  if (input.index < 0) return input.shift ? input.count - 1 : 0;
+  if (input.shift && input.index === 0) return input.count - 1;
+  if (!input.shift && input.index === input.count - 1) return 0;
+  return null;
+}
+
+/** A phrase player stops for every stop event except the one it just sent. */
+export function phraseStopApplies(
+  owner: 'panel' | 'tray',
+  detail: unknown,
+): boolean {
+  return detail !== owner;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -580,12 +631,23 @@ function itemOf(value: unknown): TrayItem | null {
   return null;
 }
 
-/** A payload that is not version 1 in this shape asks the caller to reset. */
-export function parseTray(raw: string | null): {
-  state: TrayState;
-  reset: boolean;
-} {
-  if (raw == null) return { state: EMPTY_TRAY, reset: false };
+type Slot = { raw: unknown; item: TrayItem | null };
+
+type TrayDoc = {
+  writable: boolean;
+  slots: Slot[];
+};
+
+function project(doc: TrayDoc): TrayState {
+  return {
+    version: 1,
+    items: doc.slots.flatMap((slot) => (slot.item ? [slot.item] : [])),
+  };
+}
+
+function interpret(raw: string | null, failedRead = false): TrayDoc {
+  if (failedRead) return { writable: false, slots: [] };
+  if (raw == null) return { writable: true, slots: [] };
   try {
     const parsed: unknown = JSON.parse(raw);
     if (
@@ -593,46 +655,46 @@ export function parseTray(raw: string | null): {
       parsed.version !== 1 ||
       !Array.isArray(parsed.items)
     ) {
-      return { state: EMPTY_TRAY, reset: true };
+      return { writable: false, slots: [] };
     }
-    if (parsed.items.length > TRAY_MAX_ITEMS)
-      return { state: EMPTY_TRAY, reset: true };
-    const items: TrayItem[] = [];
+    const slots: Slot[] = [];
     const ids = new Set<string>();
     for (const entry of parsed.items) {
       const item = itemOf(entry);
-      if (!item || ids.has(item.id)) return { state: EMPTY_TRAY, reset: true };
-      ids.add(item.id);
-      items.push(item);
+      if (item && !ids.has(item.id)) {
+        ids.add(item.id);
+        slots.push({ raw: entry, item });
+      } else {
+        slots.push({ raw: entry, item: null });
+      }
     }
-    return { state: { version: 1, items }, reset: false };
+    return { writable: true, slots };
   } catch {
-    return { state: EMPTY_TRAY, reset: true };
+    return { writable: false, slots: [] };
   }
 }
 
+export function parseTray(raw: string | null): {
+  state: TrayState;
+  writable: boolean;
+} {
+  const doc = interpret(raw);
+  return { state: project(doc), writable: doc.writable };
+}
+
 export function readTray(storage: TrayStorage): TrayState {
-  let raw: string | null = null;
   try {
-    raw = storage.getItem(TRAY_KEY);
+    return project(interpret(storage.getItem(TRAY_KEY)));
   } catch {
     return EMPTY_TRAY;
   }
-  const parsed = parseTray(raw);
-  if (parsed.reset) {
-    try {
-      storage.setItem(TRAY_KEY, JSON.stringify(EMPTY_TRAY));
-    } catch {
-      // Private mode can refuse the write. The session still shows an empty tray.
-    }
-  }
-  return parsed.state;
 }
 
 export function writeTray(storage: TrayStorage, state: TrayState): void {
   storage.setItem(TRAY_KEY, JSON.stringify(state));
 }
 
+let doc: TrayDoc | null = null;
 let cache: TrayState | null = null;
 const listeners = new Set<() => void>();
 
@@ -649,11 +711,23 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
-export function getTray(): TrayState {
-  if (!cache) {
-    const storage = browserStorage();
-    cache = storage ? readTray(storage) : EMPTY_TRAY;
+function loadDoc(): TrayDoc {
+  const storage = browserStorage();
+  if (!storage) return { writable: true, slots: [] };
+  try {
+    return interpret(storage.getItem(TRAY_KEY));
+  } catch {
+    return interpret(null, true);
   }
+}
+
+function current(): TrayDoc {
+  if (!doc) doc = loadDoc();
+  return doc;
+}
+
+export function getTray(): TrayState {
+  if (!cache) cache = project(current());
   return cache;
 }
 
@@ -664,29 +738,74 @@ export function subscribeTray(listener: () => void): () => void {
   };
 }
 
-function commit(state: TrayState): void {
-  cache = state;
-  const storage = browserStorage();
-  if (storage) {
-    try {
-      writeTray(storage, state);
-    } catch {
-      // The in-memory tray still updates for this visit.
-    }
-  }
+/** Storage events only refresh memory. They never write. */
+export function onTrayStorage(key: string | null): void {
+  if (key !== TRAY_KEY) return;
+  doc = null;
+  cache = null;
   emit();
 }
 
-function remember(item: TrayItem): TrayItem | null {
-  const checked = parseTray(JSON.stringify({ version: 1, items: [item] }));
-  const stored = checked.state.items[0];
-  if (checked.reset || !stored) return null;
-  const items = [
-    stored,
-    ...getTray().items.filter((entry) => entry.id !== stored.id),
-  ];
-  commit({ version: 1, items: items.slice(0, TRAY_MAX_ITEMS) });
-  return stored;
+function commit(next: TrayDoc): boolean {
+  if (!next.writable) return false;
+  const storage = browserStorage();
+  if (storage) {
+    try {
+      storage.setItem(
+        TRAY_KEY,
+        JSON.stringify({
+          version: 1,
+          items: next.slots.map((slot) => slot.raw),
+        }),
+      );
+    } catch {
+      return false;
+    }
+  }
+  doc = next;
+  cache = project(next);
+  emit();
+  return true;
+}
+
+function oldestKnown(slots: Slot[]): number {
+  let pick = -1;
+  for (let index = 0; index < slots.length; index += 1) {
+    const item = slots[index]?.item;
+    if (!item) continue;
+    if (pick < 0) {
+      pick = index;
+      continue;
+    }
+    const best = slots[pick]?.item;
+    if (!best) continue;
+    if (
+      item.savedAt < best.savedAt ||
+      (item.savedAt === best.savedAt && index > pick)
+    ) {
+      pick = index;
+    }
+  }
+  return pick;
+}
+
+function remember(item: TrayItem): TraySaveResult {
+  const open = current();
+  if (!open.writable) return { status: 'failed', item: null };
+  const checked = itemOf(item);
+  if (!checked) return { status: 'failed', item: null };
+  const slots = open.slots.filter((slot) => slot.item?.id !== checked.id);
+  let status: TraySaveStatus = 'saved';
+  if (slots.length >= TRAY_MAX_ITEMS) {
+    const drop = oldestKnown(slots);
+    if (drop < 0) return { status: 'full', item: null };
+    slots.splice(drop, 1);
+    status = 'evicted';
+  }
+  slots.unshift({ raw: checked, item: checked });
+  if (!commit({ writable: true, slots }))
+    return { status: 'failed', item: null };
+  return { status, item: checked };
 }
 
 function newId(): string {
@@ -703,7 +822,7 @@ export function savePhrase(
   input: Omit<TrayPhrase, 'id' | 'type' | 'savedAt' | 'name'> & {
     name?: string;
   },
-): TrayPhrase | null {
+): TraySaveResult {
   const name = text(input.name ?? '', 80) ?? defaultPhraseName(input);
   const saved = remember({
     ...input,
@@ -712,11 +831,14 @@ export function savePhrase(
     name,
     savedAt: Date.now(),
   });
-  return saved && saved.type === 'phrase' ? saved : null;
+  if (saved.item && saved.item.type !== 'phrase') {
+    return { status: 'failed', item: null };
+  }
+  return saved;
 }
 
-export function saveView(view: TrayLiveView): TrayItem | null {
-  if (!view) return null;
+export function saveView(view: TrayLiveView): TraySaveResult {
+  if (!view) return { status: 'failed', item: null };
   if (view.kind === 'scale') {
     return remember({
       type: 'scale',
@@ -754,37 +876,42 @@ export function saveView(view: TrayLiveView): TrayItem | null {
 export function renameTrayItem(id: string, name: string): void {
   const next = text(name, 80);
   if (!next) return;
-  commit({
-    version: 1,
-    items: getTray().items.map((item) =>
-      item.id === id ? { ...item, name: next } : item,
-    ),
+  const open = current();
+  if (!open.writable) return;
+  const slots = open.slots.map((slot) => {
+    if (!slot.item || slot.item.id !== id) return slot;
+    const item = { ...slot.item, name: next };
+    const raw = isRecord(slot.raw) ? { ...slot.raw, name: next } : item;
+    return { raw, item };
   });
+  commit({ writable: true, slots });
 }
 
 export function removeTrayItem(
   id: string,
 ): { item: TrayItem; index: number } | null {
-  const items = getTray().items;
-  const index = items.findIndex((item) => item.id === id);
+  const open = current();
+  if (!open.writable) return null;
+  const index = open.slots.findIndex((slot) => slot.item?.id === id);
   if (index < 0) return null;
-  const item = items[index];
+  const item = open.slots[index]?.item;
   if (!item) return null;
-  commit({ version: 1, items: items.filter((entry) => entry.id !== id) });
+  const slots = open.slots.filter((_, slot) => slot !== index);
+  if (!commit({ writable: true, slots })) return null;
   return { item, index };
 }
 
 export function insertTrayItem(item: TrayItem, index: number): void {
-  const items = getTray().items.filter((entry) => entry.id !== item.id);
-  const at = Math.max(0, Math.min(index, items.length));
-  items.splice(at, 0, item);
-  commit({ version: 1, items });
+  const open = current();
+  if (!open.writable) return;
+  const slots = open.slots.filter((slot) => slot.item?.id !== item.id);
+  const at = Math.max(0, Math.min(index, slots.length));
+  slots.splice(at, 0, { raw: item, item });
+  commit({ writable: true, slots });
 }
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
-    if (event.key !== TRAY_KEY) return;
-    cache = null;
-    emit();
+    onTrayStorage(event.key);
   });
 }

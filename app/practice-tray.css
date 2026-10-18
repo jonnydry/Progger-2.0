@@ -47,9 +47,12 @@
 }
 
 .practice-tray-root {
+  --tray-blur: 40px;
+  --tray-tint: 90%;
+  --tray-tint-solid: 97%;
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 90;
   display: flex;
   justify-content: flex-end;
   pointer-events: none;
@@ -88,20 +91,47 @@ dialog.practice-tray-panel {
   padding: 0;
   pointer-events: auto;
   color: var(--foreground);
-  background: color-mix(in srgb, var(--card) 78%, transparent);
+  background: transparent;
   border: 0;
   border-left: 1px solid color-mix(in srgb, var(--foreground) 18%, transparent);
   border-radius: 0;
   box-shadow: -18px 0 48px rgb(0 0 0 / 0.32);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
   transform: translateX(100%);
   transition: transform 220ms ease;
+  isolation: isolate;
+}
+
+dialog.practice-tray-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--card) var(--tray-tint), transparent);
+  backdrop-filter: blur(var(--tray-blur)) saturate(1.15);
+  -webkit-backdrop-filter: blur(var(--tray-blur)) saturate(1.15);
+}
+
+@supports not
+((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  dialog.practice-tray-panel::before {
+    background: color-mix(
+      in srgb,
+      var(--card) var(--tray-tint-solid),
+      transparent
+    );
+  }
 }
 
 html[data-theme='day'] .practice-tray-panel {
-  background: color-mix(in srgb, var(--card) 84%, transparent);
   box-shadow: -16px 0 40px rgb(18 54 47 / 0.16);
+}
+
+.practice-tray-head,
+.practice-tray-body,
+.practice-tray-toast {
+  position: relative;
+  z-index: 1;
 }
 
 .practice-tray-root.is-in .practice-tray-backdrop {
@@ -215,13 +245,26 @@ html[data-theme='day'] .practice-tray-panel {
   min-width: 0;
 }
 
-.practice-tray-group h3 {
+.practice-tray-group h3,
+.practice-tray-empty {
   margin: 0;
   color: var(--quiet);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+.practice-tray-empty:focus {
+  outline: 2px solid var(--green);
+  outline-offset: 4px;
+}
+
+.practice-tray-export-note {
+  margin: 4px 0 0;
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .practice-tray-group ul {
