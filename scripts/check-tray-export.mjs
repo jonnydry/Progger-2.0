@@ -66,11 +66,15 @@ try {
   shotDir = null;
 }
 const browsers = [
-  ['chromium', chromium, { args: ['--no-sandbox', '--use-angle=swiftshader'] }],
-  ['firefox', firefox, {}],
+  {
+    name: 'chromium',
+    type: chromium,
+    options: { args: ['--no-sandbox', '--use-angle=swiftshader'] },
+  },
+  { name: 'firefox', type: firefox, options: {} },
 ];
 try {
-  for (const [name, type, options] of browsers) {
+  for (const { name, type, options } of browsers) {
     const browser = await type.launch({ headless: true, ...options });
     try {
       const page = await browser.newPage({ deviceScaleFactor: 1 });
