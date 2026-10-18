@@ -4,10 +4,15 @@
  * The sweep writes tests/fixtures/headroom-worst.json with JSON.stringify
  * indent 2. Arrays then sit one element per line, and `seconds` is wall-clock
  * time, so `git diff --quiet` reports a change every night. Compare the
- * parsed cases instead. Floats within 1e-6 match. `seconds` is ignored. A
- * reorder counts only when the cases that moved are not a near tie on
- * prediction, which is what the sweep sorts by. A real change is rewritten
- * in the committed fixture style (compact number arrays).
+ * parsed cases instead. `prediction` and `confirmed` within 1e-6 match.
+ * `seconds` is ignored. Note and chord offsets come from the 11-point 4 ms
+ * timing grid. A move of at most four of those steps is not a change when
+ * prediction and confirmed stay within 1e-6: the loudest offset can flip a
+ * short way while the measured headroom does not. A longer jump, or an
+ * offset that is not on that grid, still has to match within 1e-6. A
+ * reorder counts only when the cases that moved are
+ * not a near tie on prediction, which is what the sweep sorts by. A real
+ * change is rewritten in the committed fixture style (compact number arrays).
  *
  * Run: node --experimental-strip-types scripts/headroom-fixture-changed.ts <fixture>
  */
@@ -15,8 +20,28 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { sep } from 'node:path';
 
-/** Absolute tolerance for shifts, prediction, confirmed, and near-tie order. */
+/** Absolute tolerance for prediction, confirmed, off-grid offsets, and near-tie order. */
 export const HEADROOM_FLOAT_TOLERANCE = 1e-6;
+
+/**
+ * Step of `TIMING_OFFSETS` in tests/drone-headroom-run.ts.
+ * The sweep stores note and chord offsets from the 11 points
+ * `(step - 5) * HEADROOM_TIMING_STEP`, which is −0.02 through 0.02.
+ */
+export const HEADROOM_TIMING_STEP = 0.004;
+
+/**
+ * Grid steps an offset may move while the peaks still match.
+ * Pull request 41 moved one note by 2 steps (8 ms) and the confirmed peak
+ * did not change. Four steps (16 ms) covers that flicker. Five steps is a
+ * different alignment, as is anything outside the 11-point grid.
+ */
+export const HEADROOM_OFFSET_STEP_LIMIT = 4;
+
+const TIMING_GRID = Array.from(
+  { length: 11 },
+  (_, step) => (step - 5) * HEADROOM_TIMING_STEP,
+);
 
 type WorstCase = {
   sound: string;
@@ -124,6 +149,25 @@ function close(left: number, right: number): boolean {
   return Math.abs(left - right) <= HEADROOM_FLOAT_TOLERANCE;
 }
 
+/** Index on the 11-point search grid, or null when the offset is not one of those points. */
+function gridIndex(value: number): number | null {
+  const index = TIMING_GRID.indexOf(value);
+  return index < 0 ? null : index;
+}
+
+/**
+ * Off-grid dust has to match within the headroom tolerance. Two search-grid
+ * points at most HEADROOM_OFFSET_STEP_LIMIT apart are the same result when
+ * prediction and confirmed already matched.
+ */
+function offsetsMatch(left: number, right: number): boolean {
+  if (close(left, right)) return true;
+  const from = gridIndex(left);
+  const to = gridIndex(right);
+  if (from === null || to === null) return false;
+  return Math.abs(from - to) <= HEADROOM_OFFSET_STEP_LIMIT;
+}
+
 function identityKey(item: WorstCase): string {
   return [
     item.sound,
@@ -141,18 +185,20 @@ function identityKey(item: WorstCase): string {
 }
 
 function floatsMatch(left: WorstCase, right: WorstCase): boolean {
+  if (
+    !close(left.prediction, right.prediction) ||
+    !close(left.confirmed, right.confirmed)
+  ) {
+    return false;
+  }
   if (left.noteShifts.length !== right.noteShifts.length) return false;
   for (let index = 0; index < left.noteShifts.length; index += 1) {
     const shift = left.noteShifts[index];
     const other = right.noteShifts[index];
-    if (shift === undefined || other === undefined || !close(shift, other))
+    if (shift === undefined || other === undefined || !offsetsMatch(shift, other))
       return false;
   }
-  return (
-    close(left.chordShift, right.chordShift) &&
-    close(left.prediction, right.prediction) &&
-    close(left.confirmed, right.confirmed)
-  );
+  return offsetsMatch(left.chordShift, right.chordShift);
 }
 
 /** The sweep sorts by prediction only, so only that tie can swap order. */

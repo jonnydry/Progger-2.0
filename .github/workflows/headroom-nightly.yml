@@ -90,8 +90,9 @@ jobs:
             echo "${delimiter}"
           } >> "$GITHUB_OUTPUT"
           # Parsed cases, not git diff. Seconds, one-per-line arrays, float
-          # noise within 1e-6, and near-tie order swaps are not a change.
-          # A real change is rewritten in the committed fixture style.
+          # noise within 1e-6, an offset move of at most four 4 ms grid steps
+          # whose peaks stay within 1e-6, and near-tie order swaps are not a
+          # change. A real change is rewritten in the committed fixture style.
           decision=$(node --experimental-strip-types scripts/headroom-fixture-changed.ts tests/fixtures/headroom-worst.json)
           printf '%s\n' "$decision" >> "$GITHUB_OUTPUT"
           case "$decision" in
