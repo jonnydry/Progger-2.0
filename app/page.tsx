@@ -28,7 +28,14 @@ import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
 import { NeckDisplay } from '@/components/neck-display';
 import { PhraseLauncher } from '@/components/phrase-launcher';
+import { PracticeTrayHost } from '@/components/practice-tray-host';
 import type { PhraseFretMark } from '@/lib/phrase-marks';
+import {
+  PHRASE_STOP_EVENT,
+  type TrayChordRef,
+  type TrayItem,
+  type TrayPhrase,
+} from '@/lib/tray';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
 import { scaleReturnFocusId } from '@/lib/explore-focus';
 import { nearestPatternIndex } from '@/lib/practice-position';
@@ -67,6 +74,22 @@ function wrappedTitleClass(kind: string, scaleId: string): string {
   return '';
 }
 
+function chordRecord(chord: TrayChordRef): Chord | null {
+  const quality = QUALITIES.find((entry) => entry.id === chord.qualityId);
+  if (!quality) return null;
+  const tones = chord.notes.filter((note) => note.degree !== 'bass');
+  const notes = tones.length ? tones : chord.notes;
+  return {
+    original: chord.symbol,
+    root: chord.root,
+    quality,
+    bass: chord.bass,
+    notes,
+    pcs: [...new Set(notes.map((note) => note.pc))],
+    symbol: chord.symbol,
+  };
+}
+
 export default function Home() {
   const [page, setPage] = useState('explore'),
     [kind, setKind] = useState('scales');
@@ -92,6 +115,9 @@ export default function Home() {
     readonly PhraseFretMark[] | null
   >(null);
   const [phraseFocus, setPhraseFocus] = useState<number | null>(null);
+  const [heldPhrase, setHeldPhrase] = useState<TrayPhrase | null>(null);
+  const [phraseOpenSignal, setPhraseOpenSignal] = useState(0);
+  const releaseHeld = useCallback(() => setHeldPhrase(null), []);
   const showPhraseMarks = useCallback(
     (marks: readonly PhraseFretMark[] | null, focus: number | null) => {
       setPhraseMarks(marks);
@@ -405,7 +431,15 @@ export default function Home() {
     [scaleRoot, scale],
   );
   const phraseChord = useMemo(() => {
-    if (kind === 'chords') return { symbol: `${root}${quality.symbol}`, notes };
+    if (kind === 'chords') {
+      return {
+        symbol: `${root}${quality.symbol}`,
+        notes,
+        root,
+        qualityId,
+        fromContext: false,
+      };
+    }
     if (currentChord) {
       const bassPc = currentChord.bass ? pitchClass(currentChord.bass) : null;
       const slashBass =
@@ -417,10 +451,17 @@ export default function Home() {
               { name: currentChord.bass, pc: bassPc, degree: 'bass' },
             ]
           : currentChord.notes;
-      return { symbol: currentChord.symbol, notes: slashBass };
+      return {
+        symbol: currentChord.symbol,
+        notes: slashBass,
+        root: currentChord.root,
+        qualityId: currentChord.quality.id,
+        bass: currentChord.bass,
+        fromContext: true,
+      };
     }
     return null;
-  }, [kind, root, quality, notes, currentChord]);
+  }, [kind, root, quality, qualityId, notes, currentChord]);
   const outside = soundingNotes.filter(
     (n) => !notes.some((scaleNote) => scaleNote.pc === n.pc),
   );
@@ -520,6 +561,150 @@ export default function Home() {
       }}
     />
   );
+  const phraseContextKey = `${kind}|${scaleRoot}|${scaleId}|${chordRoot}|${qualityId}|${currentChord?.symbol ?? ''}`;
+  const trayCapture = {
+    position,
+    view,
+    place: kind === 'chords' ? ('chord' as const) : ('scale' as const),
+    degrees,
+    left,
+    chordRoot,
+    qualityId,
+    chordView,
+    voicingIndex,
+    voicingBass,
+    voicingStrings,
+    voicingNearFret,
+  };
+  const trayView =
+    page !== 'explore'
+      ? null
+      : kind === 'chords'
+        ? {
+            kind: 'chord' as const,
+            chordRoot,
+            qualityId,
+            qualitySymbol: quality.symbol,
+            qualityName: quality.name,
+            chordView,
+            voicingIndex,
+            voicingBass,
+            voicingStrings,
+            voicingNearFret,
+            degrees,
+            left,
+            scaleRoot,
+            scaleId,
+          }
+        : {
+            kind: 'scale' as const,
+            scaleRoot,
+            scaleId,
+            scaleName: scale.name,
+            view,
+            position,
+            degrees,
+            left,
+            chord: currentChord
+              ? {
+                  symbol: currentChord.symbol,
+                  root: currentChord.root,
+                  qualityId: currentChord.quality.id,
+                  bass: currentChord.bass,
+                  notes: currentChord.notes.map((note) => ({
+                    name: note.name,
+                    pc: note.pc,
+                    degree: note.degree,
+                  })),
+                  fromContext: true as const,
+                }
+              : null,
+          };
+  function restoreTrayItem(item: TrayItem) {
+    window.dispatchEvent(
+      new CustomEvent(PHRASE_STOP_EVENT, { detail: 'restore' }),
+    );
+    setLocalChoice(null);
+    const fit = (
+      rootNote: string,
+      nextScaleId: string,
+      index: number,
+      nextView: 'map' | 'pattern',
+    ) => {
+      const nextScale = SCALES.find((entry) => entry.id === nextScaleId);
+      const count = nextScale
+        ? patterns(spell(rootNote, nextScale.formula)).length
+        : 0;
+      if (!count) return { position: 0, view: 'map' as const };
+      return { position: Math.min(index, count - 1), view: nextView };
+    };
+    navigate('explore');
+    setDegrees(item.degrees);
+    setLeft(item.left);
+    if (item.type === 'chord') {
+      setHeldPhrase(null);
+      setScaleRoot(item.scaleRoot);
+      setScaleId(item.scaleId);
+      setKind('chords');
+      setChordRoot(item.chordRoot);
+      setQualityId(item.qualityId);
+      setChordView(item.chordView);
+      setVoicingBass(item.voicingBass);
+      setVoicingStrings(item.voicingStrings);
+      setVoicingNearFret(item.voicingNearFret);
+      setVoicingIndex(item.voicingIndex);
+      setContext([]);
+      return;
+    }
+    if (item.type === 'scale') {
+      setHeldPhrase(null);
+      const placed = fit(
+        item.scaleRoot,
+        item.scaleId,
+        item.position,
+        item.view,
+      );
+      setKind('scales');
+      setScaleRoot(item.scaleRoot);
+      setScaleId(item.scaleId);
+      setView(placed.view);
+      setPosition(placed.position);
+      const highlighted = item.chord ? chordRecord(item.chord) : null;
+      setContext(highlighted ? [highlighted] : []);
+      setActiveChord(0);
+      return;
+    }
+    setScaleRoot(item.key);
+    setScaleId(item.scaleId);
+    const placed = fit(item.key, item.scaleId, item.position, item.view);
+    setView(placed.view);
+    setPosition(placed.position);
+    if (item.place === 'chord') {
+      setKind('chords');
+      setChordRoot(item.chordRoot);
+      setQualityId(item.qualityId);
+      setChordView(item.chordView);
+      setVoicingBass(item.voicingBass);
+      setVoicingStrings(item.voicingStrings);
+      setVoicingNearFret(item.voicingNearFret);
+      setVoicingIndex(item.voicingIndex);
+      setContext([]);
+    } else {
+      setKind('scales');
+      const highlighted = item.chord?.fromContext
+        ? chordRecord(item.chord)
+        : null;
+      setContext(highlighted ? [highlighted] : []);
+      setActiveChord(0);
+    }
+    setHeldPhrase(item);
+    setPhraseOpenSignal((signal) => signal + 1);
+    window.setTimeout(() => {
+      document
+        .getElementById('phrase-practice')
+        ?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    }, 0);
+  }
   return (
     <div
       className={`app-shell night-swim ${page === 'explore' && practice ? 'practice-view' : ''}`}
@@ -550,7 +735,10 @@ export default function Home() {
             Match chords
           </a>
         </nav>
-        <ThemeToggle />
+        <div className="header-utilities">
+          <PracticeTrayHost view={trayView} onRestore={restoreTrayItem} />
+          <ThemeToggle />
+        </div>
       </header>
       <main id="main-content" tabIndex={-1}>
         <h1 className="sr-only">
@@ -847,6 +1035,11 @@ export default function Home() {
                     scaleName={scale.name}
                     scaleNotes={phraseScaleNotes}
                     chord={phraseChord}
+                    held={heldPhrase}
+                    contextKey={phraseContextKey}
+                    onReleaseHeld={releaseHeld}
+                    capture={trayCapture}
+                    openSignal={phraseOpenSignal}
                     onMarks={showPhraseMarks}
                   />
                   <div id="phrase-tab-host" className="phrase-tab-host" />

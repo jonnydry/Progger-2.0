@@ -35,6 +35,12 @@ import {
   type PhraseLocks,
 } from '@/lib/phrase';
 import { publishPhrasePlayhead, type PhraseFretMark } from '@/lib/phrase-marks';
+import {
+  PHRASE_STOP_EVENT,
+  savePhrase,
+  type TrayPhrase,
+  type TrayPhraseCapture,
+} from '@/lib/tray';
 import '@/app/phrase.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
@@ -47,6 +53,10 @@ export function PhrasePanel({
   scaleName,
   scaleNotes,
   chord,
+  held = null,
+  contextKey = '',
+  onReleaseHeld,
+  capture,
   dots = 'shown',
   locks = EMPTY_LOCKS,
   onMarks,
@@ -56,7 +66,18 @@ export function PhrasePanel({
   scaleId: string;
   scaleName: string;
   scaleNotes: readonly Note[];
-  chord: { symbol: string; notes: readonly Note[] } | null;
+  chord: {
+    symbol: string;
+    notes: readonly Note[];
+    root: string;
+    qualityId: string;
+    bass?: string;
+    fromContext: boolean;
+  } | null;
+  held?: TrayPhrase | null;
+  contextKey?: string;
+  onReleaseHeld?: () => void;
+  capture: TrayPhraseCapture;
   /** Later ear-training step passes `hidden` and keeps the same phrase. */
   dots?: PhraseDotVisibility;
   /** Later songwriting step pins contour, rhythm, register, or cadence. */
@@ -79,23 +100,52 @@ export function PhrasePanel({
   const [seed, setSeed] = useState(() => randomSeed());
   const [seedText, setSeedText] = useState(() => String(seed));
   const [status, setStatus] = useState<PhrasePlayback>('idle');
+  const [notice, setNotice] = useState('');
   const player = useRef<PhrasePlayer | null>(null);
+  const seenHeld = useRef<{ id: string; key: string } | null>(null);
+  const [heldCursor, setHeldCursor] = useState<string | null>(null);
   const live = useRef(false);
   const tempoRef = useRef(tempo);
   const soundingTempo = useRef(tempo);
   const swingRef = useRef(swing);
   const soundingSwing = useRef(swing);
-  const phrase = useMemo(
-    () =>
-      generatePhrase({
-        seed,
-        bars,
-        scaleNotes,
-        chordNotes,
-        locks,
-      }),
-    [seed, bars, scaleNotes, chordNotes, locks],
-  );
+  if ((held?.id ?? null) !== heldCursor) {
+    setHeldCursor(held?.id ?? null);
+    if (held) {
+      setBars(held.bars);
+      setTempo(held.tempo);
+      setSwing(held.swing);
+      setSlow(held.slow);
+      setSeed(held.seed);
+      setSeedText(String(held.seed));
+    }
+  }
+  useEffect(() => {
+    if (!held || heldCursor !== held.id) return;
+    tempoRef.current = held.tempo;
+    swingRef.current = held.swing;
+  }, [held, heldCursor]);
+  const phrase = useMemo(() => {
+    if (held) {
+      return {
+        ok: true as const,
+        phrase: {
+          seed: held.seed,
+          bars: held.bars,
+          plan: held.plan,
+          source: 'rules' as const,
+          notes: held.notes,
+        },
+      };
+    }
+    return generatePhrase({
+      seed,
+      bars,
+      scaleNotes,
+      chordNotes,
+      locks,
+    });
+  }, [held, seed, bars, scaleNotes, chordNotes, locks]);
   if (phrase.ok && phrase.phrase.seed !== seed && seedText === String(seed)) {
     setSeed(phrase.phrase.seed);
     setSeedText(String(phrase.phrase.seed));
@@ -118,13 +168,31 @@ export function PhrasePanel({
       current.stop();
     };
     const unbind = bindPhraseLifecycle(document, window, pause);
+    const onStop = (event: Event) => {
+      if (event instanceof CustomEvent && event.detail === 'panel') return;
+      live.current = false;
+      current.stop();
+    };
+    window.addEventListener(PHRASE_STOP_EVENT, onStop);
     return () => {
+      window.removeEventListener(PHRASE_STOP_EVENT, onStop);
       unbind();
       current.dispose();
       player.current = null;
       publishPhrasePlayhead(null);
     };
   }, []);
+  useEffect(() => {
+    if (!held) {
+      seenHeld.current = null;
+      return;
+    }
+    if (!seenHeld.current || seenHeld.current.id !== held.id) {
+      seenHeld.current = { id: held.id, key: contextKey };
+      return;
+    }
+    if (seenHeld.current.key !== contextKey) onReleaseHeld?.();
+  }, [held, contextKey, onReleaseHeld]);
   useEffect(() => {
     if (!active) {
       live.current = false;
@@ -161,16 +229,72 @@ export function PhrasePanel({
       setSeedText(String(seed));
       return;
     }
+    onReleaseHeld?.();
     setSeed(parsed);
     setSeedText(String(parsed));
   }
   function regenerate() {
+    onReleaseHeld?.();
     const next = randomSeed();
     setSeed(next);
     setSeedText(String(next));
+    setNotice('');
+  }
+  function chooseBars(next: 2 | 4) {
+    onReleaseHeld?.();
+    setBars(next);
+    setNotice('');
+  }
+  function saveToTray() {
+    if (!phrase.ok) return;
+    const saved = savePhrase({
+      notes: phrase.phrase.notes.map((note) => ({
+        name: note.name,
+        pc: note.pc,
+        degree: note.degree,
+        midi: note.midi,
+        beat: note.beat,
+        duration: note.duration,
+        strong: note.strong,
+        chordTone: note.chordTone,
+        string: note.string,
+        fret: note.fret,
+        finger: note.finger,
+        position: note.position,
+        shift: note.shift,
+      })),
+      key: scaleRoot,
+      scaleId,
+      scaleName,
+      chord: chord
+        ? {
+            symbol: chord.symbol,
+            root: chord.root,
+            qualityId: chord.qualityId,
+            bass: chord.bass,
+            notes: chord.notes.map((note) => ({
+              name: note.name,
+              pc: note.pc,
+              degree: note.degree,
+            })),
+            fromContext: chord.fromContext,
+          }
+        : null,
+      bars: phrase.phrase.bars,
+      tempo,
+      slow,
+      swing,
+      plan: phrase.phrase.plan,
+      seed: phrase.phrase.seed,
+      ...capture,
+    });
+    setNotice(saved ? 'Saved to tray.' : 'Could not save this phrase.');
   }
   function startPlayback() {
     if (!phrase.ok) return;
+    window.dispatchEvent(
+      new CustomEvent(PHRASE_STOP_EVENT, { detail: 'panel' }),
+    );
     const tempoNow = clampPhraseTempo(slow ? tempo / 2 : tempo);
     soundingTempo.current = tempoNow;
     soundingSwing.current = swing;
@@ -222,14 +346,14 @@ export function PhrasePanel({
           <button
             type="button"
             aria-pressed={bars === 2}
-            onClick={() => setBars(2)}
+            onClick={() => chooseBars(2)}
           >
             2 bars
           </button>
           <button
             type="button"
             aria-pressed={bars === 4}
-            onClick={() => setBars(4)}
+            onClick={() => chooseBars(4)}
           >
             4 bars
           </button>
@@ -322,6 +446,14 @@ export function PhrasePanel({
         <button
           type="button"
           className="phrase-action"
+          disabled={!phrase.ok}
+          onClick={saveToTray}
+        >
+          Save to tray
+        </button>
+        <button
+          type="button"
+          className="phrase-action"
           aria-pressed={loop}
           onClick={() => setLoop((current) => !current)}
         >
@@ -329,15 +461,17 @@ export function PhrasePanel({
         </button>
       </div>
       <p id="phrase-seed-help" className="phrase-status">
-        {status === 'error'
-          ? 'Audio couldn’t start. Tap Play to try again.'
-          : status === 'starting'
-            ? 'Starting…'
-            : busy
-              ? loop
-                ? 'Looping this phrase.'
-                : 'Playing this phrase.'
-              : 'Same seed replays this phrase.'}
+        {notice
+          ? notice
+          : status === 'error'
+            ? 'Audio couldn’t start. Tap Play to try again.'
+            : status === 'starting'
+              ? 'Starting…'
+              : busy
+                ? loop
+                  ? 'Looping this phrase.'
+                  : 'Playing this phrase.'
+                : 'Same seed replays this phrase.'}
       </p>
       {!phrase.ok && (
         <p className="phrase-status">
