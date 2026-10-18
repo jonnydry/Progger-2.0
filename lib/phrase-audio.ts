@@ -438,12 +438,14 @@ export class PhrasePlayer {
     voices: LiveVoice[];
   } | null = null;
   private handoffTimer: unknown = null;
-  /** Previous pass, kept until its boundary when a queued phrase replaces it. */
-  private outgoing: {
-    at: number;
+  /** Phrases already replaced, fading under the one that just started. */
+  private releases: {
     trim: GainNode | null;
     voices: LiveVoice[];
-  } | null = null;
+    dropped: boolean;
+    timer: unknown;
+    cancel: () => void;
+  }[] = [];
   private clock: PhraseClock | null = null;
   private readonly onState: (state: PhrasePlayback) => void;
 
@@ -579,7 +581,21 @@ export class PhrasePlayer {
     this.cancelQueueTimer();
     const preserved = this.preserved;
     this.preserved = null;
+    let replaced: {
+      at: number;
+      trim: GainNode | null;
+      voices: LiveVoice[];
+    } | null = null;
     if (preserved) {
+      this.scheduler?.stop();
+      this.scheduler = null;
+      this.clearEndTimer();
+      this.voices = [];
+      this.trim = null;
+    } else if (this.scheduler || this.trim || this.voices.length) {
+      // An immediate switch, including plain Loop off, keeps this pass
+      // audible and fades it as the new phrase starts.
+      replaced = { at: 0, trim: this.trim, voices: this.voices.slice() };
       this.scheduler?.stop();
       this.scheduler = null;
       this.clearEndTimer();
@@ -598,6 +614,7 @@ export class PhrasePlayer {
       await resume;
       if (this.disposed || run !== this.serial) {
         if (preserved) this.disconnectPreserved(preserved);
+        if (replaced) this.disconnectPreserved(replaced);
         return;
       }
       // A request that arrived during resume() replaces this one.
@@ -698,9 +715,14 @@ export class PhrasePlayer {
       this.scheduler.start();
       if (run !== this.serial || this.disposed) {
         if (preserved) this.disconnectPreserved(preserved);
+        if (replaced) this.disconnectPreserved(replaced);
         return;
       }
-      if (preserved) this.fadePreserved(preserved, run);
+      if (preserved) this.fadePreserved(preserved);
+      if (replaced) {
+        replaced.at = this.startedAt;
+        this.fadePreserved(replaced);
+      }
       this.onState('playing');
     } catch {
       if (this.disposed || run !== this.serial) return;
@@ -781,36 +803,66 @@ export class PhrasePlayer {
 
   private dropOutgoing(): void {
     this.cancelHandoffTimer();
-    if (!this.outgoing) return;
-    const graph = this.outgoing;
-    this.outgoing = null;
-    this.disconnectPreserved(graph);
+    for (const fade of this.releases.splice(0)) {
+      fade.dropped = true;
+      fade.cancel();
+      this.disconnectPreserved(fade);
+    }
   }
 
-  private fadePreserved(
-    preserved: { at: number; trim: GainNode | null; voices: LiveVoice[] },
-    run: number,
-  ): void {
-    this.outgoing = preserved;
+  /**
+   * Let the phrase that just ended fall away on the same release as a
+   * finished pass. The new phrase starts at `at`; this ramp overlaps it.
+   * Stop does not use this path.
+   */
+  private fadePreserved(preserved: {
+    at: number;
+    trim: GainNode | null;
+    voices: LiveVoice[];
+  }): void {
+    const end = preserved.at + PHRASE_END_RELEASE_SEC;
+    if (preserved.trim) {
+      try {
+        const gain = preserved.trim.gain;
+        gain.cancelScheduledValues(preserved.at);
+        gain.setValueAtTime(gain.value, preserved.at);
+        gain.linearRampToValueAtTime(0, end);
+      } catch {
+        // The context may already be closed.
+      }
+    }
     for (const entry of preserved.voices) {
       for (const { oscillator } of entry.voice.voices) {
         try {
-          oscillator.stop(preserved.at);
+          oscillator.stop(end);
         } catch {
           // Already stopped.
         }
       }
     }
+    const fade = {
+      trim: preserved.trim,
+      voices: preserved.voices,
+      dropped: false,
+      timer: null as unknown,
+      cancel: () => {},
+    };
+    this.releases.push(fade);
     const finish = () => {
-      if (run !== this.serial || this.outgoing !== preserved) return;
-      this.outgoing = null;
-      this.handoffTimer = null;
-      this.disconnectPreserved(preserved);
+      if (fade.dropped) return;
+      fade.dropped = true;
+      this.releases = this.releases.filter((item) => item !== fade);
+      this.disconnectPreserved(fade);
     };
     const now = this.clock?.now() ?? preserved.at;
-    const wait = preserved.at - now;
-    if (wait > 1e-4 && this.clock) {
-      this.handoffTimer = this.clock.after(wait, finish);
+    const wait = end - now;
+    const clock = this.clock;
+    if (wait > 1e-4 && clock) {
+      fade.timer = clock.after(wait, finish);
+      fade.cancel = () => {
+        if (fade.timer != null) clock.cancel(fade.timer);
+        fade.timer = null;
+      };
       return;
     }
     finish();
