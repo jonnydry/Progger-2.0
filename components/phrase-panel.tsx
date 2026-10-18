@@ -99,6 +99,7 @@ export function PhrasePanel({
   const [tempo, setTempo] = useState(PHRASE_TEMPO_DEFAULT);
   const [slow, setSlow] = useState(false);
   const [loop, setLoop] = useState(false);
+  const loopRef = useRef(loop);
   const [seed, setSeed] = useState(() => randomSeed());
   const [seedText, setSeedText] = useState(() => String(seed));
   const [status, setStatus] = useState<PhrasePlayback>('idle');
@@ -194,12 +195,25 @@ export function PhrasePanel({
     if (seenHeld.current.key !== contextKey) onReleaseHeld?.();
   }, [held, contextKey, onReleaseHeld]);
   useEffect(() => {
+    const turnedOff = loopRef.current && !loop;
+    loopRef.current = loop;
     if (!active) {
       live.current = false;
       player.current?.stop();
       return;
     }
-    if (!live.current || !phrase.ok) return;
+    if (!live.current) return;
+    if (!phrase.ok) {
+      live.current = false;
+      player.current?.stop();
+      return;
+    }
+    // Loop off mid-pass keeps this pass and lands on the closing note.
+    // A new start would cut that note and begin again at beat 1.
+    if (turnedOff && player.current?.isLooping) {
+      player.current.finishPass();
+      return;
+    }
     const tempoNow = clampPhraseTempo(
       slow ? tempoRef.current / 2 : tempoRef.current,
     );
