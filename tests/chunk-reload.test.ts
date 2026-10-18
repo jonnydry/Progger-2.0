@@ -2,22 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
-import {
-  CHUNK_RELOAD_GAP_MS,
-  CHUNK_RELOAD_KEY,
-  chunkReloadBootstrap,
-} from '../lib/chunk-reload.ts';
+import { CHUNK_RELOAD_KEY, chunkReloadBootstrap } from '../lib/chunk-reload.ts';
 
-function browser({
-  blocked = false,
-  now = 1_700_000_000_000,
-}: {
-  blocked?: boolean;
-  now?: number;
-} = {}) {
+function browser({ blocked = false }: { blocked?: boolean } = {}) {
   const store = new Map<string, string>();
   const reloads: number[] = [];
-  let clock = now;
   const listeners = new Map<string, (event: Event) => void>();
   const sessionStorage = {
     getItem(key: string) {
@@ -36,18 +25,14 @@ function browser({
     sessionStorage,
     location: {
       reload() {
-        reloads.push(clock);
+        reloads.push(reloads.length + 1);
       },
     },
-    Date: { now: () => clock },
   };
   runInNewContext(chunkReloadBootstrap, globals);
   return {
     reloads,
     stored: () => store.get(CHUNK_RELOAD_KEY) ?? null,
-    at(value: number) {
-      clock = value;
-    },
     failChunk() {
       let prevented = false;
       const event = {
@@ -61,19 +46,14 @@ function browser({
   };
 }
 
-void test('a failed chunk reloads once, then leaves a repeated failure alone', () => {
+void test('a failed chunk reloads once and still rejects the import', () => {
   const page = browser();
-  assert.equal(page.failChunk(), true);
-  assert.deepEqual(page.reloads, [1_700_000_000_000]);
-  assert.equal(page.stored(), '1700000000000');
-
-  page.at(1_700_000_000_000 + CHUNK_RELOAD_GAP_MS - 1);
   assert.equal(page.failChunk(), false);
-  assert.equal(page.reloads.length, 1);
+  assert.deepEqual(page.reloads, [1]);
+  assert.equal(page.stored(), '1');
 
-  page.at(1_700_000_000_000 + CHUNK_RELOAD_GAP_MS);
-  assert.equal(page.failChunk(), true);
-  assert.equal(page.reloads.length, 2);
+  assert.equal(page.failChunk(), false);
+  assert.deepEqual(page.reloads, [1]);
 });
 
 void test('blocked session storage does not reload or swallow the chunk error', () => {
@@ -91,5 +71,6 @@ void test('the document installs the chunk reload before paint', () => {
   assert.match(layout, /chunkReloadBootstrap/);
   assert.match(chunkReloadBootstrap, /vite:preloadError/);
   assert.match(chunkReloadBootstrap, /location\.reload\(\)/);
+  assert.equal(chunkReloadBootstrap.includes('preventDefault'), false);
   assert.equal(chunkReloadBootstrap.includes(CHUNK_RELOAD_KEY), true);
 });
