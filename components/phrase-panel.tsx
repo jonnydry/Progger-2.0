@@ -131,7 +131,12 @@ export function PhrasePanel({
       player.current?.stop();
       return;
     }
-    if (!live.current || !phrase.ok) return;
+    if (!live.current) return;
+    if (!phrase.ok) {
+      live.current = false;
+      player.current?.stop();
+      return;
+    }
     const tempoNow = clampPhraseTempo(
       slow ? tempoRef.current / 2 : tempoRef.current,
     );

@@ -17,6 +17,7 @@ import {
   bindPhraseLifecycle,
   clampPhraseTempo,
   melodyFrets,
+  phraseLoopSeconds,
   schedulePhrase,
   type PhraseClock,
 } from '../lib/phrase-audio.ts';
@@ -25,6 +26,7 @@ import {
   beatAtSeconds,
   generatePhrase,
   onsetSeconds,
+  phrasePeriodBeats,
   SWING_AMOUNT_DEFAULT,
   SWING_AMOUNT_MAX,
   SWING_AMOUNT_MIN,
@@ -56,11 +58,7 @@ function firstAudible(channel: Float32Array, floor: number): number {
   return -1;
 }
 
-async function renderNote(
-  beat: number,
-  swing: SwingInput,
-  tempo = 120,
-) {
+async function renderNote(beat: number, swing: SwingInput, tempo = 120) {
   const seconds = 1;
   const context = new OfflineAudioContext(1, Math.ceil(RATE * seconds), RATE);
   schedulePhrase(
@@ -752,9 +750,10 @@ void test('a tick past the lookahead plays late and a loop keeps its grid', () =
   clock.advance(1.9);
   assert.deepEqual(
     cues.map((cue) => cue.intended),
-    [0, 2],
+    [0, 2, 4],
   );
   assert.equal(cues[1]?.scheduled, 2);
+  assert.equal(cues[2]?.scheduled, 4);
 });
 
 void test('a late wake keeps the latest overdue note instead of stacking the run', () => {
@@ -1015,4 +1014,314 @@ void test('a new session starts straight and does not restore swing or tempo', (
     assert.equal(source.includes('searchParams'), false);
     assert.equal(source.includes('location.hash'), false);
   }
+  assert.match(panel, /const \[loop, setLoop\] = useState\(false\)/);
+  assert.match(
+    panel,
+    /if \(!phrase\.ok\) \{\s*live\.current = false;\s*player\.current\?\.stop\(\);/,
+  );
+});
+
+function slotNote(beat: number, duration: number): FingeredNote {
+  return { ...finger, string: 0, fret: 0, beat, duration };
+}
+
+/** Downbeats of a loop, stepped on a coarse clock so a late tick is visible. */
+function loopDownbeats(
+  beats: readonly number[],
+  tempo: number,
+  swing: SwingInput,
+  period: number,
+  passes: number,
+): number[] {
+  const clock = new AudioClock();
+  const cues: { index: number; intended: number; scheduled: number }[] = [];
+  new LookaheadScheduler(
+    clock,
+    beats,
+    tempo,
+    swing,
+    0,
+    period,
+    true,
+    (cue) => cues.push(cue),
+    () => {
+      throw new Error('a loop ended');
+    },
+  ).start();
+  const end = period * passes;
+  let steps = 0;
+  while (clock.currentTime < end) {
+    clock.advance(clock.currentTime + 0.04);
+    assert.ok(++steps < 20000, 'the loop clock spun');
+  }
+  const downs = cues.filter((cue) => cue.index === 0);
+  assert.ok(downs.length >= passes, `saw ${downs.length} downbeats`);
+  for (const cue of downs) {
+    assert.equal(cue.scheduled, cue.intended);
+  }
+  return downs.slice(0, passes).map((cue) => cue.scheduled);
+}
+
+void test('a loop restarts at the last slot, on the audio clock, with no gap', () => {
+  const cases: {
+    tempo: number;
+    swing: SwingInput;
+    notes: { beat: number; duration: number }[];
+  }[] = [
+    {
+      tempo: 40,
+      swing: 0,
+      notes: [
+        { beat: 0, duration: 4 },
+        { beat: 4, duration: 4 },
+        { beat: 8, duration: 2 },
+      ],
+    },
+    {
+      tempo: 96,
+      swing: 'straight',
+      notes: [
+        { beat: 0, duration: 8 },
+        { beat: 8, duration: 8 },
+        { beat: 16, duration: 2 },
+      ],
+    },
+    {
+      tempo: 73,
+      swing: 0,
+      notes: [
+        { beat: 0, duration: 2.5 },
+        { beat: 2.5, duration: 0.25 },
+      ],
+    },
+    {
+      tempo: 240,
+      swing: 1,
+      notes: [
+        { beat: 0, duration: 3 },
+        { beat: 3, duration: 0.5 },
+      ],
+    },
+    {
+      tempo: 120,
+      swing: 'swing',
+      notes: [
+        { beat: 0, duration: 0.5 },
+        { beat: 0.5, duration: 6.5 },
+        { beat: 7, duration: 0.5 },
+      ],
+    },
+  ];
+  for (const item of cases) {
+    const length = phraseLoopSeconds(item.notes, item.tempo);
+    const last = item.notes[item.notes.length - 1];
+    assert.ok(last);
+    const beats = last.beat + last.duration;
+    assert.equal(length, beats * (60 / item.tempo));
+    const quarter = 60 / item.tempo;
+    if (item.swing !== 0 && item.swing !== 'straight') {
+      assert.ok(
+        Math.abs(length - onsetSeconds(beats, item.tempo, item.swing)) > 1e-6,
+        `${item.tempo} BPM loop length followed the swing grid`,
+      );
+    }
+    const downs = loopDownbeats(
+      item.notes.map((note) => note.beat),
+      item.tempo,
+      item.swing,
+      length,
+      4,
+    );
+    assert.equal(downs[0], 0);
+    for (let pass = 0; pass < downs.length - 1; pass++) {
+      const gap = (downs[pass + 1] ?? NaN) - (downs[pass] ?? NaN);
+      assert.ok(
+        Math.abs(gap - length) < 1e-10,
+        `${item.tempo} BPM ${beats} beats, pass ${pass} gap ${gap}s is not ${length}s`,
+      );
+      assert.ok(
+        Math.abs(gap - beats * quarter) < 1e-10,
+        `${item.tempo} BPM seam is not ${beats} quarters`,
+      );
+    }
+  }
+  const scale = SCALES.find((entry) => entry.id === 'major');
+  assert.ok(scale);
+  for (const bars of [2, 4] as const) {
+    const phrase = generatePhrase({
+      seed: 4,
+      bars,
+      scaleNotes: spell('C', scale.formula),
+      chordNotes: parseChord('C').notes,
+    });
+    assert.equal(phrase.ok, true);
+    if (!phrase.ok) return;
+    const tail = phrase.phrase.notes[phrase.phrase.notes.length - 1];
+    assert.ok(tail);
+    assert.equal(tail.beat + tail.duration, phrasePeriodBeats(bars));
+    for (const tempo of [40, 96, 240]) {
+      assert.equal(
+        phraseLoopSeconds(phrase.phrase.notes, tempo),
+        onsetSeconds(phrasePeriodBeats(bars), tempo, 'swing'),
+      );
+    }
+  }
+});
+
+void test('loop off plays one pass on the bar grid and then stops', () => {
+  const notes = [
+    { beat: 0, duration: 2.5 },
+    { beat: 2.5, duration: 0.25 },
+  ];
+  const tempo = 73;
+  const swing: SwingInput = 'swing';
+  const period = onsetSeconds(phrasePeriodBeats(2), tempo, swing);
+  const clock = new AudioClock();
+  const cues: { index: number; intended: number; scheduled: number }[] = [];
+  let ended = 0;
+  new LookaheadScheduler(
+    clock,
+    notes.map((note) => note.beat),
+    tempo,
+    swing,
+    0,
+    period,
+    false,
+    (cue) => cues.push(cue),
+    () => {
+      ended += 1;
+    },
+  ).start();
+  let steps = 0;
+  while (ended === 0) {
+    clock.advance(clock.currentTime + PHRASE_TICK_SEC);
+    assert.ok(++steps < 20000, 'the single pass never ended');
+  }
+  clock.advance(clock.currentTime + period);
+  assert.equal(ended, 1);
+  assert.equal(cues.length, notes.length);
+  for (const [index, note] of notes.entries()) {
+    const cue = cues[index];
+    assert.ok(cue);
+    assert.equal(cue.scheduled, onsetSeconds(note.beat, tempo, swing));
+  }
+  assert.ok(period > phraseLoopSeconds(notes, tempo));
+});
+
+void test('stop and regenerate cancel every note still waiting on the clock', async () => {
+  const context = new OfflineAudioContext(1, RATE * 8, RATE);
+  context.resume = () => Promise.resolve();
+  const destination = context.createGain();
+  const starts: number[] = [];
+  const oscillators: OscillatorNode[] = [];
+  const dropped = new Set<OscillatorNode>();
+  const create = context.createOscillator.bind(context);
+  context.createOscillator = () => {
+    const oscillator = create();
+    oscillators.push(oscillator);
+    const start = oscillator.start.bind(oscillator);
+    const disconnect = oscillator.disconnect.bind(oscillator);
+    oscillator.start = (when = 0) => {
+      starts.push(when);
+      return start(when);
+    };
+    oscillator.disconnect = () => {
+      dropped.add(oscillator);
+      return disconnect();
+    };
+    return oscillator;
+  };
+  const near = (when: number, target: number) => Math.abs(when - target) < 1e-9;
+  const player = new PhrasePlayer(() => {});
+  const first = [slotNote(0, 1), slotNote(1, 2.5)];
+  await player.start({
+    notes: first,
+    bars: 2,
+    tempo: 96,
+    swing: 'swing',
+    loop: true,
+    context,
+    destination,
+  });
+  const length = phraseLoopSeconds(first, 96);
+  const lead = 0.05;
+  assert.ok(starts.some((when) => near(when, lead)));
+  assert.ok(starts.some((when) => near(when, lead + length)));
+  assert.equal(
+    starts.filter((when) => near(when, lead + length * 2)).length,
+    0,
+  );
+  const armed = oscillators.length;
+  const armedStarts = starts.length;
+  player.stop();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(starts.length, armedStarts);
+  assert.equal(player.pendingTimers(), 0);
+  assert.equal(player.connectedNodes(), 0);
+  for (const oscillator of oscillators) assert.ok(dropped.has(oscillator));
+
+  const second = [slotNote(0, 0.5), slotNote(3, 0.5)];
+  await player.start({
+    notes: second,
+    bars: 2,
+    tempo: 120,
+    swing: 0,
+    loop: true,
+    context,
+    destination,
+  });
+  const regenAt = starts.length;
+  assert.ok(regenAt > armedStarts);
+  const kept = oscillators.slice(armed);
+  await player.start({
+    notes: [slotNote(0, 4), slotNote(4, 2)],
+    bars: 2,
+    tempo: 40,
+    swing: 'straight',
+    loop: true,
+    context,
+    destination,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.ok(starts.length > regenAt);
+  for (const oscillator of kept) assert.ok(dropped.has(oscillator));
+  const beforeStop = starts.length;
+  player.stop();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(starts.length, beforeStop);
+  assert.equal(player.pendingTimers(), 0);
+  assert.equal(player.connectedNodes(), 0);
+
+  const raceFrom = oscillators.length;
+  await player.start({
+    notes: first,
+    bars: 2,
+    tempo: 96,
+    swing: 0,
+    loop: true,
+    context,
+    destination,
+  });
+  const raceTo = oscillators.length;
+  assert.ok(raceTo > raceFrom);
+  const racedStarts = starts.length;
+  player.stop();
+  assert.equal(starts.length, racedStarts);
+  await player.start({
+    notes: second,
+    bars: 2,
+    tempo: 120,
+    swing: 0,
+    loop: true,
+    context,
+    destination,
+  });
+  assert.ok(starts.length > racedStarts);
+  for (const oscillator of oscillators.slice(raceFrom, raceTo)) {
+    assert.ok(dropped.has(oscillator));
+  }
+  const afterRace = starts.length;
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(starts.length, afterRace);
+  player.stop();
 });

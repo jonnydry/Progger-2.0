@@ -35,6 +35,20 @@ export function clampPhraseTempo(tempo: number): number {
   return Math.min(PHRASE_TEMPO_MAX, Math.max(PHRASE_TEMPO_MIN, tempo));
 }
 
+/** Straight seconds from the downbeat through the end of the last note's slot. */
+export function phraseLoopSeconds(
+  notes: readonly { beat: number; duration: number }[],
+  tempo: number,
+): number {
+  const bpm = clampPhraseTempo(tempo);
+  let beats = 0;
+  for (const note of notes) {
+    const end = note.beat + note.duration;
+    if (Number.isFinite(end) && end > beats) beats = end;
+  }
+  return beats * (60 / bpm);
+}
+
 export function melodyFrets(note: {
   string: number;
   fret: number;
@@ -83,9 +97,11 @@ export type PhraseCue = {
 export type PhraseWake = { expected: number; actual: number };
 
 /**
- * Schedules cues whose audio time is inside `now + lookahead`.
- * The wake is at most one tick away, and never later than the next cue
- * minus the lookahead, so the following pass is queued before it starts.
+ * Schedules cues whose audio time is inside the horizon.
+ * One pass looks ahead by `PHRASE_LOOKAHEAD_SEC`. A loop looks ahead by
+ * that plus one whole period, so the next downbeat is already on the audio
+ * clock a period before it sounds. The wake is at most one tick away.
+ * A late tick cannot move a note that was queued inside the horizon.
  */
 export class LookaheadScheduler {
   readonly cues: PhraseCue[] = [];
@@ -150,12 +166,13 @@ export class LookaheadScheduler {
     if (this.stopped || this.ended) return;
     const now = this.clock.now();
     this.wakes.push({ expected: this.expected, actual: now });
-    const horizon = now + PHRASE_LOOKAHEAD_SEC;
+    const looping = this.loop && this.period > 1e-4;
+    const horizon = now + PHRASE_LOOKAHEAD_SEC + (looping ? this.period : 0);
     let guard = 0;
     while (guard++ < 10000) {
       if (this.cursor >= this.beats.length) {
         const end = this.origin + this.period;
-        if (!this.loop) {
+        if (!looping) {
           if (end > horizon) {
             this.wake(Math.min(end, now + PHRASE_TICK_SEC));
             return;
@@ -241,6 +258,8 @@ export class PhrasePlayer {
   private serial = 0;
   private disposed = false;
   private detachTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Nodes from a fade that has not disconnected yet. */
+  private releaseDrop: (() => void) | null = null;
   private scheduler: LookaheadScheduler | null = null;
   private context: AudioContext | null = null;
   private trim: GainNode | null = null;
@@ -311,11 +330,15 @@ export class PhrasePlayer {
       }
       this.context = context;
       this.looping = input.loop;
-      this.period = onsetSeconds(
+      const barPeriod = onsetSeconds(
         phrasePeriodBeats(input.bars),
         tempo,
         input.swing,
       );
+      const loopPeriod = phraseLoopSeconds(input.notes, tempo);
+      // A loop restarts when the last slot ends. One pass still runs out
+      // the two-beat cadence hold, then stops.
+      this.period = input.loop && loopPeriod > 1e-4 ? loopPeriod : barPeriod;
       this.startedAt = context.currentTime + 0.05;
       const trim = context.createGain();
       trim.gain.setValueAtTime(PHRASE_TRIM, this.startedAt);
@@ -381,9 +404,16 @@ export class PhrasePlayer {
     }
   }
 
-  private armDetach(ms: number) {
+  private cancelDetach() {
     clearTimeout(this.detachTimer);
     this.detachTimer = undefined;
+    const drop = this.releaseDrop;
+    this.releaseDrop = null;
+    drop?.();
+  }
+
+  private armDetach(ms: number) {
+    this.cancelDetach();
     if (this.disposed) {
       this.teardown(0);
       return;
@@ -397,8 +427,7 @@ export class PhrasePlayer {
   private halt(immediate: boolean) {
     this.scheduler?.stop();
     this.scheduler = null;
-    clearTimeout(this.detachTimer);
-    this.detachTimer = undefined;
+    this.cancelDetach();
     this.teardown(this.disposed || immediate ? 0 : 0.02);
   }
 
@@ -439,6 +468,7 @@ export class PhrasePlayer {
       }
     }
     const drop = () => {
+      this.releaseDrop = null;
       if (trim) disconnectNode(trim);
       for (const entry of voices) disconnectVoice(entry.voice);
     };
@@ -446,6 +476,7 @@ export class PhrasePlayer {
       drop();
       return;
     }
+    this.releaseDrop = drop;
     this.detachTimer = setTimeout(
       () => {
         this.detachTimer = undefined;
