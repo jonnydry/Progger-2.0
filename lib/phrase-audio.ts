@@ -35,18 +35,31 @@ export function clampPhraseTempo(tempo: number): number {
   return Math.min(PHRASE_TEMPO_MAX, Math.max(PHRASE_TEMPO_MIN, tempo));
 }
 
-/** Straight seconds from the downbeat through the end of the last note's slot. */
+const BAR_BEATS = 4;
+
+/**
+ * Beats from the downbeat to the bar line at or after the last note.
+ * A note that already ends on beat 1 keeps that bar. Anything later
+ * rounds up, and the beats after the last slot are rest.
+ */
+export function phraseLoopBeats(
+  notes: readonly { beat: number; duration: number }[],
+): number {
+  let end = 0;
+  for (const note of notes) {
+    const noteEnd = note.beat + note.duration;
+    if (Number.isFinite(noteEnd) && noteEnd > end) end = noteEnd;
+  }
+  if (!(end > 0)) return 0;
+  return Math.ceil(end / BAR_BEATS - 1e-12) * BAR_BEATS;
+}
+
+/** Straight seconds for `phraseLoopBeats`. Swing does not move a bar line. */
 export function phraseLoopSeconds(
   notes: readonly { beat: number; duration: number }[],
   tempo: number,
 ): number {
-  const bpm = clampPhraseTempo(tempo);
-  let beats = 0;
-  for (const note of notes) {
-    const end = note.beat + note.duration;
-    if (Number.isFinite(end) && end > beats) beats = end;
-  }
-  return beats * (60 / bpm);
+  return phraseLoopBeats(notes) * (60 / clampPhraseTempo(tempo));
 }
 
 export function melodyFrets(note: {
@@ -257,9 +270,11 @@ type LiveVoice = { voice: ScheduledVoicing; ends: number };
 export class PhrasePlayer {
   private serial = 0;
   private disposed = false;
-  private detachTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Nodes from a fade that has not disconnected yet. */
-  private releaseDrop: (() => void) | null = null;
+  /** Waits out a finished pass, then disconnects whatever is still current. */
+  private endTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Fades already heading for zero. A new start leaves these timers alone. */
+  private fades: { timer: ReturnType<typeof setTimeout>; drop: () => void }[] =
+    [];
   private scheduler: LookaheadScheduler | null = null;
   private context: AudioContext | null = null;
   private trim: GainNode | null = null;
@@ -273,9 +288,13 @@ export class PhrasePlayer {
     this.onState = onState;
   }
 
-  /** Scheduler wake plus the disconnect timer, for leak checks. */
+  /** Scheduler wake plus disconnect timers, for leak checks. */
   pendingTimers(): number {
-    return (this.scheduler?.pending ? 1 : 0) + (this.detachTimer ? 1 : 0);
+    return (
+      (this.scheduler?.pending ? 1 : 0) +
+      (this.endTimer ? 1 : 0) +
+      this.fades.length
+    );
   }
 
   /** Trim and voice nodes not yet disconnected. */
@@ -336,7 +355,8 @@ export class PhrasePlayer {
         input.swing,
       );
       const loopPeriod = phraseLoopSeconds(input.notes, tempo);
-      // A loop restarts when the last slot ends. One pass still runs out
+      // A loop restarts on the next bar line. The tail after the last slot
+      // is rest, so the repeat lands on beat 1. One pass still runs out
       // the two-beat cadence hold, then stops.
       this.period = input.loop && loopPeriod > 1e-4 ? loopPeriod : barPeriod;
       this.startedAt = context.currentTime + 0.05;
@@ -404,22 +424,41 @@ export class PhrasePlayer {
     }
   }
 
-  private cancelDetach() {
-    clearTimeout(this.detachTimer);
-    this.detachTimer = undefined;
-    const drop = this.releaseDrop;
-    this.releaseDrop = null;
-    drop?.();
+  private clearEndTimer() {
+    clearTimeout(this.endTimer);
+    this.endTimer = undefined;
+  }
+
+  /** Disconnect fades that have not reached the end of their ramp. */
+  private finishFadesNow() {
+    const pending = this.fades;
+    this.fades = [];
+    for (const entry of pending) {
+      clearTimeout(entry.timer);
+      entry.drop();
+    }
+  }
+
+  private trackFade(drop: () => void, ms: number) {
+    const entry = {
+      drop,
+      timer: setTimeout(() => {
+        this.fades = this.fades.filter((item) => item !== entry);
+        drop();
+      }, ms),
+    };
+    this.fades.push(entry);
   }
 
   private armDetach(ms: number) {
-    this.cancelDetach();
+    this.clearEndTimer();
     if (this.disposed) {
+      this.finishFadesNow();
       this.teardown(0);
       return;
     }
-    this.detachTimer = setTimeout(() => {
-      this.detachTimer = undefined;
+    this.endTimer = setTimeout(() => {
+      this.endTimer = undefined;
       this.teardown(0);
     }, ms);
   }
@@ -427,7 +466,10 @@ export class PhrasePlayer {
   private halt(immediate: boolean) {
     this.scheduler?.stop();
     this.scheduler = null;
-    this.cancelDetach();
+    this.clearEndTimer();
+    // A stop fade keeps its timer. Clearing it here disconnects the gain
+    // while the 20 ms ramp is still moving, which clicks.
+    if (this.disposed || immediate) this.finishFadesNow();
     this.teardown(this.disposed || immediate ? 0 : 0.02);
   }
 
@@ -468,7 +510,6 @@ export class PhrasePlayer {
       }
     }
     const drop = () => {
-      this.releaseDrop = null;
       if (trim) disconnectNode(trim);
       for (const entry of voices) disconnectVoice(entry.voice);
     };
@@ -476,14 +517,7 @@ export class PhrasePlayer {
       drop();
       return;
     }
-    this.releaseDrop = drop;
-    this.detachTimer = setTimeout(
-      () => {
-        this.detachTimer = undefined;
-        drop();
-      },
-      fadeSec * 1000 + 30,
-    );
+    this.trackFade(drop, fadeSec * 1000 + 30);
   }
 }
 
