@@ -10,6 +10,8 @@ import { ROOTS, SCALES, pretty } from './music.ts';
  */
 export const TRAY_KEY = 'progger.tray.v1';
 export const TRAY_MAX_ITEMS = 80;
+export const TRAY_UNREADABLE_NOTE =
+  "Your saved tray couldn't be read, so it's left untouched.";
 export const PHRASE_STOP_EVENT = 'progger-phrase-stop';
 
 const SCALE_IDS = new Set(SCALES.map((scale) => scale.id));
@@ -790,6 +792,11 @@ function current(): TrayDoc {
 export function getTray(): TrayState {
   if (!cache) cache = project(current());
   return cache;
+}
+
+/** False when the saved blob is left untouched and this tab shows no items. */
+export function trayReadable(): boolean {
+  return current().writable;
 }
 
 export function subscribeTray(listener: () => void): () => void {

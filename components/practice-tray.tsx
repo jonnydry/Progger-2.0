@@ -29,7 +29,9 @@ import {
   renameTrayItem,
   saveView,
   subscribeTray,
+  TRAY_UNREADABLE_NOTE,
   trayFilename,
+  trayReadable,
   trayRenameCommand,
   trayRenameStart,
   traySaveMessage,
@@ -102,6 +104,11 @@ export function PracticeTray({
   onClose: () => void;
 }) {
   const tray = useSyncExternalStore(subscribeTray, getTray, emptyTray);
+  const readable = useSyncExternalStore(
+    subscribeTray,
+    trayReadable,
+    () => true,
+  );
   const [entered, setEntered] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -353,21 +360,30 @@ export function PracticeTray({
               {banner}
             </p>
           )}
-          {tray.items.length === 0 && (
-            <>
-              <h3
+          {tray.items.length === 0 &&
+            (readable ? (
+              <>
+                <h3
+                  id="practice-tray-empty"
+                  className="practice-tray-empty"
+                  tabIndex={-1}
+                >
+                  Nothing saved yet
+                </h3>
+                <p className="practice-tray-intro">
+                  Save a phrase from the phrase panel, or bookmark the view you
+                  are practicing.
+                </p>
+              </>
+            ) : (
+              <p
                 id="practice-tray-empty"
-                className="practice-tray-empty"
+                className="practice-tray-intro"
                 tabIndex={-1}
               >
-                Nothing saved yet
-              </h3>
-              <p className="practice-tray-intro">
-                Save a phrase from the phrase panel, or bookmark the view you
-                are practicing.
+                {TRAY_UNREADABLE_NOTE}
               </p>
-            </>
-          )}
+            ))}
           {groups.map((group) =>
             group.items.length ? (
               <section

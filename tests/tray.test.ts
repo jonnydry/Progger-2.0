@@ -11,6 +11,8 @@ import {
   focusTrayTab,
   getTray,
   insertTrayItem,
+  TRAY_UNREADABLE_NOTE,
+  trayReadable,
   onTrayStorage,
   parseTray,
   phraseStopApplies,
@@ -247,6 +249,60 @@ void test('an unknown tray version is left untouched and read-only', () => {
     } finally {
       held.restore();
     }
+  }
+});
+
+void test('an unreadable tray is left untouched and is not a fresh empty tray', () => {
+  const blobs = [
+    '{',
+    '[]',
+    'null',
+    '"tray"',
+    JSON.stringify({ version: 2, items: [phrase()] }),
+    JSON.stringify({ version: 0, items: [] }),
+    JSON.stringify({ version: 1 }),
+    JSON.stringify({ version: 1, items: { id: 'nope' } }),
+    JSON.stringify({ items: [phrase()] }),
+  ];
+  assert.equal(
+    TRAY_UNREADABLE_NOTE,
+    "Your saved tray couldn't be read, so it's left untouched.",
+  );
+  for (const raw of blobs) {
+    const held = installTray(raw);
+    try {
+      assert.equal(trayReadable(), false, raw);
+      assert.deepEqual(getTray().items, []);
+      assert.equal(held.raw(), raw);
+      assert.equal(held.writes.length, 0);
+    } finally {
+      held.restore();
+    }
+  }
+  const missing = installTray(null);
+  try {
+    assert.equal(trayReadable(), true);
+    assert.deepEqual(getTray().items, []);
+  } finally {
+    missing.restore();
+  }
+});
+
+void test('reading does not trim a tray that is already over the cap', () => {
+  const items = Array.from({ length: 81 }, (_item, index) => ({
+    ...phrase(),
+    id: `kept-${index}`,
+    savedAt: index + 1,
+  }));
+  const raw = JSON.stringify({ version: 1, items });
+  const held = installTray(raw);
+  try {
+    assert.equal(trayReadable(), true);
+    assert.equal(getTray().items.length, 81);
+    assert.equal(held.raw(), raw);
+    assert.equal(held.writes.length, 0);
+  } finally {
+    held.restore();
   }
 });
 

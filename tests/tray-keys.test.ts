@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Browser } from 'playwright';
-import { TRAY_KEY, type TrayPhrase } from '../lib/tray.ts';
+import {
+  TRAY_KEY,
+  TRAY_UNREADABLE_NOTE,
+  type TrayPhrase,
+} from '../lib/tray.ts';
 import { launchNamed } from './browser-launch.ts';
 import { acquireDevServer } from './dev-server.ts';
 
@@ -148,5 +152,53 @@ void test(
     );
     assert.match(stored ?? '', /Kept name/);
     assert.doesNotMatch(stored ?? '', /Dropped name/);
+  },
+);
+
+void test(
+  'an unreadable tray says it was left untouched',
+  { timeout: 120_000 },
+  async (t) => {
+    const browser: Browser = await launchNamed('chromium', t);
+    const server = await acquireDevServer();
+    t.after(async () => {
+      await browser.close();
+      await server.release();
+    });
+    const page = await browser.newPage({
+      viewport: { width: 1280, height: 900 },
+    });
+    const unread = [
+      '{',
+      JSON.stringify({ version: 2, items: [] }),
+      JSON.stringify({ version: 1, items: { id: 'nope' } }),
+    ];
+    for (const raw of unread) {
+      await page.goto(`${server.origin}/`, { waitUntil: 'networkidle' });
+      await page.evaluate(([key, value]) => localStorage.setItem(key, value), [
+        TRAY_KEY,
+        raw,
+      ] as const);
+      await page.reload({ waitUntil: 'networkidle' });
+      await page.locator('.tray-open').click();
+      await page.locator('#practice-tray').waitFor();
+      await page.getByText(TRAY_UNREADABLE_NOTE).waitFor();
+      assert.equal(
+        await page.locator('#practice-tray-empty').textContent(),
+        TRAY_UNREADABLE_NOTE,
+      );
+      assert.equal(await page.getByText('Nothing saved yet').count(), 0);
+      assert.equal(
+        await page.evaluate((key) => localStorage.getItem(key), TRAY_KEY),
+        raw,
+      );
+      await page.keyboard.press('Escape');
+      await page.locator('#practice-tray').waitFor({ state: 'detached' });
+    }
+    await page.evaluate((key) => localStorage.removeItem(key), TRAY_KEY);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.locator('.tray-open').click();
+    await page.getByRole('heading', { name: 'Nothing saved yet' }).waitFor();
+    assert.equal(await page.getByText(TRAY_UNREADABLE_NOTE).count(), 0);
   },
 );
