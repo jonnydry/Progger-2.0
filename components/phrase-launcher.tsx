@@ -10,6 +10,16 @@ import {
 import { Music2 } from 'lucide-react';
 import type { Note } from '@/lib/music';
 import type { PhraseFretMark } from '@/lib/phrase-marks';
+import type { TrayPhrase, TrayPhraseCapture } from '@/lib/tray';
+
+type PhraseChord = {
+  symbol: string;
+  notes: readonly Note[];
+  root: string;
+  qualityId: string;
+  bass?: string;
+  fromContext: boolean;
+};
 
 type PanelProps = {
   active: boolean;
@@ -17,7 +27,11 @@ type PanelProps = {
   scaleId: string;
   scaleName: string;
   scaleNotes: readonly Note[];
-  chord: { symbol: string; notes: readonly Note[] } | null;
+  chord: PhraseChord | null;
+  held: TrayPhrase | null;
+  contextKey: string;
+  onReleaseHeld: () => void;
+  capture: TrayPhraseCapture;
   onMarks: (
     marks: readonly PhraseFretMark[] | null,
     focusFret: number | null,
@@ -32,12 +46,22 @@ export function PhraseLauncher({
   scaleName,
   scaleNotes,
   chord,
+  held,
+  contextKey,
+  onReleaseHeld,
+  capture,
+  openSignal = 0,
   onMarks,
-}: PanelProps & { leading?: ReactNode }) {
+}: PanelProps & { leading?: ReactNode; openSignal?: number }) {
   const [open, setOpen] = useState(false);
   const [Panel, setPanel] = useState<ComponentType<PanelProps> | null>(null);
   const [failed, setFailed] = useState(false);
+  const [signalSeen, setSignalSeen] = useState(openSignal);
   const opened = useRef(false);
+  if (openSignal !== signalSeen) {
+    setSignalSeen(openSignal);
+    if (openSignal) setOpen(true);
+  }
 
   useEffect(() => {
     if (!open) {
@@ -86,9 +110,7 @@ export function PhraseLauncher({
           className="phrase-launcher"
           aria-label="Phrase practice"
         >
-          {failed && (
-            <p className="muted">Phrases didn’t load. Try again.</p>
-          )}
+          {failed && <p className="muted">Phrases didn’t load. Try again.</p>}
           {!failed && !Panel && <p className="muted">Loading phrases…</p>}
           {Panel && (
             <Panel
@@ -98,6 +120,10 @@ export function PhraseLauncher({
               scaleName={scaleName}
               scaleNotes={scaleNotes}
               chord={chord}
+              held={held}
+              contextKey={contextKey}
+              onReleaseHeld={onReleaseHeld}
+              capture={capture}
               onMarks={onMarks}
             />
           )}
