@@ -22,14 +22,14 @@ function minify(css: string): string {
   return code.toString();
 }
 
-void test('production minify keeps an unprefixed tray blur and a 99% fallback', () => {
+void test('production minify keeps an unprefixed tray blur and a 99.9% fallback', () => {
   const source = readFileSync(
     new URL('../app/practice-tray.css', import.meta.url),
     'utf8',
   );
   const built = minify(source);
   assert.deepEqual(trayFrostProblems(built), []);
-  assert.match(built, /--tray-tint-solid:99%/);
+  assert.match(built, /--tray-tint-solid:99\.9%/);
   assert.doesNotMatch(built, /--tray-tint-solid:100%/);
 
   const dropped = built.replace(/(?<!-)backdrop-filter:[^;}]+;?/g, '');
@@ -39,13 +39,23 @@ void test('production minify keeps an unprefixed tray blur and a 99% fallback', 
     true,
   );
 
-  const opaque = built.replace(
+  const thin = built.replace(
+    '--tray-tint-solid:99.9%',
     '--tray-tint-solid:99%',
+  );
+  const tooThin = trayFrostProblems(thin);
+  assert.equal(
+    tooThin.some((problem) => problem.includes('99%')),
+    true,
+  );
+
+  const opaque = built.replace(
+    '--tray-tint-solid:99.9%',
     '--tray-tint-solid:100%',
   );
   const solid = trayFrostProblems(opaque);
   assert.equal(
-    solid.some((problem) => problem.includes('99%')),
+    solid.some((problem) => problem.includes('99.9%')),
     true,
   );
 });

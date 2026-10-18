@@ -49,7 +49,8 @@
 .practice-tray-root {
   --tray-blur: 40px;
   --tray-tint: 90%;
-  --tray-tint-solid: 99%;
+  /* 99% leaves large page shapes readable. 99.9% is the lowest token that clears them. */
+  --tray-tint-solid: 99.9%;
   position: fixed;
   inset: 0;
   z-index: 90;
