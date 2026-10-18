@@ -16,7 +16,7 @@ Palette: rose-peach sky, lavender willows, lilac water, rich pink lilies; lumino
 Constraints: no text, lettering, glyphs, logos, UI, labels, watermarks, frame, CRT bezel; no extra characters or props; no painterly blur, 3D rendering, photographic lighting, noisy texture, arbitrary pixel noise, glossy rubber, harsh scanlines or vignette.
 ```
 
-First output (superseded for layout): `/home/jonnyd/.codex/generated_images/01a08e3f-d78d-70b2-a91d-00b0ed8b53e9/exec-361b8123-a54a-45e1-b57f-25238c3812ed.png`.
+First output (superseded for layout): original generation file (not committed).
 
 ### Day layout correction
 
@@ -24,7 +24,7 @@ First output (superseded for layout): `/home/jonnyd/.codex/generated_images/01a0
 Use case: precise-object-edit. Refine this Progger Twilight DAY scene for website integration. Preserve exactly the successful green frog band identities, the cheeky main Proggy face and red bandana, cream-orange angular guitar, strong chunky pixel art, sunny rose-lilac palette, lavender willows, pink lilies and relative horizontal locations. Make ONE specific composition correction: reduce the entire band, their lily pads and all foreground reeds/lilies slightly and move them UP so that Proggy's feet and supporting lily pad end at 55 percent of total image height, background bassist and drums end at 47 percent. His head should remain around 15 percent. The whole bottom 40 percent must contain nothing except calm water and faint reflected horizontal pixel bands, fading to the flat pale rose-lilac #f5eaf3 at the bottom. Keep reflected bands sparse and gentle, avoid bright high-contrast reflection noise below 65 percent. Remove the tiny stray musical-symbol-like mark in the water below the bassist; no glyphs or extra objects anywhere. Keep the top12 percent quiet for nav. No other restyling, do not add anything. Exactly 2:1 panoramic image, no borders, no UI, no text or watermarks.
 ```
 
-Selected raw output: `/home/jonnyd/.codex/generated_images/01a08e3f-d78d-70b2-a91d-00b0ed8b53e9/exec-29363b9c-3826-4fdc-8175-7b1c847697e3.png`.
+Selected raw output: original generation file (not committed).
 
 Workspace copy: `outputs/imagegen/twilight-day-v2.png`.
 
@@ -41,7 +41,7 @@ Important UI contract: top12 percent calm low-contrast sky except existing willo
 No text, glyphs, floating music notes, logos, UI, labels, watermarks, extra props or characters, borders, CRT bezel, harsh scanlines, noisy filter, painterly blur or 3D rendered surfaces.
 ```
 
-Selected raw output: `/home/jonnyd/.codex/generated_images/01a08e3f-d78d-70b2-a91d-00b0ed8b53e9/exec-c18f7567-9140-4fb4-b1d8-382a0dcd73ba.png`.
+Selected raw output: original generation file (not committed).
 
 Workspace copy: `outputs/imagegen/twilight-night-v2.png`.
 

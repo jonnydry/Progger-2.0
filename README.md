@@ -1,71 +1,120 @@
 # Progger 2.0
 
-A guitar scale, mode, and chord reference with a pixel frog guitarist. Reference and matching calculations run locally in the browser.
+A guitar scale, mode and chord reference with a phrase generator, a practice
+drone and a pixel frog guitarist. Everything runs in your browser: no account,
+no AI credential and no music database.
 
-Live at [progger.studio](https://progger.studio). See [Vercel deployment](docs/vercel-deployment.md) for build settings and release checks.
+**Live at [progger.studio](https://progger.studio).**
 
-The [project plan](docs/project/PROGGER_PLAN.md) and [design direction](docs/project/DESIGN_EXPLORATION_02.md) record the product decisions behind this version.
+## What it does
 
-## Run
+**Explore scales and chords**
 
-Use Node 22.13 or later. From this directory:
+- 28 scales and modes in every key: the major, harmonic-minor and jazz
+  melodic-minor modes, pentatonic and blues, whole tone and both diminished
+  scales. See [scale coverage](docs/scale-coverage.md).
+- A continuous neck up to fret 24 with connected 3-notes-per-string and
+  2-notes-per-string shapes, overlap with neighboring shapes, adjustable view
+  width, a whole-neck overview, a left-handed view and text equivalents. See
+  [connected neck](docs/connected-neck.md).
+- 32 chord qualities, including 11ths, 13ths and altered tensions, with
+  complete, reduced and rootless guitar voicings. See
+  [advanced chords](docs/advanced-chords.md).
+- Hear any voicing exactly as drawn: a short synthesized strum that keeps the
+  inversion, muted strings and omitted notes. See
+  [voicing audio](docs/voicing-audio.md).
+
+**Match a progression**
+
+- Type chords (slash basses included) and Progger lists the scales that fit,
+  grouped across the whole progression, with an optional home note and a
+  palette per chord. Up to 32 chords per progression.
+
+**Practice**
+
+- **Phrase generator:** builds a 2- or 4-bar guitar line over the selected
+  scale and chord, then plays it and shows it on the neck. Tempo runs from 40
+  to 240 BPM, with adjustable swing and optional looping. Phrases are made by
+  seeded rules in the browser with no network calls.
+- **Drone:** holds the key under your playing. Choose Reed or Bow (both
+  synthesized with Web Audio) or Cello (CC0 samples), and set the volume.
+- **Practice tray:** save phrases, scales and chords, reopen them later, and
+  download a saved phrase as ASCII guitar tab or a MIDI file.
+
+**Scenes**
+
+- Three illustrated scenes (The Pond, Tidepool and Twilight), each with a day
+  and night version. The choice is saved on your device and the transition
+  respects reduced-motion settings. See [scenes](docs/scenes/README.md).
+
+Progressions, alternate tunings, accounts and offline install are not built
+yet. Some movable shapes need wide stretches. Diagrams show positions, not
+prescribed fingerings.
+
+## Run it locally
+
+Requires Node 22.13 or later.
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
 
-To inspect the production output locally, run `npm run build` followed by
-`npm start -- --port 3000 --ip 127.0.0.1`. Preview logs and local runtime state
-stay inside the project unless explicitly overridden in the environment.
+To try the production build locally:
 
-If a system libvips installation causes Sharp's optional installation to attempt a native build, use its documented bundled-library setting: `SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install`.
+```sh
+npm run build
+npm start -- --port 3000 --ip 127.0.0.1
+```
 
-The Sites scaffold uses React, TypeScript, and Vite through Vinext. Source is in `app/page.tsx`, feature components in `components/`, and browser-independent musical code in `lib/music.ts` and `lib/harmony.ts`. No AI credential or music database is required.
+If a system libvips install makes Sharp try a native build, use
+`SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm ci`.
 
 ## Checks
 
 ```sh
+npm run lint
 npm run typecheck
 npm test
-npm run lint
 npm run build
 ```
 
-The tests use Node's built-in runner and independent pitch/fingering fixtures. Lint excludes untouched generated component-library source; intentional ARIA groups, graphical diagrams, and a keyboard-scrollable fretboard have narrowly scoped semantic-rule exceptions. Type checking still covers all TypeScript source.
+`npm test` uses Node's built-in test runner. Some tests drive real browsers
+through Playwright; install them once with
+`npx playwright install --with-deps chromium firefox`. The full suite takes
+a few minutes.
 
-## First release
+## Project layout
 
-- Twenty-eight scales and modes across all roots: all major, harmonic-minor and jazz melodic-minor modes, pentatonic/blues, whole tone and both diminished scales. See [scale coverage](docs/scale-coverage.md).
-- A continuous neck through fret 24 with connected 3NPS/2NPS forms, neighboring-form overlap, adjustable view width, an optional whole-neck navigation map, left-handed view, and text equivalents. See [connected-neck behavior and verification](docs/connected-neck.md).
-- Thirty-two chord qualities, including 11ths, 13ths and altered tensions, with validated complete, reduced and rootless guitar voicings. Full formulas remain separate from sounding notes and explicit omissions. See [advanced chord coverage](docs/advanced-chords.md).
-- Chord parsing including slash basses, grouped collection matching, optional home note, per-chord palettes, and curated pentatonic/blues colors.
-- Exact-shape chord audition: a short local synthesized strum preserving inversions, muted strings and omissions. See [audio behavior and verification](docs/voicing-audio.md).
-- A feature-detected `explore_scale` WebMCP action using the same visible application state.
-- Three illustrated scenes—The Pond, Tidepool, and Twilight—with independent light/dark choices, local preference storage, and a brief artwork dissolve that respects reduced motion. Use the scene picker beside the sun/moon control. See [scene implementation and verification](docs/scenes/README.md).
+- `app/`: the page, layout and styles
+- `components/`: React UI (neck, voicings, phrase panel, drone, practice tray)
+- `lib/`: browser-independent music logic (`music.ts`, `harmony.ts`,
+  `phrase.ts`, `drone.ts`) and audio
+- `tests/`: unit and browser tests
+- `docs/`: design notes and verification records
 
-AI Progression Lab, alternate tunings, progression playback, accounts, and offline installation remain follow-up scope. No musical quality is claimed solely from pitch-set membership. Some movable chord and harmonic-minor patterns require wide stretches; diagrams show positions rather than prescribed fingers.
+Built with React, TypeScript and Vite through [vinext](https://github.com/cloudflare/vinext),
+and deployed on Vercel. See [Vercel deployment](docs/vercel-deployment.md).
 
-Progressions accept up to 32 chords and 2,048 characters, with a 32-character
-limit per chord symbol. Oversized input stays editable and produces an explicit
-error; the matcher never analyzes a silently truncated prefix. Inferred scale
-names favor readable enharmonic spellings, while explicit chord roots and home
-notes retain their spelling.
+## Credits
 
-Current verification and limitations are recorded in `docs/verification.md`.
+- Cello drone: excerpts of the Versilian Studios
+  [VSCO 2 Community Edition](https://versilian-studios.com/vsco-community/)
+  cello section, CC0 1.0. See `public/audio/drone/LICENSE.md`.
+- Fonts: [Maple Mono](https://github.com/subframe7536/maple-font) v7.9
+  (SIL Open Font License 1.1, see `public/fonts/maple-mono/`) and
+  [Silkscreen](https://fonts.google.com/specimen/Silkscreen) (SIL Open Font
+  License 1.1, loaded through Google Fonts).
+- Scene artwork and the frog mascot were generated for this project. Prompts
+  are recorded in `docs/`.
 
-## Assets
+## License
 
-The original Pond scene uses generated pixel artwork with separate desktop and
-mobile underwater compositions. Live delivery uses lossless WebP copies;
-original PNGs are retained. `docs/asset-delivery.md` records byte sizes and
-pixel-equivalence checks. Artwork prompts are in `docs/arcade-header/asset-notes.md`
-and `docs/underwater/asset-notes.md`.
+Progger is released under the [MIT License](LICENSE).
 
-Tidepool and Twilight each have a matched light/dark illustration delivered as
-compressed WebP (270–310 KiB each). Their quiet water tails also supply the
-reference-section backgrounds. See [scene art notes](docs/scenes/README.md).
+Third-party assets keep their own licenses:
 
-Typography uses Silkscreen for the wordmark/main selectors and self-hosted Maple
-Mono elsewhere. See `docs/TYPOGRAPHY.md` and the font license/provenance in
-`public/fonts/maple-mono/`.
+- Maple Mono fonts: SIL Open Font License 1.1, see
+  [`public/fonts/maple-mono/LICENSE.txt`](public/fonts/maple-mono/LICENSE.txt).
+- Cello drone samples: CC0 1.0, see
+  [`public/audio/drone/LICENSE.md`](public/audio/drone/LICENSE.md).

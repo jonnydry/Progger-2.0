@@ -6,8 +6,8 @@ Generated with the built-in image generation tool. The interface has no explicit
 
 - Day raw: `outputs/imagegen/tidepool-day-v2.png` — 1774 × 887.
 - Night raw: `outputs/imagegen/tidepool-night-v2.png` — 1774 × 887.
-- Day original tool output: `/home/jonnyd/.codex/generated_images/01a08e3f-9a10-7780-acef-a940226b553a/exec-d5cb4430-2f42-49d5-9143-fd62e3946906.png`.
-- Night original tool output: `/home/jonnyd/.codex/generated_images/01a08e3f-9a10-7780-acef-a940226b553a/exec-fab2aff3-43c1-4042-874a-860c276f61d9.png`.
+- Day original tool output: original generation file (not committed).
+- Night original tool output: original generation file (not committed).
 
 Production conversion and app integration handled separately. Existing public assets were not overwritten by this generation task.
 

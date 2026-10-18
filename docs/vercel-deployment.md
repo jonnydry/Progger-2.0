@@ -2,7 +2,7 @@
 
 Primary URL: https://progger.studio
 
-Vercel project: `progger`, under `jonnys-projects-8f4138ff`.
+Vercel project: `progger`, under `<your-vercel-team>`.
 The connected repository is `jonnydry/Progger-2.0`, production branch `main`.
 The repository root is this directory; do not set another `app/` root in Vercel.
 
