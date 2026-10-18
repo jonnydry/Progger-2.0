@@ -209,6 +209,70 @@ void test('adding or dropping a headroom case is a change', () => {
   assert.equal(headroomFixtureChanged(baseline, added), true);
 });
 
+void test('an exact duplicate of an existing case is a change, and matching duplicates are not', () => {
+  const baseline = load();
+  const source = baseline.chromium.cases[0];
+  if (!source) throw new Error('chromium has no cases');
+  const added = structuredClone(baseline);
+  added.chromium.cases.push(structuredClone(source));
+  console.log(
+    `duplicate ${source.sound} ${source.root} ${source.mode} via ${source.via} from "${source.from}" chromium ${baseline.chromium.cases.length} -> ${added.chromium.cases.length}`,
+  );
+  assert.equal(headroomFixtureChanged(baseline, added), true);
+
+  const paired = structuredClone(baseline);
+  const twin = paired.chromium.cases[0];
+  if (!twin) throw new Error('chromium has no cases');
+  paired.chromium.cases.push(structuredClone(twin));
+  const matched = structuredClone(paired);
+  const copy = matched.chromium.cases[matched.chromium.cases.length - 1];
+  if (!copy) throw new Error('missing duplicate');
+  const before = copy.prediction;
+  copy.prediction = nudgeWithin(before);
+  const noise = Math.abs(copy.prediction - before);
+  console.log(
+    `matching duplicates ${paired.chromium.cases.length} on both sides, prediction noise ${noise}`,
+  );
+  assert.ok(noise > 0.9e-6 && noise <= HEADROOM_FLOAT_TOLERANCE);
+  assert.equal(headroomFixtureChanged(paired, matched), false);
+});
+
+void test('a note shift or chord shift moving by more than 1e-6 is a change', () => {
+  const baseline = load();
+  const shifted = structuredClone(baseline);
+  const noteCase = shifted.chromium.cases[0];
+  const originalNote = baseline.chromium.cases[0];
+  if (!noteCase || !originalNote || noteCase.noteShifts.length === 0) {
+    throw new Error('chromium case has no note shifts');
+  }
+  const beforeShift = noteCase.noteShifts[0];
+  if (beforeShift === undefined) throw new Error('missing note shift');
+  noteCase.noteShifts[0] = nudgeOver(beforeShift);
+  const noteDelta = Math.abs(noteCase.noteShifts[0] - beforeShift);
+  assert.equal(noteCase.prediction, originalNote.prediction);
+  assert.equal(noteCase.confirmed, originalNote.confirmed);
+  console.log(
+    `noteShift ${beforeShift} -> ${noteCase.noteShifts[0]} delta ${noteDelta}, prediction ${noteCase.prediction}, confirmed ${noteCase.confirmed}`,
+  );
+  assert.ok(noteDelta > HEADROOM_FLOAT_TOLERANCE, `note delta ${noteDelta}`);
+  assert.equal(headroomFixtureChanged(baseline, shifted), true);
+
+  const retimed = structuredClone(baseline);
+  const chordCase = retimed.firefox.cases[0];
+  const originalChord = baseline.firefox.cases[0];
+  if (!chordCase || !originalChord) throw new Error('firefox has no cases');
+  const beforeChord = chordCase.chordShift;
+  chordCase.chordShift = nudgeOver(beforeChord);
+  const chordDelta = Math.abs(chordCase.chordShift - beforeChord);
+  assert.equal(chordCase.prediction, originalChord.prediction);
+  assert.equal(chordCase.confirmed, originalChord.confirmed);
+  console.log(
+    `chordShift ${beforeChord} -> ${chordCase.chordShift} delta ${chordDelta}, prediction ${chordCase.prediction}, confirmed ${chordCase.confirmed}`,
+  );
+  assert.ok(chordDelta > HEADROOM_FLOAT_TOLERANCE, `chord delta ${chordDelta}`);
+  assert.equal(headroomFixtureChanged(baseline, retimed), true);
+});
+
 void test('a sources hash change is a change', () => {
   const baseline = load();
   const next = structuredClone(baseline);
