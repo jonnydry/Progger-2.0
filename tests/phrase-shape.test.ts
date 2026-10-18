@@ -16,7 +16,11 @@ import {
   parseDistributions,
 } from '../lib/phrase-planner-client.ts';
 import {
+  BAR_VARIATIONS,
+  MOTIF_CONTOURS,
+  QUESTION_DEGREES,
   barThreeTwists,
+  motifRhythmsFor,
   questionHits,
   rollShape,
   sampleShape,
@@ -390,6 +394,36 @@ void test('the plan route stays shut without a key and never echoes one', async 
   if (previous === undefined) delete process.env.TYPESAFE_API_KEY;
   else process.env.TYPESAFE_API_KEY = previous;
   resetPhrasePlanStateForTests();
+});
+
+void test('the server menus match the shape module', () => {
+  for (const grid of ['quarters', 'eighths', 'long-short', 'push'] as const) {
+    const questions = phrasePlanQuestions(
+      { scaleId: 'major', root: 'C', chord: 'C', bars: 4, rhythm: grid },
+      () => 0.2,
+    );
+    assert.deepEqual(
+      Object.keys(questions.motifRhythm.criteria).sort(),
+      [...motifRhythmsFor(grid)].sort(),
+    );
+    assert.deepEqual(
+      Object.keys(questions.motifContour.criteria).sort(),
+      [...MOTIF_CONTOURS].sort(),
+    );
+    assert.deepEqual(
+      Object.keys(questions.questionDegree.criteria).sort(),
+      [...QUESTION_DEGREES].sort(),
+    );
+    assert.deepEqual(
+      Object.keys(questions.variation2.criteria).sort(),
+      [...BAR_VARIATIONS].sort(),
+    );
+  }
+  const source = readFileSync(
+    new URL('../api/phrase-plan.ts', import.meta.url),
+    'utf8',
+  );
+  assert.equal(source.includes("from '../lib/"), false);
 });
 
 void test('CI loads a hand-authored distribution fixture and never a live Jev call', () => {

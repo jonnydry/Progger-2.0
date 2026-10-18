@@ -4,17 +4,88 @@
  * With no key it returns 503 and does not call TypeSafe.
  */
 
-import {
-  BAR_VARIATIONS,
-  MOTIF_CONTOURS,
-  QUESTION_DEGREES,
-  motifRhythmsFor,
-  type BarVariation,
-  type MotifContour,
-  type MotifRhythm,
-  type QuestionDegree,
-  type ShapeRhythm,
-} from '../lib/phrase-shape.ts';
+/**
+ * Menus are copied from lib/phrase-shape.ts. This file cannot import that
+ * module: Vercel compiles the function to api/phrase-plan.js and then fails
+ * to resolve a .ts import. A test checks the two copies still match.
+ */
+type MotifContour =
+  | 'step-up-step-up'
+  | 'step-down-step-down'
+  | 'step-up-step-down'
+  | 'step-down-step-up'
+  | 'skip-up-step-down'
+  | 'skip-down-step-up'
+  | 'upper-neighbor-turn'
+  | 'lower-neighbor-turn'
+  | 'arpeggio-up'
+  | 'arpeggio-down'
+  | 'repeat-then-step-up'
+  | 'repeat-then-step-down';
+
+type MotifRhythm =
+  | 'even'
+  | 'long-short-short'
+  | 'short-short-long'
+  | 'pickup-into-downbeat';
+
+type BarVariation =
+  | 'repeat'
+  | 'sequence-up'
+  | 'sequence-down'
+  | 'altered-ending';
+
+type QuestionDegree = '2' | '4' | '6';
+
+type ShapeRhythm = 'quarters' | 'eighths' | 'long-short' | 'push';
+
+const MOTIF_CONTOURS = [
+  'step-up-step-up',
+  'step-down-step-down',
+  'step-up-step-down',
+  'step-down-step-up',
+  'skip-up-step-down',
+  'skip-down-step-up',
+  'upper-neighbor-turn',
+  'lower-neighbor-turn',
+  'arpeggio-up',
+  'arpeggio-down',
+  'repeat-then-step-up',
+  'repeat-then-step-down',
+] as const satisfies readonly MotifContour[];
+
+const MOTIF_RHYTHMS = [
+  'even',
+  'long-short-short',
+  'short-short-long',
+  'pickup-into-downbeat',
+] as const satisfies readonly MotifRhythm[];
+
+const BAR_VARIATIONS = [
+  'repeat',
+  'sequence-up',
+  'sequence-down',
+  'altered-ending',
+] as const satisfies readonly BarVariation[];
+
+const QUESTION_DEGREES = [
+  '2',
+  '4',
+  '6',
+] as const satisfies readonly QuestionDegree[];
+
+function motifRhythmsFor(rhythm: ShapeRhythm): readonly MotifRhythm[] {
+  switch (rhythm) {
+    case 'quarters':
+      return ['even'];
+    case 'long-short':
+      return ['even', 'long-short-short'];
+    case 'push':
+      return ['even', 'pickup-into-downbeat'];
+    case 'eighths':
+      return MOTIF_RHYTHMS;
+  }
+}
 
 const MODEL = 'jev-1.13.0';
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
