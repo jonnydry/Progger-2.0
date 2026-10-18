@@ -9,7 +9,9 @@
 // event alone so Vite still rejects the import. Canceling it fulfills
 // the preload, and the panel would stay on "Loading phrases…". An
 // offline failure is the same event; reloading then replaces the page
-// with the browser's offline error.
+// with the browser's offline error. A stale CDN or a permanently missing
+// chunk leaves the tab showing the error until the user reloads by hand.
+// That is the trade-off for staying loop-safe.
 export const CHUNK_RELOAD_KEY = 'progger-chunk-reload';
 
 export const chunkReloadBootstrap = `(() => {
