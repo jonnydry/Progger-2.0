@@ -12,17 +12,24 @@ function browser({
   onLine = true,
   deploy = DEPLOY_A,
   store = new Map<string, string>(),
+  marker = 'link',
 }: {
   blocked?: boolean;
   onLine?: boolean;
   deploy?: string;
   store?: Map<string, string>;
+  marker?: 'link' | 'script' | 'none';
 } = {}) {
   const reloads: number[] = [];
   const listeners = new Map<string, (event: Event) => void>();
   let current = deploy;
   const link = {
     get href() {
+      return current;
+    },
+  };
+  const script = {
+    get src() {
       return current;
     },
   };
@@ -49,11 +56,11 @@ function browser({
     },
     document: {
       querySelector(selector: string) {
-        if (
-          selector.includes('/chunks/index-') &&
-          selector.includes('modulepreload')
-        )
-          return link;
+        if (!selector.includes('/chunks/index-')) return null;
+        if (selector.includes('modulepreload'))
+          return marker === 'link' ? link : null;
+        if (selector.includes('script'))
+          return marker === 'script' ? script : null;
         return null;
       },
     },
@@ -112,6 +119,23 @@ void test('a duplicated tab does not inherit suppression for a later deploy', ()
   assert.equal(duplicate.stored(), DEPLOY_B);
 });
 
+void test('a page with no index chunk does not reload', () => {
+  const page = browser({ marker: 'none' });
+  assert.equal(page.failChunk(), false);
+  assert.deepEqual(page.reloads, []);
+  assert.equal(page.stored(), null);
+});
+
+void test('a script tag supplies the deploy address when no modulepreload exists', () => {
+  const page = browser({ marker: 'script' });
+  assert.equal(page.failChunk(), false);
+  assert.deepEqual(page.reloads, [1]);
+  assert.equal(page.stored(), DEPLOY_A);
+
+  assert.equal(page.failChunk(), false);
+  assert.deepEqual(page.reloads, [1]);
+});
+
 void test('an offline chunk failure does not reload', () => {
   const page = browser({ onLine: false });
   assert.equal(page.failChunk(), false);
@@ -131,7 +155,7 @@ void test('the document installs the chunk reload before paint', () => {
     new URL('../app/layout.tsx', import.meta.url),
     'utf8',
   );
-  assert.match(layout, /chunkReloadBootstrap/);
+  assert.match(layout, /__html:\s*chunkReloadBootstrap/);
   assert.match(chunkReloadBootstrap, /vite:preloadError/);
   assert.match(chunkReloadBootstrap, /navigator\.onLine === false/);
   assert.match(chunkReloadBootstrap, /\/chunks\/index-/);
