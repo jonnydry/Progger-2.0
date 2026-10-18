@@ -117,7 +117,11 @@ export function samplePlannedFields(
   grid: ShapeRhythm,
   distributions: PlannerDistributions,
   available: readonly CadenceTarget[],
-): { cadence: CadenceTarget; shape: PhraseShapePlan } {
+): {
+  cadence: CadenceTarget;
+  shape: PhraseShapePlan;
+  alternates: PhraseShapePlan[];
+} {
   const random = mulberry32(seed);
   // The same seed already rolled the rules plan. Advance four draws so the
   // shape sample is not tied to contour, rhythm, register, and cadence.
@@ -125,10 +129,12 @@ export function samplePlannedFields(
   random();
   random();
   random();
-  return {
-    cadence: sampleCadence(random, distributions.cadence, available),
-    shape: sampleShape(random, bars, grid, distributions),
-  };
+  const cadence = sampleCadence(random, distributions.cadence, available);
+  const shape = sampleShape(random, bars, grid, distributions);
+  const alternates: PhraseShapePlan[] = [];
+  for (let index = 0; index < 12; index++)
+    alternates.push(sampleShape(random, bars, grid, distributions));
+  return { cadence, shape, alternates };
 }
 
 function contextOf(input: PhrasePlannerInput, grid: ShapeRhythm): string {
@@ -145,7 +151,10 @@ export function createPhrasePlanner(options?: {
   const fetchImpl = options?.fetch ?? fetch;
   const origin = options?.origin ?? '';
   const contexts = new Map<string, CacheEntry>();
-  const seeds = new Map<string, PhrasePlan>();
+  const seeds = new Map<
+    string,
+    PhrasePlan & { alternates: readonly PhraseShapePlan[] }
+  >();
   return {
     async propose(input) {
       const rules = rulePlan(
@@ -200,10 +209,11 @@ export function createPhrasePlanner(options?: {
         distributions,
         available,
       );
-      const plan: PhrasePlan = {
+      const plan = {
         ...rules,
         cadence: sampled.cadence,
         shape: sampled.shape,
+        alternates: sampled.alternates,
       };
       seeds.set(seedKey, plan);
       return plan;

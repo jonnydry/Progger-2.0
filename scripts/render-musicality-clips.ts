@@ -1110,9 +1110,7 @@ async function renderTrack2(outDir: string): Promise<void> {
     };
     const armA = asGenerated(mainRules.generatePhrase(input));
     const armB = asGenerated(generateShapedPhrase(input));
-    if (spellLine(armA.notes) === spellLine(armB.notes)) {
-      throw new Error(`${trial.id} A and B are the same line`);
-    }
+    const sameLine = spellLine(armA.notes) === spellLine(armB.notes);
     const armCLine = asGenerated(
       await generatePhraseWithPlanner({
         ...input,
@@ -1173,7 +1171,7 @@ async function renderTrack2(outDir: string): Promise<void> {
       tempo: trial.tempo,
       bars: BARS,
       feel: 'straight',
-      identical: spellLine(armA.notes) === spellLine(armB.notes),
+      identical: sameLine,
       cSameAsA: spellLine(armCLine.notes) === spellLine(armA.notes),
       cSameAsB: spellLine(armCLine.notes) === spellLine(armB.notes),
       slots,
@@ -1190,7 +1188,7 @@ async function renderTrack2(outDir: string): Promise<void> {
       '',
     );
     console.log(
-      `${trial.id} gap ${matched.gap.toFixed(2)} LU identical ${spellLine(armA.notes) === spellLine(armB.notes)}`,
+      `${trial.id} gap ${matched.gap.toFixed(2)} LU identical ${sameLine}`,
     );
   }
   writeFileSync(
