@@ -179,6 +179,9 @@ export class LookaheadScheduler {
   private loopBeats: number;
   private readonly onCue: (cue: PhraseCue) => void;
   private readonly onEnd: () => void;
+  /** Notes at or after this time belong to the pass being replaced. */
+  private suppressAt = Number.POSITIVE_INFINITY;
+  private onSuppress: (() => void) | null = null;
 
   constructor(
     clock: PhraseClock,
@@ -216,6 +219,28 @@ export class LookaheadScheduler {
   stop() {
     this.stopped = true;
     this.clear();
+    this.onSuppress = null;
+  }
+
+  /**
+   * Drop notes already queued at or after `boundary` and stop there
+   * instead of wrapping. `onReach` runs about a lookahead before the
+   * boundary, so the next phrase can be placed on that instant.
+   */
+  suppressFrom(boundary: number, onReach: () => void): void {
+    this.suppressAt = boundary;
+    this.onSuppress = onReach;
+    for (let index = this.cues.length - 1; index >= 0; index -= 1) {
+      const cue = this.cues[index];
+      if (cue && cue.intended >= boundary - 1e-4) this.cues.splice(index, 1);
+    }
+    if (this.stopped || this.ended) return;
+    this.pump();
+  }
+
+  clearSuppress(): void {
+    this.suppressAt = Number.POSITIVE_INFINITY;
+    this.onSuppress = null;
   }
 
   /**
@@ -261,6 +286,13 @@ export class LookaheadScheduler {
       }
       if (this.cursor >= this.beats.length) {
         const end = this.origin + this.period;
+        if (
+          this.suppressAt < Number.POSITIVE_INFINITY &&
+          end >= this.suppressAt - 1e-4
+        ) {
+          this.reachSuppress(now);
+          return;
+        }
         if (!looping) {
           if (end > horizon) {
             this.wake(Math.min(end, now + PHRASE_TICK_SEC));
@@ -278,6 +310,10 @@ export class LookaheadScheduler {
       const intended =
         this.origin +
         onsetSeconds(this.beats[this.cursor] ?? 0, this.tempo, this.swing);
+      if (intended >= this.suppressAt - 1e-4) {
+        this.reachSuppress(now);
+        return;
+      }
       if (intended > horizon) {
         const wakeAt = Math.min(
           intended - PHRASE_LOOKAHEAD_SEC,
@@ -326,6 +362,20 @@ export class LookaheadScheduler {
     return Number.POSITIVE_INFINITY;
   }
 
+  private reachSuppress(now: number): void {
+    const wakeAt = this.suppressAt - PHRASE_LOOKAHEAD_SEC;
+    if (wakeAt > now + 1e-4) {
+      this.wake(wakeAt);
+      return;
+    }
+    this.ended = true;
+    this.clear();
+    const reach = this.onSuppress;
+    this.onSuppress = null;
+    this.suppressAt = Number.POSITIVE_INFINITY;
+    reach?.();
+  }
+
   private wake(when: number) {
     this.clear();
     const now = this.clock.now();
@@ -363,6 +413,10 @@ export class PhrasePlayer {
   /** Fades already heading for zero. A new start leaves these timers alone. */
   private fades: { timer: ReturnType<typeof setTimeout>; drop: () => void }[] =
     [];
+  /** Starts the queued phrase a lookahead before its boundary. */
+  private queueTimer: unknown = null;
+  /** Boundary the queue timer is waiting on. */
+  private queueAt = Number.NaN;
   private scheduler: LookaheadScheduler | null = null;
   private context: AudioContext | null = null;
   private trim: GainNode | null = null;
@@ -373,6 +427,25 @@ export class PhrasePlayer {
   private holdPeriod = 0;
   private landingIndex = -1;
   private looping = false;
+  /** Loop was turned off and this pass is still sounding its cadence. */
+  private finishing = false;
+  /** Latest phrase waiting for the current pass to end. Earlier ones are dropped. */
+  private pending: PhrasePass | null = null;
+  /** Sounding graph kept until the queued phrase's downbeat. */
+  private preserved: {
+    at: number;
+    trim: GainNode | null;
+    voices: LiveVoice[];
+  } | null = null;
+  private handoffTimer: unknown = null;
+  /** Phrases already replaced, fading under the one that just started. */
+  private releases: {
+    trim: GainNode | null;
+    voices: LiveVoice[];
+    dropped: boolean;
+    timer: unknown;
+    cancel: () => void;
+  }[] = [];
   private clock: PhraseClock | null = null;
   private readonly onState: (state: PhrasePlayback) => void;
 
@@ -402,6 +475,32 @@ export class PhrasePlayer {
     return this.looping;
   }
 
+  /**
+   * A looping pass, or the cadence after Loop was turned off, is still
+   * sounding. A new phrase waits for that boundary instead of cutting it.
+   */
+  phraseChangeWaits(): boolean {
+    return this.looping || this.finishing;
+  }
+
+  /**
+   * Remember the newest phrase and start it when the sounding pass ends.
+   * Looping switches at the seam. A finishing pass plays its closing note
+   * through the hold, then starts. Nothing is waiting when this is called
+   * outside those passes, so the phrase starts now. A later call replaces
+   * one that has not started.
+   */
+  queuePhrase(input: PhrasePass): void {
+    if (this.disposed || !input.notes.length) return;
+    if (input.bars !== 2 && input.bars !== 4) return;
+    if (!this.phraseChangeWaits()) {
+      void this.start(input);
+      return;
+    }
+    this.pending = input;
+    if (this.looping) this.suppressNextPass();
+  }
+
   elapsed(): number {
     const now = this.clock?.now() ?? this.context?.currentTime;
     if (now === undefined || this.startedAt === 0) return 0;
@@ -420,6 +519,9 @@ export class PhrasePlayer {
     const now = this.clock?.now() ?? this.context.currentTime;
     const loopPeriod = this.period;
     if (!(loopPeriod > 1e-4)) return;
+    this.cancelHandoffTimer();
+    this.cancelQueueTimer();
+    this.scheduler.clearSuppress();
     const elapsed = now - this.startedAt;
     const pass = Math.max(0, Math.floor(elapsed / loopPeriod + 1e-9));
     const passOrigin = this.startedAt + pass * loopPeriod;
@@ -444,11 +546,21 @@ export class PhrasePlayer {
       // The context may already be closed.
     }
     this.scheduler.releaseLoop(passOrigin, this.period, this.landingIndex);
+    this.finishing = true;
+    // The queued phrase was captured while Loop was on. Loop is off now,
+    // so that request plays once, closing note included.
+    if (this.pending) this.pending = { ...this.pending, loop: false };
   }
 
   stop() {
     this.serial += 1;
     this.looping = false;
+    this.finishing = false;
+    this.pending = null;
+    this.preserved = null;
+    this.cancelHandoffTimer();
+    this.cancelQueueTimer();
+    this.scheduler?.clearSuppress();
     this.halt(false);
     if (!this.disposed) this.onState('idle');
   }
@@ -463,9 +575,36 @@ export class PhrasePlayer {
     if (input.bars !== 2 && input.bars !== 4) return;
     this.serial += 1;
     const run = this.serial;
-    this.halt(false);
+    this.pending = null;
+    this.finishing = false;
+    this.cancelHandoffTimer();
+    this.cancelQueueTimer();
+    const preserved = this.preserved;
+    this.preserved = null;
+    let replaced: {
+      at: number;
+      trim: GainNode | null;
+      voices: LiveVoice[];
+    } | null = null;
+    if (preserved) {
+      this.scheduler?.stop();
+      this.scheduler = null;
+      this.clearEndTimer();
+      this.voices = [];
+      this.trim = null;
+    } else if (this.scheduler || this.trim || this.voices.length) {
+      // An immediate switch, including plain Loop off, keeps this pass
+      // audible and fades it as the new phrase starts.
+      replaced = { at: 0, trim: this.trim, voices: this.voices.slice() };
+      this.scheduler?.stop();
+      this.scheduler = null;
+      this.clearEndTimer();
+      this.voices = [];
+      this.trim = null;
+    } else {
+      this.halt(false);
+    }
     this.onState('starting');
-    const tempo = clampPhraseTempo(input.tempo);
     try {
       const audio = input.context ? null : pageAudio();
       const context = (input.context ?? audio?.voicing) as AudioContext;
@@ -473,7 +612,17 @@ export class PhrasePlayer {
       if (!destination) throw new Error('Audio is unavailable.');
       const resume = context.resume();
       await resume;
-      if (this.disposed || run !== this.serial) return;
+      if (this.disposed || run !== this.serial) {
+        if (preserved) this.disconnectPreserved(preserved);
+        if (replaced) this.disconnectPreserved(replaced);
+        return;
+      }
+      // A request that arrived during resume() replaces this one.
+      // Leaving it pending would play the stale phrase and start the
+      // new one later.
+      const phrase = this.pending ?? input;
+      this.pending = null;
+      const tempo = clampPhraseTempo(phrase.tempo);
       const offline =
         typeof (context as unknown as OfflineAudioContext).startRendering ===
         'function';
@@ -481,47 +630,47 @@ export class PhrasePlayer {
         throw new Error('Audio is unavailable.');
       }
       this.context = context;
-      const loopBeats = phraseLoopBeats(input.notes);
-      const loopPeriod = phraseLoopSeconds(input.notes, tempo);
-      const looping = input.loop && loopPeriod > 1e-4;
+      const loopBeats = phraseLoopBeats(phrase.notes);
+      const loopPeriod = phraseLoopSeconds(phrase.notes, tempo);
+      const looping = phrase.loop && loopPeriod > 1e-4;
       this.looping = looping;
       this.holdPeriod = onsetSeconds(
-        phrasePeriodBeats(input.bars),
+        phrasePeriodBeats(phrase.bars),
         tempo,
-        input.swing,
+        phrase.swing,
       );
-      this.landingIndex = phraseClosingIndex(input.notes);
+      this.landingIndex = phraseClosingIndex(phrase.notes);
       // A loop ends on the bar line after the last non-closing onset.
       // An onset on a bar line fills the next bar, so that note plays.
       // The cadence starts on the loop end and is skipped; the next
       // pass's first note is that landing. Loop off plays the cadence
       // and holds it for two beats.
       this.period = looping ? loopPeriod : this.holdPeriod;
-      const clock: PhraseClock = input.clock ?? {
+      const clock: PhraseClock = phrase.clock ?? {
         now: () => context.currentTime,
         after: (delay, fn) => setTimeout(fn, Math.max(0, delay) * 1000),
         cancel: (handle) =>
           clearTimeout(handle as ReturnType<typeof setTimeout>),
       };
       this.clock = clock;
-      this.startedAt = clock.now() + 0.05;
+      this.startedAt = preserved ? preserved.at : clock.now() + 0.05;
       const trim = context.createGain();
       trim.gain.setValueAtTime(PHRASE_TRIM, this.startedAt);
       trim.connect(destination);
       this.trim = trim;
-      const beats = input.notes.map((note) => note.beat);
+      const beats = phrase.notes.map((note) => note.beat);
       this.scheduler = new LookaheadScheduler(
         clock,
         beats,
         tempo,
-        input.swing,
+        phrase.swing,
         this.startedAt,
         this.period,
         looping,
         (cue) => {
           if (run !== this.serial || this.disposed || !this.trim) return;
           this.dropFinished(this.clock?.now() ?? context.currentTime);
-          const note = input.notes[cue.index];
+          const note = phrase.notes[cue.index];
           if (!note) return;
           const voice = scheduleVoicing(
             context,
@@ -534,7 +683,7 @@ export class PhrasePlayer {
             ends: cue.scheduled + 2.6,
             scheduled: cue.scheduled,
           });
-          if (!looping && cue.index === input.notes.length - 1) {
+          if (!looping && cue.index === phrase.notes.length - 1) {
             const end = this.startedAt + this.period;
             this.trim.gain.setValueAtTime(PHRASE_TRIM, end);
             this.trim.gain.linearRampToValueAtTime(
@@ -547,8 +696,13 @@ export class PhrasePlayer {
           if (run !== this.serial || this.disposed) return;
           this.looping = false;
           this.scheduler = null;
-          const releaseEnds =
-            this.startedAt + this.period + PHRASE_END_RELEASE_SEC;
+          const end = this.startedAt + this.period;
+          if (this.pending) {
+            this.armQueuedStart(end);
+            return;
+          }
+          this.finishing = false;
+          const releaseEnds = end + PHRASE_END_RELEASE_SEC;
           const waitMs = Math.max(
             0,
             (releaseEnds - (this.clock?.now() ?? context.currentTime)) * 1000,
@@ -559,13 +713,167 @@ export class PhrasePlayer {
         looping ? loopBeats : Number.POSITIVE_INFINITY,
       );
       this.scheduler.start();
-      if (run !== this.serial || this.disposed) return;
+      if (run !== this.serial || this.disposed) {
+        if (preserved) this.disconnectPreserved(preserved);
+        if (replaced) this.disconnectPreserved(replaced);
+        return;
+      }
+      if (preserved) this.fadePreserved(preserved);
+      if (replaced) {
+        replaced.at = this.startedAt;
+        this.fadePreserved(replaced);
+      }
       this.onState('playing');
     } catch {
       if (this.disposed || run !== this.serial) return;
       this.halt(false);
       this.onState('error');
     }
+  }
+
+  private suppressNextPass(): void {
+    if (!this.scheduler || !this.clock || !(this.period > 1e-4)) return;
+    const now = this.clock.now();
+    const elapsed = now - this.startedAt;
+    const pass = Math.max(0, Math.floor(elapsed / this.period + 1e-9));
+    const boundary = this.startedAt + (pass + 1) * this.period;
+    this.dropVoicesFrom(boundary, now);
+    this.scheduler.suppressFrom(boundary, () => {
+      this.armQueuedStart(boundary);
+    });
+    // Arm now, not when the lookahead arrives, so Stop can cancel the
+    // switch. The suppress callback still starts it if this timer is gone.
+    this.armQueuedStart(boundary);
+  }
+
+  private dropVoicesFrom(boundary: number, now: number): void {
+    const keep: LiveVoice[] = [];
+    for (const entry of this.voices) {
+      if (entry.scheduled >= boundary - 1e-4 && entry.scheduled > now + 1e-4) {
+        disconnectVoice(entry.voice);
+      } else {
+        keep.push(entry);
+      }
+    }
+    this.voices = keep;
+  }
+
+  private armQueuedStart(at: number): void {
+    const now = this.clock?.now() ?? at;
+    const beginAt = at - PHRASE_LOOKAHEAD_SEC;
+    const fire = () => {
+      this.queueTimer = null;
+      this.queueAt = Number.NaN;
+      void this.beginQueued(at);
+    };
+    if (!(beginAt > now + 1e-4) || !this.clock) {
+      this.cancelQueueTimer();
+      fire();
+      return;
+    }
+    if (this.queueTimer != null && this.queueAt === at) return;
+    this.cancelQueueTimer();
+    this.queueAt = at;
+    this.queueTimer = this.clock.after(beginAt - now, fire);
+  }
+
+  private cancelQueueTimer(): void {
+    if (this.queueTimer != null) this.clock?.cancel(this.queueTimer);
+    this.queueTimer = null;
+    this.queueAt = Number.NaN;
+  }
+
+  private async beginQueued(at: number): Promise<void> {
+    if (this.disposed) return;
+    const input = this.pending;
+    this.pending = null;
+    if (!input) return;
+    this.preserved = {
+      at,
+      trim: this.trim,
+      voices: this.voices.slice(),
+    };
+    await this.start(input);
+  }
+
+  private cancelHandoffTimer(): void {
+    if (this.handoffTimer != null) this.clock?.cancel(this.handoffTimer);
+    this.handoffTimer = null;
+  }
+
+  private dropOutgoing(): void {
+    this.cancelHandoffTimer();
+    for (const fade of this.releases.splice(0)) {
+      fade.dropped = true;
+      fade.cancel();
+      this.disconnectPreserved(fade);
+    }
+  }
+
+  /**
+   * Let the phrase that just ended fall away on the same release as a
+   * finished pass. The new phrase starts at `at`; this ramp overlaps it.
+   * Stop does not use this path.
+   */
+  private fadePreserved(preserved: {
+    at: number;
+    trim: GainNode | null;
+    voices: LiveVoice[];
+  }): void {
+    const end = preserved.at + PHRASE_END_RELEASE_SEC;
+    if (preserved.trim) {
+      try {
+        const gain = preserved.trim.gain;
+        gain.cancelScheduledValues(preserved.at);
+        gain.setValueAtTime(gain.value, preserved.at);
+        gain.linearRampToValueAtTime(0, end);
+      } catch {
+        // The context may already be closed.
+      }
+    }
+    for (const entry of preserved.voices) {
+      for (const { oscillator } of entry.voice.voices) {
+        try {
+          oscillator.stop(end);
+        } catch {
+          // Already stopped.
+        }
+      }
+    }
+    const fade = {
+      trim: preserved.trim,
+      voices: preserved.voices,
+      dropped: false,
+      timer: null as unknown,
+      cancel: () => {},
+    };
+    this.releases.push(fade);
+    const finish = () => {
+      if (fade.dropped) return;
+      fade.dropped = true;
+      this.releases = this.releases.filter((item) => item !== fade);
+      this.disconnectPreserved(fade);
+    };
+    const now = this.clock?.now() ?? preserved.at;
+    const wait = end - now;
+    const clock = this.clock;
+    if (wait > 1e-4 && clock) {
+      fade.timer = clock.after(wait, finish);
+      fade.cancel = () => {
+        if (fade.timer != null) clock.cancel(fade.timer);
+        fade.timer = null;
+      };
+      return;
+    }
+    finish();
+  }
+
+  private disconnectPreserved(preserved: {
+    trim: GainNode | null;
+    voices: LiveVoice[];
+  }): void {
+    if (preserved.trim) disconnectNode(preserved.trim);
+    for (const entry of preserved.voices) disconnectVoice(entry.voice);
   }
 
   private clearEndTimer() {
@@ -608,6 +916,7 @@ export class PhrasePlayer {
   }
 
   private halt(immediate: boolean) {
+    this.dropOutgoing();
     this.scheduler?.stop();
     this.scheduler = null;
     this.clearEndTimer();
