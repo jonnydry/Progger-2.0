@@ -5,12 +5,18 @@
  * B is lib/phrase.ts at HEAD.
  * Run: node --experimental-strip-types scripts/render-musicality-clips.ts <outDir>
  * Track 2: node --experimental-strip-types scripts/render-musicality-clips.ts --track2 <outDir>
- * Track 2 compares main at bb7b12d (arm A) with generateShapedPhrase (arm B).
- * Arm C is left out: no live Jev distribution has been recorded.
+ * Track 2 compares main at bb7b12d (arm A), generateShapedPhrase (arm B),
+ * and the recorded Jev distributions (arm C). The script does not call Jev.
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,6 +27,7 @@ import { schedulePhrase } from '../lib/phrase-audio.ts';
 import {
   PHRASE_CELL_LIMIT,
   generatePhrase,
+  generatePhraseWithPlanner,
   generateShapedPhrase,
   mulberry32,
   onsetSeconds,
@@ -30,6 +37,7 @@ import {
   type RhythmId,
   type SwingInput,
 } from '../lib/phrase.ts';
+import { createPhrasePlanner } from '../lib/phrase-planner-client.ts';
 import {
   barThreeTwists,
   motifRecurs,
@@ -846,7 +854,6 @@ function measurePair(
 function measureTrack2(mainGenerate: typeof generatePhrase): {
   corpus: { A: MetricBucket; B: MetricBucket };
   progressions: { A: MetricBucket; B: MetricBucket };
-  armC: string;
 } {
   const corpusA = emptyBucket();
   const corpusB = emptyBucket();
@@ -903,7 +910,79 @@ function measureTrack2(mainGenerate: typeof generatePhrase): {
   return {
     corpus: { A: corpusA, B: corpusB },
     progressions: { A: progA, B: progB },
-    armC: 'not recorded. No live Jev distribution was available, so arm C was not measured.',
+  };
+}
+
+type RecordedPlans = {
+  recordedFromJev: boolean;
+  contexts: Record<string, unknown>;
+};
+
+function loadRecordedPlans(): RecordedPlans {
+  const file = join(
+    process.cwd(),
+    'tests/fixtures/phrase-plan-jev-recorded.json',
+  );
+  const parsed = JSON.parse(readFileSync(file, 'utf8')) as RecordedPlans;
+  if (!parsed.recordedFromJev) {
+    throw new Error('The Jev fixture is not marked as a live recording');
+  }
+  return parsed;
+}
+
+async function measureArmC(
+  mainGenerate: typeof generatePhrase,
+  recorded: RecordedPlans,
+): Promise<MetricBucket & { fallbacks: number; fallbackRate: number }> {
+  const bucket = emptyBucket();
+  const plans = new Map<string, Set<string>>();
+  let fallbacks = 0;
+  const planner = createPhrasePlanner({
+    fetch: async (_input, init) => {
+      const raw = typeof init?.body === 'string' ? init.body : '{}';
+      const request = JSON.parse(raw) as {
+        scaleId?: string;
+        root?: string;
+        chord?: string;
+        bars?: number;
+        rhythm?: string;
+      };
+      const key = `${request.scaleId}|${request.root}|${request.chord}|${request.bars}|${request.rhythm}`;
+      const found = recorded.contexts[key];
+      if (!found) return new Response('{}', { status: 503 });
+      return new Response(JSON.stringify(found), { status: 200 });
+    },
+  });
+  for (const [root, scaleId, symbol] of CORPUS) {
+    const notes = scaleNotes(root, scaleId);
+    const chordNotes = parseChord(symbol).notes;
+    for (const bars of [2, 4] as const) {
+      for (let seed = 1; seed <= 24; seed++) {
+        const input = { seed, bars, scaleNotes: notes, chordNotes };
+        const armA = takePhrase(mainGenerate(input));
+        const played = await generatePhraseWithPlanner({
+          ...input,
+          planner,
+          scaleId,
+          scaleRoot: root,
+          chordSymbol: symbol,
+        });
+        if (!played.ok) throw new Error(played.reason);
+        if (played.phrase.source !== 'planner') fallbacks += 1;
+        const armC = takePhrase(played);
+        foldPhrase(bucket, armC, armA);
+        const context = `${root}|${scaleId}|${symbol}|${bars}`;
+        const set = plans.get(context) ?? new Set<string>();
+        set.add(planKey(armC));
+        plans.set(context, set);
+      }
+    }
+  }
+  finishPlans(bucket, plans);
+  return {
+    ...bucket,
+    fallbacks,
+    fallbackRate: bucket.phrases ? fallbacks / bucket.phrases : 0,
   };
 }
 
@@ -975,10 +1054,12 @@ async function renderTrack2(outDir: string): Promise<void> {
   mkdirSync(outDir, { recursive: true });
   const mainRules = await loadRulesAt(TRACK2_SHA);
   console.log('measuring corpus and progressions');
+  const recorded = loadRecordedPlans();
   const metrics = measureTrack2(mainRules.generatePhrase);
+  const armC = await measureArmC(mainRules.generatePhrase, recorded);
   writeFileSync(
     join(outDir, 'metrics.json'),
-    `${JSON.stringify({ head: identity.head, tree: identity.tree, base: TRACK2_SHA, ...metrics }, null, 2)}\n`,
+    `${JSON.stringify({ head: identity.head, tree: identity.tree, base: TRACK2_SHA, ...metrics, corpus: { ...metrics.corpus, C: armC } }, null, 2)}\n`,
   );
   console.log(`wrote ${join(outDir, 'metrics.json')}`);
   const answer: {
@@ -995,7 +1076,9 @@ async function renderTrack2(outDir: string): Promise<void> {
       bars: number;
       feel: string;
       identical: boolean;
-      slots: Record<string, 'A' | 'B'>;
+      slots: Record<string, 'A' | 'B' | 'C'>;
+      cSameAsA: boolean;
+      cSameAsB: boolean;
       files: string[];
       gain: number;
       loudnessGapLu: number;
@@ -1003,16 +1086,16 @@ async function renderTrack2(outDir: string): Promise<void> {
     }[];
   } = {
     shuffleSeed: SHUFFLE_SEED,
-    armC: 'unavailable. No real Jev distributions were recorded, so these are pairs, not triplets.',
+    armC: 'recorded jev-1.13.0 distributions, replayed from tests/fixtures/phrase-plan-jev-recorded.json',
     base: TRACK2_SHA,
     head: identity.head,
     trials: [],
   };
   const blind: string[] = [
-    '# Blind phrase pairs',
+    '# Blind phrase triplets',
     '',
-    'Eight pairs. Slot 1 and slot 2 of each pair are the same seed, key, tempo, and four straight bars. Which slot is which arm is not in this file.',
-    'Both slots of a pair share one gain. True peak stays at or under -1 dBTP.',
+    'Eight triplets. The three slots of each set are the same seed, key, tempo, and four straight bars. Which slot is which arm is not in this file.',
+    'All three slots share one gain. True peak stays at or under -1 dBTP.',
     `Seeds used: ${TRACK2_SEEDS.join(', ')}. Keys: A Dorian over Am, and C major over C. Tempos: 90 and 120 BPM.`,
     '',
   ];
@@ -1030,11 +1113,36 @@ async function renderTrack2(outDir: string): Promise<void> {
     if (spellLine(armA.notes) === spellLine(armB.notes)) {
       throw new Error(`${trial.id} A and B are the same line`);
     }
-    const order = shuffleArms(SHUFFLE_SEED + index, ['A', 'B']) as (
+    const armCLine = asGenerated(
+      await generatePhraseWithPlanner({
+        ...input,
+        planner: createPhrasePlanner({
+          fetch: async (_request, init) => {
+            const raw = typeof init?.body === 'string' ? init.body : '{}';
+            const request = JSON.parse(raw) as {
+              scaleId?: string;
+              root?: string;
+              chord?: string;
+              bars?: number;
+              rhythm?: string;
+            };
+            const key = `${request.scaleId}|${request.root}|${request.chord}|${request.bars}|${request.rhythm}`;
+            const found = recorded.contexts[key];
+            if (!found) return new Response('{}', { status: 503 });
+            return new Response(JSON.stringify(found), { status: 200 });
+          },
+        }),
+        scaleId: trial.scaleId,
+        scaleRoot: trial.root,
+        chordSymbol: trial.chord,
+      }),
+    );
+    const order = shuffleArms(SHUFFLE_SEED + index, ['A', 'B', 'C']) as (
       | 'A'
       | 'B'
+      | 'C'
     )[];
-    const byArm = { A: armA, B: armB };
+    const byArm = { A: armA, B: armB, C: armCLine };
     const rendered = await Promise.all(
       order.map(async (arm, slot) => ({
         arm,
@@ -1051,7 +1159,7 @@ async function renderTrack2(outDir: string): Promise<void> {
       trial,
       rendered.map((item) => ({ file: item.file, samples: item.samples })),
     );
-    const slots: Record<string, 'A' | 'B'> = {};
+    const slots: Record<string, 'A' | 'B' | 'C'> = {};
     const peaks: Record<string, number> = {};
     rendered.forEach((item, slot) => {
       slots[String(slot + 1)] = item.arm;
@@ -1066,6 +1174,8 @@ async function renderTrack2(outDir: string): Promise<void> {
       bars: BARS,
       feel: 'straight',
       identical: spellLine(armA.notes) === spellLine(armB.notes),
+      cSameAsA: spellLine(armCLine.notes) === spellLine(armA.notes),
+      cSameAsB: spellLine(armCLine.notes) === spellLine(armB.notes),
       slots,
       files: rendered.map((item) => `${item.file}.mp3`),
       gain: matched.gain,
@@ -1076,7 +1186,7 @@ async function renderTrack2(outDir: string): Promise<void> {
       `## ${trial.id}`,
       '',
       `${trial.scaleLabel} over ${trial.chord}, seed ${trial.seed}, ${trial.tempo} BPM, straight, ${BARS} bars.`,
-      `Files: \`${trial.id}-slot-1.mp3\`, \`${trial.id}-slot-2.mp3\`.`,
+      `Files: \`${trial.id}-slot-1.mp3\`, \`${trial.id}-slot-2.mp3\`, \`${trial.id}-slot-3.mp3\`.`,
       '',
     );
     console.log(

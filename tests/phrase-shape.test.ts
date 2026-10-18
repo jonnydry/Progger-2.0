@@ -454,4 +454,13 @@ void test('CI loads a hand-authored distribution fixture and never a live Jev ca
   assert.equal(phrase.includes('phrase-planner-client'), false);
   assert.equal(phrase.includes('api.typesafe.ai'), false);
   assert.equal(panel.includes('createPhrasePlanner'), false);
+  const recorded = JSON.parse(
+    readFileSync(
+      new URL('./fixtures/phrase-plan-jev-recorded.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { recordedFromJev: boolean; contexts: Record<string, unknown> };
+  assert.equal(recorded.recordedFromJev, true);
+  assert.equal(Object.keys(recorded.contexts).length, 64);
+  assert.ok(parseDistributions(recorded.contexts['major|C|C|4|quarters']));
 });
