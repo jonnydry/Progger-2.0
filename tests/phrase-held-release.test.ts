@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type { Page } from 'playwright';
+import type { Browser, Page } from 'playwright';
 import { launchNamed } from './browser-launch.ts';
 
 function showHeld(page: Page, id: string, contextKey: string) {
@@ -25,7 +26,9 @@ function showHeld(page: Page, id: string, contextKey: string) {
 /**
  * Mounts PhrasePanel and drives held + contextKey. Deleting the release
  * line in the seenHeld effect leaves this red: a context change must call
- * onReleaseHeld once, and the other three updates must not.
+ * onReleaseHeld once, and the other updates must not. Clearing the held
+ * phrase resets that memory, so bringing the same phrase back does not
+ * release it again.
  */
 void test('a context change releases a held tray phrase', async (t) => {
   const root = process.cwd();
@@ -33,8 +36,9 @@ void test('a context change releases a held tray phrase', async (t) => {
   // from the entry's directory, and CI has no node_modules above /tmp.
   const scratch = join(root, 'node_modules/.cache');
   mkdirSync(scratch, { recursive: true });
-  const entry = join(scratch, 'phrase-held-release-entry.tsx');
-  const outfile = join(scratch, 'phrase-held-release-probe.js');
+  const suffix = `${process.pid}-${randomUUID()}`;
+  const entry = join(scratch, `phrase-held-release-entry-${suffix}.tsx`);
+  const outfile = join(scratch, `phrase-held-release-probe-${suffix}.js`);
   writeFileSync(
     entry,
     `import { act, createElement } from 'react';
@@ -124,7 +128,7 @@ async function show(id, contextKey) {
         scaleName: 'Dorian',
         scaleNotes,
         chord: null,
-        held: held(id),
+        held: id ? held(id) : null,
         contextKey,
         onReleaseHeld,
         capture,
@@ -153,7 +157,6 @@ export { show };
     { cwd: root, stdio: 'pipe' },
   );
 
-  const browser = await launchNamed('chromium', t);
   const server = createServer((request, response) => {
     if ((request.url ?? '/').startsWith('/probe.js')) {
       response.setHeader('content-type', 'text/javascript');
@@ -169,14 +172,22 @@ window.__heldRelease = { show };
 document.documentElement.dataset.ready = '1';
 </script>`);
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve());
-  });
-  const address = server.address() as AddressInfo;
-  const page = await browser.newPage();
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(String(error)));
+  let browser: Browser | undefined;
+  let page: Page | undefined;
   try {
+    await new Promise<void>((resolve, reject) => {
+      const fail = (error: Error) => reject(error);
+      server.once('error', fail);
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', fail);
+        resolve();
+      });
+    });
+    browser = await launchNamed('chromium', t);
+    const address = server.address() as AddressInfo;
+    page = await browser.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(String(error)));
     await page.goto(`http://127.0.0.1:${address.port}/`, {
       waitUntil: 'load',
     });
@@ -200,10 +211,20 @@ document.documentElement.dataset.ready = '1';
 
     const next = await showHeld(page, 'phrase-b', 'chords|G|major');
     assert.equal(next, 1, 'a new held phrase in a new context is kept');
+
+    const cleared = await showHeld(page, '', 'chords|G|major');
+    assert.equal(cleared, 1, 'clearing the held phrase does not release it');
+
+    const restored = await showHeld(page, 'phrase-b', 'chords|C|minor');
+    assert.equal(
+      restored,
+      1,
+      'a held phrase that went away does not release when it returns',
+    );
     if (errors.length) throw new Error(errors.join('\n'));
   } finally {
-    await page.close();
-    await browser.close();
+    await page?.close();
+    await browser?.close();
     await new Promise((resolve) => server.close(resolve));
   }
 });
