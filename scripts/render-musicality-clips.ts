@@ -488,7 +488,8 @@ function swingText(pair: Pair): string {
   return `swing amount ${pair.swing} (pinned light swing, the value these clips used before the session default became straight), ratio ${ratio.toFixed(4)} at ${pair.tempo} BPM`;
 }
 
-const TRACK2_SEEDS = [1, 3, 7, 11, 16, 24] as const;
+/** Seeds in 1..64 where both A Dorian/Am and C major/C keep a shaped line. */
+const TRACK2_SEEDS = [5, 28, 32, 34, 50, 58] as const;
 const SHUFFLE_SEED = 20261018;
 
 type TrackTrial = {
@@ -504,7 +505,7 @@ type TrackTrial = {
 const TRACK2_TRIALS: readonly TrackTrial[] = [
   {
     id: 'listen-01',
-    seed: 1,
+    seed: 5,
     root: 'A',
     scaleId: 'dorian',
     scaleLabel: 'A Dorian',
@@ -513,7 +514,7 @@ const TRACK2_TRIALS: readonly TrackTrial[] = [
   },
   {
     id: 'listen-02',
-    seed: 3,
+    seed: 28,
     root: 'A',
     scaleId: 'dorian',
     scaleLabel: 'A Dorian',
@@ -522,7 +523,7 @@ const TRACK2_TRIALS: readonly TrackTrial[] = [
   },
   {
     id: 'listen-03',
-    seed: 7,
+    seed: 32,
     root: 'A',
     scaleId: 'dorian',
     scaleLabel: 'A Dorian',
@@ -531,7 +532,7 @@ const TRACK2_TRIALS: readonly TrackTrial[] = [
   },
   {
     id: 'listen-04',
-    seed: 11,
+    seed: 34,
     root: 'A',
     scaleId: 'dorian',
     scaleLabel: 'A Dorian',
@@ -540,7 +541,7 @@ const TRACK2_TRIALS: readonly TrackTrial[] = [
   },
   {
     id: 'listen-05',
-    seed: 16,
+    seed: 50,
     root: 'C',
     scaleId: 'major',
     scaleLabel: 'C major',
@@ -549,7 +550,7 @@ const TRACK2_TRIALS: readonly TrackTrial[] = [
   },
   {
     id: 'listen-06',
-    seed: 24,
+    seed: 58,
     root: 'C',
     scaleId: 'major',
     scaleLabel: 'C major',
@@ -558,7 +559,7 @@ const TRACK2_TRIALS: readonly TrackTrial[] = [
   },
   {
     id: 'listen-07',
-    seed: 1,
+    seed: 5,
     root: 'C',
     scaleId: 'major',
     scaleLabel: 'C major',
@@ -567,7 +568,7 @@ const TRACK2_TRIALS: readonly TrackTrial[] = [
   },
   {
     id: 'listen-08',
-    seed: 7,
+    seed: 28,
     root: 'C',
     scaleId: 'major',
     scaleLabel: 'C major',
@@ -1026,6 +1027,9 @@ async function renderTrack2(outDir: string): Promise<void> {
     };
     const armA = asGenerated(mainRules.generatePhrase(input));
     const armB = asGenerated(generateShapedPhrase(input));
+    if (spellLine(armA.notes) === spellLine(armB.notes)) {
+      throw new Error(`${trial.id} A and B are the same line`);
+    }
     const order = shuffleArms(SHUFFLE_SEED + index, ['A', 'B']) as (
       | 'A'
       | 'B'
