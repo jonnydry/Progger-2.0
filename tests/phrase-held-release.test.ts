@@ -39,6 +39,10 @@ void test('a context change releases a held tray phrase', async (t) => {
   const suffix = `${process.pid}-${randomUUID()}`;
   const entry = join(scratch, `phrase-held-release-entry-${suffix}.tsx`);
   const outfile = join(scratch, `phrase-held-release-probe-${suffix}.js`);
+  let server: ReturnType<typeof createServer> | undefined;
+  let browser: Browser | undefined;
+  let page: Page | undefined;
+  try {
   writeFileSync(
     entry,
     `import { act, createElement } from 'react';
@@ -157,7 +161,7 @@ export { show };
     { cwd: root, stdio: 'pipe' },
   );
 
-  const server = createServer((request, response) => {
+  server = createServer((request, response) => {
     if ((request.url ?? '/').startsWith('/probe.js')) {
       response.setHeader('content-type', 'text/javascript');
       response.end(readFileSync(outfile));
@@ -172,9 +176,6 @@ window.__heldRelease = { show };
 document.documentElement.dataset.ready = '1';
 </script>`);
   });
-  let browser: Browser | undefined;
-  let page: Page | undefined;
-  try {
     await new Promise<void>((resolve, reject) => {
       const fail = (error: Error) => reject(error);
       server.once('error', fail);
@@ -225,7 +226,7 @@ document.documentElement.dataset.ready = '1';
   } finally {
     await page?.close();
     await browser?.close();
-    await new Promise((resolve) => server.close(resolve));
+    if (server) await new Promise((resolve) => server?.close(resolve));
     rmSync(entry, { force: true });
     rmSync(outfile, { force: true });
   }

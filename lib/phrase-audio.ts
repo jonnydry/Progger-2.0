@@ -437,7 +437,6 @@ export class PhrasePlayer {
     trim: GainNode | null;
     voices: LiveVoice[];
   } | null = null;
-  private handoffTimer: unknown = null;
   /** Phrases already replaced, fading under the one that just started. */
   private releases: {
     trim: GainNode | null;
@@ -519,7 +518,6 @@ export class PhrasePlayer {
     const now = this.clock?.now() ?? this.context.currentTime;
     const loopPeriod = this.period;
     if (!(loopPeriod > 1e-4)) return;
-    this.cancelHandoffTimer();
     this.cancelQueueTimer();
     this.scheduler.clearSuppress();
     const elapsed = now - this.startedAt;
@@ -529,15 +527,7 @@ export class PhrasePlayer {
     this.looping = false;
     this.startedAt = passOrigin;
     this.period = this.holdPeriod > 1e-4 ? this.holdPeriod : loopPeriod;
-    const keep: LiveVoice[] = [];
-    for (const entry of this.voices) {
-      if (entry.scheduled >= boundary - 1e-4 && entry.scheduled > now + 1e-4) {
-        disconnectVoice(entry.voice);
-      } else {
-        keep.push(entry);
-      }
-    }
-    this.voices = keep;
+    this.voices = this.soundingVoices(this.voices, boundary, now);
     const end = passOrigin + this.period;
     try {
       this.trim.gain.setValueAtTime(PHRASE_TRIM, end);
@@ -558,7 +548,6 @@ export class PhrasePlayer {
     this.finishing = false;
     this.pending = null;
     this.preserved = null;
-    this.cancelHandoffTimer();
     this.cancelQueueTimer();
     this.scheduler?.clearSuppress();
     this.halt(false);
@@ -577,7 +566,6 @@ export class PhrasePlayer {
     const run = this.serial;
     this.pending = null;
     this.finishing = false;
-    this.cancelHandoffTimer();
     this.cancelQueueTimer();
     const preserved = this.preserved;
     this.preserved = null;
@@ -586,6 +574,9 @@ export class PhrasePlayer {
       trim: GainNode | null;
       voices: LiveVoice[];
     } | null = null;
+    // When this pass is already inside its end release. Anchoring the
+    // overlap at the new phrase's lead time steps that ramp.
+    let replacedReleaseAt = Number.NaN;
     if (preserved) {
       this.scheduler?.stop();
       this.scheduler = null;
@@ -595,6 +586,9 @@ export class PhrasePlayer {
     } else if (this.scheduler || this.trim || this.voices.length) {
       // An immediate switch, including plain Loop off, keeps this pass
       // audible and fades it as the new phrase starts.
+      if (!this.looping && this.period > 1e-4) {
+        replacedReleaseAt = this.startedAt + this.period;
+      }
       replaced = { at: 0, trim: this.trim, voices: this.voices.slice() };
       this.scheduler?.stop();
       this.scheduler = null;
@@ -720,7 +714,20 @@ export class PhrasePlayer {
       }
       if (preserved) this.fadePreserved(preserved);
       if (replaced) {
-        replaced.at = this.startedAt;
+        const now =
+          this.clock?.now() ?? this.context?.currentTime ?? this.startedAt;
+        const inTail =
+          Number.isFinite(replacedReleaseAt) &&
+          now >= replacedReleaseAt - 1e-4 &&
+          now <= replacedReleaseAt + PHRASE_END_RELEASE_SEC + 1e-4;
+        replaced.at = inTail ? now : this.startedAt;
+        // A note that has not started by the switch would pluck inside
+        // the release. Drop it the way a seam switch does.
+        replaced.voices = this.soundingVoices(
+          replaced.voices,
+          this.startedAt,
+          now,
+        );
         this.fadePreserved(replaced);
       }
       this.onState('playing');
@@ -747,15 +754,28 @@ export class PhrasePlayer {
   }
 
   private dropVoicesFrom(boundary: number, now: number): void {
+    this.voices = this.soundingVoices(this.voices, boundary, now);
+  }
+
+  /**
+   * Keep voices that have already started, or that start before
+   * `boundary`. Anything scheduled from `boundary` onward that is still
+   * in the future would sound inside the fade.
+   */
+  private soundingVoices(
+    voices: LiveVoice[],
+    boundary: number,
+    now: number,
+  ): LiveVoice[] {
     const keep: LiveVoice[] = [];
-    for (const entry of this.voices) {
+    for (const entry of voices) {
       if (entry.scheduled >= boundary - 1e-4 && entry.scheduled > now + 1e-4) {
         disconnectVoice(entry.voice);
       } else {
         keep.push(entry);
       }
     }
-    this.voices = keep;
+    return keep;
   }
 
   private armQueuedStart(at: number): void {
@@ -796,17 +816,14 @@ export class PhrasePlayer {
     await this.start(input);
   }
 
-  private cancelHandoffTimer(): void {
-    if (this.handoffTimer != null) this.clock?.cancel(this.handoffTimer);
-    this.handoffTimer = null;
-  }
-
   private dropOutgoing(): void {
-    this.cancelHandoffTimer();
+    const now = this.context?.currentTime ?? 0;
     for (const fade of this.releases.splice(0)) {
       fade.dropped = true;
       fade.cancel();
-      this.disconnectPreserved(fade);
+      // Stop within the overlap used to cut the phrase that was still
+      // fading. Give it the same 20 ms release as the phrase Stop fades.
+      this.releaseGraph(fade.trim, fade.voices, now, 0.02);
     }
   }
 
@@ -942,7 +959,16 @@ export class PhrasePlayer {
     this.voices = [];
     this.trim = null;
     if (!context || (!trim && !voices.length)) return;
-    const now = context.currentTime;
+    this.releaseGraph(trim, voices, context.currentTime, fadeSec);
+  }
+
+  /** Ramp `trim` to silence, then disconnect. A zero fade drops at once. */
+  private releaseGraph(
+    trim: GainNode | null,
+    voices: LiveVoice[],
+    now: number,
+    fadeSec: number,
+  ): void {
     if (trim) {
       try {
         trim.gain.cancelScheduledValues(now);
