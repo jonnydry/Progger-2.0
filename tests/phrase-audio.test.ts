@@ -1896,7 +1896,7 @@ function spyGains(context: OfflineAudioContext) {
     anchor: number;
     anchorValue: number;
   }[] = [];
-  const cancels: { time: number }[] = [];
+  const cancels: { node: GainNode; time: number }[] = [];
   const disconnected = new Set<GainNode>();
   const anchors = new WeakMap<AudioParam, { time: number; value: number }>();
   const createGain = context.createGain.bind(context);
@@ -1912,7 +1912,7 @@ function spyGains(context: OfflineAudioContext) {
       return setValue(value, time);
     };
     gain.cancelScheduledValues = (time: number) => {
-      cancels.push({ time });
+      cancels.push({ node, time });
       return cancel(time);
     };
     gain.linearRampToValueAtTime = (value: number, time: number) => {
@@ -2259,6 +2259,7 @@ void test('a phrase switch fades the outgoing notes across the release', async (
       Math.abs(item.anchor - boundary) < 1e-4,
   );
   assert.ok(release, 'the outgoing phrase did not fade across the release');
+  // node-web-audio-api always reads gain.value as 1.
   assert.equal(
     release.anchorValue,
     1,
@@ -2319,6 +2320,7 @@ void test('a phrase switch fades the outgoing notes across the release', async (
       Math.abs(item.anchor - (at + lead)) < 1e-4,
   );
   assert.ok(immediate, 'an immediate switch did not fade the outgoing phrase');
+  // node-web-audio-api always reads gain.value as 1.
   assert.equal(
     immediate.anchorValue,
     1,
@@ -2339,11 +2341,15 @@ void test('an immediate switch drops notes that have not started', async () => {
   const clock = new AudioClock();
   const { starts, dropped } = spyPhrase(context);
   const player = new PhrasePlayer(() => {});
+  // The old phrase starts at 0.05. The switch is taken at 0.25, so the
+  // new downbeat is 0.30 and the release runs until 0.60. Beat 0.45
+  // sounds at 0.275, in the 50 ms before that downbeat. Beat 0.8 sounds
+  // at 0.45, inside the 0.3 s release.
   const playing = [
     queuedNote(0, 0),
+    queuedNote(3, 0.45),
+    queuedNote(5, 0.8),
     queuedNote(2, 2),
-    queuedNote(4, 4),
-    queuedNote(7, 6),
     queuedNote(8, 8, 2),
   ];
   await player.start({
@@ -2358,7 +2364,7 @@ void test('an immediate switch drops notes that have not started', async () => {
   });
   const lead = 0.05;
   await rollClock(clock, lead + 0.2);
-  const at = clock.currentTime;
+  const now = clock.currentTime;
   await player.start({
     notes: [queuedNote(10, 0)],
     bars: 2,
@@ -2369,25 +2375,37 @@ void test('an immediate switch drops notes that have not started', async () => {
     destination: context.destination,
     clock,
   });
-  const switchAt = at + lead;
-  const future = starts.filter(
-    (item) => !nearPitch(item, 10) && item.when >= switchAt - 1e-4,
+  const downbeat = now + lead;
+  const inside = starts.find((item) => nearPitch(item, 5));
+  assert.ok(inside, 'the note inside the release was not scheduled');
+  assert.ok(
+    inside.when >= downbeat - 1e-4 &&
+      inside.when < downbeat + PHRASE_END_RELEASE_SEC - 1e-3,
+    `the release note is at ${inside.when}s, outside the 0.3 s fade`,
+  );
+  assert.equal(
+    dropped.has(inside.oscillator),
+    true,
+    'a note inside the release played',
+  );
+  const gap = starts.find((item) => nearPitch(item, 3));
+  assert.ok(gap, 'the note in the lead was not scheduled');
+  assert.ok(
+    gap.when > now + 1e-4 && gap.when < downbeat - 1e-4,
+    `the lead note is at ${gap.when}s, not inside the 50 ms gap`,
+  );
+  assert.equal(
+    dropped.has(gap.oscillator),
+    true,
+    'a note in the 50 ms before the downbeat played at full level',
+  );
+  const sounding = starts.filter(
+    (item) => !nearPitch(item, 10) && item.when <= now + 1e-4,
   );
   assert.ok(
-    future.length >= 2,
-    'the outgoing phrase had no notes left to drop',
+    sounding.some((item) => nearPitch(item, 0)),
+    'the outgoing phrase had no sounding note',
   );
-  for (const item of future) {
-    assert.equal(
-      dropped.has(item.oscillator),
-      true,
-      'a note that had not started played inside the fade',
-    );
-  }
-  const sounding = starts.filter(
-    (item) => !nearPitch(item, 10) && item.when < switchAt - 1e-4,
-  );
-  assert.ok(sounding.length >= 1, 'the outgoing phrase had no sounding note');
   for (const item of sounding) {
     assert.equal(
       dropped.has(item.oscillator),
@@ -2437,6 +2455,7 @@ void test('play during the release tail anchors the fade at the current time', a
       Math.abs(item.end - now - PHRASE_END_RELEASE_SEC) < 0.02,
   );
   assert.ok(fade, 'play during the tail did not fade from the current time');
+  // node-web-audio-api always reads gain.value as 1.
   assert.equal(
     fade.anchorValue,
     1,
@@ -2486,6 +2505,7 @@ void test('a queued phrase fades the closing note across the release', async () 
   await rollClock(clock, holdEnd + 0.05);
   await Promise.resolve();
   await Promise.resolve();
+  // anchorValue is 1 because this audio library always reads gain.value as 1.
   const fade = ramps.find(
     (item) =>
       item.value === 0 &&
@@ -2520,7 +2540,7 @@ void test('stop during a switch fade releases the outgoing phrase over 20 ms', a
   const context = new OfflineAudioContext(1, RATE * 20, RATE);
   context.resume = () => Promise.resolve();
   const clock = new AudioClock();
-  const { ramps, disconnected } = spyGains(context);
+  const { ramps, cancels, disconnected } = spyGains(context);
   const { starts, dropped } = spyPhrase(context);
   const player = new PhrasePlayer(() => {});
   await player.start({
@@ -2548,6 +2568,7 @@ void test('stop during a switch fade releases the outgoing phrase over 20 ms', a
   });
   await Promise.resolve();
   await Promise.resolve();
+  // anchorValue is 1 because this audio library always reads gain.value as 1.
   const outgoing = ramps.find(
     (item) =>
       item.value === 0 &&
@@ -2569,10 +2590,18 @@ void test('stop during a switch fade releases the outgoing phrase over 20 ms', a
       Math.abs(item.end - item.anchor - 0.02) < 1e-3,
   );
   assert.ok(cut, 'stop disconnected a phrase that was still fading');
+  // node-web-audio-api always reads gain.value as 1.
   assert.equal(
     cut.anchorValue,
     1,
     'the stop fade did not anchor at the current gain',
+  );
+  assert.ok(
+    cancels.some(
+      (item) =>
+        item.node === outgoing.node && Math.abs(item.time - cut.anchor) < 1e-4,
+    ),
+    'stop left the release ramp scheduled',
   );
   assert.equal(
     disconnected.has(outgoing.node),

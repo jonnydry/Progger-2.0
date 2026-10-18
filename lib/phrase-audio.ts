@@ -721,13 +721,10 @@ export class PhrasePlayer {
           now >= replacedReleaseAt - 1e-4 &&
           now <= replacedReleaseAt + PHRASE_END_RELEASE_SEC + 1e-4;
         replaced.at = inTail ? now : this.startedAt;
-        // A note that has not started by the switch would pluck inside
-        // the release. Drop it the way a seam switch does.
-        replaced.voices = this.soundingVoices(
-          replaced.voices,
-          this.startedAt,
-          now,
-        );
+        // The new downbeat is 50 ms ahead. A note due in that gap, or
+        // later inside the release, still plays at full level. Drop every
+        // old note that has not started yet.
+        replaced.voices = this.soundingVoices(replaced.voices, now, now);
         this.fadePreserved(replaced);
       }
       this.onState('playing');
