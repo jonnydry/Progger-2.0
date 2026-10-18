@@ -179,6 +179,9 @@ export class LookaheadScheduler {
   private loopBeats: number;
   private readonly onCue: (cue: PhraseCue) => void;
   private readonly onEnd: () => void;
+  /** Notes at or after this time belong to the pass being replaced. */
+  private suppressAt = Number.POSITIVE_INFINITY;
+  private onSuppress: (() => void) | null = null;
 
   constructor(
     clock: PhraseClock,
@@ -216,6 +219,28 @@ export class LookaheadScheduler {
   stop() {
     this.stopped = true;
     this.clear();
+    this.onSuppress = null;
+  }
+
+  /**
+   * Drop notes already queued at or after `boundary` and stop there
+   * instead of wrapping. `onReach` runs about a lookahead before the
+   * boundary, so the next phrase can be placed on that instant.
+   */
+  suppressFrom(boundary: number, onReach: () => void): void {
+    this.suppressAt = boundary;
+    this.onSuppress = onReach;
+    for (let index = this.cues.length - 1; index >= 0; index -= 1) {
+      const cue = this.cues[index];
+      if (cue && cue.intended >= boundary - 1e-4) this.cues.splice(index, 1);
+    }
+    if (this.stopped || this.ended) return;
+    this.pump();
+  }
+
+  clearSuppress(): void {
+    this.suppressAt = Number.POSITIVE_INFINITY;
+    this.onSuppress = null;
   }
 
   /**
@@ -261,6 +286,13 @@ export class LookaheadScheduler {
       }
       if (this.cursor >= this.beats.length) {
         const end = this.origin + this.period;
+        if (
+          this.suppressAt < Number.POSITIVE_INFINITY &&
+          end >= this.suppressAt - 1e-4
+        ) {
+          this.reachSuppress(now);
+          return;
+        }
         if (!looping) {
           if (end > horizon) {
             this.wake(Math.min(end, now + PHRASE_TICK_SEC));
@@ -278,6 +310,10 @@ export class LookaheadScheduler {
       const intended =
         this.origin +
         onsetSeconds(this.beats[this.cursor] ?? 0, this.tempo, this.swing);
+      if (intended >= this.suppressAt - 1e-4) {
+        this.reachSuppress(now);
+        return;
+      }
       if (intended > horizon) {
         const wakeAt = Math.min(
           intended - PHRASE_LOOKAHEAD_SEC,
@@ -324,6 +360,20 @@ export class LookaheadScheduler {
       return origin + onsetSeconds(beat, this.tempo, this.swing);
     }
     return Number.POSITIVE_INFINITY;
+  }
+
+  private reachSuppress(now: number): void {
+    const wakeAt = this.suppressAt - PHRASE_LOOKAHEAD_SEC;
+    if (wakeAt > now + 1e-4) {
+      this.wake(wakeAt);
+      return;
+    }
+    this.ended = true;
+    this.clear();
+    const reach = this.onSuppress;
+    this.onSuppress = null;
+    this.suppressAt = Number.POSITIVE_INFINITY;
+    reach?.();
   }
 
   private wake(when: number) {
@@ -373,6 +423,23 @@ export class PhrasePlayer {
   private holdPeriod = 0;
   private landingIndex = -1;
   private looping = false;
+  /** Loop was turned off and this pass is still sounding its cadence. */
+  private finishing = false;
+  /** Latest phrase waiting for the current pass to end. Earlier ones are dropped. */
+  private pending: PhrasePass | null = null;
+  /** Sounding graph kept until the queued phrase's downbeat. */
+  private preserved: {
+    at: number;
+    trim: GainNode | null;
+    voices: LiveVoice[];
+  } | null = null;
+  private handoffTimer: unknown = null;
+  /** Previous pass, kept until its boundary when a queued phrase replaces it. */
+  private outgoing: {
+    at: number;
+    trim: GainNode | null;
+    voices: LiveVoice[];
+  } | null = null;
   private clock: PhraseClock | null = null;
   private readonly onState: (state: PhrasePlayback) => void;
 
@@ -402,6 +469,32 @@ export class PhrasePlayer {
     return this.looping;
   }
 
+  /**
+   * A looping pass, or the cadence after Loop was turned off, is still
+   * sounding. A new phrase waits for that boundary instead of cutting it.
+   */
+  phraseChangeWaits(): boolean {
+    return this.looping || this.finishing;
+  }
+
+  /**
+   * Remember the newest phrase and start it when the sounding pass ends.
+   * Looping switches at the seam. A finishing pass plays its closing note
+   * through the hold, then starts. Nothing is waiting when this is called
+   * outside those passes, so the phrase starts now. A later call replaces
+   * one that has not started.
+   */
+  queuePhrase(input: PhrasePass): void {
+    if (this.disposed || !input.notes.length) return;
+    if (input.bars !== 2 && input.bars !== 4) return;
+    if (!this.phraseChangeWaits()) {
+      void this.start(input);
+      return;
+    }
+    this.pending = input;
+    if (this.looping) this.suppressNextPass();
+  }
+
   elapsed(): number {
     const now = this.clock?.now() ?? this.context?.currentTime;
     if (now === undefined || this.startedAt === 0) return 0;
@@ -420,6 +513,8 @@ export class PhrasePlayer {
     const now = this.clock?.now() ?? this.context.currentTime;
     const loopPeriod = this.period;
     if (!(loopPeriod > 1e-4)) return;
+    this.cancelHandoffTimer();
+    this.scheduler.clearSuppress();
     const elapsed = now - this.startedAt;
     const pass = Math.max(0, Math.floor(elapsed / loopPeriod + 1e-9));
     const passOrigin = this.startedAt + pass * loopPeriod;
@@ -444,11 +539,17 @@ export class PhrasePlayer {
       // The context may already be closed.
     }
     this.scheduler.releaseLoop(passOrigin, this.period, this.landingIndex);
+    this.finishing = true;
   }
 
   stop() {
     this.serial += 1;
     this.looping = false;
+    this.finishing = false;
+    this.pending = null;
+    this.preserved = null;
+    this.cancelHandoffTimer();
+    this.scheduler?.clearSuppress();
     this.halt(false);
     if (!this.disposed) this.onState('idle');
   }
@@ -463,7 +564,20 @@ export class PhrasePlayer {
     if (input.bars !== 2 && input.bars !== 4) return;
     this.serial += 1;
     const run = this.serial;
-    this.halt(false);
+    this.pending = null;
+    this.finishing = false;
+    this.cancelHandoffTimer();
+    const preserved = this.preserved;
+    this.preserved = null;
+    if (preserved) {
+      this.scheduler?.stop();
+      this.scheduler = null;
+      this.clearEndTimer();
+      this.voices = [];
+      this.trim = null;
+    } else {
+      this.halt(false);
+    }
     this.onState('starting');
     const tempo = clampPhraseTempo(input.tempo);
     try {
@@ -473,7 +587,10 @@ export class PhrasePlayer {
       if (!destination) throw new Error('Audio is unavailable.');
       const resume = context.resume();
       await resume;
-      if (this.disposed || run !== this.serial) return;
+      if (this.disposed || run !== this.serial) {
+        if (preserved) this.disconnectPreserved(preserved);
+        return;
+      }
       const offline =
         typeof (context as unknown as OfflineAudioContext).startRendering ===
         'function';
@@ -504,7 +621,7 @@ export class PhrasePlayer {
           clearTimeout(handle as ReturnType<typeof setTimeout>),
       };
       this.clock = clock;
-      this.startedAt = clock.now() + 0.05;
+      this.startedAt = preserved ? preserved.at : clock.now() + 0.05;
       const trim = context.createGain();
       trim.gain.setValueAtTime(PHRASE_TRIM, this.startedAt);
       trim.connect(destination);
@@ -547,8 +664,13 @@ export class PhrasePlayer {
           if (run !== this.serial || this.disposed) return;
           this.looping = false;
           this.scheduler = null;
-          const releaseEnds =
-            this.startedAt + this.period + PHRASE_END_RELEASE_SEC;
+          const end = this.startedAt + this.period;
+          if (this.pending) {
+            this.armQueuedStart(end);
+            return;
+          }
+          this.finishing = false;
+          const releaseEnds = end + PHRASE_END_RELEASE_SEC;
           const waitMs = Math.max(
             0,
             (releaseEnds - (this.clock?.now() ?? context.currentTime)) * 1000,
@@ -559,13 +681,119 @@ export class PhrasePlayer {
         looping ? loopBeats : Number.POSITIVE_INFINITY,
       );
       this.scheduler.start();
-      if (run !== this.serial || this.disposed) return;
+      if (run !== this.serial || this.disposed) {
+        if (preserved) this.disconnectPreserved(preserved);
+        return;
+      }
+      if (preserved) this.fadePreserved(preserved, run);
       this.onState('playing');
     } catch {
       if (this.disposed || run !== this.serial) return;
       this.halt(false);
       this.onState('error');
     }
+  }
+
+  private suppressNextPass(): void {
+    if (!this.scheduler || !this.clock || !(this.period > 1e-4)) return;
+    const now = this.clock.now();
+    const elapsed = now - this.startedAt;
+    const pass = Math.max(0, Math.floor(elapsed / this.period + 1e-9));
+    const boundary = this.startedAt + (pass + 1) * this.period;
+    this.dropVoicesFrom(boundary, now);
+    this.scheduler.suppressFrom(boundary, () => {
+      this.armQueuedStart(boundary);
+    });
+  }
+
+  private dropVoicesFrom(boundary: number, now: number): void {
+    const keep: LiveVoice[] = [];
+    for (const entry of this.voices) {
+      if (entry.scheduled >= boundary - 1e-4 && entry.scheduled > now + 1e-4) {
+        disconnectVoice(entry.voice);
+      } else {
+        keep.push(entry);
+      }
+    }
+    this.voices = keep;
+  }
+
+  private armQueuedStart(at: number): void {
+    const now = this.clock?.now() ?? at;
+    const beginAt = at - PHRASE_LOOKAHEAD_SEC;
+    const fire = () => {
+      this.handoffTimer = null;
+      void this.beginQueued(at);
+    };
+    if (!(beginAt > now + 1e-4) || !this.clock) {
+      fire();
+      return;
+    }
+    this.cancelHandoffTimer();
+    this.handoffTimer = this.clock.after(beginAt - now, fire);
+  }
+
+  private async beginQueued(at: number): Promise<void> {
+    if (this.disposed) return;
+    const input = this.pending;
+    this.pending = null;
+    if (!input) return;
+    this.preserved = {
+      at,
+      trim: this.trim,
+      voices: this.voices.slice(),
+    };
+    await this.start(input);
+  }
+
+  private cancelHandoffTimer(): void {
+    if (this.handoffTimer != null) this.clock?.cancel(this.handoffTimer);
+    this.handoffTimer = null;
+  }
+
+  private dropOutgoing(): void {
+    this.cancelHandoffTimer();
+    if (!this.outgoing) return;
+    const graph = this.outgoing;
+    this.outgoing = null;
+    this.disconnectPreserved(graph);
+  }
+
+  private fadePreserved(
+    preserved: { at: number; trim: GainNode | null; voices: LiveVoice[] },
+    run: number,
+  ): void {
+    this.outgoing = preserved;
+    for (const entry of preserved.voices) {
+      for (const { oscillator } of entry.voice.voices) {
+        try {
+          oscillator.stop(preserved.at);
+        } catch {
+          // Already stopped.
+        }
+      }
+    }
+    const finish = () => {
+      if (run !== this.serial || this.outgoing !== preserved) return;
+      this.outgoing = null;
+      this.handoffTimer = null;
+      this.disconnectPreserved(preserved);
+    };
+    const now = this.clock?.now() ?? preserved.at;
+    const wait = preserved.at - now;
+    if (wait > 1e-4 && this.clock) {
+      this.handoffTimer = this.clock.after(wait, finish);
+      return;
+    }
+    finish();
+  }
+
+  private disconnectPreserved(preserved: {
+    trim: GainNode | null;
+    voices: LiveVoice[];
+  }): void {
+    if (preserved.trim) disconnectNode(preserved.trim);
+    for (const entry of preserved.voices) disconnectVoice(entry.voice);
   }
 
   private clearEndTimer() {
@@ -608,6 +836,7 @@ export class PhrasePlayer {
   }
 
   private halt(immediate: boolean) {
+    this.dropOutgoing();
     this.scheduler?.stop();
     this.scheduler = null;
     this.clearEndTimer();
