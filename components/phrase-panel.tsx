@@ -160,6 +160,8 @@ export function PhrasePanel({
     () => (phrase.ok ? phrase.phrase.notes : EMPTY_NOTES),
     [phrase],
   );
+  const phraseRef = useRef(phrase);
+  const barsRef = useRef(bars);
   useEffect(() => {
     const current = new PhrasePlayer((next) => {
       if (next === 'idle' || next === 'error') live.current = false;
@@ -197,6 +199,10 @@ export function PhrasePanel({
   useEffect(() => {
     const turnedOff = loopRef.current && !loop;
     loopRef.current = loop;
+    const phraseChanged =
+      phraseRef.current !== phrase || barsRef.current !== bars;
+    phraseRef.current = phrase;
+    barsRef.current = bars;
     if (!active) {
       live.current = false;
       player.current?.stop();
@@ -212,20 +218,30 @@ export function PhrasePanel({
     // A new start would cut that note and begin again at beat 1.
     if (turnedOff && player.current?.isLooping) {
       player.current.finishPass();
-      return;
     }
     const tempoNow = clampPhraseTempo(
       slow ? tempoRef.current / 2 : tempoRef.current,
     );
-    soundingTempo.current = tempoNow;
-    soundingSwing.current = swingRef.current;
-    void player.current?.start({
+    const next = {
       notes: phrase.phrase.notes,
       bars,
       tempo: tempoNow,
       swing: swingRef.current,
       loop,
-    });
+    };
+    // Context, regenerate, and bar count wait for the sounding pass.
+    // Looping switches at the seam. A finishing pass keeps its closing
+    // note. Only the latest request is kept. Stop still cuts immediately.
+    if (phraseChanged && player.current?.phraseChangeWaits()) {
+      soundingTempo.current = tempoNow;
+      soundingSwing.current = swingRef.current;
+      player.current.queuePhrase(next);
+      return;
+    }
+    if (turnedOff) return;
+    soundingTempo.current = tempoNow;
+    soundingSwing.current = swingRef.current;
+    void player.current?.start(next);
   }, [active, phrase, bars, slow, loop]);
   const marks = useMemo(
     () => (phrase.ok ? phraseFretMarks(notes, dots) : null),
