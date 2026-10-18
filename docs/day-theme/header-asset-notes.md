@@ -2,10 +2,10 @@
 
 Generated with the built-in Image Gen tool on 2026-09-08. One generation; no raster retouching. WebP is a lossless format conversion with byte-identical decoded RGBA pixels verified using Sharp.
 
-- Source: `/home/jonnyd/.codex/generated_images/01a079c5-72f1-7153-b4ee-4d7455fd11ed/exec-dd90bc57-670e-4d31-a719-41703d3da357.png`
+- Source: original generation file (not committed)
 - Project PNG: `public/progger-day-pond.png`, 2172 × 724, 2,181,014 bytes.
 - Project WebP: `public/progger-day-pond.webp`, 2172 × 724, 1,849,118 bytes.
-- Reference 1: selected golden-hour concept `/home/jonnyd/.codex/generated_images/01a074be-236c-7e01-81e6-fa4975602a03/exec-d30b7051-716b-401d-a371-819bd8c27888.png`.
+- Reference 1: selected golden-hour concept original generation file (not committed).
 - Reference 2: existing night panorama `public/progger-arcade-pond.png`.
 
 ## Exact generation prompt
