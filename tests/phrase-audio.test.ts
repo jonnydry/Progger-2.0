@@ -1310,6 +1310,33 @@ void test('loop off keeps the 10-beat and 18-beat cadence hold', () => {
   }
 });
 
+void test('an onset exactly on a bar line fills the next bar', () => {
+  // Ceil of an exact bar line was one bar short, so the note on that
+  // line was skipped (beat >= loop length). The whole note at beat 4
+  // has to sit inside an 8-beat loop; the cadence at 8 stays outside.
+  const wholeOnTheBar = [
+    { beat: 0, duration: 2 },
+    { beat: 2, duration: 2 },
+    { beat: 4, duration: 4 },
+    { beat: 8, duration: 2 },
+  ];
+  assert.equal(phraseClosingIndex(wholeOnTheBar), wholeOnTheBar.length - 1);
+  assert.equal(phraseLoopBeats(wholeOnTheBar), 8);
+  assert.ok(
+    wholeOnTheBar[2] && wholeOnTheBar[2].beat < phraseLoopBeats(wholeOnTheBar),
+  );
+
+  const threeFour = [
+    { beat: 0, duration: 1.5 },
+    { beat: 1.5, duration: 1.5 },
+    { beat: 3, duration: 3 },
+    { beat: 6, duration: 2 },
+  ];
+  assert.equal(phraseClosingIndex(threeFour, 3), threeFour.length - 1);
+  assert.equal(phraseLoopBeats(threeFour, 3), 6);
+  assert.ok(threeFour[2] && threeFour[2].beat < phraseLoopBeats(threeFour, 3));
+});
+
 void test('a 3/4 loop uses bars of three and a 4/4 phrase loops at 8 or 16', () => {
   assert.equal(phraseLoopBeats([{ beat: 0, duration: 3 }], 3), 3);
   const pastTheBar = [

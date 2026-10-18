@@ -65,11 +65,12 @@ export function phraseClosingIndex(
 }
 
 /**
- * Beats from the downbeat to the bar line at or after the last note
- * that is not the closing cadence. The landing sits on that line and
- * is left out of a loop, so the next pass's first note is the landing.
- * `beatsPerBar` defaults to 4. A 3/4 bar is 3. An onset on beat 0
- * still fills its bar.
+ * Beats from the downbeat through the bar that holds the last onset
+ * that is not the closing cadence. An onset that lands exactly on a
+ * bar line still fills the next bar, so that note stays inside the
+ * loop. The cadence starts on the following downbeat and is left out,
+ * and the next pass's first note is that landing. `beatsPerBar`
+ * defaults to 4. A 3/4 bar is 3. An onset on beat 0 still fills its bar.
  */
 export function phraseLoopBeats(
   notes: readonly { beat: number; duration?: number }[],
@@ -90,8 +91,8 @@ export function phraseLoopBeats(
     if (Number.isFinite(note.beat) && note.beat > onset) onset = note.beat;
   }
   if (!(onset >= 0)) return 0;
-  const bars = Math.ceil(onset / bar - 1e-12);
-  return Math.max(1, bars) * bar;
+  const bars = Math.floor(onset / bar + 1e-9) + 1;
+  return bars * bar;
 }
 
 /** Straight seconds for `phraseLoopBeats`. Swing does not move a bar line. */
@@ -490,9 +491,11 @@ export class PhrasePlayer {
         input.swing,
       );
       this.landingIndex = phraseClosingIndex(input.notes);
-      // A loop ends on the bar line of the last non-closing note and
-      // skips the cadence, so the next pass's first note is that landing.
-      // Loop off plays the cadence and holds it for two beats.
+      // A loop ends on the bar line after the last non-closing onset.
+      // An onset on a bar line fills the next bar, so that note plays.
+      // The cadence starts on the loop end and is skipped; the next
+      // pass's first note is that landing. Loop off plays the cadence
+      // and holds it for two beats.
       this.period = looping ? loopPeriod : this.holdPeriod;
       const clock: PhraseClock = input.clock ?? {
         now: () => context.currentTime,
