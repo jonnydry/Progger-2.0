@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -226,5 +226,7 @@ document.documentElement.dataset.ready = '1';
     await page?.close();
     await browser?.close();
     await new Promise((resolve) => server.close(resolve));
+    rmSync(entry, { force: true });
+    rmSync(outfile, { force: true });
   }
 });

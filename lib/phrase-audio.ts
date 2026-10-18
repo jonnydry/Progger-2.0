@@ -413,6 +413,10 @@ export class PhrasePlayer {
   /** Fades already heading for zero. A new start leaves these timers alone. */
   private fades: { timer: ReturnType<typeof setTimeout>; drop: () => void }[] =
     [];
+  /** Starts the queued phrase a lookahead before its boundary. */
+  private queueTimer: unknown = null;
+  /** Boundary the queue timer is waiting on. */
+  private queueAt = Number.NaN;
   private scheduler: LookaheadScheduler | null = null;
   private context: AudioContext | null = null;
   private trim: GainNode | null = null;
@@ -514,6 +518,7 @@ export class PhrasePlayer {
     const loopPeriod = this.period;
     if (!(loopPeriod > 1e-4)) return;
     this.cancelHandoffTimer();
+    this.cancelQueueTimer();
     this.scheduler.clearSuppress();
     const elapsed = now - this.startedAt;
     const pass = Math.max(0, Math.floor(elapsed / loopPeriod + 1e-9));
@@ -540,6 +545,9 @@ export class PhrasePlayer {
     }
     this.scheduler.releaseLoop(passOrigin, this.period, this.landingIndex);
     this.finishing = true;
+    // The queued phrase was captured while Loop was on. Loop is off now,
+    // so that request plays once, closing note included.
+    if (this.pending) this.pending = { ...this.pending, loop: false };
   }
 
   stop() {
@@ -549,6 +557,7 @@ export class PhrasePlayer {
     this.pending = null;
     this.preserved = null;
     this.cancelHandoffTimer();
+    this.cancelQueueTimer();
     this.scheduler?.clearSuppress();
     this.halt(false);
     if (!this.disposed) this.onState('idle');
@@ -567,6 +576,7 @@ export class PhrasePlayer {
     this.pending = null;
     this.finishing = false;
     this.cancelHandoffTimer();
+    this.cancelQueueTimer();
     const preserved = this.preserved;
     this.preserved = null;
     if (preserved) {
@@ -579,7 +589,6 @@ export class PhrasePlayer {
       this.halt(false);
     }
     this.onState('starting');
-    const tempo = clampPhraseTempo(input.tempo);
     try {
       const audio = input.context ? null : pageAudio();
       const context = (input.context ?? audio?.voicing) as AudioContext;
@@ -591,6 +600,12 @@ export class PhrasePlayer {
         if (preserved) this.disconnectPreserved(preserved);
         return;
       }
+      // A request that arrived during resume() replaces this one.
+      // Leaving it pending would play the stale phrase and start the
+      // new one later.
+      const phrase = this.pending ?? input;
+      this.pending = null;
+      const tempo = clampPhraseTempo(phrase.tempo);
       const offline =
         typeof (context as unknown as OfflineAudioContext).startRendering ===
         'function';
@@ -598,23 +613,23 @@ export class PhrasePlayer {
         throw new Error('Audio is unavailable.');
       }
       this.context = context;
-      const loopBeats = phraseLoopBeats(input.notes);
-      const loopPeriod = phraseLoopSeconds(input.notes, tempo);
-      const looping = input.loop && loopPeriod > 1e-4;
+      const loopBeats = phraseLoopBeats(phrase.notes);
+      const loopPeriod = phraseLoopSeconds(phrase.notes, tempo);
+      const looping = phrase.loop && loopPeriod > 1e-4;
       this.looping = looping;
       this.holdPeriod = onsetSeconds(
-        phrasePeriodBeats(input.bars),
+        phrasePeriodBeats(phrase.bars),
         tempo,
-        input.swing,
+        phrase.swing,
       );
-      this.landingIndex = phraseClosingIndex(input.notes);
+      this.landingIndex = phraseClosingIndex(phrase.notes);
       // A loop ends on the bar line after the last non-closing onset.
       // An onset on a bar line fills the next bar, so that note plays.
       // The cadence starts on the loop end and is skipped; the next
       // pass's first note is that landing. Loop off plays the cadence
       // and holds it for two beats.
       this.period = looping ? loopPeriod : this.holdPeriod;
-      const clock: PhraseClock = input.clock ?? {
+      const clock: PhraseClock = phrase.clock ?? {
         now: () => context.currentTime,
         after: (delay, fn) => setTimeout(fn, Math.max(0, delay) * 1000),
         cancel: (handle) =>
@@ -626,19 +641,19 @@ export class PhrasePlayer {
       trim.gain.setValueAtTime(PHRASE_TRIM, this.startedAt);
       trim.connect(destination);
       this.trim = trim;
-      const beats = input.notes.map((note) => note.beat);
+      const beats = phrase.notes.map((note) => note.beat);
       this.scheduler = new LookaheadScheduler(
         clock,
         beats,
         tempo,
-        input.swing,
+        phrase.swing,
         this.startedAt,
         this.period,
         looping,
         (cue) => {
           if (run !== this.serial || this.disposed || !this.trim) return;
           this.dropFinished(this.clock?.now() ?? context.currentTime);
-          const note = input.notes[cue.index];
+          const note = phrase.notes[cue.index];
           if (!note) return;
           const voice = scheduleVoicing(
             context,
@@ -651,7 +666,7 @@ export class PhrasePlayer {
             ends: cue.scheduled + 2.6,
             scheduled: cue.scheduled,
           });
-          if (!looping && cue.index === input.notes.length - 1) {
+          if (!looping && cue.index === phrase.notes.length - 1) {
             const end = this.startedAt + this.period;
             this.trim.gain.setValueAtTime(PHRASE_TRIM, end);
             this.trim.gain.linearRampToValueAtTime(
@@ -704,6 +719,9 @@ export class PhrasePlayer {
     this.scheduler.suppressFrom(boundary, () => {
       this.armQueuedStart(boundary);
     });
+    // Arm now, not when the lookahead arrives, so Stop can cancel the
+    // switch. The suppress callback still starts it if this timer is gone.
+    this.armQueuedStart(boundary);
   }
 
   private dropVoicesFrom(boundary: number, now: number): void {
@@ -722,15 +740,25 @@ export class PhrasePlayer {
     const now = this.clock?.now() ?? at;
     const beginAt = at - PHRASE_LOOKAHEAD_SEC;
     const fire = () => {
-      this.handoffTimer = null;
+      this.queueTimer = null;
+      this.queueAt = Number.NaN;
       void this.beginQueued(at);
     };
     if (!(beginAt > now + 1e-4) || !this.clock) {
+      this.cancelQueueTimer();
       fire();
       return;
     }
-    this.cancelHandoffTimer();
-    this.handoffTimer = this.clock.after(beginAt - now, fire);
+    if (this.queueTimer != null && this.queueAt === at) return;
+    this.cancelQueueTimer();
+    this.queueAt = at;
+    this.queueTimer = this.clock.after(beginAt - now, fire);
+  }
+
+  private cancelQueueTimer(): void {
+    if (this.queueTimer != null) this.clock?.cancel(this.queueTimer);
+    this.queueTimer = null;
+    this.queueAt = Number.NaN;
   }
 
   private async beginQueued(at: number): Promise<void> {

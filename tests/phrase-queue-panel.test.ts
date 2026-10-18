@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { Page } from 'playwright';
+import type { Browser, Page } from 'playwright';
 import { launchNamed } from './browser-launch.ts';
 import { acquireDevServer } from './dev-server.ts';
 
@@ -89,12 +89,15 @@ async function playLooping(page: Page) {
  * start() would flash "Starting…". The queued phrase waits for the seam.
  */
 void test('choosing bars while Loop is on does not restart the pass', async (t) => {
-  const browser = await launchNamed('chromium', t);
-  const server = await acquireDevServer();
-  const page = await browser.newPage({
-    viewport: { width: 1280, height: 900 },
-  });
+  let browser: Browser | undefined;
+  let page: Page | undefined;
+  let server: Awaited<ReturnType<typeof acquireDevServer>> | undefined;
   try {
+    browser = await launchNamed('chromium', t);
+    server = await acquireDevServer();
+    page = await browser.newPage({
+      viewport: { width: 1280, height: 900 },
+    });
     await page.goto(server.origin, { waitUntil: 'networkidle' });
     await openPhrases(page);
     await playLooping(page);
@@ -113,9 +116,9 @@ void test('choosing bars while Loop is on does not restart the pass', async (t) 
     const status = await page.locator('#phrase-seed-help').innerText();
     assert.match(status, /Looping this phrase\./);
   } finally {
-    await page.close();
-    await browser.close();
-    await server.release();
+    await page?.close();
+    await browser?.close();
+    await server?.release();
   }
 });
 
@@ -124,12 +127,15 @@ void test('choosing bars while Loop is on does not restart the pass', async (t) 
  * that pass. The new phrase waits until the closing note has finished.
  */
 void test('choosing bars while a pass is finishing does not restart it', async (t) => {
-  const browser = await launchNamed('chromium', t);
-  const server = await acquireDevServer();
-  const page = await browser.newPage({
-    viewport: { width: 1280, height: 900 },
-  });
+  let browser: Browser | undefined;
+  let page: Page | undefined;
+  let server: Awaited<ReturnType<typeof acquireDevServer>> | undefined;
   try {
+    browser = await launchNamed('chromium', t);
+    server = await acquireDevServer();
+    page = await browser.newPage({
+      viewport: { width: 1280, height: 900 },
+    });
     await page.goto(server.origin, { waitUntil: 'networkidle' });
     await openPhrases(page);
     await playLooping(page);
@@ -152,8 +158,8 @@ void test('choosing bars while a pass is finishing does not restart it', async (
     const status = await page.locator('#phrase-seed-help').innerText();
     assert.match(status, /Playing this phrase\./);
   } finally {
-    await page.close();
-    await browser.close();
-    await server.release();
+    await page?.close();
+    await browser?.close();
+    await server?.release();
   }
 });
