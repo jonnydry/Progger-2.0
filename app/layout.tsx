@@ -14,6 +14,7 @@ import './practice-view.css';
 import './reference-panels.css';
 import './connected-neck.css';
 import './match-welcome.css';
+import { chunkReloadBootstrap } from '@/lib/chunk-reload';
 import { themeBootstrap } from '@/lib/theme';
 
 const arcade = Silkscreen({
@@ -38,6 +39,7 @@ export default function RootLayout({
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
+        <script dangerouslySetInnerHTML={{ __html: chunkReloadBootstrap }} />
         <link
           rel="preload"
           href="/fonts/maple-mono/MapleMono-Regular.ttf.woff2"
