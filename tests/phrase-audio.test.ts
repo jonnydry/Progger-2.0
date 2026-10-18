@@ -1888,6 +1888,24 @@ function nearPitch(start: { frequency: number }, fret: number): boolean {
   return Math.abs(start.frequency - pitchHz(fret)) < 1e-3;
 }
 
+/** Odd on purpose, so an anchor pinned to PHRASE_TRIM fails. */
+const SPY_GAIN = 0.137;
+
+function reportCurrentGain(gain: AudioParam): void {
+  const proto = Object.getPrototypeOf(gain) as AudioParam;
+  const desc =
+    Object.getOwnPropertyDescriptor(gain, 'value') ??
+    Object.getOwnPropertyDescriptor(proto, 'value');
+  Object.defineProperty(gain, 'value', {
+    configurable: true,
+    enumerable: true,
+    get: () => SPY_GAIN,
+    set(next: number) {
+      desc?.set?.call(gain, next);
+    },
+  });
+}
+
 function spyGains(context: OfflineAudioContext) {
   const ramps: {
     node: GainNode;
@@ -1903,6 +1921,7 @@ function spyGains(context: OfflineAudioContext) {
   context.createGain = () => {
     const node = createGain();
     const gain = node.gain;
+    reportCurrentGain(gain);
     const setValue = gain.setValueAtTime.bind(gain);
     const ramp = gain.linearRampToValueAtTime.bind(gain);
     const cancel = gain.cancelScheduledValues.bind(gain);
@@ -2202,6 +2221,7 @@ void test('a phrase switch fades the outgoing notes across the release', async (
   context.createGain = () => {
     const node = createGain();
     const gain = node.gain;
+    reportCurrentGain(gain);
     const setValue = gain.setValueAtTime.bind(gain);
     const ramp = gain.linearRampToValueAtTime.bind(gain);
     const cancel = gain.cancelScheduledValues.bind(gain);
@@ -2259,10 +2279,11 @@ void test('a phrase switch fades the outgoing notes across the release', async (
       Math.abs(item.anchor - boundary) < 1e-4,
   );
   assert.ok(release, 'the outgoing phrase did not fade across the release');
-  // The trim is created at PHRASE_TRIM, so the fade anchors there.
-  assert.ok(
-    Math.abs(release.anchorValue - PHRASE_TRIM) < 1e-3,
-    `the fade anchored at ${release.anchorValue}, not the trim`,
+  // The spy reports the gain's current value as 0.137. The anchor is that read.
+  assert.equal(
+    release.anchorValue,
+    SPY_GAIN,
+    `the fade anchored at ${release.anchorValue}, not the current gain`,
   );
   assert.ok(
     cancels.some((item) => Math.abs(item.time - release.anchor) < 1e-4),
@@ -2319,10 +2340,11 @@ void test('a phrase switch fades the outgoing notes across the release', async (
       Math.abs(item.anchor - (at + lead)) < 1e-4,
   );
   assert.ok(immediate, 'an immediate switch did not fade the outgoing phrase');
-  // The trim is created at PHRASE_TRIM, so the fade anchors there.
-  assert.ok(
-    Math.abs(immediate.anchorValue - PHRASE_TRIM) < 1e-3,
-    `an immediate switch anchored at ${immediate.anchorValue}, not the trim`,
+  // The spy reports the gain's current value as 0.137. The anchor is that read.
+  assert.equal(
+    immediate.anchorValue,
+    SPY_GAIN,
+    `an immediate switch anchored at ${immediate.anchorValue}, not the current gain`,
   );
   const arrived = starts.filter((item) => nearPitch(item, 6));
   assert.ok(
@@ -2453,10 +2475,11 @@ void test('play during the release tail anchors the fade at the current time', a
       Math.abs(item.end - now - PHRASE_END_RELEASE_SEC) < 0.02,
   );
   assert.ok(fade, 'play during the tail did not fade from the current time');
-  // The trim is created at PHRASE_TRIM, so the fade anchors there.
-  assert.ok(
-    Math.abs(fade.anchorValue - PHRASE_TRIM) < 1e-3,
-    `the tail fade anchored at ${fade.anchorValue}, not the trim`,
+  // The spy reports the gain's current value as 0.137. The anchor is that read.
+  assert.equal(
+    fade.anchorValue,
+    SPY_GAIN,
+    `the tail fade anchored at ${fade.anchorValue}, not the current gain`,
   );
   assert.ok(
     Math.abs(fade.anchor - (now + lead)) > 1e-3,
@@ -2502,11 +2525,11 @@ void test('a queued phrase fades the closing note across the release', async () 
   await rollClock(clock, holdEnd + 0.05);
   await Promise.resolve();
   await Promise.resolve();
-  // The trim is created at PHRASE_TRIM, so the fade anchors there.
+  // The spy reports the gain's current value as 0.137. The anchor is that read.
   const fade = ramps.find(
     (item) =>
       item.value === 0 &&
-      Math.abs(item.anchorValue - PHRASE_TRIM) < 1e-3 &&
+      item.anchorValue === SPY_GAIN &&
       Math.abs(item.anchor - holdEnd) < 1e-4 &&
       Math.abs(item.end - holdEnd - PHRASE_END_RELEASE_SEC) < 0.02,
   );
@@ -2565,11 +2588,11 @@ void test('stop during a switch fade releases the outgoing phrase over 20 ms', a
   });
   await Promise.resolve();
   await Promise.resolve();
-  // The trim is created at PHRASE_TRIM, so the fade anchors there.
+  // The spy reports the gain's current value as 0.137. The anchor is that read.
   const outgoing = ramps.find(
     (item) =>
       item.value === 0 &&
-      Math.abs(item.anchorValue - PHRASE_TRIM) < 1e-3 &&
+      item.anchorValue === SPY_GAIN &&
       Math.abs(item.anchor - (at + lead)) < 1e-4 &&
       Math.abs(item.end - item.anchor - PHRASE_END_RELEASE_SEC) < 1e-3,
   );
@@ -2587,10 +2610,11 @@ void test('stop during a switch fade releases the outgoing phrase over 20 ms', a
       Math.abs(item.end - item.anchor - 0.02) < 1e-3,
   );
   assert.ok(cut, 'stop disconnected a phrase that was still fading');
-  // The trim is created at PHRASE_TRIM, so the stop ramp anchors there.
-  assert.ok(
-    Math.abs(cut.anchorValue - PHRASE_TRIM) < 1e-3,
-    `the stop fade anchored at ${cut.anchorValue}, not the trim`,
+  // The spy reports the gain's current value as 0.137. The anchor is that read.
+  assert.equal(
+    cut.anchorValue,
+    SPY_GAIN,
+    `the stop fade anchored at ${cut.anchorValue}, not the current gain`,
   );
   assert.ok(
     cancels.some(
@@ -2825,6 +2849,7 @@ void test('stop within 50 ms fades from the trim, not the default gain', async (
   context.createGain = () => {
     const node = createGain();
     const gain = node.gain;
+    reportCurrentGain(gain);
     const setValue = gain.setValueAtTime.bind(gain);
     const ramp = gain.linearRampToValueAtTime.bind(gain);
     gain.setValueAtTime = (value: number, time: number) => {
@@ -2860,9 +2885,10 @@ void test('stop within 50 ms fades from the trim, not the default gain', async (
       item.value === 0 && Math.abs(item.end - item.anchor - 0.02) < 1e-3,
   );
   assert.ok(cut, 'stop did not fade the phrase');
-  assert.ok(
-    Math.abs(cut.anchorValue - PHRASE_TRIM) < 1e-3,
-    `stop faded from ${cut.anchorValue}, not the trim`,
+  assert.equal(
+    cut.anchorValue,
+    SPY_GAIN,
+    `stop faded from ${cut.anchorValue}, not the current gain`,
   );
 });
 
@@ -2924,6 +2950,7 @@ void test('a second start during resume fades the phrase already sounding', asyn
   context.createGain = () => {
     const node = createGain();
     const gain = node.gain;
+    reportCurrentGain(gain);
     const setValue = gain.setValueAtTime.bind(gain);
     const ramp = gain.linearRampToValueAtTime.bind(gain);
     gain.setValueAtTime = (value: number, time: number) => {
@@ -3011,8 +3038,10 @@ void test('a second start during resume fades the phrase already sounding', asyn
     'the start that lost resume still played',
   );
   assert.ok(
-    starts.some((item) => nearPitch(item, 9)),
-    'the later start did not play',
+    starts.some(
+      (item) => nearPitch(item, 9) && Math.abs(item.when - (now + lead)) < 1e-6,
+    ),
+    'the takeover treated a sounding phrase as a seam',
   );
   player.stop();
 });
@@ -3074,9 +3103,10 @@ void test('a second start during the release tail does not bump the fade', async
       Math.abs(item.end - now - PHRASE_END_RELEASE_SEC) < 0.02,
   );
   assert.ok(fade, 'a second start during the tail bumped the fade');
-  assert.ok(
-    Math.abs(fade.anchorValue - PHRASE_TRIM) < 1e-3,
-    `the tail takeover anchored at ${fade.anchorValue}, not the trim`,
+  assert.equal(
+    fade.anchorValue,
+    SPY_GAIN,
+    `the tail takeover anchored at ${fade.anchorValue}, not the current gain`,
   );
   assert.ok(
     Math.abs(fade.anchor - (now + lead)) > 1e-3,
@@ -3217,9 +3247,10 @@ void test('stop during resume fades the parked phrase over 20 ms', async () => {
       item.value === 0 && Math.abs(item.end - item.anchor - 0.02) < 1e-3,
   );
   assert.ok(cut, 'stop during resume did not fade the parked phrase');
-  assert.ok(
-    Math.abs(cut.anchorValue - PHRASE_TRIM) < 1e-3,
-    `stop during resume faded from ${cut.anchorValue}, not the trim`,
+  assert.equal(
+    cut.anchorValue,
+    SPY_GAIN,
+    `stop during resume faded from ${cut.anchorValue}, not the current gain`,
   );
   for (const item of sounding) {
     assert.equal(
@@ -3248,6 +3279,7 @@ void test('a finished switch does not leave the old phrase parked', async () => 
   const context = new OfflineAudioContext(1, RATE * 16, RATE);
   context.resume = () => Promise.resolve();
   const clock = new AudioClock();
+  const { ramps } = spyGains(context);
   const { starts } = spyPhrase(context);
   const player = new PhrasePlayer(() => {});
   await player.start({
@@ -3301,7 +3333,87 @@ void test('a finished switch does not leave the old phrase parked', async () => 
   assert.ok(heard.length >= 1, 'the next phrase did not play');
   assert.ok(
     heard.some((item) => Math.abs(item.when - (now + lead)) < 1e-6),
+    'the next phrase did not start on time',
+  );
+  assert.equal(
+    ramps.some(
+      (item) =>
+        item.value === 0 &&
+        Math.abs(item.anchor - (now + lead)) < 1e-4 &&
+        Math.abs(item.end - item.anchor - PHRASE_END_RELEASE_SEC) < 0.02,
+    ),
+    false,
     'a finished switch left the old phrase parked',
   );
+  player.stop();
+});
+
+void test('a late seam resume starts at now, not the old downbeat', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 30, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const { ramps } = spyGains(context);
+  const { starts } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [queuedNote(0, 0), queuedNote(3, 2), queuedNote(8, 8, 2)];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = 0.05;
+  const boundary = lead + phraseLoopSeconds(playing, tempo);
+  await rollClock(clock, lead + 0.5);
+  player.queuePhrase({
+    notes: [queuedNote(11, 0), queuedNote(11, 0.2)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: false,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  context.resume = () => gate;
+  await rollClock(clock, boundary - PHRASE_LOOKAHEAD_SEC + 0.03);
+  await rollClock(clock, boundary + 0.5);
+  const now = clock.currentTime;
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const later = now + onsetSeconds(0.2, tempo, 0);
+  assert.ok(
+    starts.some(
+      (item) => nearPitch(item, 11) && Math.abs(item.when - later) < 1e-4,
+    ),
+    'the late seam kept the old downbeat',
+  );
+  assert.ok(
+    starts.some(
+      (item) => nearPitch(item, 11) && Math.abs(item.when - now) < 1e-4,
+    ),
+    'the late seam did not start at now',
+  );
+  assert.equal(
+    starts.some((item) => nearPitch(item, 11) && item.when < now - 1e-4),
+    false,
+    'the late seam scheduled a note in the past',
+  );
+  const fade = ramps.find(
+    (item) =>
+      item.value === 0 &&
+      Math.abs(item.anchor - now) < 1e-4 &&
+      Math.abs(item.end - now - PHRASE_END_RELEASE_SEC) < 0.02,
+  );
+  assert.ok(fade, 'the late seam faded from the old downbeat');
   player.stop();
 });

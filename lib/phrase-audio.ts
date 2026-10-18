@@ -414,6 +414,8 @@ type HeldGraph = {
    * fade at the current time. NaN when this graph is not in a tail.
    */
   releaseAt: number;
+  /** Waiting for a downbeat. `at` is that boundary, which may already be past. */
+  seam: boolean;
 };
 
 export class PhrasePlayer {
@@ -603,10 +605,13 @@ export class PhrasePlayer {
         releaseAt = this.startedAt + this.period;
       }
       replaced = {
-        at: 0,
+        // A sounding phrase already has a clock time. That must not make
+        // this look like a seam; `seam` is the only signal for a downbeat.
+        at: this.clock?.now() ?? 0,
         trim: this.trim,
         voices: this.voices.slice(),
         releaseAt,
+        seam: false,
       };
       this.scheduler?.stop();
       this.scheduler = null;
@@ -619,7 +624,7 @@ export class PhrasePlayer {
         // The previous start is still inside resume() and is holding this
         // graph. A seam graph starts at its downbeat. Anything else fades
         // from here, including a release tail carried on the graph.
-        if (inherited.at > 0) preserved = inherited;
+        if (inherited.seam) preserved = inherited;
         else replaced = inherited;
       } else {
         this.halt(false);
@@ -674,7 +679,11 @@ export class PhrasePlayer {
           clearTimeout(handle as ReturnType<typeof setTimeout>),
       };
       this.clock = clock;
-      this.startedAt = preserved ? preserved.at : clock.now() + 0.05;
+      const now = clock.now();
+      // Resume can return after the downbeat. Starting there would put
+      // the new phrase on a time that has already passed.
+      if (preserved && preserved.at < now) preserved.at = now;
+      this.startedAt = preserved ? preserved.at : now + 0.05;
       const trim = context.createGain();
       // setValueAtTime waits until startedAt. Until then the node is
       // still 1, and Stop in that 50 ms blips well above the trim.
@@ -777,6 +786,8 @@ export class PhrasePlayer {
 
   private holdPark(run: number, graph: HeldGraph | null): void {
     if (!graph) return;
+    if (this.parked && this.parked !== graph)
+      this.disconnectPreserved(this.parked);
     this.parked = graph;
     this.parkedRun = run;
   }
@@ -886,6 +897,7 @@ export class PhrasePlayer {
       trim: this.trim,
       voices: this.voices.slice(),
       releaseAt: Number.NaN,
+      seam: true,
     };
     await this.start(input);
   }
