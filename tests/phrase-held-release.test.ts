@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { Page } from 'playwright';
@@ -30,8 +29,12 @@ function showHeld(page: Page, id: string, contextKey: string) {
  */
 void test('a context change releases a held tray phrase', async (t) => {
   const root = process.cwd();
-  const entry = join(tmpdir(), 'phrase-held-release-entry.tsx');
-  const outfile = join(tmpdir(), 'phrase-held-release-probe.js');
+  // The entry has to live in the project. esbuild resolves bare imports
+  // from the entry's directory, and CI has no node_modules above /tmp.
+  const scratch = join(root, 'node_modules/.cache');
+  mkdirSync(scratch, { recursive: true });
+  const entry = join(scratch, 'phrase-held-release-entry.tsx');
+  const outfile = join(scratch, 'phrase-held-release-probe.js');
   writeFileSync(
     entry,
     `import { act, createElement } from 'react';
@@ -147,7 +150,7 @@ export { show };
       '--loader:.css=empty',
       `--alias:@=${root}`,
     ],
-    { stdio: 'pipe' },
+    { cwd: root, stdio: 'pipe' },
   );
 
   const browser = await launchNamed('chromium', t);
