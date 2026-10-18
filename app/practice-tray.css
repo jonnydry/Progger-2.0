@@ -49,7 +49,7 @@
 .practice-tray-root {
   --tray-blur: 40px;
   --tray-tint: 90%;
-  --tray-tint-solid: 97%;
+  --tray-tint-solid: 99%;
   position: fixed;
   inset: 0;
   z-index: 90;

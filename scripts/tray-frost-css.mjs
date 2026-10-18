@@ -19,9 +19,9 @@ export function trayFrostProblems(css) {
       );
     }
   }
-  if (!/--tray-tint-solid\s*:\s*97%/.test(css)) {
+  if (!/--tray-tint-solid\s*:\s*99%/.test(css)) {
     problems.push(
-      'tray fallback tint must stay translucent at 97% on .practice-tray-root',
+      'tray fallback tint must stay translucent at 99% on .practice-tray-root',
     );
   }
   if (/--tray-tint-solid\s*:\s*100%/.test(css)) {

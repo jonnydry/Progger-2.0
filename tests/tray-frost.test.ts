@@ -22,14 +22,14 @@ function minify(css: string): string {
   return code.toString();
 }
 
-void test('production minify keeps an unprefixed tray blur and a 97% fallback', () => {
+void test('production minify keeps an unprefixed tray blur and a 99% fallback', () => {
   const source = readFileSync(
     new URL('../app/practice-tray.css', import.meta.url),
     'utf8',
   );
   const built = minify(source);
   assert.deepEqual(trayFrostProblems(built), []);
-  assert.match(built, /--tray-tint-solid:97%/);
+  assert.match(built, /--tray-tint-solid:99%/);
   assert.doesNotMatch(built, /--tray-tint-solid:100%/);
 
   const dropped = built.replace(/(?<!-)backdrop-filter:[^;}]+;?/g, '');
@@ -40,12 +40,12 @@ void test('production minify keeps an unprefixed tray blur and a 97% fallback', 
   );
 
   const opaque = built.replace(
-    '--tray-tint-solid:97%',
+    '--tray-tint-solid:99%',
     '--tray-tint-solid:100%',
   );
   const solid = trayFrostProblems(opaque);
   assert.equal(
-    solid.some((problem) => problem.includes('97%')),
+    solid.some((problem) => problem.includes('99%')),
     true,
   );
 });
