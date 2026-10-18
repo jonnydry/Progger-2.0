@@ -405,6 +405,12 @@ type LiveVoice = {
   scheduled: number;
 };
 
+type HeldGraph = {
+  at: number;
+  trim: GainNode | null;
+  voices: LiveVoice[];
+};
+
 export class PhrasePlayer {
   private serial = 0;
   private disposed = false;
@@ -432,11 +438,13 @@ export class PhrasePlayer {
   /** Latest phrase waiting for the current pass to end. Earlier ones are dropped. */
   private pending: PhrasePass | null = null;
   /** Sounding graph kept until the queued phrase's downbeat. */
-  private preserved: {
-    at: number;
-    trim: GainNode | null;
-    voices: LiveVoice[];
-  } | null = null;
+  private preserved: HeldGraph | null = null;
+  /**
+   * Graph held across resume(). A second start adopts it and fades it.
+   * The start that still owns it disconnects the graph if it loses.
+   */
+  private parked: HeldGraph | null = null;
+  private parkedRun = 0;
   private handoffTimer: unknown = null;
   /** Phrases already replaced, fading under the one that just started. */
   private releases: {
@@ -579,13 +587,10 @@ export class PhrasePlayer {
     this.finishing = false;
     this.cancelHandoffTimer();
     this.cancelQueueTimer();
-    const preserved = this.preserved;
+    let preserved = this.preserved;
     this.preserved = null;
-    let replaced: {
-      at: number;
-      trim: GainNode | null;
-      voices: LiveVoice[];
-    } | null = null;
+    let replaced: HeldGraph | null = null;
+    const inherited = this.claimParked(run);
     if (preserved) {
       this.scheduler?.stop();
       this.scheduler = null;
@@ -601,9 +606,15 @@ export class PhrasePlayer {
       this.clearEndTimer();
       this.voices = [];
       this.trim = null;
+    } else if (inherited) {
+      // The previous start is still inside resume() and is holding this
+      // graph. Fade it from here instead of letting that start cut it.
+      if (inherited.at > 0) preserved = inherited;
+      else replaced = inherited;
     } else {
       this.halt(false);
     }
+    this.holdPark(run, preserved ?? replaced);
     this.onState('starting');
     try {
       const audio = input.context ? null : pageAudio();
@@ -613,8 +624,7 @@ export class PhrasePlayer {
       const resume = context.resume();
       await resume;
       if (this.disposed || run !== this.serial) {
-        if (preserved) this.disconnectPreserved(preserved);
-        if (replaced) this.disconnectPreserved(replaced);
+        this.dropParked(run);
         return;
       }
       // A request that arrived during resume() replaces this one.
@@ -655,6 +665,9 @@ export class PhrasePlayer {
       this.clock = clock;
       this.startedAt = preserved ? preserved.at : clock.now() + 0.05;
       const trim = context.createGain();
+      // setValueAtTime waits until startedAt. Until then the node is
+      // still 1, and Stop in that 50 ms blips well above the trim.
+      trim.gain.value = PHRASE_TRIM;
       trim.gain.setValueAtTime(PHRASE_TRIM, this.startedAt);
       trim.connect(destination);
       this.trim = trim;
@@ -714,10 +727,10 @@ export class PhrasePlayer {
       );
       this.scheduler.start();
       if (run !== this.serial || this.disposed) {
-        if (preserved) this.disconnectPreserved(preserved);
-        if (replaced) this.disconnectPreserved(replaced);
+        this.dropParked(run);
         return;
       }
+      this.releasePark(run);
       if (preserved) this.fadePreserved(preserved);
       if (replaced) {
         replaced.at = this.startedAt;
@@ -725,10 +738,41 @@ export class PhrasePlayer {
       }
       this.onState('playing');
     } catch {
+      this.dropParked(run);
       if (this.disposed || run !== this.serial) return;
       this.halt(false);
       this.onState('error');
     }
+  }
+
+  private claimParked(run: number): HeldGraph | null {
+    if (!this.parked || this.parkedRun === run) return null;
+    const graph = this.parked;
+    this.parked = null;
+    this.parkedRun = 0;
+    return graph;
+  }
+
+  private holdPark(run: number, graph: HeldGraph | null): void {
+    if (!graph) return;
+    this.parked = graph;
+    this.parkedRun = run;
+  }
+
+  /** This start will fade the graph itself, so it is no longer parked. */
+  private releasePark(run: number): void {
+    if (this.parkedRun !== run) return;
+    this.parked = null;
+    this.parkedRun = 0;
+  }
+
+  /** Disconnect a graph this start still owns. A newer start has adopted it otherwise. */
+  private dropParked(run: number): void {
+    if (this.parkedRun !== run) return;
+    const graph = this.parked;
+    this.parked = null;
+    this.parkedRun = 0;
+    if (graph) this.disconnectPreserved(graph);
   }
 
   private suppressNextPass(): void {
