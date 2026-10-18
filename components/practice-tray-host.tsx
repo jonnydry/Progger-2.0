@@ -50,15 +50,15 @@ export function PracticeTrayHost({
         className="tray-open"
         aria-expanded={open}
         aria-controls={open ? 'practice-tray' : undefined}
-        aria-label={count ? `Practice tray, ${count} saved` : 'Practice tray'}
+        aria-label={count ? `Stash, ${count} saved` : 'Stash'}
         onClick={() => (open ? setOpen(false) : openTray())}
       >
         <Library size={18} aria-hidden="true" />
-        <span className="tray-open-label">Tray</span>
+        <span className="tray-open-label">Stash</span>
       </button>
       {open && failed && (
         <p className="sr-only" role="alert">
-          The tray did not load. Try again.
+          The stash did not load. Try again.
         </p>
       )}
       {open && Panel && (

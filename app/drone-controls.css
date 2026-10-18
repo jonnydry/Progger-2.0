@@ -315,12 +315,59 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
   white-space: nowrap;
 }
 
+.under-neck .practice-bar {
+  position: relative;
+  margin-top: 42px;
+}
+
 .under-neck .drone-controls {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto auto;
   align-items: center;
   gap: 8px;
   position: static;
   min-width: 0;
+}
+
+.under-neck .drone-legend {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  width: auto;
+  max-width: none;
+}
+
+.drone-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 200px;
+  min-width: 0;
+  margin: 0;
+  color: var(--foreground);
+}
+
+.drone-legend svg {
+  flex: 0 0 auto;
+  color: var(--green);
+}
+
+.drone-legend-title,
+.drone-legend-hint {
+  display: block;
+}
+
+.drone-legend-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.drone-legend-hint {
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.3;
 }
 
 .under-neck .drone-toggle,

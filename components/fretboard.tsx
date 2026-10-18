@@ -743,15 +743,6 @@ export function Fretboard({
               ]}
             />
           </label>
-          <button
-            id={`${titleId}-overview-toggle`}
-            className="overview-toggle"
-            aria-expanded={overview}
-            aria-controls={`${titleId}-overview`}
-            onClick={() => setOverview(!overview)}
-          >
-            <MapIcon size={17} aria-hidden="true" /> Whole-neck overview
-          </button>
         </div>
       )}
       {connected && pattern && (
@@ -900,6 +891,32 @@ export function Fretboard({
           />
         </div>
       </div>
+      {scope === 'scale' && (
+        <div className="neck-overview-slot">
+          <button
+            id={`${titleId}-overview-toggle`}
+            className="overview-toggle"
+            aria-expanded={overview}
+            aria-controls={`${titleId}-overview`}
+            onClick={() => setOverview(!overview)}
+          >
+            <MapIcon size={17} aria-hidden="true" /> Whole-neck overview
+          </button>
+        </div>
+      )}
+      {scope === 'scale' && overview && (
+        <NeckOverview
+          id={`${titleId}-overview`}
+          notes={notes}
+          left={left}
+          layers={connected ? layers : undefined}
+          range={range}
+          offset={scrollFret / 25}
+          windowWidth={Math.min(1, viewportWidth / (25 * columnWidth))}
+          onNavigate={jump}
+          onKeyDown={moveWithKey}
+        />
+      )}
       {belowNeck}
       <div className="instrument-dock">
         {!controlsAbove && controls}
@@ -985,19 +1002,6 @@ export function Fretboard({
         </div>
       </div>
       {phoneNeck && scaleForm}
-      {scope === 'scale' && overview && (
-        <NeckOverview
-          id={`${titleId}-overview`}
-          notes={notes}
-          left={left}
-          layers={connected ? layers : undefined}
-          range={range}
-          offset={scrollFret / 25}
-          windowWidth={Math.min(1, viewportWidth / (25 * columnWidth))}
-          onNavigate={jump}
-          onKeyDown={moveWithKey}
-        />
-      )}
       <details className="pattern-details string-reference">
         <summary>
           <ListMusic size={18} aria-hidden="true" />

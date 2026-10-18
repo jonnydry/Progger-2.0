@@ -11,7 +11,7 @@ import { ROOTS, SCALES, pretty } from './music.ts';
 export const TRAY_KEY = 'progger.tray.v1';
 export const TRAY_MAX_ITEMS = 80;
 export const TRAY_UNREADABLE_NOTE =
-  "Your saved tray couldn't be read, so it's left untouched.";
+  "Your saved stash couldn't be read, so it's left untouched.";
 export const PHRASE_STOP_EVENT = 'progger-phrase-stop';
 
 const SCALE_IDS = new Set(SCALES.map((scale) => scale.id));
@@ -248,15 +248,15 @@ export function traySaveMessage(
   subject: 'phrase' | 'view' = 'phrase',
   removed?: 'phrase' | 'scale' | 'chord',
 ): string {
-  if (status === 'saved') return 'Saved to tray.';
+  if (status === 'saved') return 'Saved to stash.';
   if (status === 'evicted') {
     const noun =
       removed === 'phrase' || removed === 'scale' || removed === 'chord'
         ? removed
         : 'item';
-    return `Tray full, removed the oldest ${noun}.`;
+    return `Stash full, removed the oldest ${noun}.`;
   }
-  if (status === 'full') return 'Tray is full.';
+  if (status === 'full') return 'Stash is full.';
   return subject === 'view'
     ? 'Could not save this view.'
     : 'Could not save this phrase.';

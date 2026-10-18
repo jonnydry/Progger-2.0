@@ -26,8 +26,12 @@ void test(
       const neck = document.querySelector('.neck');
       if (!neck) return false;
       const names = [...neck.children].map((child) => child.className);
-      const form = names.findIndex((name) => name.includes('connection-controls'));
-      const transport = names.findIndex((name) => name.includes('instrument-dock'));
+      const form = names.findIndex((name) =>
+        name.includes('connection-controls'),
+      );
+      const transport = names.findIndex((name) =>
+        name.includes('instrument-dock'),
+      );
       return form > transport && transport >= 0;
     });
     const order = await page.evaluate(() => {
@@ -43,15 +47,17 @@ void test(
         if (style.display === 'none' || style.visibility === 'hidden') continue;
         const group = node.closest('.connection-controls')
           ? 'form'
-          : node.closest('.under-neck')
-            ? 'phrase'
-            : node.closest('.instrument-dock')
-              ? 'transport'
-              : node.closest('.neck-frame')
-                ? 'neck'
-                : node.closest('.pattern-details')
-                  ? 'pattern'
-                  : '';
+          : node.closest('.neck-overview-slot')
+            ? 'overview'
+            : node.closest('.under-neck')
+              ? 'phrase'
+              : node.closest('.instrument-dock')
+                ? 'transport'
+                : node.closest('.neck-frame')
+                  ? 'neck'
+                  : node.closest('.pattern-details')
+                    ? 'pattern'
+                    : '';
         if (!group) continue;
         const top = node.getBoundingClientRect().top;
         if (groups.at(-1)?.group !== group) groups.push({ group, top });
@@ -60,7 +66,7 @@ void test(
     });
     assert.deepEqual(
       order.map((item) => item.group),
-      ['neck', 'phrase', 'transport', 'form', 'pattern'],
+      ['neck', 'overview', 'phrase', 'transport', 'form', 'pattern'],
     );
     for (let index = 1; index < order.length; index += 1) {
       assert.ok(

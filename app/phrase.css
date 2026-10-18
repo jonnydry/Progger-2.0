@@ -131,6 +131,19 @@
   font: inherit;
   font-size: 13px;
 }
+@media (prefers-reduced-motion: no-preference) {
+  .phrase-action {
+    transition:
+      background 160ms ease,
+      color 160ms ease,
+      border-color 160ms ease;
+  }
+}
+.phrase-action.is-saved {
+  color: var(--ink);
+  background: var(--green);
+  border-color: var(--green);
+}
 .phrase-action[aria-pressed='true'] {
   color: var(--ink);
   background: var(--green);

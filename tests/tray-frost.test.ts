@@ -30,7 +30,21 @@ void test('production minify keeps an unprefixed tray blur and a 99.9% fallback'
   const built = minify(source);
   assert.deepEqual(trayFrostProblems(built), []);
   assert.match(built, /--tray-tint-solid:99\.9%/);
+  assert.match(built, /--tray-tint:68%/);
+  assert.match(built, /--tray-blur:72px/);
   assert.doesNotMatch(built, /--tray-tint-solid:100%/);
+  assert.doesNotMatch(built, /--tray-tint:90%/);
+  const frostSource = source.match(
+    /dialog\.practice-tray-panel::before\s*\{[^}]*\}/,
+  );
+  assert.ok(frostSource, 'source frost rule');
+  const decls = frostSource[0]
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => part.includes('backdrop-filter'));
+  assert.equal(decls[0]?.startsWith('-webkit-backdrop-filter'), true);
+  assert.equal(decls[1]?.startsWith('backdrop-filter'), true);
 
   const dropped = built.replace(/(?<!-)backdrop-filter:[^;}]+;?/g, '');
   const missing = trayFrostProblems(dropped);

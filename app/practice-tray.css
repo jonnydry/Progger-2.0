@@ -47,8 +47,8 @@
 }
 
 .practice-tray-root {
-  --tray-blur: 40px;
-  --tray-tint: 90%;
+  --tray-blur: 72px;
+  --tray-tint: 68%;
   /* 99% leaves large page shapes readable. 99.9% is the lowest token that clears them. */
   --tray-tint-solid: 99.9%;
   position: fixed;
@@ -93,9 +93,8 @@ dialog.practice-tray-panel {
   pointer-events: auto;
   color: var(--foreground);
   background: transparent;
-  border: 0;
-  border-left: 1px solid color-mix(in srgb, var(--foreground) 18%, transparent);
-  border-radius: 0;
+  border: 1px solid color-mix(in srgb, var(--foreground) 22%, transparent);
+  border-radius: 16px 0 0 16px;
   box-shadow: -18px 0 48px rgb(0 0 0 / 0.32);
   transform: translateX(100%);
   transition: transform 220ms ease;
@@ -108,10 +107,23 @@ dialog.practice-tray-panel::before {
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  border-radius: inherit;
   background: color-mix(in srgb, var(--card) var(--tray-tint), transparent);
   /* Prefixed first. The production minifier drops an unprefixed backdrop-filter written before this line. */
   -webkit-backdrop-filter: blur(var(--tray-blur)) saturate(1.15);
   backdrop-filter: blur(var(--tray-blur)) saturate(1.15);
+}
+
+dialog.practice-tray-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, white 42%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 28%, transparent);
 }
 
 @supports not
@@ -127,6 +139,11 @@ dialog.practice-tray-panel::before {
 
 html[data-theme='day'] .practice-tray-panel {
   box-shadow: -16px 0 40px rgb(18 54 47 / 0.16);
+}
+html[data-theme='day'] dialog.practice-tray-panel::after {
+  box-shadow:
+    inset 1px 0 0 color-mix(in srgb, white 70%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 55%, transparent);
 }
 
 .practice-tray-head,
@@ -154,7 +171,7 @@ html[data-theme='day'] .practice-tray-panel {
 
 .practice-tray-kicker {
   margin: 0;
-  color: var(--quiet);
+  color: var(--foreground);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.12em;
@@ -197,7 +214,7 @@ html[data-theme='day'] .practice-tray-panel {
 
 .practice-tray-intro {
   margin: 0 0 12px;
-  color: var(--quiet);
+  color: var(--foreground);
   font-size: 13px;
   line-height: 1.4;
 }
@@ -250,7 +267,7 @@ html[data-theme='day'] .practice-tray-panel {
 .practice-tray-group h3,
 .practice-tray-empty {
   margin: 0;
-  color: var(--quiet);
+  color: var(--foreground);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.12em;
@@ -265,7 +282,7 @@ html[data-theme='day'] .practice-tray-panel {
 
 .practice-tray-export-note {
   margin: 4px 0 0;
-  color: var(--quiet);
+  color: var(--foreground);
   font-size: 12px;
   line-height: 1.35;
 }
@@ -294,7 +311,7 @@ html[data-theme='day'] .practice-tray-panel {
 
 .practice-tray-meta {
   margin: 0;
-  color: var(--quiet);
+  color: var(--foreground);
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -348,7 +365,8 @@ html[data-theme='day'] .practice-tray-panel {
 @media (max-width: 700px) {
   dialog.practice-tray-panel {
     width: 100%;
-    border-left: 0;
+    border-left-color: transparent;
+    border-radius: 0;
   }
 }
 

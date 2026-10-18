@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { chromium, firefox } from 'playwright';
 
 const root = fileURLToPath(new URL('../dist/client/', import.meta.url));
 const shots = '/opt/cursor/artifacts/screenshots';
@@ -58,10 +58,6 @@ function start() {
 }
 
 const { server, origin } = await start();
-const browser = await chromium.launch({
-  headless: true,
-  args: ['--no-sandbox', '--use-angle=swiftshader'],
-});
 let shotDir = null;
 try {
   await mkdir(shots, { recursive: true });
@@ -69,49 +65,59 @@ try {
 } catch {
   shotDir = null;
 }
+const browsers = [
+  ['chromium', chromium, { args: ['--no-sandbox', '--use-angle=swiftshader'] }],
+  ['firefox', firefox, {}],
+];
 try {
-  const page = await browser.newPage({ deviceScaleFactor: 1 });
-  for (const width of [1280, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto(`${origin}/`, { waitUntil: 'networkidle' });
-    await page.locator('.tray-open').waitFor();
-    const toggle = page.getByRole('switch', { name: 'Day theme' });
-    if ((await toggle.getAttribute('aria-checked')) !== 'true') {
-      await toggle.click();
-      await page.waitForFunction(
-        () => document.documentElement.dataset.theme === 'day',
-      );
+  for (const [name, type, options] of browsers) {
+    const browser = await type.launch({ headless: true, ...options });
+    try {
+      const page = await browser.newPage({ deviceScaleFactor: 1 });
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`${origin}/`, { waitUntil: 'networkidle' });
+        await page.locator('.tray-open').waitFor();
+        const toggle = page.getByRole('switch', { name: 'Day theme' });
+        if ((await toggle.getAttribute('aria-checked')) !== 'true') {
+          await toggle.click();
+          await page.waitForFunction(
+            () => document.documentElement.dataset.theme === 'day',
+          );
+        }
+        await page.locator('.tray-open').click();
+        await page.locator('#practice-tray').waitFor();
+        await page.waitForFunction((viewport) => {
+          const panel = document.querySelector('#practice-tray');
+          if (!(panel instanceof HTMLElement)) return false;
+          const rect = panel.getBoundingClientRect();
+          return rect.left >= -1 && rect.right <= viewport + 1;
+        }, width);
+        const filter = await page.evaluate(() => {
+          const panel = document.querySelector('dialog.practice-tray-panel');
+          if (!(panel instanceof HTMLElement)) return '';
+          return getComputedStyle(panel, '::before').backdropFilter;
+        });
+        if (!filter.includes('blur')) {
+          throw new Error(
+            `${name} tray backdrop-filter at ${width}px is "${filter}"`,
+          );
+        }
+        if (shotDir && name === 'chromium') {
+          await page.screenshot({
+            path: `${shotDir}/tray-${width}-day-open-frost.png`,
+          });
+        }
+        await page.keyboard.press('Escape');
+        await page.locator('#practice-tray').waitFor({ state: 'detached' });
+      }
+    } finally {
+      await browser.close();
     }
-    await page.locator('.tray-open').click();
-    await page.locator('#practice-tray').waitFor();
-    await page.waitForFunction((viewport) => {
-      const panel = document.querySelector('#practice-tray');
-      if (!(panel instanceof HTMLElement)) return false;
-      const rect = panel.getBoundingClientRect();
-      return rect.left >= -1 && rect.right <= viewport + 1;
-    }, width);
-    const filter = await page.evaluate(() => {
-      const panel = document.querySelector('dialog.practice-tray-panel');
-      if (!(panel instanceof HTMLElement)) return '';
-      return getComputedStyle(panel, '::before').backdropFilter;
-    });
-    if (!filter.includes('blur')) {
-      throw new Error(
-        `production tray backdrop-filter at ${width}px is "${filter}"`,
-      );
-    }
-    if (shotDir) {
-      await page.screenshot({
-        path: `${shotDir}/tray-${width}-day-open-frost.png`,
-      });
-    }
-    await page.keyboard.press('Escape');
-    await page.locator('#practice-tray').waitFor({ state: 'detached' });
   }
   console.log(
-    'Verified computed tray blur on the static export at 1280 and 390.',
+    'Verified computed tray blur in Chromium and Firefox at 1280 and 390.',
   );
 } finally {
-  await browser.close();
   await new Promise((resolve) => server.close(resolve));
 }
