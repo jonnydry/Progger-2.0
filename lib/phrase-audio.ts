@@ -35,31 +35,36 @@ export function clampPhraseTempo(tempo: number): number {
   return Math.min(PHRASE_TEMPO_MAX, Math.max(PHRASE_TEMPO_MIN, tempo));
 }
 
-const BAR_BEATS = 4;
+/** Quarter-note meter. Callers can pass another bar size; there is no control for it. */
+export const PHRASE_BEATS_PER_BAR = 4;
 
 /**
  * Beats from the downbeat to the bar line at or after the last note.
  * A note that already ends on beat 1 keeps that bar. Anything later
  * rounds up, and the beats after the last slot are rest.
+ * `beatsPerBar` defaults to 4. A 3/4 bar is 3.
  */
 export function phraseLoopBeats(
   notes: readonly { beat: number; duration: number }[],
+  beatsPerBar: number = PHRASE_BEATS_PER_BAR,
 ): number {
+  const bar = beatsPerBar > 0 ? beatsPerBar : PHRASE_BEATS_PER_BAR;
   let end = 0;
   for (const note of notes) {
     const noteEnd = note.beat + note.duration;
     if (Number.isFinite(noteEnd) && noteEnd > end) end = noteEnd;
   }
   if (!(end > 0)) return 0;
-  return Math.ceil(end / BAR_BEATS - 1e-12) * BAR_BEATS;
+  return Math.ceil(end / bar - 1e-12) * bar;
 }
 
 /** Straight seconds for `phraseLoopBeats`. Swing does not move a bar line. */
 export function phraseLoopSeconds(
   notes: readonly { beat: number; duration: number }[],
   tempo: number,
+  beatsPerBar: number = PHRASE_BEATS_PER_BAR,
 ): number {
-  return phraseLoopBeats(notes) * (60 / clampPhraseTempo(tempo));
+  return phraseLoopBeats(notes, beatsPerBar) * (60 / clampPhraseTempo(tempo));
 }
 
 export function melodyFrets(note: {

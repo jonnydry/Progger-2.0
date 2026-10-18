@@ -1266,6 +1266,47 @@ void test('loop off keeps the 10-beat and 18-beat cadence hold', () => {
   }
 });
 
+void test('a 3/4 loop rounds up by bars of three and 4/4 stays at 12 and 20', () => {
+  const onTheBar = [{ beat: 0, duration: 3 }];
+  assert.equal(phraseLoopBeats(onTheBar, 3), 3);
+  const spill = [
+    { beat: 0, duration: 3 },
+    { beat: 3, duration: 1.5 },
+  ];
+  assert.equal(spill[1]!.beat + spill[1]!.duration, 4.5);
+  assert.equal(phraseLoopBeats(spill, 3), 6);
+  assert.equal(phraseLoopBeats(spill), 8);
+  const tempo = 90;
+  const length = phraseLoopSeconds(spill, tempo, 3);
+  assert.equal(length, 6 * (60 / tempo));
+  const downs = loopDownbeats(
+    spill.map((note) => note.beat),
+    tempo,
+    0,
+    length,
+    4,
+  );
+  assert.equal(downs[0], 0);
+  for (let pass = 0; pass < downs.length - 1; pass++) {
+    const gap = (downs[pass + 1] ?? NaN) - (downs[pass] ?? NaN);
+    assert.ok(Math.abs(gap - length) < 1e-10, `3/4 pass ${pass} gap ${gap}`);
+  }
+  const scale = SCALES.find((entry) => entry.id === 'major');
+  assert.ok(scale);
+  for (const bars of [2, 4] as const) {
+    const phrase = generatePhrase({
+      seed: 4,
+      bars,
+      scaleNotes: spell('C', scale.formula),
+      chordNotes: parseChord('C').notes,
+    });
+    assert.equal(phrase.ok, true);
+    if (!phrase.ok) return;
+    assert.equal(phraseLoopBeats(phrase.phrase.notes), bars === 2 ? 12 : 20);
+    assert.equal(phraseLoopBeats(phrase.phrase.notes, 4), bars === 2 ? 12 : 20);
+  }
+});
+
 void test('stop and regenerate cancel every note still waiting on the clock', async () => {
   const context = new OfflineAudioContext(1, RATE * 8, RATE);
   context.resume = () => Promise.resolve();
