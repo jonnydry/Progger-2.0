@@ -137,6 +137,18 @@ dialog.practice-tray-panel::after {
   }
 }
 
+@media (prefers-reduced-transparency: reduce) {
+  dialog.practice-tray-panel::before {
+    background: color-mix(
+      in srgb,
+      var(--card) var(--tray-tint-solid),
+      transparent
+    );
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
 html[data-theme='day'] .practice-tray-panel {
   box-shadow: -16px 0 40px rgb(18 54 47 / 0.16);
 }

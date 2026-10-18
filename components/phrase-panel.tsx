@@ -48,6 +48,15 @@ import '@/app/phrase.css';
 const EMPTY_LOCKS: PhraseLocks = {};
 const EMPTY_NOTES: readonly FingeredNote[] = [];
 
+/** A repeated message has to change the text, or aria-live stays quiet. */
+export function saveAnnouncement(previous: string, message: string): string {
+  const bare = previous.replaceAll('\u200b', '');
+  if (bare === message && !previous.endsWith('\u200b')) {
+    return `${message}\u200b`;
+  }
+  return message;
+}
+
 export function PhrasePanel({
   active,
   scaleRoot,
@@ -337,8 +346,8 @@ export function PhrasePanel({
     });
     const message = traySaveMessage(saved.status, 'phrase', saved.removed);
     setNotice(message);
-    setSaveAnnounce(message);
-    if (saved.status !== 'saved') {
+    setSaveAnnounce((current) => saveAnnouncement(current, message));
+    if (saved.status !== 'saved' && saved.status !== 'evicted') {
       setSavedFor(null);
       return;
     }
@@ -517,7 +526,12 @@ export function PhrasePanel({
           Loop
         </button>
       </div>
-      <p className="sr-only" aria-live="polite">
+      <p
+        id="phrase-save-announce"
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         {saveAnnounce}
       </p>
       <p id="phrase-seed-help" className="phrase-status">

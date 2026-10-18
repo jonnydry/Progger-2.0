@@ -69,6 +69,21 @@ html:has(.night-swim) {
     inset 0 -1px 0 color-mix(in srgb, var(--foreground) 20%, transparent),
     0 12px 28px rgb(5 12 24 / 0.16);
 }
+.site-header * {
+  scroll-margin-top: calc(-1 * var(--site-bar));
+}
+@media (prefers-reduced-transparency: reduce) {
+  .night-swim .site-header {
+    background: color-mix(in srgb, var(--background) 99.9%, transparent);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media print {
+  .night-swim .site-header {
+    position: static;
+  }
+}
 .night-swim .header-scene {
   position: relative;
   isolation: isolate;

@@ -454,15 +454,13 @@ export function DroneControls({
 
   return (
     <div className="drone-controls">
-      <p
-        className="drone-legend"
-        title={`Drone. ${droneHint}`}
-        aria-label={`Drone. ${droneHint}`}
-      >
+      <p className="drone-legend" title={`Drone. ${droneHint}`}>
         <AudioLines size={DRONE_ICON_PX} aria-hidden="true" />
         <span>
           <span className="drone-legend-title">Drone</span>
-          <span className="drone-legend-hint">{droneHint}</span>
+          <span id="drone-legend-hint" className="drone-legend-hint">
+            {droneHint}
+          </span>
         </span>
       </p>
       <button
@@ -524,6 +522,7 @@ export function DroneControls({
         ref={toggleRef}
         aria-pressed={enabled}
         aria-label={droneControlName(enabled, activeSound)}
+        aria-describedby="drone-legend-hint"
         aria-keyshortcuts="ArrowDown ArrowUp"
         onClick={onToggle}
         onKeyDown={(event) => {
