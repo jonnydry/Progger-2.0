@@ -161,7 +161,7 @@ export { show };
     { cwd: root, stdio: 'pipe' },
   );
 
-  server = createServer((request, response) => {
+  const httpServer = createServer((request, response) => {
     if ((request.url ?? '/').startsWith('/probe.js')) {
       response.setHeader('content-type', 'text/javascript');
       response.end(readFileSync(outfile));
@@ -176,16 +176,17 @@ window.__heldRelease = { show };
 document.documentElement.dataset.ready = '1';
 </script>`);
   });
-    await new Promise<void>((resolve, reject) => {
-      const fail = (error: Error) => reject(error);
-      server.once('error', fail);
-      server.listen(0, '127.0.0.1', () => {
-        server.off('error', fail);
-        resolve();
-      });
+  server = httpServer;
+  await new Promise<void>((resolve, reject) => {
+    const fail = (error: Error) => reject(error);
+    httpServer.once('error', fail);
+    httpServer.listen(0, '127.0.0.1', () => {
+      httpServer.off('error', fail);
+      resolve();
     });
+  });
     browser = await launchNamed('chromium', t);
-    const address = server.address() as AddressInfo;
+    const address = httpServer.address() as AddressInfo;
     page = await browser.newPage();
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(String(error)));
