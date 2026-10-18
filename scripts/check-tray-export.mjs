@@ -62,8 +62,14 @@ const browser = await chromium.launch({
   headless: true,
   args: ['--no-sandbox', '--use-angle=swiftshader'],
 });
+let shotDir = null;
 try {
   await mkdir(shots, { recursive: true });
+  shotDir = shots;
+} catch {
+  shotDir = null;
+}
+try {
   const page = await browser.newPage({ deviceScaleFactor: 1 });
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
@@ -94,9 +100,11 @@ try {
         `production tray backdrop-filter at ${width}px is "${filter}"`,
       );
     }
-    await page.screenshot({
-      path: `${shots}/tray-${width}-day-open-frost.png`,
-    });
+    if (shotDir) {
+      await page.screenshot({
+        path: `${shotDir}/tray-${width}-day-open-frost.png`,
+      });
+    }
     await page.keyboard.press('Escape');
     await page.locator('#practice-tray').waitFor({ state: 'detached' });
   }

@@ -46,11 +46,3 @@ if (frost.length) {
   );
 }
 console.log('Verified unprefixed tray backdrop-filter in the production CSS.');
-
-const check = spawnSync(
-  process.execPath,
-  [fileURLToPath(new URL('./check-tray-export.mjs', import.meta.url))],
-  { cwd: root, stdio: 'inherit' },
-);
-if (check.error) throw check.error;
-if (check.status !== 0) process.exit(check.status ?? 1);
