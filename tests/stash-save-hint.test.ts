@@ -60,8 +60,28 @@ function stashPhrase(index: number) {
 }
 
 async function openPhrases(page: Page) {
-  await page.locator('.phrase-open').click();
-  await page.locator('.phrase-panel').waitFor({ state: 'visible' });
+  const button = page.locator('.phrase-open');
+  const panel = page.locator('.phrase-panel');
+  await button.waitFor();
+  // The server-rendered button accepts clicks before React has attached
+  // its handler. `networkidle` does not wait for that, so after a reload
+  // the click can be lost while the machine is busy and the panel never
+  // opens. React records props on the node when that handler is attached.
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.phrase-open');
+    if (!node) return false;
+    return Object.keys(node).some((key) => key.startsWith('__reactProps'));
+  });
+  await button.click();
+  try {
+    await panel.waitFor({ state: 'visible' });
+  } catch (error) {
+    // Still collapsed: the click missed the handler. A second click is
+    // safe only while the panel has not started opening.
+    if ((await button.getAttribute('aria-expanded')) === 'true') throw error;
+    await button.click();
+    await panel.waitFor({ state: 'visible' });
+  }
   await page.getByRole('button', { name: 'Save to stash' }).waitFor();
   await page.waitForFunction(() => {
     const button = [...document.querySelectorAll('button')].find((node) =>
