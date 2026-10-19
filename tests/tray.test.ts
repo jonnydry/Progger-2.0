@@ -228,7 +228,7 @@ void test('corrupt JSON stays byte-identical and is not written over', () => {
     assert.equal(result.status, 'failed');
     assert.equal(result.item, null);
     assert.equal(held.raw(), '{');
-    assert.notEqual(traySaveMessage(result.status), 'Saved to tray.');
+    assert.notEqual(traySaveMessage(result.status), 'Saved to stash.');
   } finally {
     held.restore();
   }
@@ -267,7 +267,7 @@ void test('an unreadable tray is left untouched and is not a fresh empty tray', 
   ];
   assert.equal(
     TRAY_UNREADABLE_NOTE,
-    "Your saved tray couldn't be read, so it's left untouched.",
+    "Your saved stash couldn't be read, so it's left untouched.",
   );
   for (const raw of blobs) {
     const held = installTray(raw);
@@ -380,7 +380,7 @@ void test('the cap evicts the oldest known item and never an unknown one', () =>
     assert.equal(saved.removed, 'phrase');
     assert.equal(
       traySaveMessage(saved.status, 'phrase', saved.removed),
-      'Tray full, removed the oldest phrase.',
+      'Stash full, removed the oldest phrase.',
     );
     const stored = JSON.parse(held.raw() ?? '');
     assert.equal(stored.items.length, 80);
@@ -409,7 +409,7 @@ void test('a tray of only unknown items refuses the next save', () => {
     const saved = savePhrase(phraseInput());
     assert.equal(saved.status, 'full');
     assert.equal(saved.item, null);
-    assert.equal(traySaveMessage(saved.status), 'Tray is full.');
+    assert.equal(traySaveMessage(saved.status), 'Stash is full.');
     assert.equal(held.raw(), raw);
     assert.deepEqual(getTray().items, []);
   } finally {
@@ -439,7 +439,7 @@ void test('a storage-full throw does not report success or change data', () => {
     assert.equal(saved.item, null);
     assert.equal(value, raw);
     assert.equal(getTray().items[0]?.id, 'phrase-1');
-    assert.notEqual(traySaveMessage(saved.status), 'Saved to tray.');
+    assert.notEqual(traySaveMessage(saved.status), 'Saved to stash.');
   } finally {
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
@@ -506,7 +506,7 @@ void test('eviction names the bookmark that was removed', () => {
       assert.equal(saved.status, 'evicted');
       assert.equal(saved.removed, noun);
       const message = traySaveMessage(saved.status, 'phrase', saved.removed);
-      assert.equal(message, `Tray full, removed the oldest ${noun}.`);
+      assert.equal(message, `Stash full, removed the oldest ${noun}.`);
       assert.equal(message.includes('phrase'), false);
     } finally {
       held.restore();
@@ -514,7 +514,7 @@ void test('eviction names the bookmark that was removed', () => {
   }
   assert.equal(
     traySaveMessage('evicted'),
-    'Tray full, removed the oldest item.',
+    'Stash full, removed the oldest item.',
   );
 });
 
@@ -535,7 +535,7 @@ void test('unavailable storage does not report a saved phrase', () => {
     assert.equal(saved.status, 'failed');
     assert.equal(saved.item, null);
     assert.equal(traySaveMessage(saved.status), 'Could not save this phrase.');
-    assert.notEqual(traySaveMessage(saved.status), 'Saved to tray.');
+    assert.notEqual(traySaveMessage(saved.status), 'Saved to stash.');
     assert.deepEqual(getTray().items, []);
     const view = saveView({
       kind: 'scale',
@@ -553,7 +553,7 @@ void test('unavailable storage does not report a saved phrase', () => {
       traySaveMessage(view.status, 'view'),
       'Could not save this view.',
     );
-    assert.notEqual(traySaveMessage(view.status, 'view'), 'Saved to tray.');
+    assert.notEqual(traySaveMessage(view.status, 'view'), 'Saved to stash.');
   } finally {
     if (descriptor) {
       Object.defineProperty(globalThis, 'localStorage', descriptor);
@@ -875,6 +875,23 @@ void test('focus wrap moves off either end and stops a foreign player', () => {
   assert.equal(phraseStopApplies('tray', 'tray'), false);
 });
 
+void test('stash labels keep progger.tray.v1 and still load items saved under that key', () => {
+  assert.equal(TRAY_KEY, 'progger.tray.v1');
+  const saved = phrase();
+  const blob = JSON.stringify({ version: 1, items: [saved] });
+  const store = new Map<string, string>([['progger.tray.v1', blob]]);
+  const loaded = readTray({
+    getItem: (key) => store.get(key) ?? null,
+    setItem: (key, value) => {
+      store.set(key, value);
+    },
+  });
+  assert.equal(loaded.items.length, 1);
+  assert.equal(loaded.items[0]?.id, saved.id);
+  assert.equal(loaded.items[0]?.name, saved.name);
+  assert.equal(store.has('progger.stash.v1'), false);
+});
+
 function installTray(initial: string | null) {
   let value = initial;
   const writes: string[] = [];
@@ -998,7 +1015,7 @@ void test('the tray stays out of the eager phrase graph', () => {
   assert.match(host, /import\('@\/components\/practice-tray'\)/);
   assert.match(tray, /import\('@\/lib\/phrase-audio'\)/);
   assert.match(panel, /traySaveMessage\(saved\.status/);
-  assert.equal(panel.includes("saved ? 'Saved to tray.'"), false);
+  assert.equal(panel.includes("saved ? 'Saved to stash.'"), false);
   assert.equal(page.includes("from '@/components/practice-tray'"), false);
   assert.match(page, /PracticeTrayHost/);
   for (const file of [

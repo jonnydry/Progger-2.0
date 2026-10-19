@@ -708,7 +708,6 @@ export default function Home() {
       className={`app-shell night-swim ${page === 'explore' && practice ? 'practice-view' : ''}`}
     >
       <header className="site-header">
-        <PondScene />
         <a
           href="#explore"
           onClick={() => navigate('explore')}
@@ -738,6 +737,9 @@ export default function Home() {
           <ThemeToggle />
         </div>
       </header>
+      <div className="header-scene" aria-hidden="true">
+        <PondScene />
+      </div>
       <main id="main-content" tabIndex={-1}>
         <h1 className="sr-only">
           {page === 'match'
@@ -1020,6 +1022,7 @@ export default function Home() {
                           celloAvailable={drone.celloAvailable}
                           walking={drone.walking}
                           message={drone.message}
+                          rootName={pretty(scaleRoot)}
                           onToggle={() => drone.toggle()}
                           onVolume={(value) => drone.setVolume(value)}
                           onSound={(value) => drone.setSound(value)}

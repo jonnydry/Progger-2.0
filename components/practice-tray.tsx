@@ -327,7 +327,7 @@ export function PracticeTray({
       <button
         type="button"
         className="practice-tray-backdrop"
-        aria-label="Close practice tray"
+        aria-label="Close stash"
         tabIndex={-1}
         onClick={() => closeAction.current()}
       />
@@ -342,13 +342,13 @@ export function PracticeTray({
         <div className="practice-tray-head">
           <div>
             <p className="practice-tray-kicker">Practice</p>
-            <h2 id="practice-tray-title">Tray</h2>
+            <h2 id="practice-tray-title">Stash</h2>
           </div>
           <button
             ref={closeRef}
             type="button"
             className="practice-tray-close"
-            aria-label="Close practice tray"
+            aria-label="Close stash"
             onClick={() => closeAction.current()}
           >
             <X size={18} aria-hidden="true" />

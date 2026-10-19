@@ -48,6 +48,15 @@ import '@/app/phrase.css';
 const EMPTY_LOCKS: PhraseLocks = {};
 const EMPTY_NOTES: readonly FingeredNote[] = [];
 
+/** A repeated message has to change the text, or aria-live stays quiet. */
+export function saveAnnouncement(previous: string, message: string): string {
+  const bare = previous.replaceAll('\u200b', '');
+  if (bare === message && !previous.endsWith('\u200b')) {
+    return `${message}\u200b`;
+  }
+  return message;
+}
+
 export function PhrasePanel({
   active,
   scaleRoot,
@@ -275,6 +284,23 @@ export function PhrasePanel({
     setBars(next);
     setNotice('');
   }
+  const phraseKey = `${scaleId}:${scaleRoot}:${seed}:${bars}`;
+  const [savedFor, setSavedFor] = useState<string | null>(null);
+  const [saveAnnounce, setSaveAnnounce] = useState('');
+  const [announcedFor, setAnnouncedFor] = useState(phraseKey);
+  const savedTimer = useRef<number | null>(null);
+  if (announcedFor !== phraseKey) {
+    setAnnouncedFor(phraseKey);
+    setSaveAnnounce('');
+    setSavedFor(null);
+  }
+  const savedMark = savedFor === phraseKey;
+  useEffect(
+    () => () => {
+      if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+    },
+    [],
+  );
   function saveToTray() {
     if (!phrase.ok) return;
     const saved = savePhrase({
@@ -318,7 +344,19 @@ export function PhrasePanel({
       seed: phrase.phrase.seed,
       ...capture,
     });
-    setNotice(traySaveMessage(saved.status, 'phrase', saved.removed));
+    const message = traySaveMessage(saved.status, 'phrase', saved.removed);
+    setNotice(message);
+    setSaveAnnounce((current) => saveAnnouncement(current, message));
+    if (saved.status !== 'saved' && saved.status !== 'evicted') {
+      setSavedFor(null);
+      return;
+    }
+    setSavedFor(phraseKey);
+    if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+    savedTimer.current = window.setTimeout(() => {
+      savedTimer.current = null;
+      setSavedFor(null);
+    }, 1500);
   }
   function startPlayback() {
     if (!phrase.ok) return;
@@ -473,11 +511,11 @@ export function PhrasePanel({
         </button>
         <button
           type="button"
-          className="phrase-action"
+          className={`phrase-action${savedMark ? ' is-saved' : ''}`}
           disabled={!phrase.ok}
           onClick={saveToTray}
         >
-          Save to tray
+          {savedMark ? 'Saved ✓' : 'Save to stash'}
         </button>
         <button
           type="button"
@@ -488,6 +526,14 @@ export function PhrasePanel({
           Loop
         </button>
       </div>
+      <p
+        id="phrase-save-announce"
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {saveAnnounce}
+      </p>
       <p id="phrase-seed-help" className="phrase-status">
         {notice
           ? notice

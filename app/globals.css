@@ -280,12 +280,18 @@ input {
   top: 10px;
 }
 .site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   height: 92px;
   padding: 0 max(44px, calc((100vw - 1360px) /2));
   display: flex;
   align-items: center;
   gap: 64px;
   border-bottom: 1px solid #2a3028;
+  background: color-mix(in srgb, var(--background) 78%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
 }
 .brand {
   display: flex;
@@ -574,14 +580,25 @@ main {
 }
 /* The phrase cluster follows the neck in the tab order and on screen.
    The fret transport comes after it. */
+.neck > .neck-overview-slot {
+  order: 2;
+}
 .neck > .under-neck {
   order: 2;
+}
+.neck-overview-slot {
+  display: flex;
+  margin: 8px 0 2px;
+}
+.neck-overview-slot .overview-toggle {
+  flex: 0 1 auto;
+  width: auto;
 }
 .neck > .instrument-dock:not(.practice-controls) {
   order: 3;
 }
 .neck > .neck-overview {
-  order: 4;
+  order: 2;
 }
 .neck > .pattern-details {
   order: 5;
