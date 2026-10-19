@@ -238,9 +238,9 @@ function clampedIndex(state: PhraseHistoryState): number {
 
 /**
  * Remember `entry` as the phrase now showing.
- * A repeat of the current phrase is not stored again.
- * Anything after the current phrase is dropped, then the oldest phrase
- * past the cap of three is dropped.
+ * A phrase already in history moves to the current spot instead of being
+ * copied. Anything after the current phrase is dropped, then the oldest
+ * phrase past the cap of three is dropped.
  */
 export function pushPhraseHistory(
   state: PhraseHistoryState,
@@ -257,11 +257,32 @@ export function pushPhraseHistory(
     }
     return { version: 1, entries: kept, index: kept.length - 1 };
   }
-  const entries = [...kept, clean];
+  const withoutRepeat = kept.filter(
+    (item) => !samePhraseHistoryEntry(item, clean),
+  );
+  const entries = [...withoutRepeat, clean];
   if (entries.length > PHRASE_HISTORY_LIMIT) {
     entries.splice(0, entries.length - PHRASE_HISTORY_LIMIT);
   }
   return { version: 1, entries, index: entries.length - 1 };
+}
+
+export type PhraseHistoryStepFocus = 'previous' | 'next' | 'new';
+
+/**
+ * The step button that was just used disables at either end.
+ * Focus moves to the other step, or to New phrase when both ends are closed.
+ */
+export function phraseHistoryStepFocus(input: {
+  direction: -1 | 1;
+  index: number;
+  count: number;
+}): PhraseHistoryStepFocus | null {
+  const atStart = input.index <= 0;
+  const atEnd = input.count <= 0 || input.index >= input.count - 1;
+  if (input.direction === -1 && atStart) return atEnd ? 'new' : 'next';
+  if (input.direction === 1 && atEnd) return atStart ? 'new' : 'previous';
+  return null;
 }
 
 /** Move within the stored phrases. The ends stay put. */
@@ -350,15 +371,13 @@ function project(raw: string | null, failedRead = false): HistoryDoc {
       const clean = entryOf(entry);
       if (clean) entries.push(clean);
     }
-    const index = clampedIndex({
-      version: 1,
-      entries,
-      index: typeof parsed.index === 'number' ? parsed.index : Number.NaN,
-    });
-    if (entries.length === 0) {
-      return { writable: true, state: EMPTY_PHRASE_HISTORY };
-    }
-    return { writable: true, state: { version: 1, entries, index } };
+    return {
+      writable: true,
+      state: capLoadedHistory(
+        entries,
+        typeof parsed.index === 'number' ? parsed.index : Number.NaN,
+      ),
+    };
   } catch {
     return { writable: false, state: EMPTY_PHRASE_HISTORY };
   }
@@ -460,6 +479,25 @@ export function bindPhraseHistoryStorage(target: EventTarget): () => void {
   return () => target.removeEventListener('storage', onStorage);
 }
 
+/** A saved list longer than the cap keeps the newest phrases. */
+function capLoadedHistory(
+  entries: PhraseHistoryEntry[],
+  index: number,
+): PhraseHistoryState {
+  if (entries.length === 0) return EMPTY_PHRASE_HISTORY;
+  const overflow = Math.max(0, entries.length - PHRASE_HISTORY_LIMIT);
+  const kept = overflow > 0 ? entries.slice(overflow) : entries;
+  return {
+    version: 1,
+    entries: kept,
+    index: clampedIndex({
+      version: 1,
+      entries: kept,
+      index: index - overflow,
+    }),
+  };
+}
+
 function commit(state: PhraseHistoryState): boolean {
   const open = current();
   if (!open.writable) return false;
@@ -470,9 +508,16 @@ function commit(state: PhraseHistoryState): boolean {
     entries: state.entries,
     index: state.index,
   });
+  let wrote = false;
   try {
     storage.setItem(PHRASE_HISTORY_KEY, payload);
+    wrote = true;
   } catch {
+    wrote = false;
+  }
+  if (!wrote) {
+    doc = { writable: true, state };
+    emit();
     return false;
   }
   const refreshed = project(payload);
@@ -487,7 +532,7 @@ export function rememberPhrase(entry: PhraseHistoryEntry): PhraseHistoryState {
   if (!open.writable) return open.state;
   const next = pushPhraseHistory(open.state, entry);
   if (next === open.state) return open.state;
-  if (!commit(next)) return open.state;
+  commit(next);
   return current().state;
 }
 
@@ -496,11 +541,12 @@ export function movePhraseHistory(
   direction: -1 | 1,
 ): PhraseHistoryEntry | null {
   const open = current();
+  if (!open.writable) return null;
   const next = stepPhraseHistory(open.state, direction);
   if (next === open.state) return null;
-  if (!open.writable || !commit(next)) return null;
-  const index = next.index;
-  return index >= 0 ? (next.entries[index] ?? null) : null;
+  commit(next);
+  const shown = current().state;
+  return shown.index >= 0 ? (shown.entries[shown.index] ?? null) : null;
 }
 
 if (typeof window !== 'undefined') bindPhraseHistoryStorage(window);

@@ -12,6 +12,7 @@ import {
   parsePhraseHistory,
   phraseHistoryEntry,
   phraseHistoryOpening,
+  phraseHistoryStepFocus,
   pushPhraseHistory,
   readPhraseHistory,
   rememberPhrase,
@@ -293,21 +294,89 @@ void test('a corrupt entry is ignored and the phrases around it remain', () => {
   assert.equal(parsePhraseHistory(missingIndex).writable, true);
 });
 
-void test('a refused write leaves the phrases already stored', () => {
+void test('a stored list longer than 3 loads only the newest 3', () => {
+  const entries = Array.from({ length: 50 }, (_, index) => entry(index + 1));
+  const raw = JSON.stringify({ version: 1, index: 49, entries });
+  const loaded = parsePhraseHistory(raw);
+  assert.equal(loaded.writable, true);
+  assert.deepEqual(
+    loaded.state.entries.map((item) => item.seed),
+    [48, 49, 50],
+  );
+  assert.equal(loaded.state.index, 2);
+  const earlier = parsePhraseHistory(
+    JSON.stringify({ version: 1, index: 48, entries }),
+  );
+  assert.equal(earlier.state.entries[earlier.state.index]?.seed, 49);
+  const store = memory(raw);
+  assert.equal(readPhraseHistory(store).entries.length, 3);
+  assert.equal(store.raw(), raw);
+});
+
+void test('a repeated phrase moves to the current spot instead of being stored twice', () => {
+  let state = pushPhraseHistory(emptyPhraseHistory(), entry(1));
+  state = pushPhraseHistory(state, entry(2));
+  state = pushPhraseHistory(state, entry(1));
+  assert.deepEqual(
+    state.entries.map((item) => item.seed),
+    [2, 1],
+  );
+  assert.equal(state.index, 1);
+  assert.equal(state.entries.filter((item) => item.seed === 1).length, 1);
+  const back = stepPhraseHistory(state, -1);
+  assert.equal(back.entries[back.index]?.seed, 2);
+  let branched = rememberSeeds([1, 2, 3]);
+  branched = stepPhraseHistory(branched, -1);
+  branched = pushPhraseHistory(branched, entry(1));
+  assert.deepEqual(
+    branched.entries.map((item) => item.seed),
+    [2, 1],
+  );
+  assert.equal(branched.index, 1);
+});
+
+void test('a refused write still steps the phrases in memory', () => {
   const held = install(null);
   try {
     rememberPhrase(entry(1));
+    rememberPhrase(entry(2));
     const raw = held.raw();
-    const seen = getPhraseHistory();
     held.setItem = () => {
       throw new Error('full');
     };
-    assert.equal(rememberPhrase(entry(2)), seen);
+    const saved = rememberPhrase(entry(3));
+    assert.deepEqual(
+      saved.entries.map((item) => item.seed),
+      [1, 2, 3],
+    );
     assert.equal(held.raw(), raw);
-    assert.deepEqual(getPhraseHistory(), seen);
+    assert.equal(movePhraseHistory(-1)?.seed, 2);
+    assert.equal(getPhraseHistory().index, 1);
+    assert.equal(movePhraseHistory(1)?.seed, 3);
+    assert.equal(held.raw(), raw);
+    assert.equal(held.writes(), 2);
   } finally {
     held.restore();
   }
+});
+
+void test('focus leaves a step button that has reached the end', () => {
+  assert.equal(
+    phraseHistoryStepFocus({ direction: -1, index: 0, count: 3 }),
+    'next',
+  );
+  assert.equal(
+    phraseHistoryStepFocus({ direction: 1, index: 2, count: 3 }),
+    'previous',
+  );
+  assert.equal(
+    phraseHistoryStepFocus({ direction: -1, index: 1, count: 3 }),
+    null,
+  );
+  assert.equal(
+    phraseHistoryStepFocus({ direction: 1, index: 0, count: 1 }),
+    'new',
+  );
 });
 
 void test('unavailable storage is an empty history', () => {

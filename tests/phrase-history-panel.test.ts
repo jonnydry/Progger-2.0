@@ -71,9 +71,21 @@ void test('back and forward restore the last phrases on a phone width', async (t
     assert.equal(await seedOf(page), first);
     assert.equal(await previous.isDisabled(), true);
     assert.equal(await next.isDisabled(), false);
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.getAttribute('aria-label'),
+      ),
+      'Next phrase',
+    );
     await next.click();
     assert.equal(await seedOf(page), second);
     assert.equal(await next.isDisabled(), true);
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.getAttribute('aria-label'),
+      ),
+      'Previous phrase',
+    );
 
     await page.reload({ waitUntil: 'networkidle' });
     await openPhrases(page);

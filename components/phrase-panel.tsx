@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -48,6 +49,7 @@ import {
   movePhraseHistory,
   phraseHistoryEntry,
   phraseHistoryOpening,
+  phraseHistoryStepFocus,
   rememberPhrase,
   subscribePhraseHistory,
 } from '@/lib/phrase-history';
@@ -327,11 +329,33 @@ export function PhrasePanel({
     if (incoming) rememberPhrase(incoming);
     showHistoryPhrase(next, bars);
   }
+  const previousStep = useRef<HTMLButtonElement>(null);
+  const nextStep = useRef<HTMLButtonElement>(null);
+  const newPhraseButton = useRef<HTMLButtonElement>(null);
+  const historyFocus = useRef<'previous' | 'next' | 'new' | null>(null);
   function stepHistory(direction: -1 | 1) {
     const entry = movePhraseHistory(direction);
     if (!entry) return;
     showHistoryPhrase(entry.seed, entry.bars);
+    const shown = getPhraseHistory();
+    historyFocus.current = phraseHistoryStepFocus({
+      direction,
+      index: shown.index,
+      count: shown.entries.length,
+    });
   }
+  useLayoutEffect(() => {
+    const target = historyFocus.current;
+    if (!target) return;
+    historyFocus.current = null;
+    const node =
+      target === 'previous'
+        ? previousStep.current
+        : target === 'next'
+          ? nextStep.current
+          : newPhraseButton.current;
+    if (node && !node.disabled) node.focus({ preventScroll: true });
+  }, [history.index]);
   function chooseBars(next: 2 | 4) {
     onReleaseHeld?.();
     setBars(next);
@@ -555,6 +579,7 @@ export function PhrasePanel({
               aria-label="Previous phrase"
               aria-describedby="phrase-history-hint"
               disabled={history.index <= 0}
+              ref={previousStep}
               onClick={() => stepHistory(-1)}
             >
               <ArrowLeft size={14} aria-hidden="true" />
@@ -562,6 +587,7 @@ export function PhrasePanel({
             <button
               type="button"
               className="phrase-action"
+              ref={newPhraseButton}
               onClick={regenerate}
             >
               <RefreshCw size={14} aria-hidden="true" /> New phrase
@@ -574,6 +600,7 @@ export function PhrasePanel({
               disabled={
                 history.index < 0 || history.index >= history.entries.length - 1
               }
+              ref={nextStep}
               onClick={() => stepHistory(1)}
             >
               <ArrowRight size={14} aria-hidden="true" />
