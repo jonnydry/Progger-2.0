@@ -25,8 +25,15 @@
   outline: 2px solid var(--green);
   outline-offset: 3px;
 }
+.night-swim.practice-view .header-scene {
+  display: none;
+}
 .night-swim.practice-view .site-header {
   height: 94px;
+}
+html:has(.practice-view) {
+  --site-bar: 94px;
+  scroll-padding-top: 94px;
 }
 .practice-view .pond-scene,
 .practice-view .underwater-scene {
@@ -179,10 +186,18 @@ html:is([data-scene='tidepool'], [data-scene='twilight'])[data-theme='day']
   .night-swim.practice-view .site-header {
     height: 124px;
   }
+  html:has(.practice-view) {
+    --site-bar: 124px;
+    scroll-padding-top: 124px;
+  }
 }
 @media (max-width: 500px) {
   .night-swim.practice-view .site-header {
     height: 108px;
+  }
+  html:has(.practice-view) {
+    --site-bar: 108px;
+    scroll-padding-top: 108px;
   }
   .night-swim.practice-view .reference-tabs {
     margin-top: 0;

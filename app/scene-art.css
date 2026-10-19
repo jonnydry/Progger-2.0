@@ -83,25 +83,28 @@ html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
 /* One frame for every scene keeps the band still during a dissolve. The Pond
    composition reaches farther into the water, so leave room for its lily pad. */
 @media (min-width: 901px) {
-  .night-swim .site-header {
-    height: clamp(450px, calc(90px + 40vw), 520px);
+  html:has(.night-swim) {
+    --scene-header: clamp(450px, calc(90px + 40vw), 520px);
+    --site-bar: 76px;
   }
   html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
     .pond-scene {
     /* Reserve navigation space above the tallest headstocks, then blend sky in. */
     top: 70px;
     height: calc(100% - 70px);
-    mask-image: linear-gradient(transparent, black 9%, black 85%, transparent);
+    mask-image: linear-gradient(black 0%, black 85%, transparent);
   }
 }
 @media (min-width: 501px) and (max-width: 900px) {
-  .night-swim .site-header {
-    height: calc(90px + 40vw);
+  html:has(.night-swim) {
+    --scene-header: calc(90px + 40vw);
+    --site-bar: 120px;
   }
 }
 @media (max-width: 500px) {
-  .night-swim .site-header {
-    height: min(250px, calc(82px + 36.25vw));
+  html:has(.night-swim) {
+    --scene-header: min(250px, calc(82px + 36.25vw));
+    --site-bar: 112px;
   }
 }
 html:is([data-scene='pond'], [data-scene='tidepool'])
@@ -129,7 +132,9 @@ html:is([data-scene='pond'], [data-scene='tidepool'], [data-scene='twilight'])
   background-position: center var(--pond-art-shift, 0px);
   /* The painted tail ends above the box. A fade that runs to 100% leaves
      the illustration's bottom edge as a hard line. */
-  --pond-art-bottom: calc(var(--pond-art-shift, 0px) + var(--pond-art-width) / 2);
+  --pond-art-bottom: calc(
+    var(--pond-art-shift, 0px) + var(--pond-art-width) / 2
+  );
   mask-image: linear-gradient(
     to bottom,
     transparent 0,

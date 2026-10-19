@@ -2,6 +2,13 @@
   "name": "progger",
   "version": "0.1.0",
   "private": true,
+  "description": "Guitar scale, mode and chord reference with a phrase generator, practice drone and pixel-art frog. Runs entirely in the browser.",
+  "license": "MIT",
+  "homepage": "https://progger.studio",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jonnydry/Progger-2.0.git"
+  },
   "engines": {
     "node": ">=22.6.0"
   },

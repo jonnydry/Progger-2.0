@@ -25,11 +25,11 @@ The pond and typography are cohesive. At the captured 1075 × 828 desktop viewpo
 
 Recommend an optional **Practice view** or compact working header after entering the reference area, with root/type, note-versus-degree controls, and the neck visible together. Preserve Proggy's welcome scene and an obvious way to return to it. Do not solve the problem by hiding core controls in more menus.
 
-Source: [app/scene-art.css](</home/jonnyd/Documents/ChatGPT/Progger 2/app/app/scene-art.css>) shared header frames; [app/page.tsx](</home/jonnyd/Documents/ChatGPT/Progger 2/app/app/page.tsx>) reference composition; [components/fretboard.tsx](</home/jonnyd/Documents/ChatGPT/Progger 2/app/components/fretboard.tsx>) instrument toolbar after the diagram.
+Source: [app/scene-art.css](../app/scene-art.css) shared header frames; [app/page.tsx](../app/page.tsx) reference composition; [components/fretboard.tsx](../components/fretboard.tsx) instrument toolbar after the diagram.
 
-![Step 1 — desktop Explore](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/01-explore-desktop.png>)
+_Screenshot (not committed): Step 1 — desktop Explore_
 
-![Step 1 — mobile Explore](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/03-explore-mobile.png>)
+_Screenshot (not committed): Step 1 — mobile Explore_
 
 ### 2. Choose a scale — usable grouped menus, weak discovery
 
@@ -37,9 +37,9 @@ Family headings and keyboard focus are useful. The 28-scale menu has no visible 
 
 Add search to the long scale/quality menus, accepting supported aliases and symbols. Keep family groupings and show labels such as **Half-diminished · m7♭5**. Root and fret pickers can remain small, simple menus. Search must never reinterpret an unsupported or ambiguous symbol silently.
 
-Source: [components/music-select.tsx:89](</home/jonnyd/Documents/ChatGPT/Progger 2/app/components/music-select.tsx:89>); [app/page.tsx:487](</home/jonnyd/Documents/ChatGPT/Progger 2/app/app/page.tsx:487>); [components/match-chords.tsx:172](</home/jonnyd/Documents/ChatGPT/Progger 2/app/components/match-chords.tsx:172>).
+Source: [components/music-select.tsx:89](../components/music-select.tsx); [app/page.tsx:487](../app/page.tsx); [components/match-chords.tsx:172](../components/match-chords.tsx).
 
-![Step 2 — grouped scale menu](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/02-scale-picker.png>)
+_Screenshot (not committed): Step 2 — grouped scale menu_
 
 ### 3. Match Am–D — correct coverage, insufficient help choosing
 
@@ -47,21 +47,21 @@ The app recognizes both chords and separates pitch coverage from tonal interpret
 
 Add a short deterministic **What changes** line. For this progression, jazz melodic minor introduces G♯ in place of Dorian's G; Dorian ♭2 introduces B♭ in place of B. Distinguish chord tones from optional melodic notes. Preserve the qualified **Contains all chord tones** wording; avoid turning it into a promise that every note will sound equally settled.
 
-Source: [components/match-chords.tsx:52](</home/jonnyd/Documents/ChatGPT/Progger 2/app/components/match-chords.tsx:52>) and the independently exercised Am–D fixture.
+Source: [components/match-chords.tsx:52](../components/match-chords.tsx) and the independently exercised Am–D fixture.
 
-![Step 3 — matching cards repeat the same explanation](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/04-match-results-mobile.png>)
+_Screenshot (not committed): Step 3 — matching cards repeat the same explanation_
 
 ### 4. Compare another palette — confirmed context loss
 
 Reproduction: enter **Am D** → show **A Dorian** on the neck → choose **Jazz melodic minor** in the scale selector. Before the change, the app displays Am → D, chord-highlight buttons, and **Back to your chords**. Afterward, the progression and both controls disappear. The original typed progression remains available through the top Match navigation, but the comparison workspace is lost.
 
-`choose()` explicitly calls `setContext([])` in [app/page.tsx:179](</home/jonnyd/Documents/ChatGPT/Progger 2/app/app/page.tsx:179>). Preserve context until the existing explicit **Clear context** action. The app already supports explaining chord tones outside the selected palette, so a new scale need not erase the progression. Also preserve the nearest valid pattern starting fret when comparing scales rather than always resetting to index 0.
+`choose()` explicitly calls `setContext([])` in [app/page.tsx:179](../app/page.tsx). Preserve context until the existing explicit **Clear context** action. The app already supports explaining chord tones outside the selected palette, so a new scale need not erase the progression. Also preserve the nearest valid pattern starting fret when comparing scales rather than always resetting to index 0.
 
-Related source-only issue: local choices in **Follow each chord** pass only `[chord]` ([components/match-chords.tsx:315](</home/jonnyd/Documents/ChatGPT/Progger 2/app/components/match-chords.tsx:315>)). Preserve the full progression plus the active chord index and label the scale as a local choice, so users can move through the progression deliberately.
+Related source-only issue: local choices in **Follow each chord** pass only `[chord]` ([components/match-chords.tsx:315](../components/match-chords.tsx)). Preserve the full progression plus the active chord index and label the scale as a local choice, so users can move through the progression deliberately.
 
-![Step 4 — progression context present](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/05-progression-context.png>)
+_Screenshot (not committed): Step 4 — progression context present_
 
-![Step 4 — context disappears after selecting another scale](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/06-context-cleared.png>)
+_Screenshot (not committed): Step 4 — context disappears after selecting another scale_
 
 ### 5. Inspect C13 — musically honest, visually disconnected
 
@@ -69,9 +69,9 @@ The full formula shows C E G B♭ D F A. The first shape correctly plays C B♭ 
 
 Connect the two representations: emphasize sounding notes in the formula and gently mark the omitted ones, with a text explanation that remains available. Avoid deleting notes from the full symbolic chord or relying on color alone. This would help beginners understand why a four-note grip can represent a 13th chord.
 
-Source: [app/page.tsx:503](</home/jonnyd/Documents/ChatGPT/Progger 2/app/app/page.tsx:503>); [components/voicing-browser.tsx:137](</home/jonnyd/Documents/ChatGPT/Progger 2/app/components/voicing-browser.tsx:137>).
+Source: [app/page.tsx:503](../app/page.tsx); [components/voicing-browser.tsx:137](../components/voicing-browser.tsx).
 
-![Step 5 — full formula and played notes](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/07-extended-chord.png>)
+_Screenshot (not committed): Step 5 — full formula and played notes_
 
 ### 6. Browse voicings — a confirmed row bug and a navigation opportunity
 
@@ -81,11 +81,11 @@ Source: [app/page.tsx:503](</home/jonnyd/Documents/ChatGPT/Progger 2/app/app/pag
 
 Add **Near fret…** or distance-based ordering, then optional string-set filters. Keep bass/inversion, rootless, and omission information. Avoid calling a generated voicing “easy” without fingering review. Independent source fixtures also found 72 Cmaj13 shapes, reinforcing the need for navigation rather than more catalog expansion.
 
-Source: [app/night-swim.css:1216](</home/jonnyd/Documents/ChatGPT/Progger 2/app/app/night-swim.css:1216>), [app/night-swim.css:1224](</home/jonnyd/Documents/ChatGPT/Progger 2/app/app/night-swim.css:1224>), [components/voicing-browser.tsx:32](</home/jonnyd/Documents/ChatGPT/Progger 2/app/components/voicing-browser.tsx:32>), [components/voicing-browser.tsx:173](</home/jonnyd/Documents/ChatGPT/Progger 2/app/components/voicing-browser.tsx:173>).
+Source: [app/night-swim.css:1216](../app/night-swim.css), [app/night-swim.css:1224](../app/night-swim.css), [components/voicing-browser.tsx:32](../components/voicing-browser.tsx), [components/voicing-browser.tsx:173](../components/voicing-browser.tsx).
 
-![Step 6 — desktop voicing list](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/08-voicing-library.png>)
+_Screenshot (not committed): Step 6 — desktop voicing list_
 
-![Step 6 — mobile omission text crosses row borders](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/09-voicing-library-mobile.png>)
+_Screenshot (not committed): Step 6 — mobile omission text crosses row borders_
 
 ### 7. Return from Chords to Scales — confirmed unexpected selection change
 
@@ -95,9 +95,9 @@ The selector should preserve each reference's selected root/type. A likely cause
 
 Investigate selector identity and option-registration lifecycle. Add a focused browser regression for returning from chords to a nondefault scale, plus changing unusual enharmonic roots. Do not broadly ignore programmatic change callbacks: keyboard typeahead/autofill may use them too.
 
-Source: [components/music-select.tsx:56](</home/jonnyd/Documents/ChatGPT/Progger 2/app/components/music-select.tsx:56>); [app/page.tsx:473](</home/jonnyd/Documents/ChatGPT/Progger 2/app/app/page.tsx:473>); installed [SelectPositioner.js:127](</home/jonnyd/Documents/ChatGPT/Progger 2/app/node_modules/@base-ui/react/select/positioner/SelectPositioner.js:127>).
+Source: [components/music-select.tsx:56](../components/music-select.tsx); [app/page.tsx:473](../app/page.tsx); installed `SelectPositioner.js:127`.
 
-![Step 7 — returning unexpectedly shows Dorian](</home/jonnyd/Documents/ChatGPT/Progger 2/app/outputs/ux-audit-2026-09-10/10-scale-return-reset.png>)
+_Screenshot (not committed): Step 7 — returning unexpectedly shows Dorian_
 
 ## Additional opportunity: resume and share
 

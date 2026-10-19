@@ -12,9 +12,9 @@ All are native, unmodified 1774 × 887 RGB PNGs (2:1). Parent integration select
 
 Built-in original paths (retained):
 
-- Day first: `/home/jonnyd/.codex/generated_images/01a08e3f-4364-7b80-a6e6-7f87b9193af8/exec-eb1c1d7e-a38f-4ee4-a074-95c9b20cc68d.png`
-- Day alternate: `/home/jonnyd/.codex/generated_images/01a08e3f-4364-7b80-a6e6-7f87b9193af8/exec-07277bfc-f994-426a-935f-5e793f3fbd21.png`
-- Night: `/home/jonnyd/.codex/generated_images/01a08e3f-4364-7b80-a6e6-7f87b9193af8/exec-3608b30e-a9b7-492c-b9fa-cc36b6c59a92.png`
+- Day first: original generation file (not committed)
+- Day alternate: original generation file (not committed)
+- Night: original generation file (not committed)
 
 ## Visual assessment
 

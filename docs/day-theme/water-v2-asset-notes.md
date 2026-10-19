@@ -4,7 +4,7 @@ Generated with the built-in imagegen tool on 2026-09-08. Header artwork remains 
 
 ## Files
 
-- Source: `/home/jonnyd/.codex/generated_images/01a079c5-72f1-7153-b4ee-4d7455fd11ed/exec-1842bd8d-e911-4371-b78b-26b311d3e503.png`
+- Source: original generation file (not committed)
 - Project PNG: `public/progger-day-water-v2.png`
 - Project lossless WebP: `public/progger-day-water-v2.webp`
 

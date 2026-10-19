@@ -4,9 +4,9 @@ User direction: less crowded, sleek, simple, attractive, elegant simplicity with
 
 Three ImageGen art-direction mocks were displayed in this exact order on 2026-09-06:
 
-1. Quiet Cabinet — `/home/jonnyd/.codex/generated_images/01a074be-236c-7e01-81e6-fa4975602a03/exec-71eba262-fbc0-42e7-bf67-d91b2579c327.png`
-2. Pocket Console — `/home/jonnyd/.codex/generated_images/01a074be-236c-7e01-81e6-fa4975602a03/exec-d3dae10c-fb19-4441-8337-64f4471df858.png`
-3. Cartridge Studio — `/home/jonnyd/.codex/generated_images/01a074be-236c-7e01-81e6-fa4975602a03/exec-caf6c528-dadc-4642-9eb2-2a2502c8b266.png`
+1. Quiet Cabinet — original generation file (not committed)
+2. Pocket Console — original generation file (not committed)
+3. Cartridge Studio — original generation file (not committed)
 
 These are visual concepts, not authoritative musical diagrams or accepted new feature requirements. The user selected option 1 (Quiet Cabinet). It is implemented in the existing app; local verification is documented in app/design-qa.md. The private site has not yet been updated with this redesign.
 

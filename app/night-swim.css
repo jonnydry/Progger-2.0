@@ -47,14 +47,50 @@
     transparent 100%
   );
 }
+html:has(.night-swim) {
+  --site-bar: 76px;
+  --scene-header: clamp(210px, 26vw, 360px);
+  scroll-padding-top: var(--site-bar);
+}
 .night-swim .site-header {
-  position: relative;
+  position: sticky;
+  top: 0;
+  z-index: 20;
   isolation: isolate;
-  height: clamp(210px, 26vw, 360px);
-  align-items: flex-start;
-  padding: 26px max(28px, calc((100vw - 1384px) / 2)) 0;
+  height: var(--site-bar);
+  align-items: center;
+  padding: 0 max(28px, calc((100vw - 1384px) / 2));
   border: 0;
   gap: 48px;
+  background: color-mix(in srgb, var(--background) 78%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+  box-shadow:
+    inset 0 -1px 0 color-mix(in srgb, var(--foreground) 20%, transparent),
+    0 12px 28px rgb(5 12 24 / 0.16);
+}
+.site-header * {
+  scroll-margin-top: calc(-1 * var(--site-bar));
+}
+@media (prefers-reduced-transparency: reduce) {
+  .night-swim .site-header {
+    background: color-mix(in srgb, var(--background) 99.9%, transparent);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media print {
+  .night-swim .site-header {
+    position: static;
+  }
+}
+.night-swim .header-scene {
+  position: relative;
+  isolation: isolate;
+  height: var(--scene-header);
+  margin-top: calc(-1 * var(--site-bar));
+  pointer-events: none;
+  z-index: 0;
 }
 .night-swim .brand {
   color: var(--green);
@@ -680,9 +716,11 @@
   }
 }
 @media (max-width: 750px) {
+  html:has(.night-swim) {
+    --scene-header: 210px;
+  }
   .night-swim .site-header {
-    height: 210px;
-    padding: 20px 24px 0;
+    padding: 0 24px;
     gap: 30px;
   }
   .night-swim .brand > span {
@@ -770,10 +808,9 @@
     mask-image: linear-gradient(transparent, black 30%, black 70%, transparent);
   }
   .night-swim .site-header {
-    height: 210px;
-    padding: 18px 18px 0;
+    padding: 8px 18px;
     gap: 0;
-    align-content: flex-start;
+    align-content: center;
     justify-content: flex-start;
   }
   .night-swim .brand > span {
