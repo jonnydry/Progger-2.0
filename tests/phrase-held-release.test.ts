@@ -39,9 +39,13 @@ void test('a context change releases a held tray phrase', async (t) => {
   const suffix = `${process.pid}-${randomUUID()}`;
   const entry = join(scratch, `phrase-held-release-entry-${suffix}.tsx`);
   const outfile = join(scratch, `phrase-held-release-probe-${suffix}.js`);
-  writeFileSync(
-    entry,
-    `import { act, createElement } from 'react';
+  let server: ReturnType<typeof createServer> | undefined;
+  let browser: Browser | undefined;
+  let page: Page | undefined;
+  try {
+    writeFileSync(
+      entry,
+      `import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { PhrasePanel } from '${root}/components/phrase-panel.tsx';
 
@@ -141,50 +145,48 @@ async function show(id, contextKey) {
 
 export { show };
 `,
-  );
-  execFileSync(
-    join(root, 'node_modules/esbuild/bin/esbuild'),
-    [
-      entry,
-      '--bundle',
-      '--format=esm',
-      `--outfile=${outfile}`,
-      '--platform=browser',
-      '--jsx=automatic',
-      '--loader:.css=empty',
-      `--alias:@=${root}`,
-    ],
-    { cwd: root, stdio: 'pipe' },
-  );
+    );
+    execFileSync(
+      join(root, 'node_modules/esbuild/bin/esbuild'),
+      [
+        entry,
+        '--bundle',
+        '--format=esm',
+        `--outfile=${outfile}`,
+        '--platform=browser',
+        '--jsx=automatic',
+        '--loader:.css=empty',
+        `--alias:@=${root}`,
+      ],
+      { cwd: root, stdio: 'pipe' },
+    );
 
-  const server = createServer((request, response) => {
-    if ((request.url ?? '/').startsWith('/probe.js')) {
-      response.setHeader('content-type', 'text/javascript');
-      response.end(readFileSync(outfile));
-      return;
-    }
-    response.setHeader('content-type', 'text/html; charset=utf-8');
-    response.end(`<!doctype html>
+    const httpServer = createServer((request, response) => {
+      if ((request.url ?? '/').startsWith('/probe.js')) {
+        response.setHeader('content-type', 'text/javascript');
+        response.end(readFileSync(outfile));
+        return;
+      }
+      response.setHeader('content-type', 'text/html; charset=utf-8');
+      response.end(`<!doctype html>
 <div id="root"></div>
 <script type="module">
 import { show } from '/probe.js';
 window.__heldRelease = { show };
 document.documentElement.dataset.ready = '1';
 </script>`);
-  });
-  let browser: Browser | undefined;
-  let page: Page | undefined;
-  try {
+    });
+    server = httpServer;
     await new Promise<void>((resolve, reject) => {
       const fail = (error: Error) => reject(error);
-      server.once('error', fail);
-      server.listen(0, '127.0.0.1', () => {
-        server.off('error', fail);
+      httpServer.once('error', fail);
+      httpServer.listen(0, '127.0.0.1', () => {
+        httpServer.off('error', fail);
         resolve();
       });
     });
     browser = await launchNamed('chromium', t);
-    const address = server.address() as AddressInfo;
+    const address = httpServer.address() as AddressInfo;
     page = await browser.newPage();
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(String(error)));
@@ -225,7 +227,7 @@ document.documentElement.dataset.ready = '1';
   } finally {
     await page?.close();
     await browser?.close();
-    await new Promise((resolve) => server.close(resolve));
+    if (server) await new Promise((resolve) => server?.close(resolve));
     rmSync(entry, { force: true });
     rmSync(outfile, { force: true });
   }
