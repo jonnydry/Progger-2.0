@@ -1,8 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from 'react';
 import { createPortal } from 'react-dom';
-import { Play, RefreshCw, Square } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Play, RefreshCw, Square } from 'lucide-react';
 import { pretty, type Note } from '@/lib/music';
 import {
   bindPhraseLifecycle,
@@ -35,6 +42,15 @@ import {
   type PhraseLocks,
 } from '@/lib/phrase';
 import { publishPhrasePlayhead, type PhraseFretMark } from '@/lib/phrase-marks';
+import {
+  emptyPhraseHistory,
+  getPhraseHistory,
+  movePhraseHistory,
+  phraseHistoryEntry,
+  phraseHistoryOpening,
+  rememberPhrase,
+  subscribePhraseHistory,
+} from '@/lib/phrase-history';
 import {
   bindPhraseStop,
   dispatchPhraseStop,
@@ -103,14 +119,23 @@ export function PhrasePanel({
     [chord, scaleNotes],
   );
   const chordSymbol = chord?.symbol ?? `${scaleRoot} tonic`;
-  const [bars, setBars] = useState<2 | 4>(2);
+  const [opening] = useState(() => {
+    const saved = phraseHistoryOpening(getPhraseHistory(), {
+      scaleRoot,
+      scaleId,
+      chordNotes,
+      locks,
+    });
+    return saved ?? { seed: randomSeed(), bars: 2 as const };
+  });
+  const [bars, setBars] = useState<2 | 4>(opening.bars);
   const [swing, setSwing] = useState(SWING_AMOUNT_DEFAULT);
   const [tempo, setTempo] = useState(PHRASE_TEMPO_DEFAULT);
   const [slow, setSlow] = useState(false);
   const [loop, setLoop] = useState(false);
   const loopRef = useRef(loop);
-  const [seed, setSeed] = useState(() => randomSeed());
-  const [seedText, setSeedText] = useState(() => String(seed));
+  const [seed, setSeed] = useState(opening.seed);
+  const [seedText, setSeedText] = useState(() => String(opening.seed));
   const [status, setStatus] = useState<PhrasePlayback>('idle');
   const [notice, setNotice] = useState('');
   const player = useRef<PhrasePlayer | null>(null);
@@ -272,12 +297,40 @@ export function PhrasePanel({
     setSeed(parsed);
     setSeedText(String(parsed));
   }
-  function regenerate() {
+  const history = useSyncExternalStore(
+    subscribePhraseHistory,
+    getPhraseHistory,
+    emptyPhraseHistory,
+  );
+  function historyEntry(nextSeed: number) {
+    return phraseHistoryEntry({
+      seed: nextSeed,
+      bars,
+      scaleRoot,
+      scaleId,
+      chordNotes,
+      locks,
+    });
+  }
+  function showHistoryPhrase(nextSeed: number, nextBars: 2 | 4) {
     onReleaseHeld?.();
-    const next = randomSeed();
-    setSeed(next);
-    setSeedText(String(next));
+    setBars(nextBars);
+    setSeed(nextSeed);
+    setSeedText(String(nextSeed));
     setNotice('');
+  }
+  function regenerate() {
+    const next = randomSeed();
+    const outgoing = historyEntry(seed);
+    const incoming = historyEntry(next);
+    if (outgoing) rememberPhrase(outgoing);
+    if (incoming) rememberPhrase(incoming);
+    showHistoryPhrase(next, bars);
+  }
+  function stepHistory(direction: -1 | 1) {
+    const entry = movePhraseHistory(direction);
+    if (!entry) return;
+    showHistoryPhrase(entry.seed, entry.bars);
   }
   function chooseBars(next: 2 | 4) {
     onReleaseHeld?.();
@@ -493,9 +546,43 @@ export function PhrasePanel({
             }}
           />
         </label>
-        <button type="button" className="phrase-action" onClick={regenerate}>
-          <RefreshCw size={14} aria-hidden="true" /> New phrase
-        </button>
+        <div className="phrase-history">
+          <fieldset className="phrase-history-steps">
+            <legend className="sr-only">Phrase history</legend>
+            <button
+              type="button"
+              className="phrase-action phrase-history-step"
+              aria-label="Previous phrase"
+              aria-describedby="phrase-history-hint"
+              disabled={history.index <= 0}
+              onClick={() => stepHistory(-1)}
+            >
+              <ArrowLeft size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="phrase-action"
+              onClick={regenerate}
+            >
+              <RefreshCw size={14} aria-hidden="true" /> New phrase
+            </button>
+            <button
+              type="button"
+              className="phrase-action phrase-history-step"
+              aria-label="Next phrase"
+              aria-describedby="phrase-history-hint"
+              disabled={
+                history.index < 0 || history.index >= history.entries.length - 1
+              }
+              onClick={() => stepHistory(1)}
+            >
+              <ArrowRight size={14} aria-hidden="true" />
+            </button>
+          </fieldset>
+          <p id="phrase-history-hint" className="phrase-history-hint">
+            Last 3 phrases.
+          </p>
+        </div>
         <button
           type="button"
           className="phrase-action"

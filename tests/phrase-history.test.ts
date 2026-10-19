@@ -1,0 +1,420 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { defaultChordNotes, generatePhrase } from '../lib/phrase.ts';
+import {
+  PHRASE_HISTORY_KEY,
+  PHRASE_HISTORY_LIMIT,
+  emptyPhraseHistory,
+  getPhraseHistory,
+  movePhraseHistory,
+  onPhraseHistoryStorage,
+  parsePhraseHistory,
+  phraseHistoryEntry,
+  phraseHistoryOpening,
+  pushPhraseHistory,
+  readPhraseHistory,
+  rememberPhrase,
+  samePhraseHistoryEntry,
+  stepPhraseHistory,
+  writePhraseHistory,
+  type PhraseHistoryEntry,
+  type PhraseHistoryState,
+} from '../lib/phrase-history.ts';
+import { SCALES, spell } from '../lib/music.ts';
+
+const tonic = [
+  { name: 'A', pc: 9, degree: '1' },
+  { name: 'C', pc: 0, degree: 'b3' },
+  { name: 'E', pc: 4, degree: '5' },
+];
+
+function entry(
+  seed: number,
+  patch: Partial<PhraseHistoryEntry> = {},
+): PhraseHistoryEntry {
+  const made = phraseHistoryEntry({
+    seed,
+    bars: patch.bars ?? 2,
+    scaleRoot: patch.scaleRoot ?? 'A',
+    scaleId: patch.scaleId ?? 'dorian',
+    chordNotes: patch.chordNotes ?? tonic,
+    locks: patch.locks ?? {},
+  });
+  assert.ok(made, `fixture ${seed} should be a phrase`);
+  return made;
+}
+
+function rememberSeeds(seeds: readonly number[]): PhraseHistoryState {
+  return seeds.reduce(
+    (state, seed) => pushPhraseHistory(state, entry(seed)),
+    emptyPhraseHistory(),
+  );
+}
+
+function memory(initial: string | null = null) {
+  let raw = initial;
+  return {
+    getItem(key: string) {
+      return key === PHRASE_HISTORY_KEY ? raw : null;
+    },
+    setItem(key: string, value: string) {
+      if (key !== PHRASE_HISTORY_KEY) return;
+      raw = value;
+    },
+    raw: () => raw,
+  };
+}
+
+function install(initial: string | null) {
+  let value = initial;
+  let writes = 0;
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const storage = {
+    getItem(key: string) {
+      return key === PHRASE_HISTORY_KEY ? value : null;
+    },
+    setItem(key: string, next: string) {
+      if (key !== PHRASE_HISTORY_KEY) return;
+      writes += 1;
+      value = next;
+    },
+    writes: () => writes,
+    raw: () => value,
+    restore() {
+      if (previous) Object.defineProperty(globalThis, 'localStorage', previous);
+      else Reflect.deleteProperty(globalThis, 'localStorage');
+      onPhraseHistoryStorage(PHRASE_HISTORY_KEY);
+    },
+  };
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: storage,
+  });
+  onPhraseHistoryStorage(PHRASE_HISTORY_KEY);
+  return storage;
+}
+
+void test('history keeps the last 3 phrases and drops the oldest', () => {
+  assert.equal(PHRASE_HISTORY_LIMIT, 3);
+  const state = rememberSeeds([11, 22, 33, 44]);
+  assert.deepEqual(
+    state.entries.map((item) => item.seed),
+    [22, 33, 44],
+  );
+  assert.equal(state.index, 2);
+  assert.equal(state.entries.length, 3);
+  const kept = rememberSeeds([11, 22, 33]);
+  assert.equal(kept.entries[0]?.seed, 11);
+});
+
+void test('back and forward move inside the list and stop at the ends', () => {
+  let state = rememberSeeds([11, 22, 33]);
+  assert.equal(stepPhraseHistory(state, 1), state);
+  state = stepPhraseHistory(state, -1);
+  assert.equal(state.entries[state.index]?.seed, 22);
+  state = stepPhraseHistory(state, -1);
+  assert.equal(state.entries[state.index]?.seed, 11);
+  assert.equal(state.index, 0);
+  assert.equal(stepPhraseHistory(state, -1), state);
+  state = stepPhraseHistory(state, 1);
+  assert.equal(state.entries[state.index]?.seed, 22);
+  state = stepPhraseHistory(state, 1);
+  assert.equal(state.entries[state.index]?.seed, 33);
+  assert.equal(stepPhraseHistory(state, 1), state);
+  assert.equal(
+    stepPhraseHistory(emptyPhraseHistory(), -1),
+    emptyPhraseHistory(),
+  );
+  assert.equal(
+    stepPhraseHistory(emptyPhraseHistory(), 1),
+    emptyPhraseHistory(),
+  );
+});
+
+void test('a new phrase from the middle drops the forward phrases', () => {
+  let state = rememberSeeds([11, 22, 33]);
+  state = stepPhraseHistory(state, -1);
+  const branched = pushPhraseHistory(state, entry(22));
+  assert.deepEqual(
+    branched.entries.map((item) => item.seed),
+    [11, 22],
+  );
+  assert.equal(branched.index, 1);
+  state = pushPhraseHistory(branched, entry(99));
+  assert.deepEqual(
+    state.entries.map((item) => item.seed),
+    [11, 22, 99],
+  );
+  assert.equal(state.index, 2);
+});
+
+void test('the phrase on screen is not stored twice', () => {
+  const state = rememberSeeds([11, 22]);
+  const again = pushPhraseHistory(state, entry(22));
+  assert.equal(again, state);
+  const otherScale = pushPhraseHistory(
+    state,
+    entry(22, { scaleRoot: 'C', scaleId: 'major' }),
+  );
+  assert.equal(otherScale.entries.length, 3);
+  assert.equal(samePhraseHistoryEntry(entry(22), entry(22)), true);
+  assert.equal(
+    samePhraseHistoryEntry(entry(22), entry(22, { bars: 4 })),
+    false,
+  );
+  assert.equal(
+    samePhraseHistoryEntry(
+      entry(22),
+      entry(22, { locks: { rhythm: 'quarters' } }),
+    ),
+    false,
+  );
+  const spelled = entry(22, {
+    chordNotes: [{ name: 'C#', pc: 1, degree: '3' }],
+  });
+  const flats = entry(22, {
+    chordNotes: [{ name: 'Db', pc: 1, degree: '3' }],
+  });
+  assert.equal(samePhraseHistoryEntry(spelled, flats), false);
+  const broken = entry(22);
+  broken.seed = Number.NaN;
+  assert.equal(pushPhraseHistory(state, broken), state);
+});
+
+void test('storage round-trips the phrase and leaves tempo and swing out', () => {
+  let state = rememberSeeds([4, 5, 6]);
+  state = stepPhraseHistory(state, -1);
+  const store = memory();
+  writePhraseHistory(store, state);
+  assert.deepEqual(readPhraseHistory(store), state);
+  const parsed = parsePhraseHistory(store.raw());
+  assert.equal(parsed.writable, true);
+  assert.deepEqual(parsed.state, state);
+  const raw = store.raw() ?? '';
+  assert.equal(raw.includes('tempo'), false);
+  assert.equal(raw.includes('swing'), false);
+  assert.equal(raw.includes('"version":1'), true);
+  assert.deepEqual(parsePhraseHistory(null), {
+    state: emptyPhraseHistory(),
+    writable: true,
+  });
+  assert.deepEqual(readPhraseHistory(memory(null)), emptyPhraseHistory());
+});
+
+void test('the browser store round-trips and ignores a duplicate push', () => {
+  const held = install(null);
+  try {
+    assert.deepEqual(getPhraseHistory(), emptyPhraseHistory());
+    rememberPhrase(entry(7));
+    rememberPhrase(entry(8));
+    const duplicate = held.raw();
+    const writes = held.writes();
+    assert.equal(rememberPhrase(entry(8)), getPhraseHistory());
+    assert.equal(held.raw(), duplicate);
+    assert.equal(held.writes(), writes);
+    const saved = held.raw();
+    onPhraseHistoryStorage(PHRASE_HISTORY_KEY);
+    const loaded = getPhraseHistory();
+    assert.deepEqual(
+      loaded.entries.map((item) => item.seed),
+      [7, 8],
+    );
+    assert.equal(loaded.index, 1);
+    assert.deepEqual(parsePhraseHistory(saved).state, loaded);
+    const back = movePhraseHistory(-1);
+    assert.equal(back?.seed, 7);
+    assert.equal(getPhraseHistory().index, 0);
+    assert.equal(movePhraseHistory(-1), null);
+    assert.equal(getPhraseHistory().index, 0);
+    const forward = movePhraseHistory(1);
+    assert.equal(forward?.seed, 8);
+  } finally {
+    held.restore();
+  }
+});
+
+void test('corrupt storage is ignored and left untouched', () => {
+  const blobs = [
+    '{',
+    '[]',
+    'null',
+    '"history"',
+    '',
+    JSON.stringify({ version: 2, entries: [entry(1)], index: 0 }),
+    JSON.stringify({ version: 0, entries: [] }),
+    JSON.stringify({ version: 1 }),
+    JSON.stringify({ version: 1, entries: { seed: 1 } }),
+    JSON.stringify({ entries: [entry(1)] }),
+  ];
+  for (const raw of blobs) {
+    const store = memory(raw);
+    assert.deepEqual(readPhraseHistory(store), emptyPhraseHistory(), raw);
+    assert.equal(store.raw(), raw);
+    assert.equal(parsePhraseHistory(raw).writable, false);
+    const held = install(raw);
+    try {
+      assert.deepEqual(rememberPhrase(entry(5)), emptyPhraseHistory());
+      assert.equal(movePhraseHistory(-1), null);
+      assert.equal(held.raw(), raw);
+      assert.equal(held.writes(), 0);
+    } finally {
+      held.restore();
+    }
+  }
+});
+
+void test('a corrupt entry is ignored and the phrases around it remain', () => {
+  const first = entry(3);
+  const second = entry(8, { bars: 4, locks: { cadence: 'fifth' } });
+  const raw = JSON.stringify({
+    version: 1,
+    index: 0,
+    entries: [first, { seed: 'nope' }, null, second, { seed: 1, bars: 3 }],
+  });
+  const store = memory(raw);
+  const loaded = readPhraseHistory(store);
+  assert.deepEqual(
+    loaded.entries.map((item) => [item.seed, item.bars]),
+    [
+      [3, 2],
+      [8, 4],
+    ],
+  );
+  assert.equal(loaded.entries[1]?.locks.cadence, 'fifth');
+  assert.equal(loaded.index, 0);
+  assert.equal(store.raw(), raw);
+  assert.equal(parsePhraseHistory(raw).writable, true);
+  const missingIndex = JSON.stringify({
+    version: 1,
+    entries: [first, { bars: 2 }, second],
+  });
+  assert.equal(parsePhraseHistory(missingIndex).state.index, 1);
+  assert.equal(parsePhraseHistory(missingIndex).writable, true);
+});
+
+void test('a refused write leaves the phrases already stored', () => {
+  const held = install(null);
+  try {
+    rememberPhrase(entry(1));
+    const raw = held.raw();
+    const seen = getPhraseHistory();
+    held.setItem = () => {
+      throw new Error('full');
+    };
+    assert.equal(rememberPhrase(entry(2)), seen);
+    assert.equal(held.raw(), raw);
+    assert.deepEqual(getPhraseHistory(), seen);
+  } finally {
+    held.restore();
+  }
+});
+
+void test('unavailable storage is an empty history', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    get() {
+      throw new Error('blocked');
+    },
+  });
+  onPhraseHistoryStorage(PHRASE_HISTORY_KEY);
+  try {
+    assert.deepEqual(getPhraseHistory(), emptyPhraseHistory());
+    assert.deepEqual(rememberPhrase(entry(1)), emptyPhraseHistory());
+    assert.equal(movePhraseHistory(1), null);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'localStorage', previous);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+    onPhraseHistoryStorage(PHRASE_HISTORY_KEY);
+  }
+});
+
+void test('a stored entry regenerates the same spelled phrase', () => {
+  const scale = SCALES.find((item) => item.id === 'major');
+  assert.ok(scale);
+  const scaleNotes = spell('A', scale.formula);
+  const chordNotes = defaultChordNotes(scaleNotes);
+  const locks = { contour: 'arch' as const, rhythm: 'quarters' as const };
+  const generated = generatePhrase({
+    seed: 42,
+    bars: 4,
+    scaleNotes,
+    chordNotes,
+    locks,
+  });
+  assert.equal(generated.ok, true);
+  const saved = phraseHistoryEntry({
+    seed: 42,
+    bars: 4,
+    scaleRoot: 'A',
+    scaleId: 'major',
+    chordNotes,
+    locks,
+  });
+  assert.ok(saved);
+  assert.equal(
+    saved.chordNotes.some((note) => note.name.includes('#')),
+    true,
+  );
+  const store = memory();
+  const state = pushPhraseHistory(emptyPhraseHistory(), saved);
+  writePhraseHistory(store, state);
+  const loaded = readPhraseHistory(store).entries[0];
+  assert.ok(loaded);
+  const scaleAgain = SCALES.find((item) => item.id === loaded.scaleId);
+  assert.ok(scaleAgain);
+  const again = generatePhrase({
+    seed: loaded.seed,
+    bars: loaded.bars,
+    scaleNotes: spell(loaded.scaleRoot, scaleAgain.formula),
+    chordNotes: loaded.chordNotes,
+    locks: loaded.locks,
+  });
+  assert.deepEqual(again, generated);
+  if (again.ok && generated.ok) {
+    assert.deepEqual(
+      again.phrase.notes.map((note) => note.name),
+      generated.phrase.notes.map((note) => note.name),
+    );
+  }
+  const context = {
+    scaleRoot: 'A',
+    scaleId: 'major',
+    chordNotes,
+    locks,
+  };
+  assert.deepEqual(phraseHistoryOpening(state, context), {
+    seed: 42,
+    bars: 4,
+  });
+  assert.equal(
+    phraseHistoryOpening(state, { ...context, scaleRoot: 'C' }),
+    null,
+  );
+  assert.equal(phraseHistoryOpening(emptyPhraseHistory(), context), null);
+});
+
+void test('the panel stores history beside the stash and not in the component', () => {
+  assert.equal(PHRASE_HISTORY_KEY, 'progger.phrase-history.v1');
+  const history = readFileSync(
+    new URL('../lib/phrase-history.ts', import.meta.url),
+    'utf8',
+  );
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.equal(history.includes('phrase-audio'), false);
+  assert.equal(history.includes('drone'), false);
+  assert.equal(history.includes("from './phrase.ts'"), false);
+  assert.equal(history.includes("from '@/lib/phrase'"), false);
+  assert.match(history, /localStorage/);
+  assert.equal(panel.includes('localStorage'), false);
+  assert.equal(panel.includes('sessionStorage'), false);
+  assert.match(panel, /rememberPhrase/);
+  assert.match(panel, /movePhraseHistory/);
+  assert.match(panel, /aria-label="Previous phrase"/);
+  assert.match(panel, /aria-label="Next phrase"/);
+  assert.match(panel, /Last 3 phrases\./);
+});
