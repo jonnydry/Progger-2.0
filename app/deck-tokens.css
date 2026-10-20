@@ -45,7 +45,7 @@
 
   /* Glass: the bar, menus and Stash let the scene through without letting
      page text compete with their own. */
-  --glass-tint: 82%;
+  --glass-tint: 88%;
   --glass-blur: 18px;
   --surface-glass: color-mix(
     in srgb,
