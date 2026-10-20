@@ -405,6 +405,19 @@ type LiveVoice = {
   scheduled: number;
 };
 
+type HeldGraph = {
+  at: number;
+  trim: GainNode | null;
+  voices: LiveVoice[];
+  /**
+   * End of a loop-off pass. A takeover during that release anchors the
+   * fade at the current time. NaN when this graph is not in a tail.
+   */
+  releaseAt: number;
+  /** Waiting for a downbeat. `at` is that boundary, which may already be past. */
+  seam: boolean;
+};
+
 export class PhrasePlayer {
   private serial = 0;
   private disposed = false;
@@ -432,11 +445,13 @@ export class PhrasePlayer {
   /** Latest phrase waiting for the current pass to end. Earlier ones are dropped. */
   private pending: PhrasePass | null = null;
   /** Sounding graph kept until the queued phrase's downbeat. */
-  private preserved: {
-    at: number;
-    trim: GainNode | null;
-    voices: LiveVoice[];
-  } | null = null;
+  private preserved: HeldGraph | null = null;
+  /**
+   * Graph held across resume(). A second start adopts it and fades it.
+   * The start that still owns it disconnects the graph if it loses.
+   */
+  private parked: HeldGraph | null = null;
+  private parkedRun = 0;
   /** Phrases already replaced, fading under the one that just started. */
   private releases: {
     trim: GainNode | null;
@@ -550,6 +565,10 @@ export class PhrasePlayer {
     this.preserved = null;
     this.cancelQueueTimer();
     this.scheduler?.clearSuppress();
+    // The live trim was moved onto the park for the in-flight start.
+    // Halt cannot see it, and that start would otherwise cut it when
+    // resume settles.
+    this.fadeParked();
     this.halt(false);
     if (!this.disposed) this.onState('idle');
   }
@@ -567,16 +586,9 @@ export class PhrasePlayer {
     this.pending = null;
     this.finishing = false;
     this.cancelQueueTimer();
-    const preserved = this.preserved;
+    let preserved = this.preserved;
     this.preserved = null;
-    let replaced: {
-      at: number;
-      trim: GainNode | null;
-      voices: LiveVoice[];
-    } | null = null;
-    // When this pass is already inside its end release. Anchoring the
-    // overlap at the new phrase's lead time steps that ramp.
-    let replacedReleaseAt = Number.NaN;
+    let replaced: HeldGraph | null = null;
     if (preserved) {
       this.scheduler?.stop();
       this.scheduler = null;
@@ -585,19 +597,40 @@ export class PhrasePlayer {
       this.trim = null;
     } else if (this.scheduler || this.trim || this.voices.length) {
       // An immediate switch, including plain Loop off, keeps this pass
-      // audible and fades it as the new phrase starts.
+      // audible and fades it as the new phrase starts. The release time
+      // stays on the graph so a second start during resume can still
+      // anchor a tail fade at the current time.
+      let releaseAt = Number.NaN;
       if (!this.looping && this.period > 1e-4) {
-        replacedReleaseAt = this.startedAt + this.period;
+        releaseAt = this.startedAt + this.period;
       }
-      replaced = { at: 0, trim: this.trim, voices: this.voices.slice() };
+      replaced = {
+        // A sounding phrase already has a clock time. That must not make
+        // this look like a seam; `seam` is the only signal for a downbeat.
+        at: this.clock?.now() ?? 0,
+        trim: this.trim,
+        voices: this.voices.slice(),
+        releaseAt,
+        seam: false,
+      };
       this.scheduler?.stop();
       this.scheduler = null;
       this.clearEndTimer();
       this.voices = [];
       this.trim = null;
     } else {
-      this.halt(false);
+      const inherited = this.claimParked(run);
+      if (inherited) {
+        // The previous start is still inside resume() and is holding this
+        // graph. A seam graph starts at its downbeat. Anything else fades
+        // from here, including a release tail carried on the graph.
+        if (inherited.seam) preserved = inherited;
+        else replaced = inherited;
+      } else {
+        this.halt(false);
+      }
     }
+    this.holdPark(run, preserved ?? replaced);
     this.onState('starting');
     try {
       const audio = input.context ? null : pageAudio();
@@ -607,8 +640,7 @@ export class PhrasePlayer {
       const resume = context.resume();
       await resume;
       if (this.disposed || run !== this.serial) {
-        if (preserved) this.disconnectPreserved(preserved);
-        if (replaced) this.disconnectPreserved(replaced);
+        this.dropParked(run);
         return;
       }
       // A request that arrived during resume() replaces this one.
@@ -647,8 +679,15 @@ export class PhrasePlayer {
           clearTimeout(handle as ReturnType<typeof setTimeout>),
       };
       this.clock = clock;
-      this.startedAt = preserved ? preserved.at : clock.now() + 0.05;
+      const now = clock.now();
+      // Resume can return after the downbeat. Starting there would put
+      // the new phrase on a time that has already passed.
+      if (preserved && preserved.at < now) preserved.at = now;
+      this.startedAt = preserved ? preserved.at : now + 0.05;
       const trim = context.createGain();
+      // setValueAtTime waits until startedAt. Until then the node is
+      // still 1, and Stop in that 50 ms blips well above the trim.
+      trim.gain.value = PHRASE_TRIM;
       trim.gain.setValueAtTime(PHRASE_TRIM, this.startedAt);
       trim.connect(destination);
       this.trim = trim;
@@ -708,18 +747,19 @@ export class PhrasePlayer {
       );
       this.scheduler.start();
       if (run !== this.serial || this.disposed) {
-        if (preserved) this.disconnectPreserved(preserved);
-        if (replaced) this.disconnectPreserved(replaced);
+        this.dropParked(run);
         return;
       }
+      this.releasePark(run);
       if (preserved) this.fadePreserved(preserved);
       if (replaced) {
         const now =
           this.clock?.now() ?? this.context?.currentTime ?? this.startedAt;
+        const releaseAt = replaced.releaseAt;
         const inTail =
-          Number.isFinite(replacedReleaseAt) &&
-          now >= replacedReleaseAt - 1e-4 &&
-          now <= replacedReleaseAt + PHRASE_END_RELEASE_SEC + 1e-4;
+          Number.isFinite(releaseAt) &&
+          now >= releaseAt - 1e-4 &&
+          now <= releaseAt + PHRASE_END_RELEASE_SEC + 1e-4;
         replaced.at = inTail ? now : this.startedAt;
         // The new downbeat is 50 ms ahead. A note due in that gap, or
         // later inside the release, still plays at full level. Drop every
@@ -729,10 +769,57 @@ export class PhrasePlayer {
       }
       this.onState('playing');
     } catch {
+      this.dropParked(run);
       if (this.disposed || run !== this.serial) return;
       this.halt(false);
       this.onState('error');
     }
+  }
+
+  private claimParked(run: number): HeldGraph | null {
+    if (!this.parked || this.parkedRun === run) return null;
+    const graph = this.parked;
+    this.parked = null;
+    this.parkedRun = 0;
+    return graph;
+  }
+
+  private holdPark(run: number, graph: HeldGraph | null): void {
+    if (!graph) return;
+    if (this.parked && this.parked !== graph)
+      this.disconnectPreserved(this.parked);
+    this.parked = graph;
+    this.parkedRun = run;
+  }
+
+  /** This start will fade the graph itself, so it is no longer parked. */
+  private releasePark(run: number): void {
+    if (this.parkedRun !== run) return;
+    this.parked = null;
+    this.parkedRun = 0;
+  }
+
+  /**
+   * Stop while a start is still inside resume(). The 20 ms release is the
+   * same one halt uses, and clearing the park keeps that start from cutting
+   * the phrase when resume settles.
+   */
+  private fadeParked(): void {
+    const graph = this.parked;
+    this.parked = null;
+    this.parkedRun = 0;
+    if (!graph) return;
+    const now = this.clock?.now() ?? this.context?.currentTime ?? 0;
+    this.releaseGraph(graph.trim, graph.voices, now, 0.02);
+  }
+
+  /** Disconnect a graph this start still owns. A newer start has adopted it otherwise. */
+  private dropParked(run: number): void {
+    if (this.parkedRun !== run) return;
+    const graph = this.parked;
+    this.parked = null;
+    this.parkedRun = 0;
+    if (graph) this.disconnectPreserved(graph);
   }
 
   private suppressNextPass(): void {
@@ -809,6 +896,8 @@ export class PhrasePlayer {
       at,
       trim: this.trim,
       voices: this.voices.slice(),
+      releaseAt: Number.NaN,
+      seam: true,
     };
     await this.start(input);
   }
