@@ -30,8 +30,8 @@ void test('production minify keeps an unprefixed tray blur and a 99.9% fallback'
   const built = minify(source);
   assert.deepEqual(trayFrostProblems(built), []);
   assert.match(built, /--tray-tint-solid:99\.9%/);
-  assert.match(built, /--tray-tint:68%/);
-  assert.match(built, /--tray-blur:72px/);
+  assert.match(built, /--tray-tint:44%/);
+  assert.match(built, /--tray-blur:22px/);
   assert.doesNotMatch(built, /--tray-tint-solid:100%/);
   assert.doesNotMatch(built, /--tray-tint:90%/);
   const frostSource = source.match(
