@@ -183,7 +183,8 @@
 .console-swing {
   align-items: center;
 }
-.console-lcd {
+.console-lcd,
+.console-fader output {
   order: 1;
   box-sizing: border-box;
   display: block;
@@ -393,7 +394,8 @@
   .console-channel input[type='range'] {
     height: 96px;
   }
-  .console-lcd {
+  .console-lcd,
+  .console-fader output {
     font-size: 14px;
   }
 }
