@@ -1,0 +1,77 @@
+/* Deck A: one housing for every panel. Spacing, radius, type, surfaces,
+   edges and focus come from here; colours derive from the scene palette on
+   <html>, so each scene and both themes share the same hardware. */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  --tap: 44px;
+
+  --radius-key: 4px;
+  --radius-control: 6px;
+  --radius-panel: 8px;
+  --radius-sheet: 16px;
+
+  /* 12px is the smallest readable size on a phone. */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 22px;
+  --tracking-legend: 0.1em;
+
+  --surface-sunken: var(--background);
+  --surface-panel: var(--card);
+  --surface-plate: color-mix(in srgb, var(--background) 45%, var(--card));
+  --surface-key: color-mix(in srgb, var(--foreground) 7%, var(--card));
+  --surface-key-lit: color-mix(in srgb, var(--green) 18%, var(--card));
+  --surface-key-on: color-mix(in srgb, var(--green) 24%, var(--card));
+  --surface-key-saved: color-mix(in srgb, var(--amber) 20%, var(--card));
+
+  --edge: var(--border);
+  --edge-lit: color-mix(in srgb, var(--green) 55%, var(--border));
+  --edge-drop: color-mix(in srgb, var(--border) 60%, var(--background));
+  --edge-sheen: color-mix(in srgb, var(--foreground) 10%, transparent);
+
+  --shadow-key: inset 0 2px 0 var(--edge-sheen), 0 4px 0 var(--edge-drop);
+  --shadow-key-down:
+    inset 0 2px 0 color-mix(in srgb, var(--foreground) 6%, transparent),
+    0 1px 0 var(--edge-drop);
+  --shadow-sunken: inset 0 3px 0 rgb(0 0 0 / 0.18);
+  --shadow-float: 0 12px 32px rgb(0 0 0 / 0.32);
+
+  /* Glass: the bar, menus and Stash let the scene through without letting
+     page text compete with their own. */
+  --glass-tint: 82%;
+  --glass-blur: 18px;
+  --surface-glass: color-mix(
+    in srgb,
+    var(--background) var(--glass-tint),
+    transparent
+  );
+  --surface-pop: color-mix(in srgb, var(--card) 92%, transparent);
+  --glass-rim:
+    inset 0 1px 0 color-mix(in srgb, white 18%, transparent),
+    inset 1px 0 0 color-mix(in srgb, white 10%, transparent);
+
+  --focus-ring: 3px solid var(--amber);
+  --focus-offset: 3px;
+}
+
+html[data-theme='day'] {
+  --shadow-sunken: inset 0 2px 0 rgb(18 54 47 / 0.1);
+  --shadow-float: 0 12px 32px rgb(18 54 47 / 0.18);
+  --glass-rim:
+    inset 0 1px 0 color-mix(in srgb, white 70%, transparent),
+    inset 1px 0 0 color-mix(in srgb, white 50%, transparent);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-tint: 99.9%;
+    --surface-pop: var(--card);
+  }
+}
