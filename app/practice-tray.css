@@ -315,8 +315,8 @@ html[data-theme='day'] dialog.practice-tray-panel::after {
 
 .practice-tray-empty:focus,
 #practice-tray-empty:focus {
-  outline: 2px solid var(--green);
-  outline-offset: 4px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .practice-tray-export-note {

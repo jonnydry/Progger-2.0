@@ -2,7 +2,7 @@
 .night-swim .reference-guide {
   margin-top: 24px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   background: var(--card);
   overflow: clip;
 }
@@ -19,13 +19,13 @@
   min-width: 0;
 }
 .reference-guide > summary:focus-visible {
-  outline: 2px solid var(--green);
+  outline: var(--focus-ring);
   outline-offset: -4px;
-  border-radius: 10px;
+  border-radius: var(--radius-panel);
 }
 .guide-summary-text small {
   color: var(--quiet);
-  font-size: 12px;
+  font-size: var(--text-xs);
   line-height: 1.5;
 }
 .disclosure-chevron {
@@ -64,7 +64,7 @@
   margin: 0;
 }
 .reference-guide .scale-story > p.muted {
-  font-size: 12px;
+  font-size: var(--text-xs);
   margin-top: 16px;
 }
 .listening-note {
@@ -74,7 +74,7 @@
   padding: 16px;
   margin-top: 20px;
   border-left: 2px solid var(--green);
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
   background: color-mix(in srgb, var(--green) 6%, var(--card));
 }
 .listening-note > svg {
@@ -88,7 +88,7 @@
 }
 .reference-guide .listening-note p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-sm);
   line-height: 1.8;
 }
 .reference-guide .related-chords h3 {
@@ -98,7 +98,7 @@
   margin: 0;
 }
 .reference-guide .related-chords .chord-explainer {
-  font-size: 12px;
+  font-size: var(--text-xs);
   margin: 8px 0 18px;
 }
 .reference-guide .harmony-row {
@@ -112,7 +112,7 @@
   padding: 12px;
   gap: 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--background);
   color: var(--foreground);
   transition:
@@ -142,13 +142,13 @@
 .night-swim .reference-guide .harmony-row button:focus-visible,
 .neck-display-trigger:focus-visible,
 .neck-handedness input:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 3px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 .night-swim .string-reference {
   margin: 16px 0 0;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   background: var(--card);
   color: var(--quiet);
 }
@@ -189,7 +189,7 @@
   gap: 16px;
   padding: 12px 0;
   border-top: 1px solid var(--border);
-  font-size: 13px;
+  font-size: var(--text-sm);
   line-height: 1.9;
 }
 .string-reference-rows dt {
@@ -216,8 +216,8 @@
   min-width: 44px;
   padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: var(--radius-key);
+  font-size: var(--text-xs);
   color: var(--quiet);
 }
 .neck-display-trigger:hover,
@@ -229,20 +229,23 @@
 .neck-display-panel {
   width: min(300px, calc(100vw - 24px));
   padding: 20px;
-  gap: 8px;
-  border: 1px solid var(--input);
-  background: var(--card);
+  gap: var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  background: var(--surface-pop);
   color: var(--foreground);
   font-family: var(--font-ui);
-  box-shadow: 0 12px 40px #0003;
+  box-shadow: var(--glass-rim), var(--shadow-float);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
 }
 .neck-display-panel [data-slot='popover-title'] {
   color: var(--green);
-  font-size: 16px;
+  font-size: var(--text-lg);
 }
 .neck-display-panel [data-slot='popover-description'] {
   color: var(--quiet);
-  font-size: 12px;
+  font-size: var(--text-xs);
   line-height: 1.6;
 }
 .neck-handedness {
@@ -284,7 +287,7 @@
 }
 .night-swim .entry-options > details {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-panel);
   background: var(--card);
   padding: 0 16px;
 }
@@ -292,7 +295,7 @@
   min-height: 60px;
   color: var(--foreground);
   gap: 10px;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .entry-options > details > summary > svg {
   flex-shrink: 0;
@@ -349,7 +352,7 @@
   .string-reference-rows > div {
     grid-template-columns: 70px minmax(0, 1fr);
     gap: 10px;
-    font-size: 12px;
+    font-size: var(--text-xs);
   }
   .string-reference-rows dt {
     gap: 6px;

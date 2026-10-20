@@ -20,7 +20,7 @@
 .under-neck .phrase-heading p,
 .under-neck .phrase-plan,
 .under-neck .phrase-status {
-  font-size: 12px;
+  font-size: var(--text-xs);
   line-height: 1.25;
 }
 .under-neck .phrase-heading p {
@@ -66,7 +66,7 @@
 .phrase-plan {
   margin: 0;
   color: var(--quiet);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .phrase-tab-host:empty {
   display: none;
@@ -97,7 +97,7 @@
 }
 .phrase-staff-caption {
   color: var(--quiet);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 .phrase-staff-lane,
 .phrase-staff-beats {
@@ -114,14 +114,14 @@
   justify-items: center;
   transform: translateX(-50%);
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
 .phrase-staff-finger i {
   color: var(--amber);
   font-style: normal;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .phrase-staff-finger.is-current b {
   color: var(--amber);
@@ -180,7 +180,7 @@
   color: var(--ink);
   background: var(--green);
   border-radius: 3px;
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   line-height: 1.35;
   text-align: center;
@@ -229,7 +229,7 @@
   height: 14px;
   background: var(--green);
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 @media (prefers-reduced-motion: reduce) {
   .note-dot.phrase-current,

@@ -259,8 +259,8 @@ html:has(.night-swim) {
   align-content: center;
 }
 .note-spelling > summary:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 3px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 .note-spelling > p {
   margin: 4px 0 8px;
@@ -412,8 +412,12 @@ html:has(.night-swim) {
   color: #e1f2e8;
 }
 .night-swim .segmented button:focus-visible {
-  outline-color: #edcb79;
+  outline-color: var(--amber);
   outline-offset: -4px;
+}
+/* The inset ring sits on the lit key, so it takes the key's ink. */
+.night-swim .segmented button[aria-pressed='true']:focus-visible {
+  outline-color: var(--primary-foreground);
 }
 .night-swim .display-controls {
   width: auto;

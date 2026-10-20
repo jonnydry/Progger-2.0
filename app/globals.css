@@ -242,8 +242,8 @@ textarea:focus-visible,
 summary:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 4px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 a {
   color: inherit;
@@ -1455,7 +1455,7 @@ footer {
   transform: rotate(180deg);
 }
 .segmented button:focus-visible {
-  outline: 2px solid var(--green);
+  outline: var(--focus-ring);
   outline-offset: -3px;
 }
 .reference-tabs button:not([aria-pressed='true']):hover {
