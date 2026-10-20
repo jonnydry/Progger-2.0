@@ -1,0 +1,399 @@
+/* Mixing console: each control group is a channel strip with its readout on
+   top, the control in the middle and a name strip along the bottom. Colours
+   come from the scene palette so every scene and both themes share it. */
+.phrase-console {
+  --console-bed: color-mix(in srgb, var(--background) 55%, var(--card));
+  --console-led-off: color-mix(in srgb, var(--quiet) 28%, var(--background));
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  gap: 1px;
+}
+
+.console-strips {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr) minmax(0, 1.05fr) minmax(0, 2.5fr) minmax(0, 0.85fr)
+    minmax(0, 0.9fr) minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 1px;
+  min-width: 0;
+}
+
+.console-channel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 10px 0;
+  background: var(--console-bed);
+  border: 0;
+  border-radius: 0;
+}
+.console-channel > label {
+  display: contents;
+}
+.console-scribble {
+  order: 99;
+  align-self: stretch;
+  display: block;
+  margin: auto -10px 0;
+  padding: 7px 4px;
+  overflow: hidden;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--background));
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.phrase-console button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 10px;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.15;
+  cursor: pointer;
+}
+.phrase-console button svg {
+  flex: 0 0 auto;
+  color: var(--quiet);
+}
+.phrase-console button:hover:not(:disabled) {
+  border-color: var(--green);
+}
+.phrase-console button:disabled {
+  color: var(--quiet);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.phrase-console button:focus-visible,
+.phrase-console input:focus-visible {
+  outline: 3px solid var(--amber);
+  outline-offset: 2px;
+}
+.console-led {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  background: var(--console-led-off);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.phrase-console button[aria-pressed='true'] {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, var(--card));
+  border-color: var(--green);
+}
+.phrase-console button[aria-pressed='true'] .console-led {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.phrase-console button[aria-pressed='true'] svg {
+  color: var(--green);
+}
+
+.phrase-console .console-play {
+  min-height: 56px;
+  color: var(--ink);
+  background: var(--green);
+  border-color: var(--green);
+  font-size: 15px;
+}
+.phrase-console .console-play svg {
+  color: currentColor;
+}
+.phrase-console .console-play.is-live {
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.phrase-console .console-save {
+  flex: 1 1 auto;
+  max-height: 108px;
+  color: var(--amber);
+  background: transparent;
+  border-color: var(--amber);
+  white-space: normal;
+  text-align: center;
+}
+.phrase-console .console-save svg {
+  color: currentColor;
+}
+.phrase-console .console-save.is-saved {
+  color: var(--ink);
+  background: var(--amber);
+}
+
+.console-history {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.phrase-console .console-new {
+  color: var(--green);
+  border-color: var(--green);
+}
+.phrase-console .console-new svg {
+  color: var(--green);
+}
+.console-phrase .phrase-history-hint {
+  margin: 0;
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.console-length {
+  justify-content: flex-start;
+}
+.console-length button {
+  justify-content: flex-start;
+}
+
+.console-fader,
+.console-tempo,
+.console-swing {
+  align-items: center;
+}
+.console-lcd {
+  order: 1;
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 4px;
+  color: var(--green);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  box-shadow: inset 0 2px 0 rgb(0 0 0 / 0.2);
+  font-family: var(--font-arcade), var(--font-ui);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+}
+.console-channel input[type='range'] {
+  order: 2;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 104px;
+  margin: 0;
+  /* Fader scale printed on the strip behind the slot. */
+  background: repeating-linear-gradient(
+      to bottom,
+      var(--border) 0 1px,
+      transparent 1px 12px
+    )
+    center / 34px 100% no-repeat;
+  cursor: pointer;
+  appearance: none;
+  direction: rtl;
+  writing-mode: vertical-lr;
+}
+.console-channel input[type='range']::-webkit-slider-runnable-track {
+  width: 8px;
+  height: 100%;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.console-channel input[type='range']::-moz-range-track {
+  width: 6px;
+  height: 100%;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+.console-channel input[type='range']::-webkit-slider-thumb {
+  box-sizing: border-box;
+  width: 34px;
+  height: 16px;
+  margin-left: -14px;
+  background:
+    linear-gradient(var(--green), var(--green)) center / 100% 2px no-repeat,
+    var(--card);
+  border: 1px solid var(--quiet);
+  border-radius: 2px;
+  appearance: none;
+}
+.console-channel input[type='range']::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 34px;
+  height: 16px;
+  background:
+    linear-gradient(var(--green), var(--green)) center / 100% 2px no-repeat,
+    var(--card);
+  border: 1px solid var(--quiet);
+  border-radius: 2px;
+}
+.console-half {
+  order: 3;
+}
+.console-seed .console-lcd {
+  min-height: 44px;
+  letter-spacing: 1px;
+}
+.console-seed .console-scribble {
+  order: 99;
+}
+
+.console-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 12px;
+  background: var(--background);
+}
+.console-status-led {
+  flex: 0 0 10px;
+  width: 10px;
+  height: 10px;
+  background: var(--console-led-off);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.console-status-led.is-live {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.console-status-led.is-error {
+  background: var(--destructive);
+}
+.console-status-text {
+  display: grid;
+  flex: 0 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+.phrase-console .console-status .phrase-status {
+  color: var(--foreground);
+}
+.console-status .phrase-plan {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .phrase-console button {
+    transition:
+      background 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease;
+  }
+}
+
+@media (max-width: 960px) {
+  .console-strips {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-areas:
+      'transport transport transport stash stash stash'
+      'phrase phrase phrase phrase phrase phrase'
+      'length length tempo tempo swing swing'
+      'seed seed seed seed seed seed';
+  }
+  .console-transport {
+    grid-area: transport;
+  }
+  .console-stash {
+    grid-area: stash;
+  }
+  .console-phrase {
+    grid-area: phrase;
+  }
+  .console-length {
+    grid-area: length;
+  }
+  .console-tempo {
+    grid-area: tempo;
+  }
+  .console-swing {
+    grid-area: swing;
+  }
+  .console-seed {
+    grid-area: seed;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    padding-bottom: 12px;
+  }
+  .console-seed .console-scribble {
+    order: 0;
+    align-self: center;
+    margin: 0;
+    padding: 0 10px 0 0;
+    background: none;
+    border: 0;
+  }
+  .console-status {
+    flex-wrap: wrap;
+  }
+  .console-status .phrase-plan {
+    flex-basis: 100%;
+    margin-left: 20px;
+    text-align: left;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 640px) {
+  .console-channel {
+    padding: 10px 8px 0;
+  }
+  .console-scribble {
+    margin-inline: -8px;
+  }
+  .phrase-console button {
+    padding: 0 6px;
+    font-size: 12px;
+  }
+  .console-history .phrase-history-step,
+  .console-history .console-new {
+    flex-direction: column;
+    gap: 2px;
+    min-height: 52px;
+  }
+  .console-history .phrase-history-step:last-child {
+    flex-direction: column-reverse;
+  }
+  .console-channel input[type='range'] {
+    height: 96px;
+  }
+  .console-lcd {
+    font-size: 14px;
+  }
+}
