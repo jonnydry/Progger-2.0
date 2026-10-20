@@ -18,6 +18,7 @@ import { pageAudio } from '@/lib/audio-output';
 import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
 import {
   DRONE_ICON_PX,
+  DRONE_POPOVER_MARGIN_PX,
   VOLUME_POPOVER_GUARD_SELECTORS,
   type AnchoredPopoverSide,
   type DroneBox,
@@ -249,8 +250,29 @@ function DroneVolumePopover({
         onFocusLeave();
       }, 0);
     };
+    // Open under the button. When the viewport ends too close below it,
+    // scroll just enough for the menu, but never tuck the button under
+    // the pinned bar. Only a page with no room left flips the menu.
+    const makeRoom = () => {
+      const trigger = anchorRef.current?.getBoundingClientRect();
+      if (!trigger || !panel || panel.offsetHeight < 1) return;
+      const needed =
+        trigger.bottom +
+        DRONE_POPOVER_MARGIN_PX * 2 +
+        panel.offsetHeight -
+        window.innerHeight;
+      if (needed <= 0) return;
+      const bar = document.querySelector('.site-header');
+      const barBottom = bar
+        ? Math.max(0, bar.getBoundingClientRect().bottom)
+        : 0;
+      const room = trigger.top - barBottom - DRONE_POPOVER_MARGIN_PX;
+      const by = Math.ceil(Math.min(needed, room));
+      if (by > 0) window.scrollBy({ top: by, behavior: 'instant' });
+    };
     panel?.addEventListener('cancel', onCancel);
     panel?.addEventListener('focusout', onFocusOut);
+    makeRoom();
     place();
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
