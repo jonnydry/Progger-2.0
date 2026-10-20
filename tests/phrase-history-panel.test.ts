@@ -20,51 +20,77 @@ async function phraseNotes(page: Page) {
   return page.locator('.phrase-panel ol.sr-only li').allTextContents();
 }
 
+const menuStepMs = 5_000;
+
+async function controlShows(page: Page, id: string, expected: string) {
+  await page.waitForFunction(
+    ({ controlId, label }) => {
+      const text = document.getElementById(controlId)?.innerText ?? '';
+      return text.replace(/\s+/g, ' ').trim().includes(label);
+    },
+    { controlId: id, label: expected },
+    { timeout: menuStepMs },
+  );
+}
+
 async function chooseRoot(page: Page, name: string) {
   const trigger = page.locator('#explore-root');
-  await trigger.scrollIntoViewIfNeeded();
-  await trigger.click();
   const option = page.getByRole('option', { name, exact: true });
-  await option.click();
-  // The root menu returns focus after it closes. A scale click in that
-  // window is swallowed, so wait until the chosen option is gone.
-  await option.waitFor({ state: 'hidden' });
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      // The menu returns focus after it closes. Wait until this control
+      // shows the note before the next menu opens.
+      await trigger.waitFor({ state: 'visible', timeout: menuStepMs });
+      await trigger.scrollIntoViewIfNeeded();
+      await trigger.click({ timeout: menuStepMs });
+      await option.waitFor({ state: 'visible', timeout: menuStepMs });
+      await option.click({ timeout: menuStepMs });
+      await option.waitFor({ state: 'hidden', timeout: menuStepMs });
+      await controlShows(page, 'explore-root', name);
+      return;
+    } catch (error) {
+      lastError = error;
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+  }
+  throw lastError;
 }
 
 async function chooseSearch(
   page: Page,
   searchLabel: string,
   query: string,
-  option: string | RegExp,
+  optionName: string | RegExp,
 ) {
-  const input = page.getByRole('combobox', { name: searchLabel });
   const trigger = page.locator('#explore-type');
-  await trigger.scrollIntoViewIfNeeded();
-  let opened = false;
+  const input = page.getByRole('combobox', { name: searchLabel });
+  const option = page.getByRole('option', {
+    name: optionName,
+    exact: typeof optionName === 'string',
+  });
   let lastError: unknown;
-  for (let attempt = 0; attempt < 4 && !opened; attempt += 1) {
-    if (!(await input.isVisible())) await trigger.click();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      await input.waitFor({ state: 'visible', timeout: 2000 });
-      opened = true;
+      await trigger.waitFor({ state: 'visible', timeout: menuStepMs });
+      await trigger.scrollIntoViewIfNeeded();
+      if (!(await input.isVisible())) {
+        await trigger.click({ timeout: menuStepMs });
+      }
+      await input.waitFor({ state: 'visible', timeout: menuStepMs });
+      await input.fill(query, { timeout: menuStepMs });
+      await option.waitFor({ state: 'visible', timeout: menuStepMs });
+      const label = (await option.locator('span').first().innerText()).trim();
+      await option.click({ timeout: menuStepMs });
+      await input.waitFor({ state: 'hidden', timeout: menuStepMs });
+      await controlShows(page, 'explore-type', label);
+      return;
     } catch (error) {
       lastError = error;
+      await page.keyboard.press('Escape').catch(() => {});
     }
   }
-  if (!opened) throw lastError;
-  try {
-    await input.fill(query);
-  } catch {
-    if (!(await input.isVisible())) await trigger.click();
-    await input.waitFor({ state: 'visible' });
-    await input.fill(query);
-  }
-  await page
-    .getByRole('option', {
-      name: option,
-      exact: typeof option === 'string',
-    })
-    .click();
+  throw lastError;
 }
 
 async function historyEntries(page: Page) {
@@ -368,6 +394,7 @@ void test('back restores the key, scale, chord, and notes together', async (t) =
     assert.notDeepEqual(drifted, firstNotes);
     await page.getByRole('button', { name: 'New phrase' }).click();
     const secondNotes = await phraseNotes(page);
+    const secondSeed = await seedOf(page);
     assert.notDeepEqual(secondNotes, firstNotes);
     assert.match(
       await page.locator('.phrase-heading p').innerText(),
@@ -421,6 +448,35 @@ void test('back restores the key, scale, chord, and notes together', async (t) =
       await page.locator('.phrase-heading p').innerText(),
       /Over E tonic in E Mixolydian/,
     );
+
+    await page.evaluate(() => {
+      (window as Window & { __phraseChanges?: number }).__phraseChanges = 0;
+    });
+    await page.getByRole('button', { name: 'Next phrase' }).click();
+    assert.deepEqual(await phraseNotes(page), secondNotes);
+    assert.equal(await seedOf(page), secondSeed);
+    assert.equal(
+      await page.evaluate(
+        () =>
+          (window as Window & { __phraseChanges?: number }).__phraseChanges ??
+          -1,
+      ),
+      1,
+    );
+    assert.deepEqual(await historyEntries(page), stored);
+    assert.equal(
+      await page.locator('#scales-reference-tab').getAttribute('aria-pressed'),
+      'false',
+    );
+    assert.equal(
+      await page
+        .getByRole('button', { name: 'Chords' })
+        .getAttribute('aria-pressed'),
+      'true',
+    );
+    assert.match(await page.locator('#explore-root').innerText(), /C/);
+    assert.match(await page.locator('#explore-type').innerText(), /Minor/);
+    await page.locator('#drone-toggle').waitFor({ state: 'detached' });
   } finally {
     await page.close();
     await browser.close();
@@ -533,6 +589,75 @@ void test('a stashed phrase from another key survives new and back', async (t) =
         .getAttribute('aria-pressed'),
       'true',
     );
+  } finally {
+    await page.close();
+    await browser.close();
+    await server.release();
+  }
+});
+
+void test('back restores a phrase saved on the chords tab', async (t) => {
+  const browser = await launchNamed('chromium', t);
+  const server = await acquireDevServer();
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 900 },
+  });
+  try {
+    await page.goto(server.origin, { waitUntil: 'networkidle' });
+    await page.evaluate(
+      ([historyKey, trayKey]) => {
+        localStorage.removeItem(historyKey);
+        localStorage.removeItem(trayKey);
+      },
+      [PHRASE_HISTORY_KEY, TRAY_KEY],
+    );
+    await openPhrases(page);
+    await page.getByRole('button', { name: '4 bars' }).click();
+    await page.getByRole('button', { name: 'Chords' }).click();
+    await chooseRoot(page, 'C');
+    await chooseSearch(page, 'Search chord quality', 'minor', /^Minor m$/);
+    await page.getByRole('button', { name: 'New phrase' }).click();
+    const chordNotes = await phraseNotes(page);
+    assert.ok(chordNotes.length > 2, chordNotes.join(' | '));
+    assert.match(
+      await page.locator('.phrase-heading p').innerText(),
+      /Over Cm in A Dorian/,
+    );
+
+    await page.getByRole('button', { name: 'Scales & modes' }).click();
+    await chooseRoot(page, 'E');
+    await chooseSearch(page, 'Search scale / mode', 'mixo', 'Mixolydian');
+    assert.notDeepEqual(await phraseNotes(page), chordNotes);
+    await page.getByRole('button', { name: 'New phrase' }).click();
+    assert.notDeepEqual(await phraseNotes(page), chordNotes);
+    const stored = await historyEntries(page);
+
+    await page.getByRole('button', { name: 'Previous phrase' }).click();
+    assert.deepEqual(await phraseNotes(page), chordNotes);
+    assert.deepEqual(await historyEntries(page), stored);
+    assert.equal(
+      await page
+        .getByRole('button', { name: 'Chords' })
+        .getAttribute('aria-pressed'),
+      'true',
+    );
+    assert.equal(
+      await page.locator('#scales-reference-tab').getAttribute('aria-pressed'),
+      'false',
+    );
+    assert.match(await page.locator('#explore-root').innerText(), /C/);
+    assert.match(await page.locator('#explore-type').innerText(), /Minor/);
+    assert.match(
+      await page.locator('.phrase-heading p').innerText(),
+      /Over Cm in A Dorian/,
+    );
+    assert.equal(
+      await page
+        .getByRole('button', { name: '4 bars' })
+        .getAttribute('aria-pressed'),
+      'true',
+    );
+    await page.locator('#drone-toggle').waitFor({ state: 'detached' });
   } finally {
     await page.close();
     await browser.close();
