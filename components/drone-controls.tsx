@@ -140,9 +140,14 @@ function fixedFrame(node: HTMLElement): { x: number; y: number } | null {
   let current: HTMLElement | null = node.parentElement;
   while (current && current !== document.documentElement) {
     const style = getComputedStyle(current);
+    const backdrop =
+      style.backdropFilter ||
+      style.getPropertyValue('-webkit-backdrop-filter') ||
+      'none';
     const containsFixed =
       style.transform !== 'none' ||
       style.filter !== 'none' ||
+      backdrop !== 'none' ||
       style.perspective !== 'none' ||
       style.contain === 'paint' ||
       style.contain.split(' ').includes('paint') ||
@@ -187,15 +192,17 @@ function DroneVolumePopover({
   const [origin, setOrigin] = useState<{ x: number; y: number } | null>(null);
   const [side, setSide] = useState<AnchoredPopoverSide>('below');
 
+  // The menu stays visibility: hidden until it has a position, and a hidden
+  // slider cannot take focus. Wait for the first placement.
   useLayoutEffect(() => {
-    if (didFocus.current) return;
+    if (didFocus.current || !origin) return;
     didFocus.current = true;
     if (initialFocus === 'slider') {
       sliderRef.current?.focus({ preventScroll: true });
       return;
     }
     anchorRef.current?.focus({ preventScroll: true });
-  }, [anchorRef, initialFocus]);
+  }, [anchorRef, initialFocus, origin]);
 
   useLayoutEffect(() => {
     const place = () => {
@@ -252,7 +259,8 @@ function DroneVolumePopover({
     };
     // Open under the button. When the viewport ends too close below it,
     // scroll just enough for the menu, but never tuck the button under
-    // the pinned bar. Only a page with no room left flips the menu.
+    // the pinned bar. A viewport too short for that keeps its scroll and
+    // the menu falls back to above or a sheet.
     const makeRoom = () => {
       const trigger = anchorRef.current?.getBoundingClientRect();
       if (!trigger || !panel || panel.offsetHeight < 1) return;
@@ -267,8 +275,8 @@ function DroneVolumePopover({
         ? Math.max(0, bar.getBoundingClientRect().bottom)
         : 0;
       const room = trigger.top - barBottom - DRONE_POPOVER_MARGIN_PX;
-      const by = Math.ceil(Math.min(needed, room));
-      if (by > 0) window.scrollBy({ top: by, behavior: 'instant' });
+      if (needed > room) return;
+      window.scrollBy({ top: Math.ceil(needed), behavior: 'instant' });
     };
     panel?.addEventListener('cancel', onCancel);
     panel?.addEventListener('focusout', onFocusOut);
