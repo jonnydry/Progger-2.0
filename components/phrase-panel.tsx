@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ChangeEvent,
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -560,6 +561,12 @@ export function PhrasePanel({
     }
     startPlayback();
   }
+  function changeTempo(event: ChangeEvent<HTMLInputElement>) {
+    const sounding = clampPhraseTempo(Number(event.target.value));
+    const written = clampPhraseTempo(slow ? sounding * 2 : sounding);
+    tempoRef.current = written;
+    setTempo(written);
+  }
   function commitTempo() {
     if (live.current) startPlayback();
   }
@@ -727,14 +734,7 @@ export function PhrasePanel({
                   ? `${playbackTempo} BPM, half of ${tempo}`
                   : `${playbackTempo} BPM`
               }
-              onChange={(event) => {
-                const sounding = clampPhraseTempo(Number(event.target.value));
-                const written = clampPhraseTempo(
-                  slow ? sounding * 2 : sounding,
-                );
-                tempoRef.current = written;
-                setTempo(written);
-              }}
+              onChange={changeTempo}
               onPointerUp={commitTempo}
               onKeyUp={commitTempo}
             />
