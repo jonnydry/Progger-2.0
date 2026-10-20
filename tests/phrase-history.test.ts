@@ -1,7 +1,22 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { defaultChordNotes, generatePhrase } from '../lib/phrase.ts';
+import { OfflineAudioContext } from 'node-web-audio-api';
+import {
+  PHRASE_START_LEAD_SEC,
+  PHRASE_TICK_SEC,
+  PhrasePlayer,
+  melodyFrets,
+  nextPhraseBarLine,
+  phraseLoopSeconds,
+  type PhraseClock,
+} from '../lib/phrase-audio.ts';
+import { voicingMidi } from '../lib/voicing-audio.ts';
+import {
+  defaultChordNotes,
+  generatePhrase,
+  type FingeredNote,
+} from '../lib/phrase.ts';
 import {
   PHRASE_HISTORY_KEY,
   PHRASE_HISTORY_LIMIT,
@@ -577,4 +592,152 @@ void test('the panel stores history beside the stash and not in the component', 
   assert.match(panel, /aria-label="Previous phrase"/);
   assert.match(panel, /aria-label="Next phrase"/);
   assert.match(panel, /Last 3 phrases\./);
+});
+
+class AudioClock implements PhraseClock {
+  currentTime = 0;
+  private nextId = 1;
+  private timers = new Map<number, { at: number; fn: () => void }>();
+
+  now(): number {
+    return this.currentTime;
+  }
+
+  after(delaySec: number, fn: () => void): number {
+    const id = this.nextId++;
+    this.timers.set(id, { at: this.currentTime + delaySec, fn });
+    return id;
+  }
+
+  cancel(handle: unknown): void {
+    this.timers.delete(handle as number);
+  }
+
+  advance(to: number): void {
+    this.currentTime = to;
+    for (;;) {
+      let due: { id: number; at: number; fn: () => void } | null = null;
+      for (const [id, timer] of this.timers) {
+        if (timer.at <= this.currentTime + 1e-9 && (!due || timer.at < due.at))
+          due = { id, at: timer.at, fn: timer.fn };
+      }
+      if (!due) break;
+      this.timers.delete(due.id);
+      due.fn();
+    }
+  }
+}
+
+const placed: FingeredNote = {
+  name: 'A',
+  pc: 9,
+  degree: '1',
+  midi: 57,
+  beat: 0,
+  duration: 1,
+  strong: true,
+  chordTone: true,
+  string: 0,
+  fret: 0,
+  finger: 1,
+  position: 0,
+  shift: false,
+};
+
+function queuedNote(fret: number, beat: number, duration = 1): FingeredNote {
+  return { ...placed, fret, beat, duration };
+}
+
+function pitchHz(fret: number): number {
+  const midi = voicingMidi(melodyFrets({ string: 0, fret }))[0] ?? 0;
+  return 440 * 2 ** ((midi - 69) / 12);
+}
+
+function spyPhrase(context: OfflineAudioContext) {
+  const starts: { when: number; frequency: number }[] = [];
+  const create = context.createOscillator.bind(context);
+  context.createOscillator = () => {
+    const oscillator = create();
+    const start = oscillator.start.bind(oscillator);
+    oscillator.start = (when = 0) => {
+      starts.push({ when, frequency: oscillator.frequency.value });
+      return start(when);
+    };
+    return oscillator;
+  };
+  return starts;
+}
+
+async function rollClock(clock: AudioClock, to: number) {
+  let steps = 0;
+  while (clock.currentTime + 1e-9 < to) {
+    clock.advance(Math.min(to, clock.currentTime + PHRASE_TICK_SEC));
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.ok(++steps < 40000, 'the clock spun');
+  }
+}
+
+void test('a bars change while looping lands on the next downbeat', async () => {
+  const tempo = 120;
+  const changes = [
+    { from: 4 as const, to: 2 as const, seamBeats: 16 },
+    { from: 2 as const, to: 4 as const, seamBeats: 8 },
+  ];
+  for (const change of changes) {
+    const context = new OfflineAudioContext(1, 44100 * 24, 44100);
+    context.resume = () => Promise.resolve();
+    const clock = new AudioClock();
+    const starts = spyPhrase(context);
+    const player = new PhrasePlayer(() => {});
+    const cadence = change.seamBeats;
+    const playing = [
+      queuedNote(0, 0),
+      queuedNote(2, cadence - 2),
+      queuedNote(3, cadence, 2),
+    ];
+    await player.start({
+      notes: playing,
+      bars: change.from,
+      tempo,
+      swing: 0,
+      loop: true,
+      context,
+      destination: context.createGain(),
+      clock,
+    });
+    const lead = PHRASE_START_LEAD_SEC;
+    const seam = lead + phraseLoopSeconds(playing, tempo);
+    assert.equal(seam, lead + cadence * (60 / tempo));
+    await rollClock(clock, lead + 0.4);
+    const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+    assert.ok(
+      boundary < seam - 1,
+      `${change.from} to ${change.to} waited for the end of the pass`,
+    );
+    player.queuePhrase({
+      notes: [queuedNote(10, 0), queuedNote(10, change.to * 4, 2)],
+      bars: change.to,
+      tempo,
+      swing: 0,
+      loop: true,
+      context,
+      destination: context.destination,
+      clock,
+    });
+    await rollClock(clock, boundary + 0.05);
+    const arrived = starts.filter(
+      (item) => Math.abs(item.frequency - pitchHz(10)) < 1e-3,
+    );
+    assert.equal(
+      arrived.some((item) => item.when < boundary - 1e-6),
+      false,
+      `${change.from} to ${change.to} started before the downbeat`,
+    );
+    assert.ok(
+      arrived.some((item) => Math.abs(item.when - boundary) < 1e-6),
+      `${change.from} to ${change.to} did not start on the next downbeat`,
+    );
+    player.stop();
+  }
 });
