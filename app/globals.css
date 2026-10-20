@@ -508,13 +508,13 @@ main {
   position: absolute;
   right: 0;
   top: 50px;
-  background: #20251b;
-  border: 1px solid #515b40;
-  border-radius: 4px;
+  background: var(--surface-pop);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
   z-index: 5;
   padding: 14px 18px;
   min-width: 220px;
-  box-shadow: 0 10px 30px #0005;
+  box-shadow: var(--glass-rim), var(--shadow-float);
 }
 .handedness {
   display: flex;
@@ -608,7 +608,7 @@ main {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 1px;
   color: var(--quiet);
   padding: 0 0 12px;
@@ -676,15 +676,16 @@ main {
   gap: 8px;
   box-sizing: border-box;
   flex: 0 0 auto;
-  height: 44px;
-  min-height: 44px;
+  height: var(--tap);
+  min-height: var(--tap);
   margin: 0 0 0 auto;
   padding: 0 14px;
   color: var(--green);
-  background: var(--accent);
+  background: var(--surface-key-lit);
   border: 1px solid var(--green);
-  border-radius: 5px;
-  font-size: 13px;
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 1px 0 var(--edge-sheen);
+  font-size: var(--text-sm);
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0;
@@ -700,8 +701,8 @@ main {
   box-shadow: inset 0 0 0 2px var(--primary-foreground);
 }
 .phrase-open:focus-visible {
-  outline: 3px solid var(--amber);
-  outline-offset: 3px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 .string-labels {
   flex: 0 0 32px;
@@ -1194,7 +1195,7 @@ footer {
   margin-top: 16px;
 }
 .examples > span {
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 0.5px;
   color: var(--quiet);
   margin-bottom: 4px;
@@ -1743,14 +1744,14 @@ footer {
     padding-top: 14px;
   }
   .neck-meta {
-    font-size: 10px;
+    font-size: var(--text-xs);
     letter-spacing: 0.6px;
   }
   .neck-meta .muted {
     letter-spacing: 0.6px;
   }
   .neck-legend {
-    font-size: 11px;
+    font-size: var(--text-xs);
   }
   .neck-legend i:first-child {
     margin-left: 0;
@@ -1779,7 +1780,7 @@ footer {
     margin-left: auto;
   }
   .jump-label {
-    font-size: 11px;
+    font-size: var(--text-xs);
     gap: 6px;
   }
   .range-label {
@@ -1872,7 +1873,7 @@ footer {
   }
   footer {
     margin-top: 12px;
-    font-size: 11px;
+    font-size: var(--text-xs);
     padding: 20px 0;
   }
 }
@@ -1988,41 +1989,43 @@ footer {
   width: max(var(--anchor-width), 224px);
   max-width: calc(100vw - 24px);
   max-height: min(var(--available-height), 360px);
-  border: 1px solid #566347;
-  border-radius: 5px;
-  background: #1b2219;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  background: var(--surface-pop);
   color: var(--foreground);
   padding: 5px;
-  box-shadow: 0 12px 35px #0006;
+  box-shadow: var(--glass-rim), var(--shadow-float);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
   scrollbar-width: thin;
-  scrollbar-color: #64784b #1b2219;
+  scrollbar-color: var(--input) transparent;
 }
 .music-select-popup [data-slot='select-group'] {
   padding: 0;
 }
 .music-select-popup [data-slot='select-label'] {
-  color: #a6b494;
-  font-size: 11px;
+  color: var(--quiet);
+  font-size: var(--text-xs);
   letter-spacing: 0.8px;
   padding: 14px 12px 7px;
 }
 .music-select-popup [data-slot='select-item'] {
   min-height: 44px;
   padding: 10px 36px 10px 12px;
-  border-radius: 3px;
-  font-size: 14px;
+  border-radius: var(--radius-key);
+  font-size: var(--text-md);
   cursor: pointer;
 }
 .music-select-popup [data-slot='select-item'][data-highlighted] {
-  color: #f0f5e3;
-  background: #303d22;
+  color: var(--foreground);
+  background: var(--accent);
 }
 .music-select-popup [data-slot='select-item'][data-selected] {
   color: var(--green);
 }
 .music-select-popup [data-slot='select-scroll-up-button'],
 .music-select-popup [data-slot='select-scroll-down-button'] {
-  background: #1b2219;
+  background: var(--card);
   color: var(--quiet);
 }
 .selection-bar .music-select-trigger {

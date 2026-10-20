@@ -51,7 +51,7 @@
 .reference-eyebrow {
   display: block;
   color: var(--quiet);
-  font-size: 10px;
+  font-size: var(--text-xs);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   margin-bottom: 10px;
@@ -176,7 +176,7 @@
   padding: 16px;
 }
 .string-reference .string-reference-key {
-  font-size: 11px;
+  font-size: var(--text-xs);
   margin: 0 0 14px;
   color: var(--quiet);
 }
@@ -200,7 +200,7 @@
 }
 .string-reference-rows dt small {
   color: var(--quiet);
-  font-size: 10px;
+  font-size: var(--text-xs);
 }
 .string-reference-rows dd {
   margin: 0;
@@ -257,7 +257,7 @@
 }
 .neck-handedness small {
   display: block;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--quiet);
   margin-top: 5px;
 }
@@ -270,7 +270,7 @@
 .neck-tuning {
   margin: 8px 0 0;
   color: var(--quiet);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .neck-tuning span {
   display: block;
