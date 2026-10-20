@@ -181,13 +181,17 @@
   background: var(--amber);
   box-shadow: 0 0 6px var(--amber);
 }
-.phrase-deck .deck-key.is-saved svg {
-  color: var(--amber);
+/* The record lamp glows while "Saved ✓" shows; the label carries the tick. */
+.phrase-deck .deck-key.is-saved .deck-rec-dot {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--amber) 45%, transparent),
+    0 0 10px var(--amber);
 }
+/* Dimmed, but Previous and Next stay readable as labels. */
 .phrase-deck .deck-key:disabled {
   color: var(--quiet);
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.72;
 }
 .phrase-deck .deck-key:disabled svg {
   color: var(--quiet);

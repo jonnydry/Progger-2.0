@@ -12,7 +12,6 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Check,
   Play,
   RefreshCw,
   Repeat,
@@ -701,11 +700,7 @@ export function PhrasePanel({
             disabled={!phrase.ok}
             onClick={saveToTray}
           >
-            {savedMark ? (
-              <Check size={18} aria-hidden="true" />
-            ) : (
-              <span className="deck-rec-dot" aria-hidden="true" />
-            )}
+            <span className="deck-rec-dot" aria-hidden="true" />
             <span className="deck-key-label">
               {savedMark ? 'Saved ✓' : 'Save to stash'}
             </span>

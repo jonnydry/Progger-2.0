@@ -247,12 +247,16 @@ html
   background: color-mix(in srgb, var(--green) 7%, transparent);
   border-radius: var(--radius-key);
 }
+/* Two equal outer tracks keep "12" on the centre of the fret-12 column. */
 .overview-ruler {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   color: var(--quiet);
   font-size: var(--text-xs);
   margin-top: 10px;
+}
+.overview-ruler > :last-child {
+  justify-self: end;
 }
 @media (max-width: 500px) {
   /* Paint the fretboard above the form controls before hydration, and keep
@@ -299,15 +303,15 @@ html
     flex-basis: calc(50% - 10px);
   }
   .connection-controls .music-select-trigger {
-    font-size: 12px;
-    padding: 8px;
+    font-size: var(--text-xs);
+    padding: var(--space-2);
   }
   .overview-toggle {
     flex: 1 1 calc(50% - 10px);
     font-size: var(--text-xs);
   }
   .connection-caption {
-    padding: 12px;
+    padding: var(--space-3);
     font-size: var(--text-xs);
   }
   .connection-legend {
@@ -315,5 +319,13 @@ html
   }
   .neck-overview {
     padding: 14px 10px;
+  }
+}
+/* Below this, two pickers side by side cut "Higher neighbor" to an
+   ellipsis. Each takes the full row. */
+@media (max-width: 380px) {
+  .connection-controls > label,
+  .connection-controls .form-picker {
+    flex-basis: 100%;
   }
 }
