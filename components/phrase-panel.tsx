@@ -336,9 +336,10 @@ export function PhrasePanel({
       swing: swingRef.current,
       loop,
     };
-    // Context, regenerate, and bar count wait for the sounding pass.
-    // Looping switches at the seam. A finishing pass keeps its closing
-    // note. Only the latest request is kept. Stop still cuts immediately.
+    // Context, regenerate, key, scale, and bar count wait while a pass
+    // is sounding. Looping switches on the next bar line. A finishing
+    // pass keeps its closing note. Only the latest request is kept.
+    // Stop still cuts immediately. Tempo and swing are the ones above.
     if (phraseChanged && player.current?.phraseChangeWaits()) {
       soundingTempo.current = tempoNow;
       soundingSwing.current = swingRef.current;
