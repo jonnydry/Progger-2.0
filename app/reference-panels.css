@@ -236,8 +236,8 @@
   color: var(--foreground);
   font-family: var(--font-ui);
   box-shadow: var(--glass-rim), var(--shadow-float);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 .neck-display-panel [data-slot='popover-title'] {
   color: var(--green);

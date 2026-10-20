@@ -419,8 +419,8 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
   border: 1px solid var(--edge-lit);
   border-radius: var(--radius-panel);
   box-shadow: var(--glass-rim), var(--shadow-float);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 
 .drone-volume-popover::before {
@@ -554,12 +554,6 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
   z-index: 1;
 }
 
-@media (prefers-reduced-transparency: reduce) {
-  .drone-volume-popover {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-}
 
 .palette-note.palette-walking > span {
   color: var(--green);

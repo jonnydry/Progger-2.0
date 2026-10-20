@@ -1995,8 +1995,8 @@ footer {
   color: var(--foreground);
   padding: 5px;
   box-shadow: var(--glass-rim), var(--shadow-float);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
   scrollbar-width: thin;
   scrollbar-color: var(--input) transparent;
 }

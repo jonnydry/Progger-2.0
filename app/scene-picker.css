@@ -57,8 +57,8 @@
   border: 1px solid var(--edge);
   border-radius: var(--radius-panel);
   box-shadow: var(--glass-rim), var(--shadow-float);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 
 .scene-popup [data-slot='select-group'] {

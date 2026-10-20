@@ -47,6 +47,7 @@
      page text compete with their own. */
   --glass-tint: 88%;
   --glass-blur: 18px;
+  --glass-filter: blur(var(--glass-blur)) saturate(1.15);
   --surface-glass: color-mix(
     in srgb,
     var(--background) var(--glass-tint),
@@ -72,6 +73,7 @@ html[data-theme='day'] {
 @media (prefers-reduced-transparency: reduce) {
   :root {
     --glass-tint: 99.9%;
+    --glass-filter: none;
     --surface-pop: var(--card);
   }
 }

@@ -155,7 +155,7 @@ html[data-theme='day'] .night-swim .display-menu[open] > div {
 }
 
 html[data-theme='day'] .night-swim .display-menu[open] > div {
-  box-shadow: 0 10px 28px #12362f1a;
+  box-shadow: var(--glass-rim), var(--shadow-float);
 }
 
 html[data-theme='day'] .night-swim .segmented {
@@ -374,9 +374,9 @@ html[data-theme='day'] .music-select-trigger > svg {
 html[data-theme='day'] .music-select-popup {
   color: var(--foreground);
   border-color: var(--input);
-  background: var(--day-surface);
-  scrollbar-color: var(--input) var(--day-surface);
-  box-shadow: 0 12px 35px #12362f24;
+  background: var(--surface-pop);
+  scrollbar-color: var(--input) transparent;
+  box-shadow: var(--glass-rim), var(--shadow-float);
 }
 
 html[data-theme='day'] .music-select-popup [data-slot='select-label'] {

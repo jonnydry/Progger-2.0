@@ -446,8 +446,8 @@ html:has(.night-swim) {
   border-radius: var(--radius-panel);
   background: var(--surface-pop);
   box-shadow: var(--glass-rim), var(--shadow-float);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 .dock-position {
   min-width: 110px;
@@ -685,25 +685,25 @@ html:has(.night-swim) {
   color: #aabcc5;
 }
 .music-select-popup {
-  background: #0c1c2a;
-  border-color: #5c7480;
-  color: #e1eade;
-  scrollbar-color: #71998a #0c1c2a;
+  background: var(--surface-pop);
+  border-color: var(--input);
+  color: var(--foreground);
+  scrollbar-color: var(--input) transparent;
 }
 .music-select-popup [data-slot='select-label'] {
-  color: #a7c3c5;
+  color: var(--quiet);
 }
 .music-select-popup [data-slot='select-item'][data-highlighted] {
-  color: #eaf2e5;
-  background: #254138;
+  color: var(--foreground);
+  background: var(--surface-key-lit);
 }
 .music-select-popup [data-slot='select-item'][data-selected] {
-  color: #b9e8c0;
+  color: var(--green);
 }
 .music-select-popup [data-slot='select-scroll-up-button'],
 .music-select-popup [data-slot='select-scroll-down-button'] {
-  background: #0c1c2a;
-  color: #b2c4cb;
+  background: var(--card);
+  color: var(--quiet);
 }
 @media (max-width: 1200px) {
   .instrument-dock {
