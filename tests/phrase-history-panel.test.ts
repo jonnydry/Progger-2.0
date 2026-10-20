@@ -21,8 +21,14 @@ async function phraseNotes(page: Page) {
 }
 
 async function chooseRoot(page: Page, name: string) {
-  await page.locator('#explore-root').click();
-  await page.getByRole('option', { name, exact: true }).click();
+  const trigger = page.locator('#explore-root');
+  await trigger.scrollIntoViewIfNeeded();
+  await trigger.click();
+  const option = page.getByRole('option', { name, exact: true });
+  await option.click();
+  // The root menu returns focus after it closes. A scale click in that
+  // window is swallowed, so wait until the chosen option is gone.
+  await option.waitFor({ state: 'hidden' });
 }
 
 async function chooseSearch(
@@ -32,12 +38,24 @@ async function chooseSearch(
   option: string | RegExp,
 ) {
   const input = page.getByRole('combobox', { name: searchLabel });
-  await page.locator('#explore-type').click();
-  await input.waitFor({ state: 'visible' });
+  const trigger = page.locator('#explore-type');
+  await trigger.scrollIntoViewIfNeeded();
+  let opened = false;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4 && !opened; attempt += 1) {
+    if (!(await input.isVisible())) await trigger.click();
+    try {
+      await input.waitFor({ state: 'visible', timeout: 2000 });
+      opened = true;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!opened) throw lastError;
   try {
     await input.fill(query);
   } catch {
-    await page.locator('#explore-type').click();
+    if (!(await input.isVisible())) await trigger.click();
     await input.waitFor({ state: 'visible' });
     await input.fill(query);
   }
