@@ -202,6 +202,32 @@ void test('the phrase on screen is not stored twice', () => {
   assert.equal(pushPhraseHistory(state, broken), state);
 });
 
+void test('an identical cross-tab read keeps the history objects', () => {
+  const held = install(null);
+  try {
+    rememberPhrase(entry(7, { locks: { rhythm: 'eighths', cadence: 'fifth' } }));
+    rememberPhrase(entry(8));
+    const before = getPhraseHistory();
+    const locks = before.entries[0]?.locks;
+    onPhraseHistoryStorage(PHRASE_HISTORY_KEY);
+    const after = getPhraseHistory();
+    assert.equal(after, before);
+    assert.equal(after.entries[0]?.locks, locks);
+    assert.equal(locks?.rhythm, 'eighths');
+    const raw = held.raw();
+    assert.ok(raw);
+    const changed = JSON.parse(raw) as { entries: { seed: number }[] };
+    changed.entries[1]!.seed = 9;
+    held.setItem(PHRASE_HISTORY_KEY, JSON.stringify(changed));
+    onPhraseHistoryStorage(PHRASE_HISTORY_KEY);
+    const next = getPhraseHistory();
+    assert.notEqual(next, before);
+    assert.equal(next.entries[1]?.seed, 9);
+  } finally {
+    held.restore();
+  }
+});
+
 void test('storage round-trips the phrase and leaves tempo and swing out', () => {
   let state = rememberSeeds([4, 5, 6]);
   state = stepPhraseHistory(state, -1);

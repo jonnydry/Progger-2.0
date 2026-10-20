@@ -250,8 +250,9 @@ export class LookaheadScheduler {
   }
 
   /**
-   * Drop notes already queued at or after `boundary` and stop there
-   * instead of wrapping. `onReach` runs about a lookahead before the
+   * Forget cue records at or after `boundary` and stop there instead
+   * of wrapping. Voices already in the graph stay until the handoff
+   * mutes or drops them. `onReach` runs about a lookahead before the
    * boundary, so the next phrase can be placed on that instant.
    */
   suppressFrom(boundary: number, onReach: () => void): void {
@@ -455,6 +456,12 @@ export class PhrasePlayer {
     [];
   /** Starts the queued phrase a lookahead before its boundary. */
   private queueTimer: unknown = null;
+  /**
+   * Notes the armed switch will not play. Their bus is silent from the
+   * bar line, including when this thread stalls past the handoff.
+   * Loop off puts the level back so those notes still sound.
+   */
+  private switchMutes: { bus: GainNode; level: number }[] = [];
   /** Boundary the queue timer is waiting on. */
   private queueAt = Number.NaN;
   private scheduler: LookaheadScheduler | null = null;
@@ -496,10 +503,11 @@ export class PhrasePlayer {
     this.onState = onState;
   }
 
-  /** Scheduler wake plus disconnect timers, for leak checks. */
+  /** Scheduler wake, the armed switch, and disconnect timers. */
   pendingTimers(): number {
     return (
       (this.scheduler?.pending ? 1 : 0) +
+      (this.queueTimer != null ? 1 : 0) +
       (this.endTimer ? 1 : 0) +
       this.fades.length
     );
@@ -542,26 +550,6 @@ export class PhrasePlayer {
       void this.start(input);
       return;
     }
-    const now = this.clock?.now();
-    // The switch is already armed and its downbeat has not arrived. The
-    // latest phrase takes that downbeat while the lead still holds.
-    // Inside the lead it is too late, so the armed phrase plays and this
-    // request waits for the following bar.
-    if (
-      this.looping &&
-      now !== undefined &&
-      this.startedAt > now + 1e-4 &&
-      this.startedAt >= now + PHRASE_START_LEAD_SEC - 1e-6
-    ) {
-      // A start is still inside resume() and will read pending after it.
-      // Replacing the graph here would drop the phrase that start is holding.
-      if (this.parked) {
-        this.pending = input;
-        return;
-      }
-      this.replaceUnstarted(input);
-      return;
-    }
     this.pending = input;
     if (this.looping) this.suppressNextPass();
   }
@@ -586,6 +574,9 @@ export class PhrasePlayer {
     if (!(loopPeriod > 1e-4)) return;
     this.cancelQueueTimer();
     this.scheduler.clearSuppress();
+    // The armed switch had silenced notes from the bar line on. Loop off
+    // plays those notes, including the closing note.
+    this.releaseSwitchMutes();
     const elapsed = now - this.startedAt;
     const pass = Math.max(0, Math.floor(elapsed / loopPeriod + 1e-9));
     const passOrigin = this.startedAt + pass * loopPeriod;
@@ -615,6 +606,7 @@ export class PhrasePlayer {
     this.pending = null;
     this.preserved = null;
     this.cancelQueueTimer();
+    this.discardSwitchMutes();
     this.scheduler?.clearSuppress();
     // The live trim was moved onto the park for the in-flight start.
     // Halt cannot see it, and that start would otherwise cut it when
@@ -637,6 +629,7 @@ export class PhrasePlayer {
     this.pending = null;
     this.finishing = false;
     this.cancelQueueTimer();
+    this.discardSwitchMutes();
     let preserved = this.preserved;
     this.preserved = null;
     let replaced: HeldGraph | null = null;
@@ -838,8 +831,10 @@ export class PhrasePlayer {
 
   private holdPark(run: number, graph: HeldGraph | null): void {
     if (!graph) return;
-    if (this.parked && this.parked !== graph)
-      this.disconnectPreserved(this.parked);
+    // A start claims any park before holding another, so this branch is
+    // not reached today. Fading it keeps a future miss from cutting the
+    // phrase that resume() is still holding.
+    if (this.parked && this.parked !== graph) this.fadeParked();
     this.parked = graph;
     this.parkedRun = run;
   }
@@ -874,36 +869,14 @@ export class PhrasePlayer {
     if (graph) this.disconnectPreserved(graph);
   }
 
-  /**
-   * The armed phrase has not reached its downbeat. Drop its notes and
-   * put the latest phrase on that same downbeat.
-   */
-  private replaceUnstarted(input: PhrasePass): void {
-    const at = this.startedAt;
-    const now = this.clock?.now() ?? at;
-    this.cancelQueueTimer();
-    this.scheduler?.clearSuppress();
-    this.dropVoicesFrom(at, now);
-    this.scheduler?.stop();
-    this.scheduler = null;
-    this.pending = null;
-    this.preserved = {
-      at,
-      trim: this.trim,
-      voices: this.voices.slice(),
-      releaseAt: Number.NaN,
-      seam: true,
-    };
-    void this.start(input);
-  }
-
   private suppressNextPass(): void {
     if (!this.scheduler || !this.clock || !(this.period > 1e-4)) return;
     const now = this.clock.now();
     const boundary = nextPhraseBarLine(this.startedAt, now, this.soundingTempo);
-    // Leave notes that have not started yet. Turning Loop off before the
-    // bar still plays them, including the closing note. The switch drops
-    // anything from the downbeat onward when it commits.
+    // Silence notes at or after the bar on the audio clock. Turning Loop
+    // off before the bar releases that mute, so they still play. The
+    // handoff drops them when the switch commits.
+    this.muteVoicesFrom(boundary);
     this.scheduler.suppressFrom(boundary, () => {
       this.armQueuedStart(boundary);
     });
@@ -912,8 +885,67 @@ export class PhrasePlayer {
     this.armQueuedStart(boundary);
   }
 
-  private dropVoicesFrom(boundary: number, now: number): void {
-    this.voices = this.soundingVoices(this.voices, boundary, now);
+  /**
+   * Notes that would start at or after `boundary` go silent there, even
+   * if the handoff runs late. Notes already sounding are left for the
+   * seam fade. The level is put back by `releaseSwitchMutes`.
+   */
+  private muteVoicesFrom(boundary: number): void {
+    this.releaseSwitchMutes();
+    const now = this.clock?.now() ?? boundary;
+    if (!(boundary > now + 1e-4)) return;
+    for (const entry of this.voices) {
+      if (entry.scheduled < boundary - 1e-4) continue;
+      const bus = entry.voice.bus;
+      let level = 0;
+      try {
+        level = bus.gain.value;
+      } catch {
+        continue;
+      }
+      if (!(level > 0)) continue;
+      try {
+        bus.gain.cancelScheduledValues(now);
+        bus.gain.setValueAtTime(level, now);
+        bus.gain.setValueAtTime(0, boundary);
+      } catch {
+        continue;
+      }
+      this.switchMutes.push({ bus, level });
+    }
+  }
+
+  private releaseSwitchMutes(): void {
+    const now = this.clock?.now() ?? 0;
+    const mutes = this.switchMutes;
+    this.switchMutes = [];
+    for (const mute of mutes) {
+      try {
+        mute.bus.gain.cancelScheduledValues(now);
+        mute.bus.gain.setValueAtTime(mute.level, now);
+      } catch {
+        // The context may already be closed.
+      }
+    }
+  }
+
+  /** Drop the bookkeeping. The nodes are about to be disconnected. */
+  private discardSwitchMutes(): void {
+    this.switchMutes = [];
+  }
+
+  /**
+   * Disconnect every voice scheduled on or after the bar. A stall past
+   * that time still drops them; they were already silent from the mute.
+   * Notes that started earlier stay and fade with the seam.
+   */
+  private dropArmedVoices(boundary: number): void {
+    const keep: LiveVoice[] = [];
+    for (const entry of this.voices) {
+      if (entry.scheduled >= boundary - 1e-4) disconnectVoice(entry.voice);
+      else keep.push(entry);
+    }
+    this.voices = keep;
   }
 
   /**
@@ -967,11 +999,11 @@ export class PhrasePlayer {
     const input = this.pending;
     this.pending = null;
     if (!input) return;
-    const now = this.clock?.now() ?? at;
-    // A note from the old phrase that has not started would land on the
-    // new downbeat or inside the fade. Drop it. Notes already going stay
-    // on the graph and fade with the seam release.
-    this.dropVoicesFrom(at, now);
+    // A note from the old phrase at or after the bar would land on the
+    // new downbeat, including when this handoff woke up late. Drop it.
+    // Notes already going stay on the graph and fade with the seam.
+    this.dropArmedVoices(at);
+    this.discardSwitchMutes();
     this.preserved = {
       at,
       trim: this.trim,

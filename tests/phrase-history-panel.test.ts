@@ -102,18 +102,19 @@ async function historyEntries(page: Page) {
   }, PHRASE_HISTORY_KEY);
 }
 
+type PhraseChangeCall = { method: 'start' | 'queuePhrase'; bars: number; at: number };
+
 async function armPhraseChanges(page: Page) {
   await page.evaluate(async () => {
     const view = window as Window & {
       __phraseChanges?: number;
+      __phraseChangeCalls?: PhraseChangeCall[];
       __phraseChangeArmed?: boolean;
     };
     view.__phraseChanges = 0;
+    view.__phraseChangeCalls = [];
     view.__phraseChangeArmed = true;
-    if (
-      view.__phraseChangeArmed &&
-      (window as Window & { __phraseHooked?: boolean }).__phraseHooked
-    ) {
+    if ((window as Window & { __phraseHooked?: boolean }).__phraseHooked) {
       return;
     }
     const urls = performance
@@ -137,10 +138,18 @@ async function armPhraseChanges(page: Page) {
       proto[method] = function counted(this: unknown, ...args: unknown[]) {
         const host = window as Window & {
           __phraseChanges?: number;
+          __phraseChangeCalls?: PhraseChangeCall[];
           __phraseChangeArmed?: boolean;
         };
         if (host.__phraseChangeArmed) {
           host.__phraseChanges = (host.__phraseChanges ?? 0) + 1;
+          const bars = (args[0] as { bars?: number } | undefined)?.bars;
+          host.__phraseChangeCalls = host.__phraseChangeCalls ?? [];
+          host.__phraseChangeCalls.push({
+            method,
+            bars: bars === 2 || bars === 4 ? bars : 0,
+            at: performance.now(),
+          });
         }
         return original.apply(this, args);
       };
@@ -149,6 +158,33 @@ async function armPhraseChanges(page: Page) {
     count('queuePhrase');
     (window as Window & { __phraseHooked?: boolean }).__phraseHooked = true;
   });
+}
+
+async function settledChangeCount(page: Page) {
+  return page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            resolve(
+              (window as Window & { __phraseChanges?: number }).__phraseChanges ??
+                -1,
+            );
+          }, 40);
+        });
+      }),
+  );
+}
+
+function phraseChangeCalls(page: Page) {
+  return page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __phraseChangeCalls?: PhraseChangeCall[];
+        }
+      ).__phraseChangeCalls ?? [],
+  );
 }
 
 async function freshPhrases(page: Page, origin: string, width: number) {
@@ -412,14 +448,7 @@ void test('back restores the key, scale, chord, and notes together', async (t) =
 
     assert.deepEqual(await phraseNotes(page), firstNotes);
     assert.equal(await seedOf(page), firstSeed);
-    assert.equal(
-      await page.evaluate(
-        () =>
-          (window as Window & { __phraseChanges?: number }).__phraseChanges ??
-          -1,
-      ),
-      1,
-    );
+    assert.equal(await settledChangeCount(page), 1);
     assert.deepEqual(await historyEntries(page), stored);
     assert.equal(
       await page
@@ -450,19 +479,13 @@ void test('back restores the key, scale, chord, and notes together', async (t) =
     );
 
     await page.evaluate(() => {
-      (window as Window & { __phraseChanges?: number }).__phraseChanges = 0;
+      const view = window as Window & { __phraseChanges?: number };
+      view.__phraseChanges = 0;
     });
     await page.getByRole('button', { name: 'Next phrase' }).click();
     assert.deepEqual(await phraseNotes(page), secondNotes);
     assert.equal(await seedOf(page), secondSeed);
-    assert.equal(
-      await page.evaluate(
-        () =>
-          (window as Window & { __phraseChanges?: number }).__phraseChanges ??
-          -1,
-      ),
-      1,
-    );
+    assert.equal(await settledChangeCount(page), 1);
     assert.deepEqual(await historyEntries(page), stored);
     assert.equal(
       await page.locator('#scales-reference-tab').getAttribute('aria-pressed'),
@@ -658,6 +681,152 @@ void test('back restores a phrase saved on the chords tab', async (t) => {
       'true',
     );
     await page.locator('#drone-toggle').waitFor({ state: 'detached' });
+  } finally {
+    await page.close();
+    await browser.close();
+    await server.release();
+  }
+});
+
+void test('an identical history write from another tab does not restart playback', async (t) => {
+  const browser = await launchNamed('chromium', t);
+  const server = await acquireDevServer();
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 900 },
+  });
+  try {
+    await freshPhrases(page, server.origin, 1280);
+    await page.getByRole('button', { name: 'New phrase' }).click();
+    const notes = await phraseNotes(page);
+    await page.locator('.phrase-action', { hasText: 'Play' }).click();
+    await page
+      .locator('#phrase-seed-help', { hasText: 'Playing this phrase.' })
+      .waitFor({ timeout: 15000 });
+    await armPhraseChanges(page);
+    const rewrite = (key: string) => {
+      const raw = localStorage.getItem(key);
+      if (!raw) throw new Error('history missing');
+      localStorage.setItem(key, raw);
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue: raw }));
+    };
+    await page.evaluate(() => {
+      const view = window as Window & {
+        __phraseChanges?: number;
+        __phraseChangeCalls?: unknown[];
+      };
+      view.__phraseChanges = 0;
+      view.__phraseChangeCalls = [];
+    });
+    await page.evaluate(rewrite, PHRASE_HISTORY_KEY);
+    assert.equal(await settledChangeCount(page), 0);
+    assert.deepEqual(await phraseNotes(page), notes);
+    assert.match(
+      await page.locator('#phrase-seed-help').innerText(),
+      /Playing this phrase\./,
+    );
+
+    await page.locator('.phrase-action', { hasText: 'Loop' }).click();
+    await page
+      .locator('#phrase-seed-help', { hasText: 'Looping this phrase.' })
+      .waitFor({ timeout: 15000 });
+    await page.evaluate(() => {
+      const view = window as Window & {
+        __phraseChanges?: number;
+        __phraseChangeCalls?: unknown[];
+      };
+      view.__phraseChanges = 0;
+      view.__phraseChangeCalls = [];
+    });
+    await page.evaluate(rewrite, PHRASE_HISTORY_KEY);
+    assert.equal(await settledChangeCount(page), 0);
+    assert.deepEqual(await phraseNotes(page), notes);
+    assert.match(
+      await page.locator('#phrase-seed-help').innerText(),
+      /Looping this phrase\./,
+    );
+  } finally {
+    await page.close();
+    await browser.close();
+    await server.release();
+  }
+});
+
+void test('a history step that changes bars queues the next downbeat', async (t) => {
+  const browser = await launchNamed('chromium', t);
+  const server = await acquireDevServer();
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 900 },
+  });
+  try {
+    for (const change of [
+      { playing: 4 as const, back: 2 as const },
+      { playing: 2 as const, back: 4 as const },
+    ]) {
+      await freshPhrases(page, server.origin, 1280);
+      await page.getByRole('button', { name: `${change.back} bars` }).click();
+      await page.getByRole('button', { name: 'New phrase' }).click();
+      await page.getByRole('button', { name: `${change.playing} bars` }).click();
+      await page
+        .locator('button[aria-pressed="true"]', {
+          hasText: `${change.playing} bars`,
+        })
+        .waitFor();
+      await armPhraseChanges(page);
+      await page.locator('.phrase-action', { hasText: 'Loop' }).click();
+      await page
+        .locator('.phrase-action[aria-pressed="true"]', { hasText: 'Loop' })
+        .waitFor();
+      await page.locator('.phrase-action', { hasText: 'Play' }).click();
+      await page
+        .locator('#phrase-seed-help', { hasText: 'Looping this phrase.' })
+        .waitFor({ timeout: 15000 });
+      await page.waitForFunction(
+        () => {
+          const head = document.querySelector<HTMLElement>(
+            '[data-phrase-playhead]:not([hidden])',
+          );
+          if (head?.dataset.phrasePlayhead !== '1') return false;
+          const left = Number.parseFloat(head.style.left);
+          return left > 12 && left < 40;
+        },
+        undefined,
+        { timeout: 8000 },
+      );
+      await page.evaluate(() => {
+        const view = window as Window & {
+          __phraseChanges?: number;
+          __phraseChangeCalls?: unknown[];
+        };
+        view.__phraseChanges = 0;
+        view.__phraseChangeCalls = [];
+      });
+      await page.getByRole('button', { name: 'Previous phrase' }).click();
+      await page
+        .locator('button[aria-pressed="true"]', {
+          hasText: `${change.back} bars`,
+        })
+        .waitFor();
+      await page.evaluate(
+        () => new Promise((resolve) => setTimeout(resolve, 400)),
+      );
+      const early = await phraseChangeCalls(page);
+      assert.deepEqual(
+        early.map((call) => call.method),
+        ['queuePhrase'],
+        `${change.playing} to ${change.back} did not queue a single change`,
+      );
+      assert.equal(early[0]?.bars, change.back);
+      await page.evaluate(
+        () => new Promise((resolve) => setTimeout(resolve, 2800)),
+      );
+      const later = await phraseChangeCalls(page);
+      assert.deepEqual(
+        later.map((call) => call.method),
+        ['queuePhrase', 'start'],
+        `${change.playing} to ${change.back} did not hand off before the pass ended`,
+      );
+      assert.equal(later[1]?.bars, change.back);
+    }
   } finally {
     await page.close();
     await browser.close();
