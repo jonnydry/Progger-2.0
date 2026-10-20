@@ -1,0 +1,441 @@
+/* Cassette deck: a tape window, one row of transport keys, and a plate of
+   labelled settings. Colours come from the scene palette so every scene and
+   both themes share the same housing. */
+.phrase-deck {
+  --deck-key: color-mix(in srgb, var(--foreground) 7%, var(--card));
+  --deck-edge: color-mix(in srgb, var(--border) 60%, var(--background));
+  --deck-led-off: color-mix(in srgb, var(--quiet) 30%, transparent);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  color: var(--foreground);
+  background: var(--card);
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  box-shadow:
+    inset 0 2px 0 color-mix(in srgb, var(--foreground) 6%, transparent),
+    0 4px 0 var(--deck-edge);
+}
+
+.deck-window {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 8px 12px;
+  background: var(--background);
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  box-shadow: inset 0 3px 0 rgb(0 0 0 / 0.18);
+}
+.deck-window-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: center;
+}
+.phrase-deck .deck-window .phrase-status {
+  color: var(--green);
+  font-weight: 600;
+}
+.deck-reel {
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  background: radial-gradient(
+    circle,
+    var(--quiet) 0 3px,
+    transparent 4px 7px,
+    color-mix(in srgb, var(--quiet) 45%, transparent) 8px 10px,
+    transparent 11px
+  );
+  border: 4px dotted var(--quiet);
+  border-radius: 50%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .phrase-deck.is-rolling .deck-reel {
+    animation: deck-reel-spin 1.6s steps(8) infinite;
+  }
+}
+@keyframes deck-reel-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.deck-keys {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.3fr) minmax(0, 3fr) minmax(0, 1fr)
+    minmax(0, 1.3fr);
+  grid-template-areas:
+    'play bank loop rec'
+    '. hint . .';
+  gap: 4px 6px;
+  min-width: 0;
+}
+.deck-key-play {
+  grid-area: play;
+}
+.deck-key-bank {
+  grid-area: bank;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.deck-key-loop {
+  grid-area: loop;
+}
+.deck-key-rec {
+  grid-area: rec;
+}
+.deck-keys .phrase-history-hint {
+  grid-area: hint;
+  margin: 2px 0 0;
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.phrase-deck .deck-key {
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  min-height: 68px;
+  margin: 0;
+  padding: 14px 6px 8px;
+  color: var(--foreground);
+  background: var(--deck-key);
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  box-shadow:
+    inset 0 2px 0 color-mix(in srgb, var(--foreground) 10%, transparent),
+    0 4px 0 var(--deck-edge);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+  cursor: pointer;
+}
+.phrase-deck .deck-key svg {
+  color: var(--green);
+}
+/* The indicator lamp above each legend. */
+.phrase-deck .deck-key::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 18px;
+  height: 4px;
+  background: var(--deck-led-off);
+  transform: translateX(-50%);
+}
+.deck-key-label {
+  overflow-wrap: anywhere;
+}
+.phrase-deck .deck-key-play {
+  background: color-mix(in srgb, var(--green) 18%, var(--card));
+  border-color: color-mix(in srgb, var(--green) 55%, var(--border));
+  font-size: 13px;
+}
+.deck-rec-dot {
+  width: 14px;
+  height: 14px;
+  background: var(--amber);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 35%, transparent);
+}
+.phrase-deck .deck-key:hover:not(:disabled) {
+  border-color: var(--green);
+}
+.phrase-deck .deck-key:active:not(:disabled),
+.phrase-deck .deck-key[aria-pressed='true'],
+.phrase-deck .deck-key.is-latched,
+.phrase-deck .deck-key.is-saved {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 2px 0 color-mix(in srgb, var(--foreground) 6%, transparent),
+    0 1px 0 var(--deck-edge);
+}
+.phrase-deck .deck-key[aria-pressed='true'],
+.phrase-deck .deck-key.is-latched {
+  background: color-mix(in srgb, var(--green) 24%, var(--card));
+  border-color: var(--green);
+}
+.phrase-deck .deck-key[aria-pressed='true']::before,
+.phrase-deck .deck-key.is-latched::before {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.phrase-deck .deck-key.is-saved {
+  background: color-mix(in srgb, var(--amber) 20%, var(--card));
+  border-color: var(--amber);
+}
+.phrase-deck .deck-key.is-saved::before {
+  background: var(--amber);
+  box-shadow: 0 0 6px var(--amber);
+}
+.phrase-deck .deck-key.is-saved svg {
+  color: var(--amber);
+}
+.phrase-deck .deck-key:disabled {
+  color: var(--quiet);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.phrase-deck .deck-key:disabled svg {
+  color: var(--quiet);
+}
+.phrase-deck button:focus-visible,
+.phrase-deck input:focus-visible {
+  outline: 3px solid var(--amber);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .phrase-deck .deck-key,
+  .deck-switch button,
+  .deck-toggle {
+    transition:
+      transform 80ms steps(2),
+      background 120ms ease,
+      border-color 120ms ease;
+  }
+}
+
+.deck-plate {
+  display: grid;
+  grid-template-columns:
+    auto minmax(150px, 1.4fr) auto minmax(130px, 1fr)
+    auto;
+  grid-template-areas: 'length tempo speed swing seed';
+  align-items: end;
+  gap: 10px 18px;
+  min-width: 0;
+  padding: 10px 12px 12px;
+  background: color-mix(in srgb, var(--background) 45%, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.deck-legend {
+  display: block;
+  margin: 0 0 4px;
+  padding: 0;
+  color: var(--quiet);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.deck-switch {
+  grid-area: length;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.deck-switch button,
+.phrase-deck .deck-toggle {
+  box-sizing: border-box;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 12px;
+  color: var(--quiet);
+  background: var(--background);
+  border: 2px solid var(--border);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.deck-switch button:first-of-type {
+  border-right-width: 1px;
+  border-radius: 4px 0 0 4px;
+}
+.deck-switch button:last-of-type {
+  border-left-width: 1px;
+  border-radius: 0 4px 4px 0;
+}
+.deck-switch button[aria-pressed='true'],
+.phrase-deck .deck-toggle[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--green);
+  border-color: var(--green);
+}
+.deck-switch button:hover:not([aria-pressed='true']),
+.phrase-deck .deck-toggle:hover:not([aria-pressed='true']) {
+  color: var(--foreground);
+  border-color: var(--green);
+}
+.phrase-deck .deck-toggle {
+  grid-area: speed;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 4px;
+}
+
+.deck-fader {
+  grid-area: tempo;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'legend legend'
+    'input output';
+  align-items: center;
+  column-gap: 10px;
+  min-width: 0;
+}
+.deck-fader.phrase-swing {
+  grid-area: swing;
+}
+.deck-fader .deck-legend {
+  grid-area: legend;
+}
+.deck-fader output {
+  grid-area: output;
+  min-width: 4.6em;
+  color: var(--green);
+  font-family: var(--font-arcade), var(--font-ui);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.deck-fader.phrase-swing output {
+  min-width: 2.6em;
+}
+.deck-fader input[type='range'] {
+  grid-area: input;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+}
+.deck-fader input[type='range']::-webkit-slider-runnable-track {
+  height: 8px;
+  background: var(--background);
+  border: 2px solid var(--border);
+  border-radius: 2px;
+}
+.deck-fader input[type='range']::-moz-range-track {
+  height: 4px;
+  background: var(--background);
+  border: 2px solid var(--border);
+  border-radius: 2px;
+}
+.deck-fader input[type='range']::-moz-range-progress {
+  height: 4px;
+  background: var(--green);
+}
+.deck-fader input[type='range']::-webkit-slider-thumb {
+  width: 16px;
+  height: 28px;
+  margin-top: -12px;
+  background: var(--deck-key);
+  border: 2px solid var(--green);
+  border-radius: 2px;
+  box-shadow:
+    inset 0 -8px 0 transparent,
+    inset 0 2px 0 color-mix(in srgb, var(--foreground) 14%, transparent);
+  appearance: none;
+}
+.deck-fader input[type='range']::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 16px;
+  height: 28px;
+  background: var(--deck-key);
+  border: 2px solid var(--green);
+  border-radius: 2px;
+}
+
+.deck-counter {
+  grid-area: seed;
+  display: grid;
+  min-width: 0;
+}
+.deck-counter input {
+  box-sizing: border-box;
+  width: 9em;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 6px 10px;
+  color: var(--green);
+  background: var(--background);
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  box-shadow: inset 0 3px 0 rgb(0 0 0 / 0.18);
+  font-family: var(--font-arcade), var(--font-ui);
+  font-size: 16px;
+  letter-spacing: 1px;
+}
+
+@media (max-width: 960px) {
+  .deck-plate {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'length tempo speed'
+      'seed swing swing';
+  }
+}
+
+@media (max-width: 640px) {
+  .phrase-deck {
+    gap: 10px;
+    padding: 10px;
+  }
+  .deck-window {
+    grid-template-columns: 28px minmax(0, 1fr) 28px;
+    gap: 8px;
+    padding: 8px;
+  }
+  .deck-reel {
+    width: 28px;
+    height: 28px;
+    border-width: 3px;
+  }
+  .deck-keys {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      'play loop rec'
+      'bank bank bank'
+      'hint hint hint';
+    row-gap: 8px;
+  }
+  .phrase-deck .deck-key {
+    min-height: 60px;
+  }
+  .deck-plate {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'length speed'
+      'tempo tempo'
+      'swing swing'
+      'seed seed';
+    padding: 10px;
+  }
+  .deck-counter input {
+    width: 100%;
+  }
+}

@@ -10,7 +10,16 @@ import {
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, ArrowRight, Play, RefreshCw, Square } from 'lucide-react';
+import {
+  Check,
+  Play,
+  RefreshCw,
+  Repeat,
+  SkipBack,
+  SkipForward,
+  Square,
+  Turtle,
+} from 'lucide-react';
 import { pretty, type Note } from '@/lib/music';
 import {
   bindPhraseLifecycle,
@@ -66,6 +75,7 @@ import {
   type TrayPhraseCapture,
 } from '@/lib/tray';
 import '@/app/phrase.css';
+import '@/app/phrase-deck.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
 const EMPTY_NOTES: readonly FingeredNote[] = [];
@@ -566,126 +576,82 @@ export function PhrasePanel({
           {plan ? CADENCE_LABEL[plan.cadence] : 'chord'}.
         </p>
       </div>
-      {plan && (
-        <p className="phrase-plan">
-          {bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
-          {RHYTHM_LABEL[plan.rhythm]} · {REGISTER_LABEL[plan.register]} register
-          · ends on the {CADENCE_LABEL[plan.cadence]} · swing{' '}
-          {Math.round(swing * 100)}%{trueHalf ? ` · half of ${tempo}` : ''}
-        </p>
-      )}
-      <div className="phrase-controls">
-        <fieldset className="segmented">
-          <legend className="sr-only">Phrase length</legend>
+      <div className={`phrase-deck deck-tape${busy ? ' is-rolling' : ''}`}>
+        <div className="deck-window">
+          <span className="deck-reel" aria-hidden="true" />
+          <div className="deck-window-text">
+            <p id="phrase-seed-help" className="phrase-status">
+              {notice
+                ? notice
+                : status === 'error'
+                  ? 'Audio couldn’t start. Tap Play to try again.'
+                  : status === 'starting'
+                    ? 'Starting…'
+                    : busy
+                      ? loop
+                        ? 'Looping this phrase.'
+                        : 'Playing this phrase.'
+                      : 'Same seed replays this phrase.'}
+            </p>
+            {!phrase.ok && (
+              <p className="phrase-status">
+                {phrase.reason === 'no-shared-tones'
+                  ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
+                  : 'This plan has no playable line in the register. Try a new phrase.'}
+              </p>
+            )}
+            {plan && (
+              <p className="phrase-plan">
+                {bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
+                {RHYTHM_LABEL[plan.rhythm]} · {REGISTER_LABEL[plan.register]}{' '}
+                register · ends on the {CADENCE_LABEL[plan.cadence]} · swing{' '}
+                {Math.round(swing * 100)}%
+                {trueHalf ? ` · half of ${tempo}` : ''}
+              </p>
+            )}
+          </div>
+          <span className="deck-reel" aria-hidden="true" />
+        </div>
+        <div className="deck-keys">
           <button
             type="button"
-            aria-pressed={bars === 2}
-            onClick={() => chooseBars(2)}
+            className={`phrase-action deck-key deck-key-play${busy ? ' is-latched' : ''}`}
+            disabled={!phrase.ok}
+            onClick={togglePlay}
           >
-            2 bars
+            {busy ? (
+              <Square size={18} aria-hidden="true" />
+            ) : (
+              <Play size={18} aria-hidden="true" />
+            )}
+            <span className="deck-key-label">{busy ? 'Stop' : 'Play'}</span>
           </button>
-          <button
-            type="button"
-            aria-pressed={bars === 4}
-            onClick={() => chooseBars(4)}
-          >
-            4 bars
-          </button>
-        </fieldset>
-        <label className="phrase-tempo phrase-swing">
-          Swing
-          <input
-            type="range"
-            min={SWING_AMOUNT_MIN}
-            max={SWING_AMOUNT_MAX}
-            step={SWING_AMOUNT_STEP}
-            value={swing}
-            aria-valuetext={`${Math.round(swing * 100)} percent`}
-            onChange={(event) => {
-              const next = Math.min(
-                SWING_AMOUNT_MAX,
-                Math.max(SWING_AMOUNT_MIN, Number(event.target.value)),
-              );
-              swingRef.current = next;
-              setSwing(next);
-            }}
-            onPointerUp={commitTempo}
-            onKeyUp={commitTempo}
-          />
-          <output>{Math.round(swing * 100)}%</output>
-        </label>
-        <label className="phrase-tempo">
-          Tempo
-          <input
-            type="range"
-            min={PHRASE_TEMPO_MIN}
-            max={tempoMax}
-            step={1}
-            value={playbackTempo}
-            aria-valuetext={
-              trueHalf
-                ? `${playbackTempo} BPM, half of ${tempo}`
-                : `${playbackTempo} BPM`
-            }
-            onChange={(event) => {
-              const sounding = clampPhraseTempo(Number(event.target.value));
-              const written = clampPhraseTempo(slow ? sounding * 2 : sounding);
-              tempoRef.current = written;
-              setTempo(written);
-            }}
-            onPointerUp={commitTempo}
-            onKeyUp={commitTempo}
-          />
-          <output>{playbackTempo} BPM</output>
-        </label>
-        <button
-          type="button"
-          className="phrase-action"
-          aria-pressed={slow}
-          onClick={() => setSlow((current) => !current)}
-        >
-          Half speed
-        </button>
-        <label className="phrase-seed">
-          Seed
-          <input
-            value={seedText}
-            inputMode="numeric"
-            aria-describedby="phrase-seed-help"
-            onChange={(event) => setSeedText(event.target.value)}
-            onBlur={() => commitSeed(seedText)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.currentTarget.blur();
-              }
-            }}
-          />
-        </label>
-        <div className="phrase-history">
-          <fieldset className="phrase-history-steps">
+          <fieldset className="phrase-history-steps deck-key-bank">
             <legend className="sr-only">Phrase history</legend>
             <button
               type="button"
-              className="phrase-action phrase-history-step"
+              className="phrase-action phrase-history-step deck-key"
               aria-label="Previous phrase"
               aria-describedby="phrase-history-hint"
               disabled={onHistory ? history.index <= 0 : !cursor}
               ref={previousStep}
               onClick={() => stepHistory(-1)}
             >
-              <ArrowLeft size={14} aria-hidden="true" />
+              <SkipBack size={18} aria-hidden="true" />
+              <span className="deck-key-label">Previous</span>
             </button>
             <button
               type="button"
-              className="phrase-action"
+              className="phrase-action deck-key"
               ref={newPhraseButton}
               onClick={regenerate}
             >
-              <RefreshCw size={14} aria-hidden="true" /> New phrase
+              <RefreshCw size={18} aria-hidden="true" />
+              <span className="deck-key-label">New phrase</span>
             </button>
             <button
               type="button"
-              className="phrase-action phrase-history-step"
+              className="phrase-action phrase-history-step deck-key"
               aria-label="Next phrase"
               aria-describedby="phrase-history-hint"
               disabled={
@@ -696,42 +662,131 @@ export function PhrasePanel({
               ref={nextStep}
               onClick={() => stepHistory(1)}
             >
-              <ArrowRight size={14} aria-hidden="true" />
+              <SkipForward size={18} aria-hidden="true" />
+              <span className="deck-key-label">Next</span>
             </button>
           </fieldset>
+          <button
+            type="button"
+            className="phrase-action deck-key deck-key-loop"
+            aria-pressed={loop}
+            onClick={() => setLoop((current) => !current)}
+          >
+            <Repeat size={18} aria-hidden="true" />
+            <span className="deck-key-label">Loop</span>
+          </button>
+          <button
+            type="button"
+            className={`phrase-action deck-key deck-key-rec${savedMark ? ' is-saved' : ''}`}
+            disabled={!phrase.ok}
+            onClick={saveToTray}
+          >
+            {savedMark ? (
+              <Check size={18} aria-hidden="true" />
+            ) : (
+              <span className="deck-rec-dot" aria-hidden="true" />
+            )}
+            <span className="deck-key-label">
+              {savedMark ? 'Saved ✓' : 'Save to stash'}
+            </span>
+          </button>
           <p id="phrase-history-hint" className="phrase-history-hint">
             Last 3 phrases.
           </p>
         </div>
-        <button
-          type="button"
-          className="phrase-action"
-          disabled={!phrase.ok}
-          onClick={togglePlay}
-        >
-          {busy ? (
-            <Square size={14} aria-hidden="true" />
-          ) : (
-            <Play size={14} aria-hidden="true" />
-          )}
-          {busy ? 'Stop' : 'Play'}
-        </button>
-        <button
-          type="button"
-          className={`phrase-action${savedMark ? ' is-saved' : ''}`}
-          disabled={!phrase.ok}
-          onClick={saveToTray}
-        >
-          {savedMark ? 'Saved ✓' : 'Save to stash'}
-        </button>
-        <button
-          type="button"
-          className="phrase-action"
-          aria-pressed={loop}
-          onClick={() => setLoop((current) => !current)}
-        >
-          Loop
-        </button>
+        <div className="deck-plate">
+          <fieldset className="deck-switch">
+            <legend className="deck-legend">
+              <span className="sr-only">Phrase </span>Length
+            </legend>
+            <button
+              type="button"
+              aria-pressed={bars === 2}
+              onClick={() => chooseBars(2)}
+            >
+              2 bars
+            </button>
+            <button
+              type="button"
+              aria-pressed={bars === 4}
+              onClick={() => chooseBars(4)}
+            >
+              4 bars
+            </button>
+          </fieldset>
+          <label className="phrase-tempo deck-fader">
+            <span className="deck-legend">Tempo</span>
+            <input
+              type="range"
+              min={PHRASE_TEMPO_MIN}
+              max={tempoMax}
+              step={1}
+              value={playbackTempo}
+              aria-valuetext={
+                trueHalf
+                  ? `${playbackTempo} BPM, half of ${tempo}`
+                  : `${playbackTempo} BPM`
+              }
+              onChange={(event) => {
+                const sounding = clampPhraseTempo(Number(event.target.value));
+                const written = clampPhraseTempo(
+                  slow ? sounding * 2 : sounding,
+                );
+                tempoRef.current = written;
+                setTempo(written);
+              }}
+              onPointerUp={commitTempo}
+              onKeyUp={commitTempo}
+            />
+            <output>{playbackTempo} BPM</output>
+          </label>
+          <button
+            type="button"
+            className="phrase-action deck-toggle"
+            aria-pressed={slow}
+            onClick={() => setSlow((current) => !current)}
+          >
+            <Turtle size={16} aria-hidden="true" />
+            Half speed
+          </button>
+          <label className="phrase-tempo phrase-swing deck-fader">
+            <span className="deck-legend">Swing</span>
+            <input
+              type="range"
+              min={SWING_AMOUNT_MIN}
+              max={SWING_AMOUNT_MAX}
+              step={SWING_AMOUNT_STEP}
+              value={swing}
+              aria-valuetext={`${Math.round(swing * 100)} percent`}
+              onChange={(event) => {
+                const next = Math.min(
+                  SWING_AMOUNT_MAX,
+                  Math.max(SWING_AMOUNT_MIN, Number(event.target.value)),
+                );
+                swingRef.current = next;
+                setSwing(next);
+              }}
+              onPointerUp={commitTempo}
+              onKeyUp={commitTempo}
+            />
+            <output>{Math.round(swing * 100)}%</output>
+          </label>
+          <label className="phrase-seed deck-counter">
+            <span className="deck-legend">Seed</span>
+            <input
+              value={seedText}
+              inputMode="numeric"
+              aria-describedby="phrase-seed-help"
+              onChange={(event) => setSeedText(event.target.value)}
+              onBlur={() => commitSeed(seedText)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
+        </div>
       </div>
       <p
         id="phrase-save-announce"
@@ -741,26 +796,6 @@ export function PhrasePanel({
       >
         {saveAnnounce}
       </p>
-      <p id="phrase-seed-help" className="phrase-status">
-        {notice
-          ? notice
-          : status === 'error'
-            ? 'Audio couldn’t start. Tap Play to try again.'
-            : status === 'starting'
-              ? 'Starting…'
-              : busy
-                ? loop
-                  ? 'Looping this phrase.'
-                  : 'Playing this phrase.'
-                : 'Same seed replays this phrase.'}
-      </p>
-      {!phrase.ok && (
-        <p className="phrase-status">
-          {phrase.reason === 'no-shared-tones'
-            ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
-            : 'This plan has no playable line in the register. Try a new phrase.'}
-        </p>
-      )}
       {phrase.ok && dots === 'shown' && (
         <PhraseStaff
           notes={notes}
