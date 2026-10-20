@@ -28,6 +28,10 @@ import { UnderwaterScene } from '@/components/underwater-scene';
 import { NoteSpelling } from '@/components/note-spelling';
 import { NeckDisplay } from '@/components/neck-display';
 import { PhraseLauncher } from '@/components/phrase-launcher';
+import type {
+  PhraseHistoryChord,
+  PhraseHistoryPlace,
+} from '@/lib/phrase-history';
 import { PracticeTrayHost } from '@/components/practice-tray-host';
 import type { PhraseFretMark } from '@/lib/phrase-marks';
 import {
@@ -703,6 +707,66 @@ export default function Home() {
         ?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
     }, 0);
   }
+  function restorePhraseContext(next: {
+    scaleRoot: string;
+    scaleId: string;
+    place: PhraseHistoryPlace;
+    chord: PhraseHistoryChord | null;
+  }) {
+    const nextScale = SCALES.find((entry) => entry.id === next.scaleId);
+    if (!nextScale || !ROOTS.includes(next.scaleRoot)) return;
+    setScaleRoot(next.scaleRoot);
+    setScaleId(next.scaleId);
+    const nextPatterns = patterns(spell(next.scaleRoot, nextScale.formula));
+    setPosition(
+      nearestPatternIndex(nextPatterns, shapes[position]?.start ?? 0),
+    );
+    if (!nextPatterns.length) setView('map');
+    setLocalChoice(null);
+    if (next.place === 'chord' && next.chord) {
+      const selected = QUALITIES.find(
+        (item) => item.id === next.chord?.qualityId,
+      );
+      setKind('chords');
+      setChordRoot(next.chord.root);
+      setQualityId(next.chord.qualityId);
+      setContext([]);
+      setActiveChord(0);
+      setVoicingBass('all');
+      setChordView('shape');
+      if (selected) {
+        setVoicingIndex(
+          voicingIndexForChange(
+            voicings(next.chord.root, selected),
+            {
+              bass: 'all',
+              strings: voicingStrings,
+              nearFret: voicingNearFret,
+            },
+            voicingIndex,
+            'chord-tab',
+          ),
+        );
+      }
+      return;
+    }
+    setKind('scales');
+    if (next.chord?.fromContext) {
+      const record = chordRecord({
+        symbol: next.chord.symbol,
+        root: next.chord.root,
+        qualityId: next.chord.qualityId,
+        bass: next.chord.bass,
+        notes: next.chord.notes,
+        fromContext: true,
+      });
+      setContext(record ? [record] : []);
+      setActiveChord(0);
+      return;
+    }
+    setContext([]);
+    setActiveChord(0);
+  }
   return (
     <div
       className={`app-shell night-swim ${page === 'explore' && practice ? 'practice-view' : ''}`}
@@ -1039,6 +1103,7 @@ export default function Home() {
                     held={heldPhrase}
                     contextKey={phraseContextKey}
                     onReleaseHeld={releaseHeld}
+                    onRestoreContext={restorePhraseContext}
                     capture={trayCapture}
                     openSignal={phraseOpenSignal}
                     onMarks={showPhraseMarks}
