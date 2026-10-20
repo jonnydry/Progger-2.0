@@ -588,7 +588,7 @@ main {
 }
 .neck-overview-slot {
   display: flex;
-  margin: 8px 0 2px;
+  margin: var(--space-2) 0 2px;
 }
 .neck-overview-slot .overview-toggle {
   flex: 0 1 auto;
@@ -667,7 +667,7 @@ main {
   align-self: center;
   width: 1px;
   height: 28px;
-  background: var(--border);
+  background: var(--edge);
 }
 .phrase-open {
   display: inline-flex;
