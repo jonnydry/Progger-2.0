@@ -81,6 +81,15 @@ import '@/app/phrase-deck.css';
 const EMPTY_LOCKS: PhraseLocks = {};
 const EMPTY_NOTES: readonly FingeredNote[] = [];
 
+function sameLocks(a: PhraseLocks, b: PhraseLocks): boolean {
+  return (
+    a.contour === b.contour &&
+    a.rhythm === b.rhythm &&
+    a.register === b.register &&
+    a.cadence === b.cadence
+  );
+}
+
 function historyPlace(
   chord: {
     fromContext: boolean;
@@ -246,6 +255,10 @@ export function PhrasePanel({
   // Saved locks stay with that phrase. A cadence the chord cannot land is
   // ignored by generatePhrase. The page has no lock control to change.
   const generationLocks = phraseHistoryActiveLocks(cursor, onHistory, locks);
+  // A cross-tab read builds new lock objects for the same phrase. Keep
+  // the previous object so playback does not see a new phrase.
+  const [stableLocks, setStableLocks] = useState(generationLocks);
+  if (!sameLocks(stableLocks, generationLocks)) setStableLocks(generationLocks);
   const phrase = useMemo(() => {
     if (held) {
       return {
@@ -264,9 +277,9 @@ export function PhrasePanel({
       bars,
       scaleNotes,
       chordNotes,
-      locks: generationLocks,
+      locks: stableLocks,
     });
-  }, [held, seed, bars, scaleNotes, chordNotes, generationLocks]);
+  }, [held, seed, bars, scaleNotes, chordNotes, stableLocks]);
   if (phrase.ok && phrase.phrase.seed !== seed && seedText === String(seed)) {
     setSeed(phrase.phrase.seed);
     setSeedText(String(phrase.phrase.seed));

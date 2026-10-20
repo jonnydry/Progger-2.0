@@ -298,6 +298,18 @@ function sameChord(
   );
 }
 
+function samePhraseHistoryState(
+  a: PhraseHistoryState,
+  b: PhraseHistoryState,
+): boolean {
+  if (a === b) return true;
+  if (a.index !== b.index || a.entries.length !== b.entries.length) return false;
+  return a.entries.every((entry, index) => {
+    const other = b.entries[index];
+    return other !== undefined && samePhraseHistoryEntry(entry, other);
+  });
+}
+
 export function samePhraseHistoryEntry(
   a: PhraseHistoryEntry,
   b: PhraseHistoryEntry,
@@ -600,10 +612,24 @@ export function subscribePhraseHistory(listener: () => void): () => void {
   };
 }
 
-/** Storage events only refresh memory. They never write. */
+/**
+ * Storage events only refresh memory. They never write.
+ * An equal list keeps the objects already in memory. A new parse would
+ * otherwise rebuild lock objects and look like a new phrase.
+ */
 export function onPhraseHistoryStorage(key: string | null): void {
   if (key !== PHRASE_HISTORY_KEY) return;
-  doc = null;
+  const previous = doc;
+  const loaded = loadDoc();
+  if (
+    previous &&
+    previous.writable === loaded.writable &&
+    samePhraseHistoryState(previous.state, loaded.state)
+  ) {
+    doc = previous;
+  } else {
+    doc = loaded;
+  }
   emit();
 }
 
