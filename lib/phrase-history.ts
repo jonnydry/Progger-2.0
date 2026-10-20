@@ -1,3 +1,4 @@
+import { QUALITIES } from './harmony.ts';
 import { ROOTS, SCALES } from './music.ts';
 
 /**
@@ -11,6 +12,7 @@ export const PHRASE_HISTORY_KEY = 'progger.phrase-history.v1';
 export const PHRASE_HISTORY_LIMIT = 3;
 
 const SCALE_IDS = new Set(SCALES.map((scale) => scale.id));
+const QUALITY_IDS = new Set(QUALITIES.map((quality) => quality.id));
 const ROOT_SET = new Set<string>(ROOTS);
 const CONTOURS = new Set(['arch', 'rise', 'fall', 'wave']);
 const RHYTHMS = new Set(['quarters', 'eighths', 'long-short', 'push']);
@@ -30,15 +32,32 @@ export type PhraseHistoryNote = {
   degree: string;
 };
 
+export type PhraseHistoryPlace = 'scale' | 'chord';
+
 /**
- * Seed, bar length, and the scale and chord the generator used.
- * The same seed in another scale or chord is a different phrase.
+ * The chord control that was selected. Null is the scale's tonic triad.
+ * `fromContext` is a highlighted chord on the scales tab.
+ */
+export type PhraseHistoryChord = {
+  symbol: string;
+  root: string;
+  qualityId: string;
+  bass?: string;
+  fromContext: boolean;
+  notes: PhraseHistoryNote[];
+};
+
+/**
+ * Seed, bar length, and the key, scale, and chord the generator used.
+ * The same seed in another key, scale, or chord is a different phrase.
  */
 export type PhraseHistoryEntry = {
   seed: number;
   bars: 2 | 4;
   scaleRoot: string;
   scaleId: string;
+  place: PhraseHistoryPlace;
+  chord: PhraseHistoryChord | null;
   chordNotes: PhraseHistoryNote[];
   locks: PhraseHistoryLocks;
 };
@@ -57,6 +76,8 @@ export type PhraseHistoryStorage = {
 export type PhraseHistoryContext = {
   scaleRoot: string;
   scaleId: string;
+  place: PhraseHistoryPlace;
+  chord: PhraseHistoryChord | null;
   chordNotes: readonly PhraseHistoryNote[];
   locks?: PhraseHistoryLocks;
 };
@@ -154,12 +175,58 @@ function notesOf(value: unknown): PhraseHistoryNote[] | null {
   return notes;
 }
 
+function chordOf(value: unknown): PhraseHistoryChord | null | undefined {
+  if (value === null) return null;
+  if (!isRecord(value)) return undefined;
+  const symbol = text(value.symbol, 32);
+  const root =
+    typeof value.root === 'string' && ROOT_SET.has(value.root)
+      ? value.root
+      : null;
+  const qualityId =
+    typeof value.qualityId === 'string' && QUALITY_IDS.has(value.qualityId)
+      ? value.qualityId
+      : null;
+  const notes = notesOf(value.notes);
+  const bass = value.bass === undefined ? undefined : text(value.bass, 16);
+  if (
+    !symbol ||
+    !root ||
+    !qualityId ||
+    !notes ||
+    notes.length === 0 ||
+    typeof value.fromContext !== 'boolean' ||
+    (value.bass !== undefined && !bass)
+  ) {
+    return undefined;
+  }
+  const chord: PhraseHistoryChord = {
+    symbol,
+    root,
+    qualityId,
+    fromContext: value.fromContext,
+    notes,
+  };
+  if (bass) chord.bass = bass;
+  return chord;
+}
+
+function placeAgrees(
+  place: PhraseHistoryPlace,
+  chord: PhraseHistoryChord | null,
+): boolean {
+  if (place === 'chord') return Boolean(chord && !chord.fromContext);
+  return chord === null || chord.fromContext;
+}
+
 /** A clean entry, or null when the value cannot regenerate a phrase. */
 export function phraseHistoryEntry(input: {
   seed: number;
   bars: 2 | 4;
   scaleRoot: string;
   scaleId: string;
+  place: PhraseHistoryPlace;
+  chord: PhraseHistoryChord | null;
   chordNotes: readonly PhraseHistoryNote[];
   locks?: PhraseHistoryLocks;
 }): PhraseHistoryEntry | null {
@@ -173,6 +240,9 @@ export function phraseHistoryEntry(input: {
     typeof input.scaleId === 'string' && SCALE_IDS.has(input.scaleId)
       ? input.scaleId
       : null;
+  const place =
+    input.place === 'scale' || input.place === 'chord' ? input.place : null;
+  const chord = chordOf(input.chord);
   const chordNotes = notesOf(input.chordNotes);
   const locks = locksOf(input.locks ?? {});
   if (
@@ -180,12 +250,15 @@ export function phraseHistoryEntry(input: {
     bars === null ||
     !scaleRoot ||
     !scaleId ||
+    !place ||
+    chord === undefined ||
+    !placeAgrees(place, chord) ||
     !chordNotes ||
     !locks
   ) {
     return null;
   }
-  return { seed, bars, scaleRoot, scaleId, chordNotes, locks };
+  return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
 }
 
 function sameLocks(a: PhraseHistoryLocks, b: PhraseHistoryLocks): boolean {
@@ -210,6 +283,21 @@ function sameNotes(
   );
 }
 
+function sameChord(
+  a: PhraseHistoryChord | null,
+  b: PhraseHistoryChord | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.symbol === b.symbol &&
+    a.root === b.root &&
+    a.qualityId === b.qualityId &&
+    a.bass === b.bass &&
+    a.fromContext === b.fromContext &&
+    sameNotes(a.notes, b.notes)
+  );
+}
+
 export function samePhraseHistoryEntry(
   a: PhraseHistoryEntry,
   b: PhraseHistoryEntry,
@@ -219,9 +307,54 @@ export function samePhraseHistoryEntry(
     a.bars === b.bars &&
     a.scaleRoot === b.scaleRoot &&
     a.scaleId === b.scaleId &&
+    a.place === b.place &&
+    sameChord(a.chord, b.chord) &&
     sameNotes(a.chordNotes, b.chordNotes) &&
     sameLocks(a.locks, b.locks)
   );
+}
+
+/**
+ * The phrase on screen is this entry.
+ * An unplayable plan is retried at the next seed, and the panel then
+ * shows that seed. It is still this phrase.
+ */
+export function phraseHistoryShows(
+  entry: PhraseHistoryEntry,
+  shown: {
+    seed: number;
+    bars: 2 | 4;
+    scaleRoot: string;
+    scaleId: string;
+    place: PhraseHistoryPlace;
+    chord: PhraseHistoryChord | null;
+    chordNotes: readonly PhraseHistoryNote[];
+  },
+): boolean {
+  const seed =
+    shown.seed === entry.seed || shown.seed === (entry.seed + 1) >>> 0;
+  return (
+    seed &&
+    shown.bars === entry.bars &&
+    shown.scaleRoot === entry.scaleRoot &&
+    shown.scaleId === entry.scaleId &&
+    shown.place === entry.place &&
+    sameChord(shown.chord, entry.chord) &&
+    sameNotes(shown.chordNotes, entry.chordNotes)
+  );
+}
+
+/**
+ * Locks saved with the phrase stay in force while it is showing.
+ * The page has no lock control, so there is nothing else to switch.
+ */
+export function phraseHistoryActiveLocks(
+  entry: PhraseHistoryEntry | null,
+  showing: boolean,
+  active: PhraseHistoryLocks,
+): PhraseHistoryLocks {
+  if (!showing || !entry) return active;
+  return entry.locks;
 }
 
 function clampedIndex(state: PhraseHistoryState): number {
@@ -300,8 +433,9 @@ export function stepPhraseHistory(
 }
 
 /**
- * Seed and bar length of the current entry when it was generated for
- * this scale and chord. Null leaves the caller on a fresh phrase.
+ * Seed and bar length of the current entry when the page is still in
+ * that key, scale, and chord. Null leaves the caller on a fresh phrase.
+ * Back then adopts this entry and restores its context.
  */
 export function phraseHistoryOpening(
   state: PhraseHistoryState,
@@ -309,16 +443,16 @@ export function phraseHistoryOpening(
 ): { seed: number; bars: 2 | 4 } | null {
   const index = clampedIndex(state);
   const entry = index >= 0 ? state.entries[index] : null;
-  if (!entry) return null;
-  const compared = phraseHistoryEntry({
-    seed: entry.seed,
-    bars: entry.bars,
-    scaleRoot: context.scaleRoot,
-    scaleId: context.scaleId,
-    chordNotes: context.chordNotes,
-    locks: context.locks,
-  });
-  if (!compared || !samePhraseHistoryEntry(entry, compared)) return null;
+  if (
+    !entry ||
+    !phraseHistoryShows(entry, {
+      ...context,
+      seed: entry.seed,
+      bars: entry.bars,
+    })
+  ) {
+    return null;
+  }
   return { seed: entry.seed, bars: entry.bars };
 }
 
@@ -334,6 +468,13 @@ function entryOf(value: unknown): PhraseHistoryEntry | null {
     typeof value.scaleId === 'string' && SCALE_IDS.has(value.scaleId)
       ? value.scaleId
       : null;
+  const place =
+    value.place === 'scale' || value.place === 'chord' ? value.place : null;
+  // Entries saved before the chord control was stored cannot be restored
+  // to that control. They are dropped. Guessing the current chord would
+  // play the old seed in whatever chord is on screen.
+  if (!('chord' in value) || !place) return null;
+  const chord = chordOf(value.chord);
   const chordNotes = notesOf(value.chordNotes);
   const locks = locksOf(value.locks);
   if (
@@ -341,12 +482,14 @@ function entryOf(value: unknown): PhraseHistoryEntry | null {
     bars === null ||
     !scaleRoot ||
     !scaleId ||
+    chord === undefined ||
+    !placeAgrees(place, chord) ||
     !chordNotes ||
     !locks
   ) {
     return null;
   }
-  return { seed, bars, scaleRoot, scaleId, chordNotes, locks };
+  return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
 }
 
 type HistoryDoc = {
@@ -536,12 +679,20 @@ export function rememberPhrase(entry: PhraseHistoryEntry): PhraseHistoryState {
   return current().state;
 }
 
-/** Step back or forward and return the phrase now showing. */
+/**
+ * Step back or forward and return the phrase now showing.
+ * When the screen is not the current entry, Back adopts that entry and
+ * does not write. A step never adds an entry.
+ */
 export function movePhraseHistory(
   direction: -1 | 1,
+  showing = true,
 ): PhraseHistoryEntry | null {
   const open = current();
   if (!open.writable) return null;
+  const index = clampedIndex(open.state);
+  const cursor = index >= 0 ? (open.state.entries[index] ?? null) : null;
+  if (!showing && direction === -1) return cursor;
   const next = stepPhraseHistory(open.state, direction);
   if (next === open.state) return null;
   commit(next);

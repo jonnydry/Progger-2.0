@@ -8,6 +8,10 @@ import {
   type ReactNode,
 } from 'react';
 import { Music2 } from 'lucide-react';
+import type {
+  PhraseHistoryChord,
+  PhraseHistoryPlace,
+} from '@/lib/phrase-history';
 import type { Note } from '@/lib/music';
 import type { PhraseFretMark } from '@/lib/phrase-marks';
 import type { TrayPhrase, TrayPhraseCapture } from '@/lib/tray';
@@ -31,6 +35,12 @@ type PanelProps = {
   held: TrayPhrase | null;
   contextKey: string;
   onReleaseHeld: () => void;
+  onRestoreContext?: (context: {
+    scaleRoot: string;
+    scaleId: string;
+    place: PhraseHistoryPlace;
+    chord: PhraseHistoryChord | null;
+  }) => void;
   capture: TrayPhraseCapture;
   onMarks: (
     marks: readonly PhraseFretMark[] | null,
@@ -49,6 +59,7 @@ export function PhraseLauncher({
   held,
   contextKey,
   onReleaseHeld,
+  onRestoreContext,
   capture,
   openSignal = 0,
   onMarks,
@@ -123,6 +134,7 @@ export function PhraseLauncher({
               held={held}
               contextKey={contextKey}
               onReleaseHeld={onReleaseHeld}
+              onRestoreContext={onRestoreContext}
               capture={capture}
               onMarks={onMarks}
             />

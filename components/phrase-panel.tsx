@@ -47,11 +47,15 @@ import {
   emptyPhraseHistory,
   getPhraseHistory,
   movePhraseHistory,
+  phraseHistoryActiveLocks,
   phraseHistoryEntry,
   phraseHistoryOpening,
+  phraseHistoryShows,
   phraseHistoryStepFocus,
   rememberPhrase,
   subscribePhraseHistory,
+  type PhraseHistoryChord,
+  type PhraseHistoryPlace,
 } from '@/lib/phrase-history';
 import {
   bindPhraseStop,
@@ -65,6 +69,41 @@ import '@/app/phrase.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
 const EMPTY_NOTES: readonly FingeredNote[] = [];
+
+function historyPlace(
+  chord: {
+    fromContext: boolean;
+  } | null,
+): PhraseHistoryPlace {
+  return chord && !chord.fromContext ? 'chord' : 'scale';
+}
+
+function historyChord(
+  chord: {
+    symbol: string;
+    root: string;
+    qualityId: string;
+    bass?: string;
+    fromContext: boolean;
+    notes: readonly { name: string; pc: number; degree: string }[];
+  } | null,
+): PhraseHistoryChord | null {
+  if (!chord) return null;
+  const notes = chord.notes.map((note) => ({
+    name: note.name,
+    pc: note.pc,
+    degree: note.degree,
+  }));
+  const saved: PhraseHistoryChord = {
+    symbol: chord.symbol,
+    root: chord.root,
+    qualityId: chord.qualityId,
+    fromContext: chord.fromContext,
+    notes,
+  };
+  if (chord.bass) saved.bass = chord.bass;
+  return saved;
+}
 
 /** A repeated message has to change the text, or aria-live stays quiet. */
 export function saveAnnouncement(previous: string, message: string): string {
@@ -85,6 +124,7 @@ export function PhrasePanel({
   held = null,
   contextKey = '',
   onReleaseHeld,
+  onRestoreContext,
   capture,
   dots = 'shown',
   locks = EMPTY_LOCKS,
@@ -106,6 +146,12 @@ export function PhrasePanel({
   held?: TrayPhrase | null;
   contextKey?: string;
   onReleaseHeld?: () => void;
+  onRestoreContext?: (context: {
+    scaleRoot: string;
+    scaleId: string;
+    place: PhraseHistoryPlace;
+    chord: PhraseHistoryChord | null;
+  }) => void;
   capture: TrayPhraseCapture;
   /** Later ear-training step passes `hidden` and keeps the same phrase. */
   dots?: PhraseDotVisibility;
@@ -125,6 +171,8 @@ export function PhrasePanel({
     const saved = phraseHistoryOpening(getPhraseHistory(), {
       scaleRoot,
       scaleId,
+      place: historyPlace(chord),
+      chord: historyChord(chord),
       chordNotes,
       locks,
     });
@@ -164,6 +212,29 @@ export function PhrasePanel({
     tempoRef.current = held.tempo;
     swingRef.current = held.swing;
   }, [held, heldCursor]);
+  const history = useSyncExternalStore(
+    subscribePhraseHistory,
+    getPhraseHistory,
+    emptyPhraseHistory,
+  );
+  const place = historyPlace(chord);
+  const savedChord = historyChord(chord);
+  const cursor =
+    history.index >= 0 ? (history.entries[history.index] ?? null) : null;
+  const onHistory = cursor
+    ? phraseHistoryShows(cursor, {
+        seed,
+        bars,
+        scaleRoot,
+        scaleId,
+        place,
+        chord: savedChord,
+        chordNotes,
+      })
+    : false;
+  // Saved locks stay with that phrase. A cadence the chord cannot land is
+  // ignored by generatePhrase. The page has no lock control to change.
+  const generationLocks = phraseHistoryActiveLocks(cursor, onHistory, locks);
   const phrase = useMemo(() => {
     if (held) {
       return {
@@ -182,9 +253,9 @@ export function PhrasePanel({
       bars,
       scaleNotes,
       chordNotes,
-      locks,
+      locks: generationLocks,
     });
-  }, [held, seed, bars, scaleNotes, chordNotes, locks]);
+  }, [held, seed, bars, scaleNotes, chordNotes, generationLocks]);
   if (phrase.ok && phrase.phrase.seed !== seed && seedText === String(seed)) {
     setSeed(phrase.phrase.seed);
     setSeedText(String(phrase.phrase.seed));
@@ -299,44 +370,63 @@ export function PhrasePanel({
     setSeed(parsed);
     setSeedText(String(parsed));
   }
-  const history = useSyncExternalStore(
-    subscribePhraseHistory,
-    getPhraseHistory,
-    emptyPhraseHistory,
-  );
-  function historyEntry(nextSeed: number) {
+  function historyEntry(nextSeed: number, entryLocks: PhraseLocks) {
     return phraseHistoryEntry({
       seed: nextSeed,
       bars,
       scaleRoot,
       scaleId,
+      place,
+      chord: savedChord,
       chordNotes,
-      locks,
+      locks: entryLocks,
     });
   }
-  function showHistoryPhrase(nextSeed: number, nextBars: 2 | 4) {
+  function showHistoryPhrase(entry: {
+    seed: number;
+    bars: 2 | 4;
+    scaleRoot: string;
+    scaleId: string;
+    place: PhraseHistoryPlace;
+    chord: PhraseHistoryChord | null;
+  }) {
     onReleaseHeld?.();
-    setBars(nextBars);
-    setSeed(nextSeed);
-    setSeedText(String(nextSeed));
+    onRestoreContext?.({
+      scaleRoot: entry.scaleRoot,
+      scaleId: entry.scaleId,
+      place: entry.place,
+      chord: entry.chord,
+    });
+    setBars(entry.bars);
+    setSeed(entry.seed);
+    setSeedText(String(entry.seed));
     setNotice('');
   }
   function regenerate() {
     const next = randomSeed();
-    const outgoing = historyEntry(seed);
-    const incoming = historyEntry(next);
-    if (outgoing) rememberPhrase(outgoing);
+    const outgoing = historyEntry(seed, generationLocks);
+    const incoming = historyEntry(next, locks);
+    const drifted = Boolean(
+      cursor &&
+      !onHistory &&
+      bars === cursor.bars &&
+      (seed === cursor.seed || seed === (cursor.seed + 1) >>> 0),
+    );
+    if (!drifted && outgoing) rememberPhrase(outgoing);
     if (incoming) rememberPhrase(incoming);
-    showHistoryPhrase(next, bars);
+    onReleaseHeld?.();
+    setSeed(next);
+    setSeedText(String(next));
+    setNotice('');
   }
   const previousStep = useRef<HTMLButtonElement>(null);
   const nextStep = useRef<HTMLButtonElement>(null);
   const newPhraseButton = useRef<HTMLButtonElement>(null);
   const historyFocus = useRef<'previous' | 'next' | 'new' | null>(null);
   function stepHistory(direction: -1 | 1) {
-    const entry = movePhraseHistory(direction);
+    const entry = movePhraseHistory(direction, onHistory);
     if (!entry) return;
-    showHistoryPhrase(entry.seed, entry.bars);
+    showHistoryPhrase(entry);
     const shown = getPhraseHistory();
     historyFocus.current = phraseHistoryStepFocus({
       direction,
@@ -355,7 +445,7 @@ export function PhrasePanel({
           ? nextStep.current
           : newPhraseButton.current;
     if (node && !node.disabled) node.focus({ preventScroll: true });
-  }, [history.index]);
+  }, [history.index, seed, bars, scaleRoot, scaleId]);
   function chooseBars(next: 2 | 4) {
     onReleaseHeld?.();
     setBars(next);
@@ -578,7 +668,7 @@ export function PhrasePanel({
               className="phrase-action phrase-history-step"
               aria-label="Previous phrase"
               aria-describedby="phrase-history-hint"
-              disabled={history.index <= 0}
+              disabled={onHistory ? history.index <= 0 : !cursor}
               ref={previousStep}
               onClick={() => stepHistory(-1)}
             >
@@ -598,7 +688,9 @@ export function PhrasePanel({
               aria-label="Next phrase"
               aria-describedby="phrase-history-hint"
               disabled={
-                history.index < 0 || history.index >= history.entries.length - 1
+                !onHistory ||
+                history.index < 0 ||
+                history.index >= history.entries.length - 1
               }
               ref={nextStep}
               onClick={() => stepHistory(1)}

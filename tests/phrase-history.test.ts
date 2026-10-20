@@ -10,8 +10,10 @@ import {
   movePhraseHistory,
   onPhraseHistoryStorage,
   parsePhraseHistory,
+  phraseHistoryActiveLocks,
   phraseHistoryEntry,
   phraseHistoryOpening,
+  phraseHistoryShows,
   phraseHistoryStepFocus,
   pushPhraseHistory,
   readPhraseHistory,
@@ -39,6 +41,8 @@ function entry(
     bars: patch.bars ?? 2,
     scaleRoot: patch.scaleRoot ?? 'A',
     scaleId: patch.scaleId ?? 'dorian',
+    place: patch.place ?? 'scale',
+    chord: patch.chord === undefined ? null : patch.chord,
     chordNotes: patch.chordNotes ?? tonic,
     locks: patch.locks ?? {},
   });
@@ -360,6 +364,89 @@ void test('a refused write still steps the phrases in memory', () => {
   }
 });
 
+void test('an older saved phrase without a chord control is dropped', () => {
+  const legacy = {
+    seed: 4,
+    bars: 4,
+    scaleRoot: 'E',
+    scaleId: 'mixolydian',
+    chordNotes: tonic,
+    locks: {},
+  };
+  const raw = JSON.stringify({
+    version: 1,
+    index: 0,
+    entries: [legacy, entry(9)],
+  });
+  const store = memory(raw);
+  const loaded = readPhraseHistory(store);
+  assert.equal(loaded.entries.length, 1);
+  assert.equal(loaded.entries[0]?.seed, 9);
+  assert.equal(loaded.index, 0);
+  assert.equal(store.raw(), raw);
+  assert.equal(parsePhraseHistory(raw).writable, true);
+});
+
+void test('stepping does not add a phrase, and back adopts an unsaved context', () => {
+  const held = install(null);
+  try {
+    rememberPhrase(entry(1));
+    rememberPhrase(entry(2, { scaleRoot: 'C', scaleId: 'major' }));
+    const raw = held.raw();
+    const writes = held.writes();
+    const adopted = movePhraseHistory(-1, false);
+    assert.equal(adopted?.scaleRoot, 'C');
+    assert.equal(adopted?.seed, 2);
+    assert.equal(held.raw(), raw);
+    assert.equal(held.writes(), writes);
+    const back = movePhraseHistory(-1, true);
+    assert.equal(back?.seed, 1);
+    assert.equal(getPhraseHistory().entries.length, 2);
+    const saved = JSON.parse(held.raw() ?? '{}') as {
+      entries: { seed: number }[];
+    };
+    assert.deepEqual(
+      saved.entries.map((item) => item.seed),
+      [1, 2],
+    );
+    const forward = movePhraseHistory(1);
+    assert.equal(forward?.seed, 2);
+    assert.equal(getPhraseHistory().entries.length, 2);
+  } finally {
+    held.restore();
+  }
+});
+
+void test('a showing phrase keeps the locks it was saved with', () => {
+  const saved = entry(5, { locks: { cadence: 'fifth', contour: 'arch' } });
+  assert.deepEqual(phraseHistoryActiveLocks(saved, true, {}), saved.locks);
+  assert.deepEqual(phraseHistoryActiveLocks(saved, false, {}), {});
+  assert.equal(
+    phraseHistoryShows(saved, {
+      seed: saved.seed,
+      bars: saved.bars,
+      scaleRoot: saved.scaleRoot,
+      scaleId: saved.scaleId,
+      place: saved.place,
+      chord: saved.chord,
+      chordNotes: saved.chordNotes,
+    }),
+    true,
+  );
+  assert.equal(
+    phraseHistoryShows(saved, {
+      seed: saved.seed,
+      bars: saved.bars,
+      scaleRoot: 'C',
+      scaleId: 'major',
+      place: 'scale',
+      chord: null,
+      chordNotes: saved.chordNotes,
+    }),
+    false,
+  );
+});
+
 void test('focus leaves a step button that has reached the end', () => {
   assert.equal(
     phraseHistoryStepFocus({ direction: -1, index: 0, count: 3 }),
@@ -418,6 +505,8 @@ void test('a stored entry regenerates the same spelled phrase', () => {
     bars: 4,
     scaleRoot: 'A',
     scaleId: 'major',
+    place: 'scale',
+    chord: null,
     chordNotes,
     locks,
   });
@@ -450,6 +539,8 @@ void test('a stored entry regenerates the same spelled phrase', () => {
   const context = {
     scaleRoot: 'A',
     scaleId: 'major',
+    place: 'scale' as const,
+    chord: null,
     chordNotes,
     locks,
   };
