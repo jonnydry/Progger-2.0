@@ -7,6 +7,7 @@ import { SCALES, TUNING, spell } from '../lib/music.ts';
 import {
   PHRASE_END_RELEASE_SEC,
   PHRASE_LOOKAHEAD_SEC,
+  PHRASE_START_LEAD_SEC,
   PHRASE_TEMPO_DEFAULT,
   PHRASE_TEMPO_MAX,
   PHRASE_TEMPO_MIN,
@@ -17,6 +18,7 @@ import {
   bindPhraseLifecycle,
   clampPhraseTempo,
   melodyFrets,
+  nextPhraseBarLine,
   phraseClosingIndex,
   phraseLoopBeats,
   phraseLoopSeconds,
@@ -1954,12 +1956,42 @@ function spyGains(context: OfflineAudioContext) {
   return { ramps, cancels, disconnected };
 }
 
-void test('a looping phrase switches to the latest request at the seam', async () => {
+void test('the next bar line keeps a start lead and skips a closer one', () => {
+  const tempo = 120;
+  const startedAt = PHRASE_START_LEAD_SEC;
+  const bar = 4 * (60 / tempo);
+  assert.equal(
+    nextPhraseBarLine(startedAt, startedAt + 0.5, tempo),
+    startedAt + bar,
+  );
+  assert.equal(
+    nextPhraseBarLine(
+      startedAt,
+      startedAt + bar - PHRASE_START_LEAD_SEC,
+      tempo,
+    ),
+    startedAt + bar,
+  );
+  assert.equal(
+    nextPhraseBarLine(
+      startedAt,
+      startedAt + bar - PHRASE_START_LEAD_SEC + 0.01,
+      tempo,
+    ),
+    startedAt + bar * 2,
+  );
+  assert.equal(
+    nextPhraseBarLine(startedAt, startedAt + bar, tempo),
+    startedAt + bar * 2,
+  );
+});
+
+void test('a looping phrase switches to the latest request on the next bar line', async () => {
   const tempo = 120;
   const context = new OfflineAudioContext(1, RATE * 20, RATE);
   context.resume = () => Promise.resolve();
   const clock = new AudioClock();
-  const { starts, dropped } = spyPhrase(context);
+  const { starts, dropped, stops } = spyPhrase(context);
   const player = new PhrasePlayer(() => {});
   const playing = [
     queuedNote(0, 0),
@@ -1977,13 +2009,19 @@ void test('a looping phrase switches to the latest request at the seam', async (
     destination: context.createGain(),
     clock,
   });
-  const lead = 0.05;
-  const boundary = lead + phraseLoopSeconds(playing, tempo);
+  const lead = PHRASE_START_LEAD_SEC;
+  const seam = lead + phraseLoopSeconds(playing, tempo);
   await rollClock(clock, lead + 60 / tempo);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  assert.ok(boundary < seam - 1, 'the switch waited for the loop seam');
+  const kept = starts.find(
+    (item) => nearPitch(item, 2) && Math.abs(item.when - (lead + 1)) < 1e-6,
+  );
+  assert.ok(kept, 'the note before the bar line was not scheduled');
   const later = starts.find(
     (item) => nearPitch(item, 4) && Math.abs(item.when - (lead + 3)) < 1e-6,
   );
-  assert.ok(later, 'the note later in this pass was not scheduled');
+  assert.ok(later, 'the note after the bar line was not scheduled');
   player.queuePhrase({
     notes: [queuedNote(7, 0), queuedNote(7, 8, 2)],
     bars: 2,
@@ -2004,8 +2042,13 @@ void test('a looping phrase switches to the latest request at the seam', async (
     destination: context.destination,
     clock,
   });
-  await rollClock(clock, boundary - 0.05);
-  assert.equal(dropped.has(later.oscillator), false);
+  await rollClock(clock, boundary - 0.02);
+  assert.equal(dropped.has(kept.oscillator), false);
+  assert.equal(
+    dropped.has(later.oscillator),
+    true,
+    'a note from the old phrase was left past the bar line',
+  );
   assert.equal(
     starts.some(
       (item) =>
@@ -2013,24 +2056,454 @@ void test('a looping phrase switches to the latest request at the seam', async (
         item.when < boundary - 1e-6,
     ),
     false,
-    'a queued phrase restarted mid-pass',
+    'a queued phrase restarted mid-bar',
   );
-  const repeated = starts.filter(
-    (item) => nearPitch(item, 0) && Math.abs(item.when - boundary) < 1e-6,
-  );
-  assert.equal(repeated.length, 1);
-  assert.equal(dropped.has(repeated[0]?.oscillator), true);
   await rollClock(clock, boundary + 0.05);
   const switched = starts.filter((item) => nearPitch(item, 10));
   assert.equal(switched.length >= 1, true);
   assert.ok(
     switched.some((item) => Math.abs(item.when - boundary) < 1e-6),
-    'the new phrase did not start on the seam',
+    'the new phrase did not start on the bar line',
   );
   assert.equal(
     starts.some((item) => nearPitch(item, 7)),
     false,
     'an earlier queued phrase still sounded',
+  );
+  for (const item of starts) {
+    if (item.when < boundary - 1e-4) continue;
+    if (nearPitch(item, 10) || nearPitch(item, 12)) continue;
+    assert.equal(
+      dropped.has(item.oscillator),
+      true,
+      `an old note stayed at ${item.when}s`,
+    );
+  }
+  assert.ok(
+    stops.some(
+      (item) =>
+        item.oscillator === kept.oscillator &&
+        Math.abs(item.when - (boundary + PHRASE_END_RELEASE_SEC)) < 1e-3,
+    ),
+    'the note already sounding was cut instead of faded',
+  );
+  const after = starts.filter((item) => item.when > seam + 1e-6);
+  assert.equal(
+    after.some((item) => !nearPitch(item, 10) && !dropped.has(item.oscillator)),
+    false,
+    'the old phrase continued past the seam',
+  );
+  player.stop();
+});
+
+void test('a key or scale change while looping lands on the next downbeat', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 20, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const { starts, dropped } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [
+    queuedNote(0, 0),
+    queuedNote(2, 3),
+    queuedNote(4, 6),
+    queuedNote(1, 8, 2),
+  ];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  await rollClock(clock, lead + 0.75);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  const seam = lead + phraseLoopSeconds(playing, tempo);
+  assert.ok(seam - boundary > 1);
+  player.queuePhrase({
+    notes: [queuedNote(9, 0), queuedNote(11, 2), queuedNote(9, 8, 2)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  await rollClock(clock, boundary + 0.05);
+  const arrived = starts.filter((item) => nearPitch(item, 9));
+  assert.ok(
+    arrived.some((item) => Math.abs(item.when - boundary) < 1e-6),
+    'the new key did not start on the bar line',
+  );
+  assert.equal(
+    arrived.some((item) => item.when < boundary - 1e-6),
+    false,
+    'the new key started before the bar line',
+  );
+  const carried = starts.find(
+    (item) => nearPitch(item, 4) && item.when > boundary - 1e-4,
+  );
+  assert.ok(carried, 'the old phrase had no note past the bar line');
+  assert.equal(dropped.has(carried.oscillator), true);
+  player.stop();
+});
+
+void test('a 4-bar loop switches on the next bar, not at the seam', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 24, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const { starts } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [
+    queuedNote(0, 0),
+    queuedNote(2, 6),
+    queuedNote(3, 10),
+    queuedNote(4, 14),
+    queuedNote(1, 16, 2),
+  ];
+  await player.start({
+    notes: playing,
+    bars: 4,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  const seam = lead + phraseLoopSeconds(playing, tempo);
+  assert.equal(seam, lead + 8);
+  await rollClock(clock, lead + 0.4);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  assert.equal(boundary, lead + 2);
+  player.queuePhrase({
+    notes: [queuedNote(10, 0), queuedNote(10, 16, 2)],
+    bars: 4,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  await rollClock(clock, boundary + 0.05);
+  assert.ok(
+    starts.some(
+      (item) => nearPitch(item, 10) && Math.abs(item.when - boundary) < 1e-6,
+    ),
+    'the 4-bar phrase did not switch on the next bar',
+  );
+  assert.equal(
+    starts.some((item) => nearPitch(item, 10) && item.when < boundary - 1e-6),
+    false,
+  );
+  player.stop();
+});
+
+void test('a change inside the start lead waits for the following bar', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 20, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const { starts, dropped } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [
+    queuedNote(0, 0),
+    queuedNote(3, 4),
+    queuedNote(5, 6),
+    queuedNote(8, 8, 2),
+  ];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  const imminent = lead + 2;
+  await rollClock(clock, imminent - 0.04);
+  player.queuePhrase({
+    notes: [queuedNote(10, 0), queuedNote(10, 8, 2)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  assert.equal(boundary, imminent + 2);
+  await rollClock(clock, imminent + 0.05);
+  const downbeat = starts.find(
+    (item) => nearPitch(item, 3) && Math.abs(item.when - imminent) < 1e-6,
+  );
+  assert.ok(downbeat, 'the skipped bar did not play its downbeat');
+  assert.equal(dropped.has(downbeat.oscillator), false);
+  assert.equal(
+    starts.some((item) => nearPitch(item, 10)),
+    false,
+    'the new phrase landed on the bar that was already too close',
+  );
+  await rollClock(clock, boundary + 0.05);
+  assert.ok(
+    starts.some(
+      (item) => nearPitch(item, 10) && Math.abs(item.when - boundary) < 1e-6,
+    ),
+    'the new phrase did not take the following bar',
+  );
+  player.stop();
+});
+
+void test('a change exactly one start lead before a bar still takes that bar', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 16, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const { starts, dropped } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [
+    queuedNote(0, 0),
+    queuedNote(6, 4),
+    queuedNote(4, 6),
+    queuedNote(8, 8, 2),
+  ];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  const imminent = lead + 2;
+  await rollClock(clock, imminent - PHRASE_START_LEAD_SEC);
+  player.queuePhrase({
+    notes: [queuedNote(11, 0)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  await rollClock(clock, imminent + 0.05);
+  const struck = starts.filter((item) => Math.abs(item.when - imminent) < 1e-6);
+  assert.equal(struck.length, 2);
+  const oldDownbeat = struck.find((item) => nearPitch(item, 6));
+  const arrived = struck.find((item) => nearPitch(item, 11));
+  assert.ok(oldDownbeat, 'the old downbeat was not scheduled');
+  assert.ok(arrived, 'a bar one start lead ahead was skipped');
+  assert.equal(
+    dropped.has(oldDownbeat.oscillator),
+    true,
+    'the old downbeat struck with the new phrase',
+  );
+  assert.equal(dropped.has(arrived.oscillator), false);
+  player.stop();
+});
+
+void test('a later request before the lead replaces the phrase armed for that bar', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 16, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const { starts, dropped } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [queuedNote(0, 0), queuedNote(4, 6), queuedNote(8, 8, 2)];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  await rollClock(clock, lead + 0.4);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  player.queuePhrase({
+    notes: [queuedNote(5, 0)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  await rollClock(clock, boundary - 0.08);
+  player.queuePhrase({
+    notes: [queuedNote(11, 0)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  await rollClock(clock, boundary + 0.05);
+  const stale = starts.filter((item) => nearPitch(item, 5));
+  assert.ok(stale.length >= 1, 'the armed phrase was not scheduled');
+  for (const item of stale) {
+    assert.equal(
+      dropped.has(item.oscillator),
+      true,
+      'a replaced phrase struck on the bar it never got to keep',
+    );
+  }
+  assert.ok(
+    starts.some(
+      (item) => nearPitch(item, 11) && Math.abs(item.when - boundary) < 1e-6,
+    ),
+    'the latest phrase missed the bar already armed',
+  );
+  player.stop();
+});
+
+void test('a request inside the lead leaves the armed downbeat and takes the next bar', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 20, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const { starts, dropped } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [queuedNote(0, 0), queuedNote(4, 6), queuedNote(8, 8, 2)];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  await rollClock(clock, lead + 0.4);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  player.queuePhrase({
+    notes: [queuedNote(5, 0), queuedNote(5, 4)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  await rollClock(clock, boundary - 0.03);
+  player.queuePhrase({
+    notes: [queuedNote(11, 0)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  await rollClock(clock, boundary + 0.05);
+  const armed = starts.find(
+    (item) => nearPitch(item, 5) && Math.abs(item.when - boundary) < 1e-6,
+  );
+  assert.ok(armed, 'the armed downbeat did not play');
+  assert.equal(dropped.has(armed.oscillator), false);
+  assert.equal(
+    starts.some((item) => nearPitch(item, 11) && item.when < boundary + 1),
+    false,
+    'a late request took the bar that was already inside the lead',
+  );
+  const following = boundary + 4 * (60 / tempo);
+  await rollClock(clock, following + 0.05);
+  assert.ok(
+    starts.some(
+      (item) => nearPitch(item, 11) && Math.abs(item.when - following) < 1e-6,
+    ),
+    'the late request did not take the following bar',
+  );
+  player.stop();
+});
+
+void test('the bar line stays on the sounding grid and the new phrase uses its own tempo and swing', async () => {
+  const soundingTempo = 120;
+  const incomingTempo = 90;
+  const incomingSwing = 0.5;
+  const context = new OfflineAudioContext(1, RATE * 20, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const { starts } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [
+    queuedNote(0, 0),
+    queuedNote(2, 0.5),
+    queuedNote(4, 6),
+    queuedNote(1, 8, 2),
+  ];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo: soundingTempo,
+    swing: 1,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  const straightOffbeat = lead + 0.25;
+  const swungOffbeat = lead + onsetSeconds(0.5, soundingTempo, 1);
+  assert.ok(swungOffbeat > straightOffbeat + 0.01);
+  await rollClock(clock, lead + 0.2);
+  const offbeat = starts.find(
+    (item) => nearPitch(item, 2) && Math.abs(item.when - swungOffbeat) < 1e-6,
+  );
+  assert.ok(offbeat, 'the sounding offbeat left the straight grid');
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, soundingTempo);
+  assert.equal(boundary, lead + 2);
+  player.queuePhrase({
+    notes: [queuedNote(10, 0), queuedNote(12, 0.5), queuedNote(10, 8, 2)],
+    bars: 2,
+    tempo: incomingTempo,
+    swing: incomingSwing,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  await rollClock(clock, boundary + 1);
+  const downbeat = starts.find(
+    (item) => nearPitch(item, 10) && Math.abs(item.when - boundary) < 1e-6,
+  );
+  assert.ok(downbeat, 'beat 1 did not land on the sounding bar line');
+  const swung = boundary + onsetSeconds(0.5, incomingTempo, incomingSwing);
+  assert.ok(
+    Math.abs(swung - (boundary + 0.25)) > 0.01,
+    'the incoming swing was straight',
+  );
+  assert.ok(
+    starts.some(
+      (item) => nearPitch(item, 12) && Math.abs(item.when - swung) < 1e-6,
+    ),
+    'the incoming phrase did not swing from its own downbeat',
   );
   player.stop();
 });
@@ -2259,8 +2732,12 @@ void test('a phrase switch fades the outgoing notes across the release', async (
     clock,
   });
   const lead = 0.05;
-  const boundary = lead + phraseLoopSeconds(playing, tempo);
   await rollClock(clock, lead + 0.5);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  assert.ok(
+    boundary < lead + phraseLoopSeconds(playing, tempo) - 1,
+    'the fade waited for the loop seam',
+  );
   player.queuePhrase({
     notes: [queuedNote(10, 0), queuedNote(10, 8, 2)],
     bars: 2,
@@ -2672,6 +3149,15 @@ void test('turning Loop off after a queued phrase plays that phrase once', async
   });
   player.finishPass();
   await rollClock(clock, holdEnd - 0.05);
+  const through = starts.filter(
+    (item) => nearPitch(item, 3) && Math.abs(item.when - (lead + 3)) < 1e-6,
+  );
+  assert.equal(through.length, 1);
+  assert.equal(
+    dropped.has(through[0]?.oscillator),
+    false,
+    'turning Loop off dropped the note that follows the next bar line',
+  );
   const landing = starts.filter(
     (item) => nearPitch(item, 8) && Math.abs(item.when - boundary) < 1e-6,
   );
@@ -2783,7 +3269,7 @@ void test('a request during the queued resume replaces the phrase already in fli
   player.stop();
 });
 
-void test('stop just before the seam starts nothing afterwards', async () => {
+void test('stop before the bar line starts nothing afterwards', async () => {
   const tempo = 120;
   const context = new OfflineAudioContext(1, RATE * 20, RATE);
   context.resume = () => Promise.resolve();
@@ -2803,8 +3289,8 @@ void test('stop just before the seam starts nothing afterwards', async () => {
     clock,
   });
   const lead = 0.05;
-  const boundary = lead + phraseLoopSeconds(playing, tempo);
   await rollClock(clock, lead + 60 / tempo);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
   player.queuePhrase({
     notes: [queuedNote(9, 0), queuedNote(9, 8, 2)],
     bars: 2,
@@ -2819,7 +3305,7 @@ void test('stop just before the seam starts nothing afterwards', async () => {
   assert.equal(
     starts.some((item) => nearPitch(item, 9)),
     false,
-    'the queued phrase started before the seam',
+    'the queued phrase started before the bar line',
   );
   player.stop();
   assert.equal(states.at(-1), 'idle');
@@ -2827,7 +3313,7 @@ void test('stop just before the seam starts nothing afterwards', async () => {
   assert.equal(
     starts.some((item) => nearPitch(item, 9)),
     false,
-    'stop left a queued phrase that started at the seam',
+    'stop left a queued phrase that started on the bar line',
   );
   assert.equal(states.at(-1), 'idle');
   player.stop();

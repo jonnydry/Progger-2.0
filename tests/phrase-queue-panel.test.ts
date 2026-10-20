@@ -86,7 +86,8 @@ async function playLooping(page: Page) {
 
 /**
  * Choosing a new length while Loop is on must not restart the pass.
- * start() would flash "Starting…". The queued phrase waits for the seam.
+ * start() would flash "Starting…". The queued phrase waits for the next
+ * bar line, which is still ahead of this check.
  */
 void test('choosing bars while Loop is on does not restart the pass', async (t) => {
   let browser: Browser | undefined;
