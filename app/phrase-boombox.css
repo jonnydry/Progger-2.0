@@ -1,0 +1,526 @@
+/* Boombox: speaker grilles either side of one face. Round push buttons carry
+   their names underneath, tempo and swing read like a radio tuner, and the
+   length is a band switch. Colours come from the scene palette. */
+.phrase-boombox {
+  --boom-shell: color-mix(in srgb, var(--foreground) 5%, var(--card));
+  --boom-edge: color-mix(in srgb, var(--border) 60%, var(--background));
+  --boom-led-off: color-mix(in srgb, var(--quiet) 28%, var(--background));
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr) 132px;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+  padding: 18px 20px;
+  color: var(--foreground);
+  background: var(--boom-shell);
+  border: 2px solid var(--border);
+  border-radius: 18px;
+  box-shadow:
+    inset 0 3px 0 color-mix(in srgb, var(--foreground) 7%, transparent),
+    0 5px 0 var(--boom-edge);
+}
+
+.boom-speaker {
+  box-sizing: border-box;
+  width: 100%;
+  aspect-ratio: 1;
+  background:
+    radial-gradient(
+      circle,
+      color-mix(in srgb, var(--quiet) 55%, transparent) 0 18%,
+      transparent 19% 24%,
+      color-mix(in srgb, var(--quiet) 25%, transparent) 25% 27%,
+      transparent 28%
+    ),
+    radial-gradient(
+        color-mix(in srgb, var(--quiet) 45%, transparent) 1.5px,
+        transparent 2px
+      )
+      0 0 / 8px 8px,
+    var(--background);
+  border: 4px solid var(--border);
+  border-radius: 50%;
+  box-shadow:
+    inset 0 0 0 6px var(--background),
+    inset 0 0 0 8px var(--border);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .phrase-boombox.is-playing .boom-speaker {
+    animation: boom-thump 0.6s steps(2) infinite;
+  }
+}
+@keyframes boom-thump {
+  50% {
+    transform: scale(1.025);
+  }
+}
+
+.boom-face {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  grid-template-areas:
+    'window window'
+    'buttons buttons'
+    'tuners switches';
+  gap: 16px 24px;
+  min-width: 0;
+}
+
+.boom-window {
+  grid-area: window;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 14px;
+  text-align: center;
+  background: var(--background);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  box-shadow: inset 0 3px 0 rgb(0 0 0 / 0.2);
+}
+.phrase-boombox .boom-window .phrase-status {
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.boom-buttons {
+  grid-area: buttons;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px 14px;
+  min-width: 0;
+}
+.boom-history {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas:
+    'prev new next'
+    'hint hint hint';
+  gap: 4px 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.boom-history .phrase-history-hint {
+  grid-area: hint;
+  margin: 0;
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.phrase-boombox .boom-button {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 6px;
+  min-width: 76px;
+  min-height: 44px;
+  margin: 0;
+  padding: 4px 2px;
+  color: var(--foreground);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.15;
+  text-align: center;
+  cursor: pointer;
+}
+.boom-cap {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  color: var(--amber);
+  background: var(--card);
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  box-shadow:
+    inset 0 3px 0 color-mix(in srgb, var(--foreground) 10%, transparent),
+    0 4px 0 var(--boom-edge);
+}
+.boom-label {
+  max-width: 9em;
+  overflow-wrap: anywhere;
+}
+.phrase-boombox .boom-button:hover:not(:disabled) .boom-cap {
+  border-color: var(--amber);
+}
+.phrase-boombox .boom-button:active:not(:disabled) .boom-cap,
+.phrase-boombox .boom-button[aria-pressed='true'] .boom-cap,
+.phrase-boombox .boom-save.is-saved .boom-cap {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 3px 0 color-mix(in srgb, var(--foreground) 6%, transparent),
+    0 1px 0 var(--boom-edge);
+}
+.phrase-boombox .boom-button[aria-pressed='true'] .boom-cap {
+  color: var(--ink);
+  background: var(--green);
+  border-color: var(--green);
+  box-shadow:
+    0 1px 0 var(--boom-edge),
+    0 0 0 4px color-mix(in srgb, var(--green) 28%, transparent);
+}
+.phrase-boombox .boom-play .boom-cap {
+  width: 76px;
+  height: 76px;
+  color: var(--ink);
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.phrase-boombox .boom-play {
+  min-width: 92px;
+  font-size: 14px;
+}
+.phrase-boombox.is-playing .boom-play .boom-cap {
+  color: var(--ink);
+  background: var(--green);
+  border-color: var(--green);
+  box-shadow:
+    0 4px 0 var(--boom-edge),
+    0 0 0 5px color-mix(in srgb, var(--green) 28%, transparent);
+}
+.phrase-boombox .boom-save.is-saved .boom-cap {
+  color: var(--ink);
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.phrase-boombox .boom-button:disabled {
+  color: var(--quiet);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.phrase-boombox .boom-button:disabled .boom-cap {
+  color: var(--quiet);
+}
+.phrase-boombox button:focus-visible,
+.phrase-boombox input:focus-visible {
+  outline: 3px solid var(--amber);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .boom-cap,
+  .boom-band-track button,
+  .boom-pill {
+    transition:
+      transform 80ms steps(2),
+      background 120ms ease,
+      border-color 120ms ease;
+  }
+}
+
+.boom-legend {
+  display: block;
+  margin: 0;
+  padding: 0;
+  color: var(--quiet);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.boom-tuners {
+  grid-area: tuners;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.boom-tuner {
+  display: grid;
+  grid-template-columns: 4.2em minmax(0, 1fr) 4.8em;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.boom-tuner output {
+  color: var(--amber);
+  font-family: var(--font-arcade), var(--font-ui);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.boom-tuner input[type='range'] {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+}
+/* The dial window: fine ticks every 10px and a major tick every 50px. */
+.boom-tuner input[type='range']::-webkit-slider-runnable-track {
+  box-sizing: border-box;
+  height: 28px;
+  background:
+    repeating-linear-gradient(
+        to right,
+        var(--quiet) 0 2px,
+        transparent 2px 50px
+      )
+      left bottom / 100% 14px no-repeat,
+    repeating-linear-gradient(
+        to right,
+        color-mix(in srgb, var(--quiet) 60%, transparent) 0 1px,
+        transparent 1px 10px
+      )
+      left bottom / 100% 8px no-repeat,
+    var(--background);
+  border: 2px solid var(--border);
+  border-radius: 6px;
+}
+.boom-tuner input[type='range']::-moz-range-track {
+  box-sizing: border-box;
+  height: 28px;
+  background:
+    repeating-linear-gradient(
+        to right,
+        var(--quiet) 0 2px,
+        transparent 2px 50px
+      )
+      left bottom / 100% 14px no-repeat,
+    repeating-linear-gradient(
+        to right,
+        color-mix(in srgb, var(--quiet) 60%, transparent) 0 1px,
+        transparent 1px 10px
+      )
+      left bottom / 100% 8px no-repeat,
+    var(--background);
+  border: 2px solid var(--border);
+  border-radius: 6px;
+}
+.boom-tuner input[type='range']::-webkit-slider-thumb {
+  width: 6px;
+  height: 36px;
+  margin-top: -6px;
+  background: var(--amber);
+  border: 0;
+  border-radius: 1px;
+  box-shadow: 0 0 6px var(--amber);
+  appearance: none;
+}
+.boom-tuner input[type='range']::-moz-range-thumb {
+  width: 6px;
+  height: 36px;
+  background: var(--amber);
+  border: 0;
+  border-radius: 1px;
+  box-shadow: 0 0 6px var(--amber);
+}
+
+.boom-switches {
+  grid-area: switches;
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-areas:
+    'band pill'
+    'seed seed';
+  align-items: end;
+  justify-content: start;
+  gap: 10px 14px;
+  min-width: 0;
+}
+.boom-band {
+  grid-area: band;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.boom-band .boom-legend {
+  margin-bottom: 4px;
+}
+.boom-band-track {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 3px;
+  background: var(--background);
+  border: 2px solid var(--border);
+  border-radius: 999px;
+}
+.boom-band-track button,
+.phrase-boombox .boom-pill {
+  box-sizing: border-box;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 14px;
+  color: var(--quiet);
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.boom-band-track button[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--amber);
+  border-color: var(--amber);
+  box-shadow: 0 2px 0 var(--boom-edge);
+}
+.boom-band-track button:hover:not([aria-pressed='true']) {
+  color: var(--foreground);
+}
+.phrase-boombox .boom-pill {
+  grid-area: pill;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 54px;
+  color: var(--foreground);
+  background: var(--background);
+  border-color: var(--border);
+}
+.boom-led {
+  flex: 0 0 10px;
+  width: 10px;
+  height: 10px;
+  background: var(--boom-led-off);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.phrase-boombox .boom-pill[aria-pressed='true'] {
+  color: var(--green);
+  border-color: var(--green);
+}
+.phrase-boombox .boom-pill[aria-pressed='true'] .boom-led {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.phrase-boombox .boom-pill:hover:not([aria-pressed='true']) {
+  border-color: var(--amber);
+}
+.boom-seed {
+  grid-area: seed;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.boom-seed input {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 14em;
+  min-height: 44px;
+  padding: 6px 12px;
+  color: var(--amber);
+  background: var(--background);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  box-shadow: inset 0 3px 0 rgb(0 0 0 / 0.2);
+  font-family: var(--font-arcade), var(--font-ui);
+  font-size: 16px;
+  letter-spacing: 1px;
+}
+
+@media (max-width: 1100px) {
+  .phrase-boombox {
+    grid-template-columns: 88px minmax(0, 1fr) 88px;
+    gap: 14px;
+    padding: 16px;
+  }
+  .boom-face {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'window'
+      'buttons'
+      'tuners'
+      'switches';
+  }
+}
+
+@media (max-width: 720px) {
+  .phrase-boombox {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding: 0 12px 14px;
+    border-radius: 14px;
+  }
+  /* The speakers fold into a grille band along the top edge. */
+  .boom-speaker {
+    display: none;
+  }
+  .phrase-boombox::before {
+    content: '';
+    display: block;
+    height: 22px;
+    margin: 0 -12px 12px;
+    background:
+      radial-gradient(
+          color-mix(in srgb, var(--quiet) 45%, transparent) 1.5px,
+          transparent 2px
+        )
+        0 0 / 8px 8px,
+      var(--background);
+    border-bottom: 2px solid var(--border);
+    border-radius: 12px 12px 0 0;
+  }
+  .boom-face {
+    gap: 14px;
+  }
+  .boom-buttons {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      'hist hist hist'
+      'play loop save';
+    gap: 12px 4px;
+  }
+  .boom-history {
+    grid-area: hist;
+    gap: 4px;
+  }
+  .boom-play {
+    grid-area: play;
+  }
+  .phrase-boombox .boom-button {
+    min-width: 0;
+  }
+  .boom-cap {
+    width: 50px;
+    height: 50px;
+  }
+  .phrase-boombox .boom-play .boom-cap {
+    width: 64px;
+    height: 64px;
+  }
+  .boom-tuner {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'legend output'
+      'dial dial';
+    row-gap: 0;
+  }
+  .boom-tuner .boom-legend {
+    grid-area: legend;
+  }
+  .boom-tuner output {
+    grid-area: output;
+  }
+  .boom-tuner input[type='range'] {
+    grid-area: dial;
+  }
+  .boom-switches {
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-content: stretch;
+  }
+  .boom-seed input {
+    max-width: none;
+  }
+}

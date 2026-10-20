@@ -7,10 +7,20 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ChangeEvent,
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, ArrowRight, Play, RefreshCw, Square } from 'lucide-react';
+import {
+  Archive,
+  Check,
+  Play,
+  RefreshCw,
+  Repeat,
+  SkipBack,
+  SkipForward,
+  Square,
+} from 'lucide-react';
 import { pretty, type Note } from '@/lib/music';
 import {
   bindPhraseLifecycle,
@@ -66,6 +76,7 @@ import {
   type TrayPhraseCapture,
 } from '@/lib/tray';
 import '@/app/phrase.css';
+import '@/app/phrase-boombox.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
 const EMPTY_NOTES: readonly FingeredNote[] = [];
@@ -550,6 +561,12 @@ export function PhrasePanel({
     }
     startPlayback();
   }
+  function changeTempo(event: ChangeEvent<HTMLInputElement>) {
+    const sounding = clampPhraseTempo(Number(event.target.value));
+    const written = clampPhraseTempo(slow ? sounding * 2 : sounding);
+    tempoRef.current = written;
+    setTempo(written);
+  }
   function commitTempo() {
     if (live.current) startPlayback();
   }
@@ -566,172 +583,226 @@ export function PhrasePanel({
           {plan ? CADENCE_LABEL[plan.cadence] : 'chord'}.
         </p>
       </div>
-      {plan && (
-        <p className="phrase-plan">
-          {bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
-          {RHYTHM_LABEL[plan.rhythm]} · {REGISTER_LABEL[plan.register]} register
-          · ends on the {CADENCE_LABEL[plan.cadence]} · swing{' '}
-          {Math.round(swing * 100)}%{trueHalf ? ` · half of ${tempo}` : ''}
-        </p>
-      )}
-      <div className="phrase-controls">
-        <fieldset className="segmented">
-          <legend className="sr-only">Phrase length</legend>
-          <button
-            type="button"
-            aria-pressed={bars === 2}
-            onClick={() => chooseBars(2)}
-          >
-            2 bars
-          </button>
-          <button
-            type="button"
-            aria-pressed={bars === 4}
-            onClick={() => chooseBars(4)}
-          >
-            4 bars
-          </button>
-        </fieldset>
-        <label className="phrase-tempo phrase-swing">
-          Swing
-          <input
-            type="range"
-            min={SWING_AMOUNT_MIN}
-            max={SWING_AMOUNT_MAX}
-            step={SWING_AMOUNT_STEP}
-            value={swing}
-            aria-valuetext={`${Math.round(swing * 100)} percent`}
-            onChange={(event) => {
-              const next = Math.min(
-                SWING_AMOUNT_MAX,
-                Math.max(SWING_AMOUNT_MIN, Number(event.target.value)),
-              );
-              swingRef.current = next;
-              setSwing(next);
-            }}
-            onPointerUp={commitTempo}
-            onKeyUp={commitTempo}
-          />
-          <output>{Math.round(swing * 100)}%</output>
-        </label>
-        <label className="phrase-tempo">
-          Tempo
-          <input
-            type="range"
-            min={PHRASE_TEMPO_MIN}
-            max={tempoMax}
-            step={1}
-            value={playbackTempo}
-            aria-valuetext={
-              trueHalf
-                ? `${playbackTempo} BPM, half of ${tempo}`
-                : `${playbackTempo} BPM`
-            }
-            onChange={(event) => {
-              const sounding = clampPhraseTempo(Number(event.target.value));
-              const written = clampPhraseTempo(slow ? sounding * 2 : sounding);
-              tempoRef.current = written;
-              setTempo(written);
-            }}
-            onPointerUp={commitTempo}
-            onKeyUp={commitTempo}
-          />
-          <output>{playbackTempo} BPM</output>
-        </label>
-        <button
-          type="button"
-          className="phrase-action"
-          aria-pressed={slow}
-          onClick={() => setSlow((current) => !current)}
-        >
-          Half speed
-        </button>
-        <label className="phrase-seed">
-          Seed
-          <input
-            value={seedText}
-            inputMode="numeric"
-            aria-describedby="phrase-seed-help"
-            onChange={(event) => setSeedText(event.target.value)}
-            onBlur={() => commitSeed(seedText)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.currentTarget.blur();
-              }
-            }}
-          />
-        </label>
-        <div className="phrase-history">
-          <fieldset className="phrase-history-steps">
-            <legend className="sr-only">Phrase history</legend>
+      <div className={`phrase-boombox${busy ? ' is-playing' : ''}`}>
+        <span className="boom-speaker" aria-hidden="true" />
+        <div className="boom-face">
+          <div className="boom-window">
+            <p id="phrase-seed-help" className="phrase-status">
+              {notice
+                ? notice
+                : status === 'error'
+                  ? 'Audio couldn’t start. Tap Play to try again.'
+                  : status === 'starting'
+                    ? 'Starting…'
+                    : busy
+                      ? loop
+                        ? 'Looping this phrase.'
+                        : 'Playing this phrase.'
+                      : 'Same seed replays this phrase.'}
+            </p>
+            {!phrase.ok && (
+              <p className="phrase-status">
+                {phrase.reason === 'no-shared-tones'
+                  ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
+                  : 'This plan has no playable line in the register. Try a new phrase.'}
+              </p>
+            )}
+            {plan && (
+              <p className="phrase-plan">
+                {bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
+                {RHYTHM_LABEL[plan.rhythm]} · {REGISTER_LABEL[plan.register]}{' '}
+                register · ends on the {CADENCE_LABEL[plan.cadence]} · swing{' '}
+                {Math.round(swing * 100)}%
+                {trueHalf ? ` · half of ${tempo}` : ''}
+              </p>
+            )}
+          </div>
+          <div className="boom-buttons">
+            <fieldset className="phrase-history-steps boom-history">
+              <legend className="sr-only">Phrase history</legend>
+              <button
+                type="button"
+                className="phrase-action phrase-history-step boom-button"
+                aria-label="Previous phrase"
+                aria-describedby="phrase-history-hint"
+                disabled={onHistory ? history.index <= 0 : !cursor}
+                ref={previousStep}
+                onClick={() => stepHistory(-1)}
+              >
+                <span className="boom-cap">
+                  <SkipBack size={20} aria-hidden="true" />
+                </span>
+                <span className="boom-label">Previous</span>
+              </button>
+              <button
+                type="button"
+                className="phrase-action boom-button"
+                ref={newPhraseButton}
+                onClick={regenerate}
+              >
+                <span className="boom-cap">
+                  <RefreshCw size={20} aria-hidden="true" />
+                </span>
+                <span className="boom-label">New phrase</span>
+              </button>
+              <button
+                type="button"
+                className="phrase-action phrase-history-step boom-button"
+                aria-label="Next phrase"
+                aria-describedby="phrase-history-hint"
+                disabled={
+                  !onHistory ||
+                  history.index < 0 ||
+                  history.index >= history.entries.length - 1
+                }
+                ref={nextStep}
+                onClick={() => stepHistory(1)}
+              >
+                <span className="boom-cap">
+                  <SkipForward size={20} aria-hidden="true" />
+                </span>
+                <span className="boom-label">Next</span>
+              </button>
+              <p id="phrase-history-hint" className="phrase-history-hint">
+                Last 3 phrases.
+              </p>
+            </fieldset>
             <button
               type="button"
-              className="phrase-action phrase-history-step"
-              aria-label="Previous phrase"
-              aria-describedby="phrase-history-hint"
-              disabled={onHistory ? history.index <= 0 : !cursor}
-              ref={previousStep}
-              onClick={() => stepHistory(-1)}
+              className="phrase-action boom-button boom-play"
+              disabled={!phrase.ok}
+              onClick={togglePlay}
             >
-              <ArrowLeft size={14} aria-hidden="true" />
+              <span className="boom-cap">
+                {busy ? (
+                  <Square size={26} aria-hidden="true" />
+                ) : (
+                  <Play size={28} aria-hidden="true" />
+                )}
+              </span>
+              <span className="boom-label">{busy ? 'Stop' : 'Play'}</span>
             </button>
             <button
               type="button"
-              className="phrase-action"
-              ref={newPhraseButton}
-              onClick={regenerate}
+              className="phrase-action boom-button"
+              aria-pressed={loop}
+              onClick={() => setLoop((current) => !current)}
             >
-              <RefreshCw size={14} aria-hidden="true" /> New phrase
+              <span className="boom-cap">
+                <Repeat size={20} aria-hidden="true" />
+              </span>
+              <span className="boom-label">Loop</span>
             </button>
             <button
               type="button"
-              className="phrase-action phrase-history-step"
-              aria-label="Next phrase"
-              aria-describedby="phrase-history-hint"
-              disabled={
-                !onHistory ||
-                history.index < 0 ||
-                history.index >= history.entries.length - 1
-              }
-              ref={nextStep}
-              onClick={() => stepHistory(1)}
+              className={`phrase-action boom-button boom-save${savedMark ? ' is-saved' : ''}`}
+              disabled={!phrase.ok}
+              onClick={saveToTray}
             >
-              <ArrowRight size={14} aria-hidden="true" />
+              <span className="boom-cap">
+                {savedMark ? (
+                  <Check size={20} aria-hidden="true" />
+                ) : (
+                  <Archive size={20} aria-hidden="true" />
+                )}
+              </span>
+              <span className="boom-label">
+                {savedMark ? 'Saved ✓' : 'Save to stash'}
+              </span>
             </button>
-          </fieldset>
-          <p id="phrase-history-hint" className="phrase-history-hint">
-            Last 3 phrases.
-          </p>
+          </div>
+          <div className="boom-tuners">
+            <label className="phrase-tempo boom-tuner">
+              <span className="boom-legend">Tempo</span>
+              <input
+                type="range"
+                min={PHRASE_TEMPO_MIN}
+                max={tempoMax}
+                step={1}
+                value={playbackTempo}
+                aria-valuetext={
+                  trueHalf
+                    ? `${playbackTempo} BPM, half of ${tempo}`
+                    : `${playbackTempo} BPM`
+                }
+                onChange={changeTempo}
+                onPointerUp={commitTempo}
+                onKeyUp={commitTempo}
+              />
+              <output>{playbackTempo} BPM</output>
+            </label>
+            <label className="phrase-tempo phrase-swing boom-tuner">
+              <span className="boom-legend">Swing</span>
+              <input
+                type="range"
+                min={SWING_AMOUNT_MIN}
+                max={SWING_AMOUNT_MAX}
+                step={SWING_AMOUNT_STEP}
+                value={swing}
+                aria-valuetext={`${Math.round(swing * 100)} percent`}
+                onChange={(event) => {
+                  const next = Math.min(
+                    SWING_AMOUNT_MAX,
+                    Math.max(SWING_AMOUNT_MIN, Number(event.target.value)),
+                  );
+                  swingRef.current = next;
+                  setSwing(next);
+                }}
+                onPointerUp={commitTempo}
+                onKeyUp={commitTempo}
+              />
+              <output>{Math.round(swing * 100)}%</output>
+            </label>
+          </div>
+          <div className="boom-switches">
+            <fieldset className="boom-band">
+              <legend className="boom-legend">
+                <span className="sr-only">Phrase </span>Length
+              </legend>
+              <div className="boom-band-track">
+                <button
+                  type="button"
+                  aria-pressed={bars === 2}
+                  onClick={() => chooseBars(2)}
+                >
+                  2 bars
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={bars === 4}
+                  onClick={() => chooseBars(4)}
+                >
+                  4 bars
+                </button>
+              </div>
+            </fieldset>
+            <button
+              type="button"
+              className="phrase-action boom-pill"
+              aria-pressed={slow}
+              onClick={() => setSlow((current) => !current)}
+            >
+              <span className="boom-led" aria-hidden="true" />
+              Half speed
+            </button>
+            <label className="phrase-seed boom-seed">
+              <span className="boom-legend">Seed</span>
+              <input
+                value={seedText}
+                inputMode="numeric"
+                aria-describedby="phrase-seed-help"
+                onChange={(event) => setSeedText(event.target.value)}
+                onBlur={() => commitSeed(seedText)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.currentTarget.blur();
+                  }
+                }}
+              />
+            </label>
+          </div>
         </div>
-        <button
-          type="button"
-          className="phrase-action"
-          disabled={!phrase.ok}
-          onClick={togglePlay}
-        >
-          {busy ? (
-            <Square size={14} aria-hidden="true" />
-          ) : (
-            <Play size={14} aria-hidden="true" />
-          )}
-          {busy ? 'Stop' : 'Play'}
-        </button>
-        <button
-          type="button"
-          className={`phrase-action${savedMark ? ' is-saved' : ''}`}
-          disabled={!phrase.ok}
-          onClick={saveToTray}
-        >
-          {savedMark ? 'Saved ✓' : 'Save to stash'}
-        </button>
-        <button
-          type="button"
-          className="phrase-action"
-          aria-pressed={loop}
-          onClick={() => setLoop((current) => !current)}
-        >
-          Loop
-        </button>
+        <span className="boom-speaker" aria-hidden="true" />
       </div>
       <p
         id="phrase-save-announce"
@@ -741,26 +812,6 @@ export function PhrasePanel({
       >
         {saveAnnounce}
       </p>
-      <p id="phrase-seed-help" className="phrase-status">
-        {notice
-          ? notice
-          : status === 'error'
-            ? 'Audio couldn’t start. Tap Play to try again.'
-            : status === 'starting'
-              ? 'Starting…'
-              : busy
-                ? loop
-                  ? 'Looping this phrase.'
-                  : 'Playing this phrase.'
-                : 'Same seed replays this phrase.'}
-      </p>
-      {!phrase.ok && (
-        <p className="phrase-status">
-          {phrase.reason === 'no-shared-tones'
-            ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
-            : 'This plan has no playable line in the register. Try a new phrase.'}
-        </p>
-      )}
       {phrase.ok && dots === 'shown' && (
         <PhraseStaff
           notes={notes}

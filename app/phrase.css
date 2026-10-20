@@ -32,12 +32,6 @@
 .under-neck .phrase-plan {
   white-space: normal;
 }
-.under-neck .phrase-controls {
-  gap: 6px 8px;
-}
-.under-neck .phrase-tempo input[type='range'] {
-  width: min(120px, 30vw);
-}
 .under-neck .phrase-tab-host {
   margin: 0;
 }
@@ -67,116 +61,6 @@
   margin: 0;
   color: var(--quiet);
   font-size: 13px;
-}
-.phrase-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 14px;
-}
-.phrase-panel fieldset.segmented {
-  margin: 0;
-  min-inline-size: 0;
-}
-.phrase-panel .segmented button {
-  min-height: 44px;
-  min-width: 44px;
-}
-.phrase-tempo {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  font-size: 13px;
-}
-.phrase-tempo input[type='range'] {
-  width: min(180px, 42vw);
-  min-height: 44px;
-}
-.phrase-tempo output {
-  min-width: 5.5em;
-  font-variant-numeric: tabular-nums;
-}
-.phrase-swing output {
-  min-width: 3.2em;
-}
-.phrase-seed {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  font-size: 13px;
-}
-.phrase-seed input {
-  width: 8.5em;
-  min-height: 44px;
-  padding: 8px 10px;
-  color: var(--foreground);
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  font: inherit;
-}
-.phrase-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 8px 14px;
-  color: var(--green);
-  background: transparent;
-  border: 1px solid currentColor;
-  border-radius: 5px;
-  font: inherit;
-  font-size: 13px;
-}
-.phrase-history {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-  max-width: 100%;
-  min-width: 0;
-}
-.phrase-history-steps {
-  display: inline-flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-.phrase-history-step {
-  width: 44px;
-  min-width: 44px;
-  padding-inline: 0;
-}
-.phrase-history-hint {
-  margin: 0;
-  color: var(--quiet);
-  font-size: 12px;
-  line-height: 1.2;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .phrase-action {
-    transition:
-      background 160ms ease,
-      color 160ms ease,
-      border-color 160ms ease;
-  }
-}
-.phrase-action.is-saved {
-  color: var(--ink);
-  background: var(--green);
-  border-color: var(--green);
-}
-.phrase-action[aria-pressed='true'] {
-  color: var(--ink);
-  background: var(--green);
 }
 .phrase-tab-host:empty {
   display: none;
