@@ -7,6 +7,7 @@ import {
   MOTIF_CONTOURS,
   MOTIF_RHYTHMS,
   PHRASE_PLAN_CACHE_LIMIT,
+  PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
   PHRASE_PLAN_DB_TIMEOUT_MS,
   PHRASE_PLAN_INFLIGHT_LIMIT,
   PHRASE_PLAN_IP_DAILY_LIMIT,
@@ -89,6 +90,7 @@ function harness(options?: {
   tokenCap?: number;
   body?: unknown;
   method?: string;
+  now?: () => number;
 }) {
   const sent: { url?: string; init?: { body: string; headers: Record<string, string> } } = {};
   let keyReads = 0;
@@ -125,7 +127,7 @@ function harness(options?: {
     },
     {
       env,
-      now: () => Date.UTC(2026, 9, 21, 3, 4, 5),
+      now: options?.now ?? (() => Date.UTC(2026, 9, 21, 3, 4, 5)),
       random: () => 0.1,
       sql: options?.sql,
       tokenCap: options?.tokenCap,
@@ -988,14 +990,17 @@ void test('a cold database that answers after Jev is used when both checks pass'
 void test('a database timeout discards Jev and serves the rules fallback', async () => {
   assert.equal(PHRASE_PLAN_DB_TIMEOUT_MS, 1_200);
   assert.equal(PHRASE_PLAN_UPSTREAM_TIMEOUT_MS, 500);
+  assert.equal(PHRASE_PLAN_DB_DOWN_BACKOFF_MS, 30_000);
   resetPhrasePlanStateForTests();
+  const started = Date.UTC(2026, 9, 21, 3, 4, 5);
   let fetches = 0;
+  const fetch = async () => {
+    fetches += 1;
+    return { ok: true, json: async () => ANSWERS };
+  };
   const run = harness({
     sql: () => new Promise(() => undefined),
-    fetch: async () => {
-      fetches += 1;
-      return { ok: true, json: async () => ANSWERS };
-    },
+    fetch,
   });
   await run.done;
   assert.equal(fetches, 1);
@@ -1006,14 +1011,79 @@ void test('a database timeout discards Jev and serves the rules fallback', async
   assert.equal(JSON.stringify(run.result().payload).includes('step-up-step-down'), false);
   const again = harness({
     sql: acceptingSql().sql,
-    fetch: async () => {
-      fetches += 1;
-      return { ok: true, json: async () => ANSWERS };
-    },
+    fetch,
   });
   await again.done;
-  assert.equal(again.result().status, 200);
+  assert.equal(again.result().status, 503);
+  assert.equal(fetches, 1);
+  const early = harness({
+    now: () => started + PHRASE_PLAN_DB_DOWN_BACKOFF_MS - 1,
+    sql: acceptingSql().sql,
+    fetch,
+  });
+  await early.done;
+  assert.equal(early.result().status, 503);
+  assert.equal(fetches, 1);
+  const later = harness({
+    now: () => started + PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
+    sql: acceptingSql().sql,
+    fetch,
+  });
+  await later.done;
+  assert.equal(later.result().status, 200);
   assert.equal(fetches, 2);
+});
+
+void test('a negative usage count keeps the reservation and does not zero the month', async () => {
+  resetPhrasePlanStateForTests();
+  let tokens = 50_000;
+  let updates = 0;
+  let reservation = 0;
+  const sql: PhrasePlanSql = (strings, ...values) => {
+    const text = strings.join('?');
+    if (text.includes('jev_ip')) return Promise.resolve([{ calls: 1 }]);
+    if (text.includes('INSERT INTO jev_spend')) {
+      reservation = Number(values[1]);
+      tokens += reservation;
+      return Promise.resolve([{ tokens }]);
+    }
+    if (text.includes('UPDATE jev_spend')) {
+      updates += 1;
+      const delta = Number(values[0]);
+      const limit = Number(values[1]);
+      tokens = Math.min(Math.max(tokens + delta, 0), limit);
+      return Promise.resolve([]);
+    }
+    return Promise.resolve([]);
+  };
+  const negative = harness({
+    sql,
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ...ANSWERS, usage: { input_tokens: -1_000_000 } }),
+    }),
+  });
+  await negative.done;
+  assert.equal(negative.result().status, 200);
+  assert.equal(updates, 0);
+  assert.ok(reservation > 0);
+  assert.equal(tokens, 50_000 + reservation);
+
+  resetPhrasePlanStateForTests();
+  tokens = 50_000;
+  updates = 0;
+  reservation = 0;
+  const positive = harness({
+    sql,
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ...ANSWERS, usage: { input_tokens: 40 } }),
+    }),
+  });
+  await positive.done;
+  assert.equal(positive.result().status, 200);
+  assert.equal(updates, 1);
+  assert.equal(tokens, 50_040);
 });
 
 void test('a spend refusal after Jev answers does not serve Jev or raise the counter', async () => {

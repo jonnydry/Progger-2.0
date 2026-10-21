@@ -5,7 +5,9 @@
  * and address checks, and only when this request's body fits under the
  * cap. The IP counter, the spend reservation, and the Jev fetch then run
  * together. Jev's answer is used only when both checks are confirmed.
- * A database timeout discards that answer. Counters live in Neon.
+ * A database timeout discards that answer, and this process skips Jev
+ * for 30 seconds. A negative usage count keeps the reservation.
+ * Counters live in Neon.
  * db/jev-spend.sql is applied by hand and is not run from this function.
  */
 
@@ -106,7 +108,10 @@ const PHRASE_PLAN_BUDGET_TOKENS = 238_000_000;
  * Typesafe can still bill a call whose fetch already started when the
  * reservation comes back refused. After one confirmed refusal, this
  * process latches that UTC month and does not start another fetch.
- * The margin is the wave already in flight when that happens.
+ * The margin is the wave already in flight when that happens. A later
+ * cold start begins with an empty latch and can spend another wave
+ * before its own refusal is confirmed. Repeated cold starts after the
+ * month is full sit outside this margin.
  *
  * A call counts as one token per UTF-8 byte of the largest upstream
  * body. That is the reservation this route already makes. The recorded
@@ -133,6 +138,8 @@ export const PHRASE_PLAN_IP_DAILY_LIMIT = 200;
  */
 export const PHRASE_PLAN_DB_TIMEOUT_MS = 1_200;
 export const PHRASE_PLAN_UPSTREAM_TIMEOUT_MS = 500;
+/** This process skips Jev after a database timeout, then tries again. */
+export const PHRASE_PLAN_DB_DOWN_BACKOFF_MS = 30_000;
 /** Musical contexts kept in memory. The oldest is dropped past this. */
 export const PHRASE_PLAN_CACHE_LIMIT = 32;
 const STUDIO_HOSTS = new Set(['progger.studio', 'www.progger.studio']);
@@ -263,11 +270,14 @@ const cache = new Map<string, PhrasePlanDistributions>();
 let missingSaltWarned = false;
 /** UTC month whose spend reservation was refused. This process stops calling Jev. */
 let capRefusedMonth: string | null = null;
+/** deps.now() value until which a database outage must not start another fetch. */
+let skipUpstreamUntil = 0;
 
 export function resetPhrasePlanStateForTests(): void {
   cache.clear();
   missingSaltWarned = false;
   capRefusedMonth = null;
+  skipUpstreamUntil = 0;
 }
 
 /** One warning per process. The salt value is never included. */
@@ -903,7 +913,7 @@ export async function handlePhrasePlan(
   const month = utcMonth(now);
   const hash = phrasePlanIpHash(ip, salt, day);
   const cap = deps?.tokenCap ?? PHRASE_PLAN_TOKEN_CAP;
-  if (capRefusedMonth === month) {
+  if (capRefusedMonth === month || now < skipUpstreamUntil) {
     unavailable(response);
     return;
   }
@@ -972,8 +982,16 @@ export async function handlePhrasePlan(
   const ipRefused = ipRows !== 'down' && !ipOk;
   const spendRefused = spendRows !== 'down' && !spendOk;
   if (spendRefused) capRefusedMonth = month;
-  // Timeout is not confirmation. The answer is discarded. A write that
-  // commits after the timeout can only leave the counter higher.
+  // Timeout is not confirmation. The answer is discarded. If the write
+  // commits after we stop waiting, the counter can sit higher. If the
+  // query never commits, the call is uncounted, so this process skips
+  // Jev until skipUpstreamUntil.
+  if (ipRows === 'down' || spendRows === 'down') {
+    skipUpstreamUntil = Math.max(
+      skipUpstreamUntil,
+      now + PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
+    );
+  }
   if (ipRefused) {
     upstream?.cancel();
     response.status(429).json({ error: 'rate-limit' });
@@ -1010,9 +1028,15 @@ export async function handlePhrasePlan(
       : undefined;
   storeDistributions(keyForContext, distributions);
   response.status(200).json({ model: MODEL, distributions });
+  // A negative or non-finite count is not a bill. Skipping the adjust
+  // keeps the byte reservation. Applying it would floor the month at 0.
   const inputTokens = usage?.input_tokens;
-  if (typeof inputTokens === 'number' && Number.isFinite(inputTokens)) {
-    schedule(adjust(Math.round(inputTokens) - reservation));
+  if (
+    typeof inputTokens === 'number' &&
+    Number.isFinite(inputTokens) &&
+    inputTokens >= 0
+  ) {
+    schedule(adjust(Math.max(0, Math.round(inputTokens)) - reservation));
   }
 }
 
