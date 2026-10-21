@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { createPhrasePlanner } from '../lib/phrase-planner-client.ts';
 import { SCALES, spell } from '../lib/music.ts';
 import {
   generatePhrase,
   generatePhraseWithPlanner,
+  PHRASE_PLANNER_CANCEL_REASON,
+  PHRASE_PLANNER_TIMEOUT_MS,
   type PhrasePlanner,
 } from '../lib/phrase.ts';
 
@@ -201,7 +204,9 @@ void test('a timeout or a network error backs off like a 5xx', async (context) =
       }) as typeof fetch,
     });
     const pending = generatePhraseWithPlanner(request(planner, 1));
-    context.mock.timers.tick(800);
+    context.mock.timers.tick(PHRASE_PLANNER_TIMEOUT_MS - 1);
+    assert.equal(fetches, 1);
+    context.mock.timers.tick(1);
     const timed = await pending;
     assert.equal(timed.ok && timed.phrase.source, 'rules');
     assert.equal(fetches, 1);
@@ -231,6 +236,54 @@ void test('a timeout or a network error backs off like a 5xx', async (context) =
     const after = await generatePhraseWithPlanner(request(dropped, 4));
     assert.equal(network, 2);
     assert.equal(after.ok && after.phrase.source, 'planner');
+  } finally {
+    context.mock.timers.reset();
+  }
+});
+
+void test('a panel cleanup abort does not arm the backoff', async (context) => {
+  context.mock.timers.enable({
+    apis: ['setTimeout', 'Date'],
+    now: Date.UTC(2026, 9, 21, 15, 0, 0),
+  });
+  try {
+    let fetches = 0;
+    const planner = createPhrasePlanner({
+      fetch: ((_url, init) => {
+        fetches += 1;
+        if (fetches === 1) {
+          return new Promise((_resolve, reject) => {
+            const signal = init?.signal;
+            const fail = () =>
+              reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+            if (!signal) {
+              fail();
+              return;
+            }
+            if (signal.aborted) fail();
+            else signal.addEventListener('abort', fail, { once: true });
+          });
+        }
+        return Promise.resolve(jsonResponse(PLAN, 200));
+      }) as typeof fetch,
+    });
+    const caller = new AbortController();
+    const pending = generatePhraseWithPlanner({
+      ...request(planner, 1),
+      signal: caller.signal,
+    });
+    caller.abort(PHRASE_PLANNER_CANCEL_REASON);
+    const cancelled = await pending;
+    assert.equal(cancelled.ok && cancelled.phrase.source, 'rules');
+    assert.equal(fetches, 1);
+    const next = await generatePhraseWithPlanner(request(planner, 4));
+    assert.equal(fetches, 2);
+    assert.equal(next.ok && next.phrase.source, 'planner');
+    const panel = readFileSync(
+      new URL('../components/phrase-panel.tsx', import.meta.url),
+      'utf8',
+    );
+    assert.match(panel, /controller\.abort\(PHRASE_PLANNER_CANCEL_REASON\)/);
   } finally {
     context.mock.timers.reset();
   }

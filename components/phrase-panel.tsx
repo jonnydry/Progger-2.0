@@ -37,6 +37,7 @@ import {
   defaultChordNotes,
   generatePhrase,
   generatePhraseWithPlanner,
+  PHRASE_PLANNER_CANCEL_REASON,
   onsetSeconds,
   parseSeed,
   phraseFocusFret,
@@ -584,7 +585,7 @@ export function PhrasePanel({
     });
     return () => {
       cancelled = true;
-      controller.abort();
+      controller.abort(PHRASE_PLANNER_CANCEL_REASON);
     };
   }, [
     held,

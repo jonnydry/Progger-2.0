@@ -25,6 +25,10 @@ import {
  */
 
 export const PHRASE_PLANNER_TIMEOUT_MS = 800;
+/** The planner timer aborts with this. A panel cleanup uses the other reason. */
+export const PHRASE_PLANNER_TIMEOUT_REASON = 'phrase-planner-timeout';
+/** Phrase-panel cleanup and a replacement Generate abort with this. */
+export const PHRASE_PLANNER_CANCEL_REASON = 'phrase-planner-cancelled';
 export const PHRASE_RANGE = 18;
 /**
  * Anchor search and gap search each count one step per call.
@@ -4511,10 +4515,13 @@ export async function generatePhraseWithPlanner(input: {
     return retryUnplayable(input, available, rulesResult(input, available));
   const timeoutMs = input.timeoutMs ?? PHRASE_PLANNER_TIMEOUT_MS;
   const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  if (input.signal?.aborted) controller.abort();
+  const onAbort = () => controller.abort(input.signal?.reason);
+  if (input.signal?.aborted) controller.abort(input.signal.reason);
   else input.signal?.addEventListener('abort', onAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(
+    () => controller.abort(PHRASE_PLANNER_TIMEOUT_REASON),
+    timeoutMs,
+  );
   let accepted = false;
   let proposal: Partial<PhrasePlan> = {};
   let alternates: readonly PhraseShapePlan[] | undefined;

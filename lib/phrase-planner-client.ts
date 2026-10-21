@@ -1,9 +1,10 @@
 /**
  * Browser-side planner. One request per musical context, then one sampled
- * plan per seed. The 800 ms abort is the caller's signal from
- * generatePhraseWithPlanner. The phrase panel keeps one instance of this
- * client so the cache survives re-renders. A transient failure backs off
- * in memory and retries on a later call. A config error latches that
+ * plan per seed. generatePhraseWithPlanner aborts its own timer with
+ * PHRASE_PLANNER_TIMEOUT_REASON. A panel cleanup abort uses a different
+ * reason and must not back off. The phrase panel keeps one instance of
+ * this client so the cache survives re-renders. A transient failure backs
+ * off in memory and retries on a later call. A config error latches that
  * context off.
  */
 
@@ -18,6 +19,7 @@ import {
   rulePlan,
   type CadenceTarget,
   type PhrasePlan,
+  PHRASE_PLANNER_TIMEOUT_REASON,
   type PhrasePlanner,
   type PhrasePlannerInput,
 } from './phrase.ts';
@@ -166,6 +168,11 @@ export function samplePlannedFields(
   return { cadence, shape, alternates };
 }
 
+/** A replacement Generate or an unmount. A timeout abort still backs off. */
+function callerCancelled(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true && signal.reason !== PHRASE_PLANNER_TIMEOUT_REASON;
+}
+
 function contextOf(input: PhrasePlannerInput, grid: ShapeRhythm): string {
   const scale = input.scaleId ?? input.scaleLabel ?? '';
   const root = input.scaleRoot ?? input.scaleNotes[0]?.name ?? '';
@@ -266,6 +273,7 @@ export function createPhrasePlanner(options?: {
           contexts.set(contextKey, parsed);
           noteSuccess();
         } catch {
+          if (callerCancelled(input.signal)) return null;
           noteTransient(Date.now());
           return null;
         }
