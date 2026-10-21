@@ -837,14 +837,13 @@ export function PhrasePanel({
       candidate.ok &&
       player.current?.phraseChangeWaits()
     ) {
-      const tempoNow = clampPhraseTempo(slow ? tempo / 2 : tempo);
-      soundingTempo.current = tempoNow;
+      soundingTempo.current = clampPhraseTempo(slow ? tempo / 2 : tempo);
       soundingSwing.current = swing;
       player.current.queuePhrase({
         notes: candidate.phrase.notes,
         bars: candidate.phrase.bars,
-        tempo: tempoNow,
-        swing,
+        tempo: soundingTempo.current,
+        swing: soundingSwing.current,
         loop,
       });
       return;
