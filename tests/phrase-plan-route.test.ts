@@ -1230,3 +1230,54 @@ void test('waitUntil reconciles the reservation after the response', async () =>
   assert.equal(body.distributions?.cadence?.third, 1);
   assert.equal(JSON.stringify(payload).includes('test-key'), false);
 });
+
+void test('a plan that finishes after the client gave up is cached for the retry', async () => {
+  resetPhrasePlanStateForTests();
+  let fetches = 0;
+  let spendInserts = 0;
+  let releaseDb: () => void = () => undefined;
+  const db = new Promise<void>((resolve) => {
+    releaseDb = resolve;
+  });
+  const sql: PhrasePlanSql = async (strings, ...values) => {
+    const text = strings.join('?');
+    if (text.includes('UPDATE jev_spend')) return [];
+    await db;
+    if (text.includes('jev_ip')) return [{ calls: 1 }];
+    if (text.includes('INSERT INTO jev_spend')) {
+      spendInserts += 1;
+      void values;
+      return [{ tokens: 80 }];
+    }
+    return [];
+  };
+  const fetch = async () => {
+    fetches += 1;
+    return { ok: true, json: async () => ANSWERS };
+  };
+  const first = harness({ sql, fetch });
+  await Promise.resolve();
+  assert.equal(fetches, 1);
+  assert.equal(spendInserts, 0);
+  releaseDb();
+  await first.done;
+  assert.equal(first.result().status, 200);
+  assert.equal(spendInserts, 1);
+  const retry = harness({
+    sql: () => {
+      spendInserts += 1;
+      throw new Error('retry must not touch the database');
+    },
+    fetch,
+  });
+  await retry.done;
+  assert.equal(retry.result().status, 200);
+  assert.equal(fetches, 1);
+  assert.equal(spendInserts, 1);
+  assert.equal(retry.keyReads(), 0);
+  assert.equal(retry.sent.url, undefined);
+  const payload = retry.result().payload as {
+    distributions?: { cadence?: { third?: number } };
+  };
+  assert.equal(payload.distributions?.cadence?.third, 1);
+});

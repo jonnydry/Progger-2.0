@@ -24,7 +24,11 @@ import {
  * timeout, then the seeded rules. This module never calls the network.
  */
 
-export const PHRASE_PLANNER_TIMEOUT_MS = 800;
+/**
+ * Cold Neon needs the server's 1200 ms database cap plus margin.
+ * The panel does not wait on this before playing the rules line.
+ */
+export const PHRASE_PLANNER_TIMEOUT_MS = 1_500;
 /** The planner timer aborts with this. A panel cleanup uses the other reason. */
 export const PHRASE_PLANNER_TIMEOUT_REASON = 'phrase-planner-timeout';
 /** Phrase-panel cleanup and a replacement Generate abort with this. */
