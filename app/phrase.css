@@ -27,13 +27,8 @@
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-}
-/* One line on a phone cut the rule after "Rules only:". */
-@media (max-width: 640px) {
-  .under-neck .phrase-heading p {
-    -webkit-line-clamp: 3;
-  }
+  /* Three lines keeps the landing visible when the rule wraps. */
+  -webkit-line-clamp: 3;
 }
 .under-neck .phrase-plan {
   white-space: normal;
