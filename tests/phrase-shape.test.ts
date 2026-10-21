@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { OfflineAudioContext } from 'node-web-audio-api';
 import { parseChord } from '../lib/harmony.ts';
@@ -32,28 +33,16 @@ import {
   type PhrasePlanner,
 } from '../lib/phrase.ts';
 import {
-  createPhrasePlanner,
-  parseDistributions,
-} from '../lib/phrase-planner-client.ts';
-import {
-  BAR_VARIATIONS,
-  MOTIF_CONTOURS,
-  QUESTION_DEGREES,
   barThreeTwists,
-  motifRhythmsFor,
   questionHits,
   rollShape,
   sampleShape,
   sanitizeShape,
 } from '../lib/phrase-shape.ts';
 import {
-  distributionsFromAnswers,
-  handlePhrasePlan,
-  parsePhrasePlanRequest,
-  phrasePlanQuestions,
-  resetPhrasePlanStateForTests,
-  shuffleItems,
-} from '../api/phrase-plan.ts';
+  parseDistributions,
+  recordedPhrasePlanner,
+} from './phrase-plan-fixture.ts';
 
 function major() {
   const scale = SCALES.find((item) => item.id === 'major');
@@ -104,25 +93,6 @@ void test('sanitize keeps a legal shape, a typed peak, and drops a repeat on bar
     undefined,
   );
   assert.equal(sanitizeShape({ ...shape, version: 2 }, 4), undefined);
-  assert.equal(
-    parsePhrasePlanRequest({
-      scaleId: 'major',
-      root: 'C',
-      chord: 'please write a solo',
-      bars: 4,
-      rhythm: 'quarters',
-    }),
-    null,
-  );
-  assert.ok(
-    parsePhrasePlanRequest({
-      scaleId: 'dorian',
-      root: 'A',
-      chord: 'Am',
-      bars: 4,
-      rhythm: 'eighths',
-    }),
-  );
 });
 
 void test('the live generator stays unshaped and the shape path keeps its grid', () => {
@@ -168,7 +138,7 @@ void test('the live generator stays unshaped and the shape path keeps its grid',
   assert.equal(phrase.includes('fetch('), false);
 });
 
-void test('a stub planner reuses one distribution and falls back without a route', async () => {
+void test('a recorded distribution is reused and a missing context falls back', async () => {
   const scaleNotes = major();
   const chordNotes = parseChord('C').notes;
   const input = {
@@ -181,41 +151,36 @@ void test('a stub planner reuses one distribution and falls back without a route
     chordSymbol: 'C',
     locks: { rhythm: 'quarters' as const },
   };
-  let calls = 0;
-  const fetchImpl: typeof fetch = async () => {
-    calls += 1;
-    const body = {
-      model: 'jev-1.13.0',
-      distributions: {
-        motifContour: { 'step-up-step-down': 1 },
-        motifRhythm: { even: 1 },
-        questionDegree: { '4': 1 },
-        cadence: { third: 1 },
-        variations: [
-          { 'sequence-up': 1 },
-          { 'sequence-down': 1 },
-          { 'altered-ending': 1 },
-        ],
-      },
-    };
-    return new Response(JSON.stringify(body), { status: 200 });
+  const body = {
+    model: 'jev-1.13.0',
+    distributions: {
+      motifContour: { 'step-up-step-down': 1 },
+      motifRhythm: { even: 1 },
+      questionDegree: { '4': 1 },
+      cadence: { third: 1 },
+      variations: [
+        { 'sequence-up': 1 },
+        { 'sequence-down': 1 },
+        { 'altered-ending': 1 },
+      ],
+    },
   };
-  const planner = createPhrasePlanner({ fetch: fetchImpl });
+  const planner = recordedPhrasePlanner({ 'major|C|C|4|quarters': body });
   const first = await generatePhraseWithPlanner({ ...input, planner });
   const second = await generatePhraseWithPlanner({
     ...input,
     seed: 6,
     planner,
   });
-  assert.equal(calls, 1);
   assert.equal(first.ok, true);
   assert.equal(second.ok, true);
-  if (first.ok) assert.ok(first.phrase.plan.cadence);
-  const offFetch: typeof fetch = async () =>
-    new Response(JSON.stringify({ error: 'planner-unavailable' }), {
-      status: 503,
-    });
-  const off = createPhrasePlanner({ fetch: offFetch });
+  if (first.ok) {
+    assert.equal(first.phrase.source, 'planner');
+    assert.equal(first.phrase.plan.cadence, 'third');
+    assert.ok(first.phrase.plan.shape);
+  }
+  if (second.ok) assert.equal(second.phrase.source, 'planner');
+  const off = recordedPhrasePlanner({});
   const missed = await generatePhraseWithPlanner({ ...input, planner: off });
   const missedAgain = await generatePhraseWithPlanner({
     ...input,
@@ -253,200 +218,7 @@ void test('a stub planner reuses one distribution and falls back without a route
   assert.deepEqual(timed, live);
 });
 
-void test('the plan route stays shut without a key and never echoes one', async () => {
-  resetPhrasePlanStateForTests();
-  const seen: { status: number; body: unknown }[] = [];
-  const respond = () => ({
-    status(code: number) {
-      return {
-        json(body: unknown) {
-          seen.push({ status: code, body });
-        },
-      };
-    },
-  });
-  const previous = process.env.TYPESAFE_API_KEY;
-  delete process.env.TYPESAFE_API_KEY;
-  await handlePhrasePlan(
-    { method: 'POST', body: { scaleId: 'major' } },
-    respond(),
-  );
-  assert.equal(seen[0]?.status, 503);
-  assert.equal(JSON.stringify(seen[0]?.body).includes('key'), false);
-  process.env.TYPESAFE_API_KEY = 'test-key-not-real';
-  await handlePhrasePlan(
-    {
-      method: 'POST',
-      body: {
-        scaleId: 'major',
-        root: 'C',
-        chord: 'C',
-        bars: 4,
-        rhythm: 'quarters',
-        extra: 'text',
-      },
-    },
-    respond(),
-    { env: { TYPESAFE_API_KEY: 'test-key-not-real' }, ip: '203.0.113.5' },
-  );
-  assert.equal(seen[1]?.status, 400);
-  let fetched = 0;
-  const deps = {
-    env: { TYPESAFE_API_KEY: 'test-key-not-real' },
-    ip: '203.0.113.8',
-    random: () => 0.5,
-    now: () => 1_000,
-    fetch: async (
-      _url: string,
-      init: { body: string; headers: Record<string, string> },
-    ) => {
-      fetched += 1;
-      assert.equal(init.headers.authorization, 'Bearer test-key-not-real');
-      const questions = JSON.parse(init.body).questions as Record<
-        string,
-        { criteria: Record<string, string> }
-      >;
-      assert.deepEqual(Object.keys(questions.motifRhythm.criteria).sort(), [
-        'even',
-      ]);
-      return {
-        ok: true,
-        json: async () => ({
-          model: 'jev-1.13.0',
-          usage: { input_tokens: 321 },
-          answers: {
-            motifContour: {
-              probabilities: {
-                'step-down-step-up': 0.7,
-                'step-up-step-up': 0.3,
-              },
-            },
-            motifRhythm: { probabilities: { even: 1 } },
-            questionDegree: { probabilities: { '2': 1 } },
-            cadence: { probabilities: { fifth: 1 } },
-            variation2: { probabilities: { 'sequence-up': 1 } },
-            variation3: {
-              probabilities: { repeat: 0.9, 'sequence-down': 0.1 },
-            },
-            variation4: { probabilities: { 'altered-ending': 1 } },
-          },
-        }),
-      };
-    },
-  };
-  await handlePhrasePlan(
-    {
-      method: 'POST',
-      body: {
-        scaleId: 'major',
-        root: 'C',
-        chord: 'C',
-        bars: 4,
-        rhythm: 'quarters',
-      },
-    },
-    respond(),
-    deps,
-  );
-  await handlePhrasePlan(
-    {
-      method: 'POST',
-      body: {
-        scaleId: 'major',
-        root: 'C',
-        chord: 'C',
-        bars: 4,
-        rhythm: 'quarters',
-      },
-    },
-    respond(),
-    deps,
-  );
-  assert.equal(fetched, 1);
-  const ok = seen[2];
-  assert.equal(ok?.status, 200);
-  const body = ok?.body as {
-    model: string;
-    distributions: { variations: { repeat: number }[] };
-    usage?: unknown;
-  };
-  assert.equal(body.model, 'jev-1.13.0');
-  assert.equal(body.usage, undefined);
-  assert.deepEqual(Object.keys(body).sort(), ['distributions', 'model']);
-  assert.equal(body.distributions.variations[1].repeat, 0);
-  assert.equal(JSON.stringify(body).includes('test-key'), false);
-  for (let index = 0; index < 29; index++) {
-    await handlePhrasePlan(
-      {
-        method: 'POST',
-        body: {
-          scaleId: 'major',
-          root: 'C',
-          chord: 'C',
-          bars: 4,
-          rhythm: 'quarters',
-        },
-      },
-      respond(),
-      deps,
-    );
-  }
-  assert.equal(seen.at(-1)?.status, 429);
-  const ordered = shuffleItems(['a', 'b', 'c'], () => 0);
-  assert.deepEqual(ordered, ['b', 'c', 'a']);
-  const questions = phrasePlanQuestions(
-    { scaleId: 'major', root: 'C', chord: 'C', bars: 4, rhythm: 'quarters' },
-    () => 0.1,
-  );
-  assert.equal(questions.variation3.criteria.repeat, undefined);
-  const source = readFileSync(
-    new URL('../api/phrase-plan.ts', import.meta.url),
-    'utf8',
-  );
-  assert.equal(source.includes('console.'), false);
-  assert.equal(
-    distributionsFromAnswers(
-      { scaleId: 'major', root: 'C', chord: 'C', bars: 2, rhythm: 'eighths' },
-      null,
-    ),
-    null,
-  );
-  if (previous === undefined) delete process.env.TYPESAFE_API_KEY;
-  else process.env.TYPESAFE_API_KEY = previous;
-  resetPhrasePlanStateForTests();
-});
-
-void test('the server menus match the shape module', () => {
-  for (const grid of ['quarters', 'eighths', 'long-short', 'push'] as const) {
-    const questions = phrasePlanQuestions(
-      { scaleId: 'major', root: 'C', chord: 'C', bars: 4, rhythm: grid },
-      () => 0.2,
-    );
-    assert.deepEqual(
-      Object.keys(questions.motifRhythm.criteria).sort(),
-      [...motifRhythmsFor(grid)].sort(),
-    );
-    assert.deepEqual(
-      Object.keys(questions.motifContour.criteria).sort(),
-      [...MOTIF_CONTOURS].sort(),
-    );
-    assert.deepEqual(
-      Object.keys(questions.questionDegree.criteria).sort(),
-      [...QUESTION_DEGREES].sort(),
-    );
-    assert.deepEqual(
-      Object.keys(questions.variation2.criteria).sort(),
-      [...BAR_VARIATIONS].sort(),
-    );
-  }
-  const source = readFileSync(
-    new URL('../api/phrase-plan.ts', import.meta.url),
-    'utf8',
-  );
-  assert.equal(source.includes("from '../lib/"), false);
-});
-
-void test('CI loads a hand-authored distribution fixture and never a live Jev call', () => {
+void test('CI loads a hand-authored distribution fixture and never a live Jev call', async () => {
   const fixture = JSON.parse(
     readFileSync(
       new URL('./fixtures/phrase-plan-distributions.json', import.meta.url),
@@ -473,7 +245,32 @@ void test('CI loads a hand-authored distribution fixture and never a live Jev ca
   );
   assert.equal(phrase.includes('phrase-planner-client'), false);
   assert.equal(phrase.includes('api.typesafe.ai'), false);
+  assert.equal(phrase.includes('fetch('), false);
   assert.equal(panel.includes('createPhrasePlanner'), false);
+  assert.equal(panel.includes('/api/phrase-plan'), false);
+  assert.equal(
+    existsSync(new URL('../api/phrase-plan.ts', import.meta.url)),
+    false,
+  );
+  const helper = readFileSync(
+    new URL('./phrase-plan-fixture.ts', import.meta.url),
+    'utf8',
+  );
+  assert.equal(helper.includes('fetch('), false);
+  assert.equal(helper.includes('api.typesafe.ai'), false);
+  assert.equal(helper.includes('/api/phrase-plan'), false);
+  const root = new URL('..', import.meta.url);
+  for (const dir of ['lib', 'components', 'app']) {
+    const folder = new URL(`${dir}/`, root);
+    for (const file of readdirSync(folder, { recursive: true })) {
+      const name = String(file);
+      if (!name.endsWith('.ts') && !name.endsWith('.tsx')) continue;
+      const source = readFileSync(join(folder.pathname, name), 'utf8');
+      assert.equal(source.includes('api.typesafe.ai'), false, name);
+      assert.equal(source.includes('/api/phrase-plan'), false, name);
+      assert.equal(source.includes('TYPESAFE_API_KEY'), false, name);
+    }
+  }
   const recorded = JSON.parse(
     readFileSync(
       new URL('./fixtures/phrase-plan-jev-recorded.json', import.meta.url),
@@ -483,6 +280,23 @@ void test('CI loads a hand-authored distribution fixture and never a live Jev ca
   assert.equal(recorded.recordedFromJev, true);
   assert.equal(Object.keys(recorded.contexts).length, 64);
   assert.ok(parseDistributions(recorded.contexts['major|C|C|4|quarters']));
+  const scaleNotes = major();
+  const replayed = await generatePhraseWithPlanner({
+    seed: 3,
+    bars: 4,
+    scaleNotes,
+    chordNotes: parseChord('C').notes,
+    scaleId: 'major',
+    scaleRoot: 'C',
+    chordSymbol: 'C',
+    planner: recordedPhrasePlanner(recorded.contexts),
+  });
+  assert.equal(replayed.ok, true);
+  if (replayed.ok) {
+    assert.equal(replayed.phrase.source, 'planner');
+    assert.ok(replayed.phrase.plan.shape);
+    assert.notEqual(replayed.phrase.plan.shape?.variations[1], 'repeat');
+  }
 });
 
 const PLAYBACK_CORPUS: readonly (readonly [string, string, string])[] = [

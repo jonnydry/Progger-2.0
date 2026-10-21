@@ -6,7 +6,8 @@
  * Run: node --experimental-strip-types scripts/render-musicality-clips.ts <outDir>
  * Track 2: node --experimental-strip-types scripts/render-musicality-clips.ts --track2 <outDir>
  * Track 2 compares main at bb7b12d (arm A), generateShapedPhrase (arm B),
- * and the recorded Jev distributions (arm C). The script does not call Jev.
+ * and the recorded Jev distributions (arm C). The script reads the fixture
+ * and does not call Jev or any planner route.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -37,7 +38,7 @@ import {
   type RhythmId,
   type SwingInput,
 } from '../lib/phrase.ts';
-import { createPhrasePlanner } from '../lib/phrase-planner-client.ts';
+import { recordedPhrasePlanner } from '../tests/phrase-plan-fixture.ts';
 import {
   barThreeTwists,
   motifRecurs,
@@ -937,22 +938,7 @@ async function measureArmC(
   const bucket = emptyBucket();
   const plans = new Map<string, Set<string>>();
   let fallbacks = 0;
-  const planner = createPhrasePlanner({
-    fetch: async (_input, init) => {
-      const raw = typeof init?.body === 'string' ? init.body : '{}';
-      const request = JSON.parse(raw) as {
-        scaleId?: string;
-        root?: string;
-        chord?: string;
-        bars?: number;
-        rhythm?: string;
-      };
-      const key = `${request.scaleId}|${request.root}|${request.chord}|${request.bars}|${request.rhythm}`;
-      const found = recorded.contexts[key];
-      if (!found) return new Response('{}', { status: 503 });
-      return new Response(JSON.stringify(found), { status: 200 });
-    },
-  });
+  const planner = recordedPhrasePlanner(recorded.contexts);
   for (const [root, scaleId, symbol] of CORPUS) {
     const notes = scaleNotes(root, scaleId);
     const chordNotes = parseChord(symbol).notes;
@@ -1115,22 +1101,7 @@ async function renderTrack2(outDir: string): Promise<void> {
     const armCLine = asGenerated(
       await generatePhraseWithPlanner({
         ...input,
-        planner: createPhrasePlanner({
-          fetch: async (_request, init) => {
-            const raw = typeof init?.body === 'string' ? init.body : '{}';
-            const request = JSON.parse(raw) as {
-              scaleId?: string;
-              root?: string;
-              chord?: string;
-              bars?: number;
-              rhythm?: string;
-            };
-            const key = `${request.scaleId}|${request.root}|${request.chord}|${request.bars}|${request.rhythm}`;
-            const found = recorded.contexts[key];
-            if (!found) return new Response('{}', { status: 503 });
-            return new Response(JSON.stringify(found), { status: 200 });
-          },
-        }),
+        planner: recordedPhrasePlanner(recorded.contexts),
         scaleId: trial.scaleId,
         scaleRoot: trial.root,
         chordSymbol: trial.chord,

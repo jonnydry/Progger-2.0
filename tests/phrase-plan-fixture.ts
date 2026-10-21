@@ -1,7 +1,6 @@
 /**
- * Browser-side planner. One request per musical context, then one sampled
- * plan per seed. The 800 ms abort is the caller's signal from
- * generatePhraseWithPlanner. This module is not used by the phrase panel.
+ * Replay a recorded shape distribution. No fetch, no route, no API key.
+ * The sampler matches the old planner client's draws so fixture metrics stay put.
  */
 
 import {
@@ -9,7 +8,7 @@ import {
   type PhraseShapePlan,
   type ShapeDistributions,
   type ShapeRhythm,
-} from './phrase-shape.ts';
+} from '../lib/phrase-shape.ts';
 import {
   mulberry32,
   rulePlan,
@@ -17,13 +16,11 @@ import {
   type PhrasePlan,
   type PhrasePlanner,
   type PhrasePlannerInput,
-} from './phrase.ts';
+} from '../lib/phrase.ts';
 
 export type PlannerDistributions = ShapeDistributions & {
   cadence: Partial<Record<CadenceTarget, number>>;
 };
-
-type CacheEntry = PlannerDistributions | 'off';
 
 const CADENCES = ['root', 'third', 'fifth'] as const;
 
@@ -144,13 +141,11 @@ function contextOf(input: PhrasePlannerInput, grid: ShapeRhythm): string {
   return `${scale}|${root}|${chord}|${input.bars}|${grid}`;
 }
 
-export function createPhrasePlanner(options?: {
-  fetch?: typeof fetch;
-  origin?: string;
-}): PhrasePlanner {
-  const fetchImpl = options?.fetch ?? fetch;
-  const origin = options?.origin ?? '';
-  const contexts = new Map<string, CacheEntry>();
+/** One parsed distribution per context, then one sampled plan per seed. */
+export function recordedPhrasePlanner(
+  contexts: Record<string, unknown>,
+): PhrasePlanner {
+  const cache = new Map<string, PlannerDistributions | 'off'>();
   const seeds = new Map<
     string,
     PhrasePlan & { alternates: readonly PhraseShapePlan[] }
@@ -168,38 +163,18 @@ export function createPhrasePlanner(options?: {
       const saved = seeds.get(seedKey);
       if (saved) return saved;
       const contextKey = contextOf(input, grid);
-      let distributions = contexts.get(contextKey);
+      let distributions = cache.get(contextKey);
       if (distributions === 'off') return null;
       if (!distributions) {
-        try {
-          const scaleId = input.scaleId;
-          const root = input.scaleRoot ?? input.scaleNotes[0]?.name;
-          const chord = input.chordSymbol;
-          if (!scaleId || !root || !chord) return null;
-          const response = await fetchImpl(`${origin}/api/phrase-plan`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              scaleId,
-              root,
-              chord,
-              bars: input.bars,
-              rhythm: grid,
-            }),
-            signal: input.signal,
-          });
-          if (response.status === 503) {
-            contexts.set(contextKey, 'off');
-            return null;
-          }
-          if (!response.ok) return null;
-          const parsed = parseDistributions(await response.json());
-          if (!parsed) return null;
-          distributions = parsed;
-          contexts.set(contextKey, parsed);
-        } catch {
+        const found = contexts[contextKey];
+        if (found === undefined) {
+          cache.set(contextKey, 'off');
           return null;
         }
+        const parsed = parseDistributions(found);
+        if (!parsed) return null;
+        distributions = parsed;
+        cache.set(contextKey, parsed);
       }
       const available: CadenceTarget[] = ['root', 'third', 'fifth'];
       const sampled = samplePlannedFields(
