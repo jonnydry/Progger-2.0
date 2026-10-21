@@ -7,6 +7,7 @@ import {
   motifBeatLimit,
   motifRoleIndexes,
   questionHits,
+  questionSlot,
   rollShape,
   sanitizeShape,
   scaleDegreeNumber,
@@ -3999,23 +4000,44 @@ function varietyWithinLimits(midis: readonly number[]): boolean {
 }
 
 function questionNoteIndex(
-  notes: readonly { beat: number }[],
+  notes: readonly { beat: number; degree: string }[],
   shape: PhraseShapePlan,
 ): number {
-  const start = (shape.question.bar - 1) * 4;
-  const end = shape.question.bar * 4;
-  let found = -1;
-  notes.forEach((note, index) => {
-    if (note.beat >= start && note.beat < end) found = index;
+  return questionSlot(notes, shape);
+}
+
+/**
+ * Last attack of the question bar, then earlier weak attacks, latest first.
+ * A strong attack is only tried when it is the last note of the bar.
+ */
+function questionEventOrder(
+  events: readonly { beat: number; strong: boolean }[],
+  bar: 1 | 2,
+): number[] {
+  const start = (bar - 1) * 4;
+  const end = bar * 4;
+  const inBar: number[] = [];
+  events.forEach((event, index) => {
+    if (event.beat >= start && event.beat < end) inBar.push(index);
   });
-  return found;
+  const last = inBar[inBar.length - 1];
+  if (last === undefined) return [];
+  const order = [last];
+  for (let cursor = inBar.length - 2; cursor >= 0; cursor--) {
+    const index = inBar[cursor];
+    if (index === undefined || events[index]?.strong) continue;
+    order.push(index);
+  }
+  return order;
 }
 
 /**
  * Rewrite pitches on the existing grid. The question lands on the nearest
- * reachable in-scale 2, 4, or 6, and that degree is what the plan stores.
- * Later bars copy the motif's scale-degree shape when a variation can be
- * played without breaking a floor.
+ * reachable in-scale 2, 4, or 6, on the last note of the question bar when
+ * that note can take one, and otherwise on the latest weak attack in the
+ * bar that can. That degree is what the plan stores. Later bars copy the
+ * motif's scale-degree shape when a variation can be played without
+ * breaking a floor.
  */
 function applyPhraseShape(
   indexes: readonly number[],
@@ -4051,25 +4073,21 @@ function applyPhraseShape(
     bare: indexes,
     plan,
   };
-  const questionEvents = events.flatMap((event, index) =>
-    event.beat >= (shape.question.bar - 1) * 4 &&
-    event.beat < shape.question.bar * 4
-      ? [index]
-      : [],
-  );
-  const questionIndex = questionEvents[questionEvents.length - 1];
-  if (
-    questionIndex === undefined ||
-    questionIndex <= 0 ||
-    questionIndex >= indexes.length - 1
-  ) {
-    shapeReject = 'question-unreachable';
-    return null;
-  }
   const requested = Number(shape.question.degree);
-  const working = indexes.slice();
-  const placed = questionDegreesNear(fit, working, questionIndex, requested);
-  if (placed === null) {
+  let working = indexes.slice();
+  let questionIndex = -1;
+  let placed: number | null = null;
+  for (const candidate of questionEventOrder(events, shape.question.bar)) {
+    if (candidate <= 0 || candidate >= indexes.length - 1) continue;
+    const trial = indexes.slice();
+    const found = questionDegreesNear(fit, trial, candidate, requested);
+    if (found === null) continue;
+    working = trial;
+    questionIndex = candidate;
+    placed = found;
+    break;
+  }
+  if (placed === null || questionIndex < 0) {
     shapeReject = 'question-unreachable';
     return null;
   }
