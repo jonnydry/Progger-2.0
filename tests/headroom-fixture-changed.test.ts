@@ -11,8 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { TIMING_OFFSETS } from './drone-headroom-run.ts';
 import {
   HEADROOM_FLOAT_TOLERANCE,
+  HEADROOM_OFFSET_STEP_LIMIT,
+  HEADROOM_TIMING_STEP,
   formatHeadroomFixture,
   headroomFixtureChanged,
   parseHeadroomFixture,
@@ -465,6 +468,399 @@ void test('the nightly script restores a regenerated fixture and rewrites a real
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+type WorstCase = HeadroomFixture['chromium']['cases'][number];
+
+/** Identity used to replay the chromium rows that moved in pull request 41. */
+function pull41Key(item: WorstCase): string {
+  return [
+    item.sound,
+    item.root,
+    item.mode,
+    item.via,
+    item.from,
+    item.fromRoot,
+    item.kind,
+    String(item.index),
+  ].join('|');
+}
+
+/**
+ * Chromium rows from closed pull request 41 (run 39122869154, commit
+ * e1e2469) measured against the fixture on main. Firefox cases were identical.
+ * Deltas are prediction, then confirmed. The one noteShifts entry is the
+ * new grid point.
+ */
+const pull41ChromiumDrift: ReadonlyArray<
+  | readonly [string, number, number]
+  | readonly [string, number, number, readonly number[]]
+> = [
+  ['reed|A|aeolian|sustain||A|pair|1', 1.4901161193847656e-8, 0],
+  ['reed|Ab|mixolydian|sustain||Ab|triple|14', 1.4901161193847656e-8, 0],
+  ['reed|F#|lydian|sustain||F#|pair|1', -1.4901161193847656e-8, 0],
+  [
+    'reed|F#|lydian|key-change|reed|G|pair|1',
+    1.4901161193847656e-8,
+    1.1920928955078125e-7,
+  ],
+  ['reed|F#|lydian|sound-switch|cello|F#|pair|1', 1.4901161193847656e-8, 0],
+  [
+    'reed|F#|lydian|sound-switch|bow|F#|pair|1',
+    0,
+    1.1920928955078125e-7,
+  ],
+  [
+    'reed|C|locrian|sound-switch|bow|C|pair|5',
+    -7.450580596923828e-9,
+    0,
+    [-0.02, -0.012],
+  ],
+  ['reed|B|locrian|sound-switch|cello|B|pair|1', -3.725290298461914e-8, 0],
+  ['bow|F#|lydian|sound-switch|reed|F#|pair|1', -(2 ** -25), 0],
+  ['bow|F#|lydian|key-change|bow|G|pair|1', 1.4901161193847656e-8, 0],
+  ['bow|F#|lydian|sound-switch|cello|F#|pair|1', 1.4901161193847656e-8, 0],
+  ['bow|Ab|mixolydian|sustain||Ab|triple|14', 1.4901161193847656e-8, 0],
+  ['bow|Ab|mixolydian|key-change|bow|A|triple|14', 5.960464477539063e-8, 0],
+  [
+    'bow|Ab|mixolydian|sound-switch|cello|Ab|triple|14',
+    -1.4901161193847656e-8,
+    0,
+  ],
+  ['bow|B|locrian|sound-switch|cello|B|pair|1', -1.4901161193847656e-8, 0],
+  ['bow|C#|ionian|key-change|bow|D|pair|12', 1.4901161193847656e-8, 0],
+  [
+    'bow|Ab|mixolydian|sound-switch|reed|Ab|triple|14',
+    -1.4901161193847656e-8,
+    0,
+  ],
+  ['bow|F#|lydian|sustain||F#|pair|1', -2.2351741790771484e-8, 0],
+  ['cello|C|locrian|sustain||C|pair|11', -1.4901161193847656e-8, 0],
+  ['cello|C|ionian|sustain||C|triple|10', 1.4901161193847656e-8, 0],
+  [
+    'cello|B|locrian|sustain||B|pair|1',
+    -(2 ** -25),
+    1.1920928955078125e-7,
+  ],
+  ['cello|C#|ionian|sustain||C#|pair|12', 1.4901161193847656e-8, 0],
+  [
+    'cello|Ab|mixolydian|sound-switch|reed|Ab|triple|14',
+    7.450580596923828e-9,
+    0,
+  ],
+  [
+    'cello|D|dorian|key-change|cello|Eb|triple|11',
+    -7.450580596923828e-9,
+    0,
+  ],
+  [
+    'cello|D|dorian|sound-switch|bow|D|triple|11',
+    7.450580596923828e-9,
+    0,
+  ],
+  [
+    'cello|D|dorian|sound-switch|reed|D|triple|11',
+    2.2351741790771484e-8,
+    0,
+  ],
+];
+
+/** Rebuild the fixture pull request 41 would have committed, on top of main. */
+function applyPullRequest41(fixture: HeadroomFixture): void {
+  fixture.chromium.seconds = 1040.7233;
+  fixture.firefox.seconds = 536.982;
+  const byKey = new Map(
+    fixture.chromium.cases.map((item) => [pull41Key(item), item]),
+  );
+  for (const row of pull41ChromiumDrift) {
+    const [key, predictionDelta, confirmedDelta] = row;
+    const item = byKey.get(key);
+    if (!item) throw new Error(`missing pull request 41 case ${key}`);
+    item.prediction += predictionDelta;
+    item.confirmed += confirmedDelta;
+    const noteShifts = row[3];
+    if (noteShifts) item.noteShifts = [...noteShifts];
+  }
+  const cases = fixture.chromium.cases;
+  const from = cases.findIndex(
+    (item) => pull41Key(item) === 'cello|D|dorian|key-change|cello|Eb|triple|11',
+  );
+  const to = cases.findIndex(
+    (item) => pull41Key(item) === 'cello|D|dorian|sound-switch|reed|D|triple|11',
+  );
+  const left = cases[from];
+  const right = cases[to];
+  if (from < 0 || to < 0 || !left || !right) {
+    throw new Error('missing the D dorian cello tie from pull request 41');
+  }
+  cases[from] = right;
+  cases[to] = left;
+}
+
+function matchedPeakDrift(
+  baseline: HeadroomFixture,
+  candidate: HeadroomFixture,
+): { prediction: number; confirmed: number } {
+  let prediction = 0;
+  let confirmed = 0;
+  for (const name of ['chromium', 'firefox'] as const) {
+    const byKey = new Map(
+      candidate[name].cases.map((item) => [pull41Key(item), item]),
+    );
+    for (const item of baseline[name].cases) {
+      const other = byKey.get(pull41Key(item));
+      if (!other) throw new Error(`missing ${name} ${pull41Key(item)}`);
+      prediction = Math.max(prediction, Math.abs(item.prediction - other.prediction));
+      confirmed = Math.max(confirmed, Math.abs(item.confirmed - other.confirmed));
+    }
+  }
+  return { prediction, confirmed };
+}
+
+function reedLocrianBow(fixture: HeadroomFixture): WorstCase {
+  const item = fixture.chromium.cases.find(
+    (candidate) => pull41Key(candidate) === 'reed|C|locrian|sound-switch|bow|C|pair|5',
+  );
+  if (!item) throw new Error('missing reed C locrian');
+  return item;
+}
+
+function withFixtureRepo(body: (directory: string, relative: string) => void): void {
+  const directory = mkdtempSync(join(tmpdir(), 'headroom-fixture-'));
+  const relative = 'tests/fixtures/headroom-worst.json';
+  try {
+    mkdirSync(join(directory, 'tests/fixtures'), { recursive: true });
+    writeFileSync(join(directory, relative), committed);
+    execFileSync('git', ['init', '-b', 'main'], {
+      cwd: directory,
+      stdio: 'ignore',
+    });
+    execFileSync('git', ['add', relative], { cwd: directory, stdio: 'ignore' });
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'user.email=test@example.com',
+        '-c',
+        'user.name=Test',
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '-m',
+        'init',
+      ],
+      { cwd: directory, stdio: 'ignore' },
+    );
+    body(directory, relative);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function runFixtureScript(directory: string, relative: string): string {
+  return execFileSync(
+    process.execPath,
+    ['--experimental-strip-types', scriptPath, relative],
+    { cwd: directory, encoding: 'utf8' },
+  ).trim();
+}
+
+void test('pull request 41 seconds, float drift, and a timing-grid note shift are unchanged', () => {
+  const step = TIMING_OFFSETS[1];
+  const origin = TIMING_OFFSETS[0];
+  if (step === undefined || origin === undefined) {
+    throw new Error('timing grid is missing its first step');
+  }
+  assert.equal(HEADROOM_TIMING_STEP, step - origin);
+  const baseline = load();
+  const next = structuredClone(baseline);
+  applyPullRequest41(next);
+  const drift = matchedPeakDrift(baseline, next);
+  const shifted = reedLocrianBow(next);
+  assert.deepEqual(shifted.noteShifts, [-0.02, -0.012]);
+  assert.deepEqual(next.firefox.cases, baseline.firefox.cases);
+  assert.equal(next.sources, baseline.sources);
+  assert.equal(next.chromium.seconds, 1040.7233);
+  assert.equal(next.firefox.seconds, 536.982);
+  const keyChange = 'cello|D|dorian|key-change|cello|Eb|triple|11';
+  const fromReed = 'cello|D|dorian|sound-switch|reed|D|triple|11';
+  const at = (cases: readonly WorstCase[], key: string) =>
+    cases.findIndex((item) => pull41Key(item) === key);
+  assert.ok(at(baseline.chromium.cases, keyChange) < at(baseline.chromium.cases, fromReed));
+  assert.ok(at(next.chromium.cases, keyChange) > at(next.chromium.cases, fromReed));
+  assert.equal(drift.prediction, 5.960464477539063e-8);
+  assert.equal(drift.confirmed, 1.1920928955078125e-7);
+  assert.ok(drift.prediction < HEADROOM_FLOAT_TOLERANCE);
+  assert.ok(drift.confirmed < HEADROOM_FLOAT_TOLERANCE);
+  console.log(
+    `pull request 41 seconds ${baseline.chromium.seconds} -> ${next.chromium.seconds}, prediction drift ${drift.prediction}, confirmed drift ${drift.confirmed}, noteShift [-0.02, -0.02] -> [-0.02, -0.012]`,
+  );
+  assert.equal(headroomFixtureChanged(baseline, next), false);
+
+  withFixtureRepo((directory, relative) => {
+    writeFileSync(
+      join(directory, relative),
+      `${JSON.stringify(next, null, 2)}\n`,
+    );
+    const output = runFixtureScript(directory, relative);
+    console.log(`script pull request 41: ${output}`);
+    assert.equal(output, 'changed=false');
+    assert.equal(readFileSync(join(directory, relative), 'utf8'), committed);
+  });
+});
+
+void test('a confirmed value moving past 1e-6 is still a change when the same drift is present', () => {
+  const baseline = load();
+  const drifted = structuredClone(baseline);
+  applyPullRequest41(drifted);
+  assert.equal(headroomFixtureChanged(baseline, drifted), false);
+
+  const next = structuredClone(drifted);
+  const item = reedLocrianBow(next);
+  const before = item.confirmed;
+  item.confirmed = nudgeOver(before);
+  const delta = Math.abs(item.confirmed - before);
+  console.log(
+    `pull request 41 drift plus confirmed ${before} -> ${item.confirmed} delta ${delta}`,
+  );
+  assert.ok(delta > HEADROOM_FLOAT_TOLERANCE);
+  assert.equal(headroomFixtureChanged(baseline, next), true);
+
+  withFixtureRepo((directory, relative) => {
+    writeFileSync(
+      join(directory, relative),
+      `${JSON.stringify(next, null, 2)}\n`,
+    );
+    const output = runFixtureScript(directory, relative);
+    const written = readFileSync(join(directory, relative), 'utf8');
+    console.log(`script real headroom change: ${output}`);
+    assert.equal(output, 'changed=true');
+    assert.equal(written, formatHeadroomFixture(next));
+    assert.match(written, /"noteShifts": \[-0\.02, -0\.012\]/);
+    assert.match(written, /"seconds": 1040\.7233/);
+    assert.notEqual(written, committed);
+  });
+});
+
+void test('one timing-grid step stays quiet at a 1e-6 peak delta and is a change just past it', () => {
+  const baseline = load();
+  const original = reedLocrianBow(baseline);
+  const beforeShift = original.noteShifts[1];
+  const beforeConfirmed = original.confirmed;
+  const beforeChord = original.chordShift;
+  if (beforeShift === undefined) throw new Error('missing note shift');
+
+  const atBoundary = structuredClone(baseline);
+  const atItem = reedLocrianBow(atBoundary);
+  atItem.noteShifts[1] = beforeShift + HEADROOM_TIMING_STEP;
+  atItem.confirmed = nudgeWithin(beforeConfirmed);
+  const atDelta = Math.abs(atItem.confirmed - beforeConfirmed);
+  assert.equal(atItem.noteShifts[1], -0.016);
+  assert.ok(atDelta <= HEADROOM_FLOAT_TOLERANCE && atDelta > 0.99e-6);
+  console.log(
+    `grid step ${beforeShift} -> ${atItem.noteShifts[1]} with confirmed delta ${atDelta}`,
+  );
+  assert.equal(headroomFixtureChanged(baseline, atBoundary), false);
+
+  const past = structuredClone(baseline);
+  const pastItem = reedLocrianBow(past);
+  pastItem.noteShifts[1] = beforeShift + HEADROOM_TIMING_STEP;
+  pastItem.confirmed = nudgeOver(beforeConfirmed);
+  const pastDelta = Math.abs(pastItem.confirmed - beforeConfirmed);
+  assert.ok(pastDelta > HEADROOM_FLOAT_TOLERANCE);
+  console.log(`same grid step with confirmed delta ${pastDelta}`);
+  assert.equal(headroomFixtureChanged(baseline, past), true);
+
+  const dust = structuredClone(baseline);
+  const dustItem = reedLocrianBow(dust);
+  dustItem.noteShifts[1] = beforeShift + HEADROOM_FLOAT_TOLERANCE * 2;
+  const dustDelta = Math.abs(dustItem.noteShifts[1] - beforeShift);
+  assert.ok(dustDelta > HEADROOM_FLOAT_TOLERANCE);
+  assert.notEqual(
+    Math.abs((dustItem.noteShifts[1] ?? 0) / HEADROOM_TIMING_STEP) % 1,
+    0,
+  );
+  console.log(`off-grid note shift delta ${dustDelta}`);
+  assert.equal(headroomFixtureChanged(baseline, dust), true);
+
+  const chord = structuredClone(baseline);
+  const chordItem = reedLocrianBow(chord);
+  chordItem.chordShift = beforeChord + HEADROOM_TIMING_STEP;
+  assert.equal(chordItem.chordShift, 0);
+  assert.equal(chordItem.prediction, original.prediction);
+  assert.equal(chordItem.confirmed, original.confirmed);
+  console.log(`chord grid step ${beforeChord} -> ${chordItem.chordShift}`);
+  assert.equal(headroomFixtureChanged(baseline, chord), false);
+});
+
+void test('a four-step grid move is quiet and a longer alignment change is not', () => {
+  assert.equal(HEADROOM_OFFSET_STEP_LIMIT, 4);
+  const baseline = load();
+  for (const sweep of [baseline.chromium, baseline.firefox]) {
+    for (const item of sweep.cases) {
+      for (const shift of item.noteShifts) {
+        assert.ok(TIMING_OFFSETS.includes(shift), `${shift} is off the timing grid`);
+      }
+      assert.ok(
+        TIMING_OFFSETS.includes(item.chordShift),
+        `${item.chordShift} is off the timing grid`,
+      );
+    }
+  }
+  const original = reedLocrianBow(baseline);
+  const beforeShift = original.noteShifts[1];
+  const fromIndex = beforeShift === undefined ? -1 : TIMING_OFFSETS.indexOf(beforeShift);
+  const withinOffset = TIMING_OFFSETS[fromIndex + HEADROOM_OFFSET_STEP_LIMIT];
+  const beyondOffset = TIMING_OFFSETS[fromIndex + HEADROOM_OFFSET_STEP_LIMIT + 1];
+  const farOffset = TIMING_OFFSETS[TIMING_OFFSETS.length - 1];
+  if (fromIndex < 0 || withinOffset === undefined || beyondOffset === undefined || farOffset === undefined) {
+    throw new Error('timing grid does not cover the step limit');
+  }
+
+  const within = structuredClone(baseline);
+  reedLocrianBow(within).noteShifts[1] = withinOffset;
+  console.log(`quiet grid move ${beforeShift} -> ${withinOffset}`);
+  assert.equal(headroomFixtureChanged(baseline, within), false);
+
+  const beyond = structuredClone(baseline);
+  reedLocrianBow(beyond).noteShifts[1] = beyondOffset;
+  console.log(`grid move past the limit ${beforeShift} -> ${beyondOffset}`);
+  assert.equal(headroomFixtureChanged(baseline, beyond), true);
+
+  const far = structuredClone(baseline);
+  reedLocrianBow(far).noteShifts[1] = farOffset;
+  console.log(`full-window note shift ${beforeShift} -> ${farOffset}`);
+  assert.equal(headroomFixtureChanged(baseline, far), true);
+
+  const later = structuredClone(baseline);
+  const zeroChord = later.chromium.cases.find((item) => item.chordShift === 0);
+  if (!zeroChord) throw new Error('missing a chord shift of 0');
+  zeroChord.chordShift = 1;
+  console.log(`chord shift 0 -> 1 on ${zeroChord.sound} ${zeroChord.root} ${zeroChord.mode}`);
+  assert.equal(headroomFixtureChanged(baseline, later), true);
+
+  const swapped = structuredClone(baseline);
+  const triple = swapped.chromium.cases.find(
+    (item) => pull41Key(item) === 'bow|Ab|mixolydian|sound-switch|cello|Ab|triple|14',
+  );
+  if (!triple) throw new Error('missing the bow Ab mixolydian triple');
+  assert.deepEqual(triple.noteShifts, [-0.016, 0.016, -0.02]);
+  triple.noteShifts = [0.016, -0.016, -0.02];
+  console.log('swapped the first two note shifts of bow Ab mixolydian');
+  assert.equal(headroomFixtureChanged(baseline, swapped), true);
+
+  const prediction = structuredClone(baseline);
+  const predItem = reedLocrianBow(prediction);
+  const oneStep = TIMING_OFFSETS[fromIndex + 1];
+  if (oneStep === undefined) throw new Error('missing the next grid point');
+  predItem.noteShifts[1] = oneStep;
+  const beforePrediction = predItem.prediction;
+  predItem.prediction = nudgeOver(beforePrediction);
+  assert.equal(predItem.confirmed, original.confirmed);
+  console.log(
+    `one grid step plus prediction ${beforePrediction} -> ${predItem.prediction}`,
+  );
+  assert.equal(headroomFixtureChanged(baseline, prediction), true);
 });
 
 void test('the nightly workflow compares parsed fixtures instead of git diff --quiet', () => {

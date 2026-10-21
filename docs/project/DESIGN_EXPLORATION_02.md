@@ -8,9 +8,9 @@ The user requested genuinely new designs in the spirit of elegant simplicity, pr
 
 The following order is based on the three generated images actually displayed in the conversation on 2026-09-06. It supersedes the earlier round for any subsequent bare numeric selection.
 
-1. **Field Notes** — `/home/jonnyd/.codex/generated_images/01a074be-236c-7e01-81e6-fa4975602a03/exec-adac3be4-683e-4e95-ab59-de20b957c973.png`
-2. **Night Swim** — `/home/jonnyd/.codex/generated_images/01a074be-236c-7e01-81e6-fa4975602a03/exec-dbcd0df8-2353-4ddc-82d8-6ec46c585682.png`
-3. **Play Desk** — `/home/jonnyd/.codex/generated_images/01a074be-236c-7e01-81e6-fa4975602a03/exec-0f921419-9555-434b-99a3-557097d7dce3.png`
+1. **Field Notes** — original generation file (not committed)
+2. **Night Swim** — original generation file (not committed)
+3. **Play Desk** — original generation file (not committed)
 
 Generated independently with the built-in Image Gen tool. All three received the existing UI screenshot and real mascot as image references, explicitly as functional/brand context rather than a layout constraint. Target was a single 1440×1024 desktop screen per concept. These are preview assets; originals remain in the generated-image directory.
 

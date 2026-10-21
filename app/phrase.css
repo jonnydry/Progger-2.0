@@ -131,6 +131,49 @@
   font: inherit;
   font-size: 13px;
 }
+.phrase-history {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  max-width: 100%;
+  min-width: 0;
+}
+.phrase-history-steps {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.phrase-history-step {
+  width: 44px;
+  min-width: 44px;
+  padding-inline: 0;
+}
+.phrase-history-hint {
+  margin: 0;
+  color: var(--quiet);
+  font-size: 12px;
+  line-height: 1.2;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .phrase-action {
+    transition:
+      background 160ms ease,
+      color 160ms ease,
+      border-color 160ms ease;
+  }
+}
+.phrase-action.is-saved {
+  color: var(--ink);
+  background: var(--green);
+  border-color: var(--green);
+}
 .phrase-action[aria-pressed='true'] {
   color: var(--ink);
   background: var(--green);

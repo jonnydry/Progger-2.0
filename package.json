@@ -2,6 +2,13 @@
   "name": "progger",
   "version": "0.1.0",
   "private": true,
+  "description": "Guitar scale, mode and chord reference with a phrase generator, practice drone and pixel-art frog. Runs entirely in the browser.",
+  "license": "MIT",
+  "homepage": "https://progger.studio",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jonnydry/Progger-2.0.git"
+  },
   "engines": {
     "node": ">=22.6.0"
   },
@@ -48,6 +55,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.34",
+    "esbuild": "0.28.1",
     "node-web-audio-api": "2.2.0",
     "oxfmt": "0.61.0",
     "oxlint": "1.76.0",
