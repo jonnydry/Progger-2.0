@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import pg from 'pg';
 import {
+  PHRASE_PLAN_DB_TIMEOUT_MS,
+  phrasePlanCountExcess,
   phrasePlanReconcile,
   phrasePlanReleaseStaleIps,
   phrasePlanReserve,
@@ -284,5 +286,82 @@ void test('postgres phrase plan gate', async (t) => {
     assert.equal(after.tokens, billedSum);
     assert.equal(after.calls, bills.length);
     console.log(JSON.stringify({ label: 'reconcile', tokens: after.tokens, billedSum, calls: after.calls }));
+  });
+
+  await t.test('usage above the reservation adds the excess up to the cap', async () => {
+    await reset();
+    const reserved = await phrasePlanReserve(sql, {
+      day,
+      hash: 'excess',
+      month,
+      reservation: 100,
+      limit: 200,
+      cap: 150,
+    }, raceBudget);
+    assert.equal(reserved.status, 'ok');
+    await phrasePlanCountExcess(sql, { month, excess: 80, cap: 150 });
+    assert.equal((await stored()).tokens, 150);
+    assert.equal((await stored()).calls, 1);
+  });
+
+  await t.test('200 existing IP rows at the 1200 ms budget do not deadlock or orphan', async () => {
+    await reset();
+    assert.equal(PHRASE_PLAN_DB_TIMEOUT_MS, 1_200);
+    const reservation = 100;
+    const racers = 200;
+    const cap = racers * reservation;
+    const hashes = Array.from({ length: 20 }, (_, index) => `held-${index}`);
+    await pool.query(
+      `INSERT INTO jev_ip (day, ip_hash, calls) VALUES ${hashes
+        .map((hash) => `('${day}', '${hash}', 1)`)
+        .join(',')}`,
+    );
+    const gateTexts: string[] = [];
+    const watching: PhrasePlanSql = async (strings, ...values) => {
+      const text = strings.join('');
+      if (text.includes('INSERT INTO jev_ip')) gateTexts.push(text);
+      return sql(strings, ...values);
+    };
+    const results = await race(racers, (index) =>
+      phrasePlanReserve(watching, {
+        day,
+        hash: hashes[index % hashes.length],
+        month,
+        reservation,
+        limit: 200,
+        cap,
+      }, { budgetMs: PHRASE_PLAN_DB_TIMEOUT_MS }),
+    );
+    const deadlocks = results.filter((result) => result.status === 'deadlock').length;
+    const downs = results.filter((result) => result.status === 'down').length;
+    const orphan = results.filter(callsWithoutTokens).length;
+    const ok = results.filter(succeeded).length;
+    let after = await stored();
+    for (let turn = 0; turn < 20; turn += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const next = await stored();
+      const stable = next.calls === after.calls && next.tokens === after.tokens;
+      after = next;
+      if (stable) break;
+    }
+    const added = after.calls - hashes.length;
+    console.log(JSON.stringify({
+      label: 'budget-1200-existing',
+      deadlocks,
+      downs,
+      orphan,
+      ok,
+      added,
+      tokens: after.tokens,
+      cap,
+    }));
+    assert.equal(deadlocks, 0);
+    assert.equal(orphan, 0);
+    assert.ok(after.tokens <= cap);
+    assert.equal(after.tokens, added * reservation);
+    assert.ok(added >= ok);
+    assert.ok(added <= ok + downs);
+    assert.ok(gateTexts.length > 0);
+    assert.ok(gateTexts.every((text) => text.includes('AND EXISTS (SELECT 1 FROM spend_lock)')));
   });
 });
