@@ -49,8 +49,7 @@ async function deckControls(page: Page): Promise<Control[]> {
         const aria = node.getAttribute('aria-label');
         const legend = node
           .closest('label')
-          ?.querySelector('.deck-legend')
-          ?.textContent;
+          ?.querySelector('.deck-legend')?.textContent;
         const name = (
           aria ||
           (node instanceof HTMLInputElement ? legend : '') ||
@@ -78,9 +77,127 @@ function readingOrder(controls: Control[]): Control[] {
   });
 }
 
+async function activeControlName(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const node = document.activeElement;
+    if (!(node instanceof HTMLElement)) return 'none';
+    if (node === document.body) return 'body';
+    if (node === document.documentElement) return 'document';
+    const aria = node.getAttribute('aria-label');
+    const legend = node
+      .closest('label')
+      ?.querySelector('.deck-legend')?.textContent;
+    const name = (
+      aria ||
+      (node instanceof HTMLInputElement ? legend : '') ||
+      node.innerText ||
+      ''
+    )
+      .replace(/\s+/g, ' ')
+      .trim();
+    return name || node.tagName.toLowerCase();
+  });
+}
+
+async function assertDeckTabOrder(page: Page, width: number) {
+  await page.setViewportSize({
+    width,
+    height: width >= 800 ? 900 : 844,
+  });
+  if ((await page.locator('.phrase-panel').count()) === 0) {
+    await openPhrases(page);
+  }
+  await page.locator('.deck-key-play').scrollIntoViewIfNeeded();
+  const controls = await deckControls(page);
+  assert.ok(controls.length >= 10, `${width}px found ${controls.length}`);
+  for (const control of controls) {
+    assert.ok(
+      control.tabIndex <= 0,
+      `${width}px ${control.name} tabindex ${control.tabIndex}`,
+    );
+  }
+  const visual = readingOrder(controls);
+  assert.deepEqual(
+    controls.map((control) => control.name),
+    visual.map((control) => control.name),
+    `${width}px dom ${controls.map((control) => control.name).join(', ')} visual ${visual.map((control) => control.name).join(', ')}`,
+  );
+  const group = page.getByRole('group', { name: 'Phrase history' });
+  assert.equal(await group.count(), 1, `${width}px phrase history group`);
+
+  await page.locator('.deck-key-play').focus();
+  const keyboard: string[] = [];
+  for (let step = 0; step < controls.length + 2; step += 1) {
+    const current = await activeControlName(page);
+    if (
+      current === 'body' ||
+      current === 'document' ||
+      current === 'none' ||
+      !controls.some((control) => control.name === current)
+    ) {
+      break;
+    }
+    keyboard.push(current);
+    await page.keyboard.press('Tab');
+  }
+  assert.deepEqual(
+    keyboard,
+    controls
+      .filter((control) => !control.disabled)
+      .map((control) => control.name),
+    `${width}px keyboard ${keyboard.join(', ')}`,
+  );
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  );
+  assert.ok(overflow <= 1, `${width}px overflow ${overflow}`);
+  return keyboard;
+}
+
+async function seedValue(page: Page) {
+  return page.locator('.phrase-seed input').inputValue();
+}
+
+/** Sit in the middle of three phrases so Previous and Next both tab. */
+async function enableHistorySteps(page: Page) {
+  const first = await seedValue(page);
+  await page.getByRole('button', { name: 'New phrase' }).click();
+  await page.waitForFunction(
+    (previous) =>
+      document.querySelector<HTMLInputElement>('.phrase-seed input')?.value !==
+      previous,
+    first,
+  );
+  const second = await seedValue(page);
+  await page.getByRole('button', { name: 'New phrase' }).click();
+  await page.waitForFunction(
+    (previous) =>
+      document.querySelector<HTMLInputElement>('.phrase-seed input')?.value !==
+      previous,
+    second,
+  );
+  await page.getByRole('button', { name: 'Previous phrase' }).click();
+  await page.waitForFunction(
+    (expected) =>
+      document.querySelector<HTMLInputElement>('.phrase-seed input')?.value ===
+      expected,
+    second,
+  );
+  assert.equal(
+    await page.getByRole('button', { name: 'Previous phrase' }).isDisabled(),
+    false,
+  );
+  assert.equal(
+    await page.getByRole('button', { name: 'Next phrase' }).isDisabled(),
+    false,
+  );
+}
+
 void test(
   'phrase deck tab order follows the visual rows at phone and desktop widths',
-  { timeout: 120_000 },
+  { timeout: 180_000 },
   async (t) => {
     const browser = await launchNamed('chromium', t);
     const server = await acquireDevServer();
@@ -96,44 +213,81 @@ void test(
     await page.waitForSelector('.phrase-open');
 
     for (const width of [1440, 800, 500, 390, 320]) {
+      await assertDeckTabOrder(page, width);
+    }
+
+    await enableHistorySteps(page);
+    for (const width of [1440, 390, 320]) {
+      const keyboard = await assertDeckTabOrder(page, width);
+      const previous = keyboard.indexOf('Previous phrase');
+      const created = keyboard.indexOf('New phrase');
+      const next = keyboard.indexOf('Next phrase');
+      assert.ok(
+        previous !== -1 &&
+          created !== -1 &&
+          next !== -1 &&
+          previous < created &&
+          created < next,
+        `${width}px history keyboard ${keyboard.join(', ')}`,
+      );
+    }
+    await page.close();
+  },
+);
+
+void test(
+  'resizing the deck across a breakpoint keeps focus in Firefox',
+  { timeout: 180_000 },
+  async (t) => {
+    const browser = await launchNamed('firefox', t);
+    const server = await acquireDevServer();
+    t.after(async () => {
+      await browser.close();
+      await server.release();
+    });
+    const page = await browser.newPage({
+      viewport: { width: 1200, height: 900 },
+      deviceScaleFactor: 1,
+    });
+    await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.phrase-open');
+    await openPhrases(page);
+
+    async function resizeKeeps(
+      from: number,
+      to: number,
+      focus: () => Promise<void>,
+      expected: string,
+    ) {
       await page.setViewportSize({
-        width,
-        height: width >= 800 ? 900 : 844,
+        width: from,
+        height: from >= 800 ? 900 : 844,
       });
       if ((await page.locator('.phrase-panel').count()) === 0) {
         await openPhrases(page);
       }
-      await page.locator('.deck-key-play').scrollIntoViewIfNeeded();
-      const controls = await deckControls(page);
-      assert.ok(controls.length >= 10, `${width}px found ${controls.length}`);
-      for (const control of controls) {
-        assert.ok(
-          control.tabIndex <= 0,
-          `${width}px ${control.name} tabindex ${control.tabIndex}`,
-        );
-      }
-      const visual = readingOrder(controls);
-      assert.deepEqual(
-        controls.map((control) => control.name),
-        visual.map((control) => control.name),
-        `${width}px dom ${controls.map((control) => control.name).join(', ')} visual ${visual.map((control) => control.name).join(', ')}`,
+      await focus();
+      assert.equal(
+        await activeControlName(page),
+        expected,
+        `focus at ${from}px`,
       );
-      const group = page.getByRole('group', { name: 'Phrase history' });
-      assert.equal(await group.count(), 1, `${width}px phrase history group`);
-
-      await page.locator('.deck-key-play').focus();
-      const keyboard: string[] = [];
-      for (let step = 0; step < controls.length + 2; step += 1) {
-        const current = await page.evaluate(() => {
+      await page.setViewportSize({
+        width: to,
+        height: to >= 800 ? 900 : 844,
+      });
+      await page.waitForFunction(
+        (name) => {
           const node = document.activeElement;
-          if (!(node instanceof HTMLElement)) return null;
-          if (!node.closest('.phrase-deck')) return null;
+          if (!(node instanceof HTMLElement)) return false;
+          if (node === document.body || node === document.documentElement) {
+            return false;
+          }
           const aria = node.getAttribute('aria-label');
           const legend = node
             .closest('label')
-            ?.querySelector('.deck-legend')
-            ?.textContent;
-          return (
+            ?.querySelector('.deck-legend')?.textContent;
+          const current = (
             aria ||
             (node instanceof HTMLInputElement ? legend : '') ||
             node.innerText ||
@@ -141,25 +295,47 @@ void test(
           )
             .replace(/\s+/g, ' ')
             .trim();
-        });
-        if (!current) break;
-        keyboard.push(current);
-        await page.keyboard.press('Tab');
-      }
-      assert.deepEqual(
-        keyboard,
-        controls
-          .filter((control) => !control.disabled)
-          .map((control) => control.name),
-        `${width}px keyboard ${keyboard.join(', ')}`,
+          return current === name;
+        },
+        expected,
+        { timeout: 2_000 },
       );
-      const overflow = await page.evaluate(
-        () =>
-          document.documentElement.scrollWidth -
-          document.documentElement.clientWidth,
-      );
-      assert.ok(overflow <= 1, `${width}px overflow ${overflow}`);
     }
+
+    await resizeKeeps(
+      1200,
+      800,
+      () => page.locator('.phrase-swing input').focus(),
+      'Swing',
+    );
+    await resizeKeeps(
+      800,
+      390,
+      () => page.getByRole('button', { name: 'New phrase' }).focus(),
+      'New phrase',
+    );
+    await resizeKeeps(
+      500,
+      320,
+      () => page.getByRole('button', { name: 'Half speed' }).focus(),
+      'Half speed',
+    );
+    await resizeKeeps(
+      320,
+      1200,
+      () => page.locator('.phrase-swing input').focus(),
+      'Swing',
+    );
+    await page.locator('.phrase-open').focus();
+    assert.equal(await activeControlName(page), 'Phrases');
+    await page.setViewportSize({ width: 320, height: 844 });
+    await page.waitForFunction(
+      () =>
+        document.activeElement instanceof HTMLElement &&
+        document.activeElement.classList.contains('phrase-open'),
+      undefined,
+      { timeout: 2_000 },
+    );
     await page.close();
   },
 );
