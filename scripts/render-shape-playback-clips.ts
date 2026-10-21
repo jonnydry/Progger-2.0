@@ -3,12 +3,17 @@
  * Loop on restarts at the next bar line and leaves the cadence out.
  * Loop off plays one pass, including the closing note and its hold.
  *
- * Run: node --experimental-strip-types scripts/render-shape-playback-clips.ts <outDir>
+ * Run: node --experimental-strip-types scripts/render-shape-playback-clips.ts <outDir> [--ab] [--base <sha>]
+ * `--base` is the before side of `--ab`. The default is
+ * `git merge-base HEAD cursor/jev-live-planner-15a2`.
  */
 
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { OfflineAudioContext } from 'node-web-audio-api';
 import { parseChord } from '../lib/harmony.ts';
 import { SCALES, spell, type Note } from '../lib/music.ts';
@@ -29,6 +34,7 @@ import {
   onsetSeconds,
   phrasePeriodBeats,
   type FingeredNote,
+  type RhythmId,
 } from '../lib/phrase.ts';
 import { recordedPhrasePlanner } from '../tests/phrase-plan-fixture.ts';
 
@@ -260,9 +266,10 @@ function spyOnsets(context: OfflineAudioContext): Onset[] {
 async function renderPhrase(
   notes: readonly FingeredNote[],
   loop: boolean,
+  bars: 2 | 4 = BARS,
 ): Promise<{ samples: Float32Array; onsets: Onset[] }> {
   const loopSec = phraseLoopSeconds(notes, TEMPO);
-  const holdSec = onsetSeconds(phrasePeriodBeats(BARS), TEMPO, SWING);
+  const holdSec = onsetSeconds(phrasePeriodBeats(bars), TEMPO, SWING);
   // A loop has no tail. The next onset after two passes is the third
   // downbeat, so the buffer stops one sample before that attack.
   const seconds = loop
@@ -310,7 +317,7 @@ async function renderPhrase(
   try {
     await player.start({
       notes,
-      bars: BARS,
+      bars,
       tempo: TEMPO,
       swing: SWING,
       loop,
@@ -346,13 +353,325 @@ function sameSamples(left: Float32Array, right: Float32Array): boolean {
   return true;
 }
 
-const outDir = process.argv[2];
+function lineKeyOf(
+  notes: readonly { midi: number; beat: number; duration?: number }[],
+): string {
+  return notes
+    .map((note) => `${note.midi}@${note.beat}:${note.duration ?? ''}`)
+    .join(',');
+}
+
+async function basePlannerModule(baseSha: string): Promise<{
+  generatePhraseWithPlanner: typeof generatePhraseWithPlanner;
+}> {
+  const music = pathToFileURL(join(process.cwd(), 'lib/music.ts')).href;
+  const marks = pathToFileURL(join(process.cwd(), 'lib/phrase-marks.ts')).href;
+  const dir = join(tmpdir(), 'phrase-base-mod', 'lib');
+  mkdirSync(dir, { recursive: true });
+  const phrase = execFileSync('git', ['show', `${baseSha}:lib/phrase.ts`], {
+    encoding: 'utf8',
+  })
+    .replaceAll("from './music.ts'", `from '${music}'`)
+    .replaceAll("from './phrase-marks.ts'", `from '${marks}'`);
+  writeFileSync(join(dir, 'phrase.ts'), phrase);
+  writeFileSync(
+    join(dir, 'phrase-shape.ts'),
+    execFileSync('git', ['show', `${baseSha}:lib/phrase-shape.ts`], {
+      encoding: 'utf8',
+    }),
+  );
+  return import(pathToFileURL(join(dir, 'phrase.ts')).href) as Promise<{
+    generatePhraseWithPlanner: typeof generatePhraseWithPlanner;
+  }>;
+}
+
+/**
+ * Seeds whose played line is the same before and after cannot show the
+ * change. Walk seeds until the locked planner line moves, and keep the
+ * first one. `allowSame` is the proven-unchanged case.
+ */
+async function pickChangedSeed(
+  before: typeof generatePhraseWithPlanner,
+  root: string,
+  scaleId: string,
+  chordSymbol: string,
+  bars: 2 | 4,
+  rhythm: RhythmId,
+  planner: ReturnType<typeof recordedPhrasePlanner>,
+  allowSame: boolean,
+): Promise<{ seed: number; changed: boolean }> {
+  const notes = scaleNotes(root, scaleId);
+  const chordNotes = parseChord(chordSymbol).notes;
+  let same = 1;
+  for (let seed = 1; seed <= 168; seed++) {
+    const input = {
+      seed,
+      bars,
+      scaleNotes: notes,
+      chordNotes,
+      scaleId,
+      scaleRoot: root,
+      chordSymbol,
+      locks: { rhythm },
+      planner,
+    };
+    const earlier = await before(input);
+    const later = await generatePhraseWithPlanner(input);
+    if (!earlier.ok || !later.ok) continue;
+    const changed = lineKeyOf(earlier.phrase.notes) !== lineKeyOf(later.phrase.notes);
+    if (changed) return { seed, changed: true };
+    same = seed;
+  }
+  if (allowSame) return { seed: same, changed: false };
+  throw new Error(
+    `No line changed for ${scaleId}|${root}|${chordSymbol}|${bars}|${rhythm}`,
+  );
+}
+
+async function renderComparisons(outDir: string, baseSha: string): Promise<void> {
+  const beforeMod = await basePlannerModule(baseSha);
+  const recorded = JSON.parse(
+    readFileSync(
+      new URL('../tests/fixtures/phrase-plan-jev-recorded.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { contexts: Record<string, unknown> };
+  const planner = recordedPhrasePlanner(recorded.contexts);
+  const pinned: {
+    id: string;
+    root: string;
+    scaleId: string;
+    chord: string;
+    bars: 2 | 4;
+    rhythm: RhythmId;
+    path: string;
+    allowSame: boolean;
+    seed?: number;
+  }[] = [
+    {
+      id: 'minor-blues-c-c7',
+      root: 'C',
+      scaleId: 'minor-blues',
+      chord: 'C7',
+      bars: 2,
+      rhythm: 'eighths',
+      path: 'jev-planner',
+      allowSame: false,
+      seed: 1,
+    },
+    {
+      id: 'dorian-a-am',
+      root: 'A',
+      scaleId: 'dorian',
+      chord: 'Am',
+      bars: 4,
+      rhythm: 'eighths',
+      path: 'jev-planner',
+      allowSame: false,
+      seed: 138,
+    },
+    {
+      id: 'major-c-c-quarters-relock',
+      root: 'C',
+      scaleId: 'major',
+      chord: 'C',
+      bars: 2,
+      rhythm: 'quarters',
+      path: 'rules-relock',
+      allowSame: false,
+      seed: 78,
+    },
+  ];
+  const manifest: {
+    file: string;
+    context: string;
+    seed: number;
+    bars: number;
+    rhythm: string;
+    path: string;
+    side: 'before' | 'after';
+    loop: boolean;
+    changed: boolean;
+    md5: string;
+  }[] = [];
+  for (const item of pinned) {
+    const picked = item.seed
+      ? { seed: item.seed, changed: true }
+      : await pickChangedSeed(
+          beforeMod.generatePhraseWithPlanner,
+          item.root,
+          item.scaleId,
+          item.chord,
+          item.bars,
+          item.rhythm,
+          planner,
+          item.allowSame,
+        );
+    const notes = scaleNotes(item.root, item.scaleId);
+    const chordNotes = parseChord(item.chord).notes;
+    const input = {
+      seed: picked.seed,
+      bars: item.bars,
+      scaleNotes: notes,
+      chordNotes,
+      scaleId: item.scaleId,
+      scaleRoot: item.root,
+      chordSymbol: item.chord,
+      locks: { rhythm: item.rhythm },
+      planner,
+    };
+    const earlier = await beforeMod.generatePhraseWithPlanner(input);
+    const later = await generatePhraseWithPlanner(input);
+    if (!earlier.ok || !later.ok) throw new Error(`${item.id} failed to generate`);
+    const changed =
+      lineKeyOf(earlier.phrase.notes) !== lineKeyOf(later.phrase.notes);
+    if (changed !== picked.changed && item.seed) {
+      if (!changed && !item.allowSame) {
+        throw new Error(`${item.id} seed ${picked.seed} did not change`);
+      }
+    }
+    if (!changed && !item.allowSame) {
+      throw new Error(`${item.id} seed ${picked.seed} did not change`);
+    }
+    for (const loop of [true, false]) {
+      const beforeRendered = await renderPhrase(earlier.phrase.notes, loop, item.bars);
+      const afterRendered = await renderPhrase(later.phrase.notes, loop, item.bars);
+      const same = sameSamples(beforeRendered.samples, afterRendered.samples);
+      if (same !== !changed) {
+        throw new Error(
+          `${item.id} loop ${loop} audio same=${same} line changed=${changed}`,
+        );
+      }
+      for (const [side, samples] of [
+        ['before', beforeRendered.samples],
+        ['after', afterRendered.samples],
+      ] as const) {
+        const peak = samplePeak(samples);
+        if (!(peak > 0.01)) throw new Error(`${item.id} ${side} is silent`);
+        const loopName = loop ? 'loop-on' : 'loop-off';
+        const stem = `${item.id}_seed${picked.seed}_${item.rhythm}_${item.bars}_${loopName}_${side}`;
+        const wav = join(outDir, `${stem}.wav`);
+        const mp3 = join(outDir, `${stem}.mp3`);
+        writeWav(wav, samples);
+        encodeMp3(wav, mp3);
+        unlinkSync(wav);
+        const md5 = createHash('md5').update(readFileSync(mp3)).digest('hex');
+        manifest.push({
+          file: `${stem}.mp3`,
+          context: `${item.scaleId}|${item.root}|${item.chord}`,
+          seed: picked.seed,
+          bars: item.bars,
+          rhythm: item.rhythm,
+          path: item.path,
+          side,
+          loop,
+          changed,
+          md5,
+        });
+        console.log(`${stem} ${md5} changed=${changed}`);
+      }
+    }
+  }
+  const byHash = new Map<string, string[]>();
+  for (const clip of manifest) {
+    const list = byHash.get(clip.md5) ?? [];
+    list.push(clip.file);
+    byHash.set(clip.md5, list);
+  }
+  for (const [hash, files] of byHash) {
+    if (files.length === 1) continue;
+    const rows = files.map((file) => manifest.find((clip) => clip.file === file));
+    const [left, right] = rows;
+    const unchangedPair =
+      rows.length === 2 &&
+      left &&
+      right &&
+      !left.changed &&
+      !right.changed &&
+      left.loop === right.loop &&
+      left.side !== right.side &&
+      left.context === right.context &&
+      left.seed === right.seed;
+    if (!unchangedPair) {
+      throw new Error(`md5 ${hash} shared by ${files.join(', ')}`);
+    }
+  }
+  writeFileSync(join(outDir, 'clips.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  const lines = [
+    '# Question placement and rhythm-lock clips',
+    '',
+    `Before is \`${baseSha}\`. After is this branch. Loop on restarts at the next bar line. Loop off plays the closing note.`,
+    '',
+    '| File | Context | Seed | Bars | Rhythm | Path | Side | Loop | Line | md5 |',
+    '| --- | --- | ---: | ---: | --- | --- | --- | --- | --- | --- |',
+  ];
+  for (const clip of manifest) {
+    lines.push(
+      `| \`${clip.file}\` | \`${clip.context}\` | ${clip.seed} | ${clip.bars} | ${clip.rhythm} | ${clip.path} | ${clip.side} | ${clip.loop ? 'on' : 'off'} | ${clip.changed ? 'changed' : 'proven unchanged'} | \`${clip.md5}\` |`,
+    );
+  }
+  lines.push('');
+  writeFileSync(join(outDir, 'README.md'), `${lines.join('\n')}\n`);
+}
+
+function argumentValue(flag: string): string | undefined {
+  const args = process.argv.slice(2);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === flag) {
+      const value = args[index + 1];
+      if (!value || value.startsWith('-')) {
+        throw new Error(`${flag} needs a commit`);
+      }
+      return value;
+    }
+    if (arg?.startsWith(`${flag}=`)) {
+      const value = arg.slice(flag.length + 1);
+      if (!value) throw new Error(`${flag} needs a commit`);
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function positionalArgs(): string[] {
+  const args = process.argv.slice(2);
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] ?? '';
+    if (arg === '--base') {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--')) continue;
+    values.push(arg);
+  }
+  return values;
+}
+
+function resolveBaseSha(): string {
+  return (
+    argumentValue('--base') ??
+    execFileSync(
+      'git',
+      ['merge-base', 'HEAD', 'cursor/jev-live-planner-15a2'],
+      { encoding: 'utf8' },
+    ).trim()
+  );
+}
+
+const outDir = positionalArgs()[0];
 if (!outDir) {
   throw new Error(
-    'Output folder is required: node --experimental-strip-types scripts/render-shape-playback-clips.ts <outDir>',
+    'Output folder is required: node --experimental-strip-types scripts/render-shape-playback-clips.ts <outDir> [--ab] [--base <sha>]',
   );
 }
 mkdirSync(outDir, { recursive: true });
+
+if (process.argv.includes('--ab')) {
+  await renderComparisons(outDir, resolveBaseSha());
+  process.exit(0);
+}
 
 const manifest: {
   tempo: number;

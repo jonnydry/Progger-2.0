@@ -413,16 +413,52 @@ function degreeDeltas(degrees: readonly number[]): number[] {
     .map((degree, index) => degree - (degrees[index] ?? degree));
 }
 
+/** Downbeat and beat 3. Beat 3.5 is weak. The phrase grid uses this same test. */
+export function isStrongBeat(beat: number): boolean {
+  const within = ((beat % 4) + 4) % 4;
+  const half = Math.round(within * 2) / 2;
+  return half === 0 || half === 2;
+}
+
+/**
+ * Index of the note that carries the question, or -1.
+ * The last note of the question bar wins when it is the question degree.
+ * Otherwise the latest weak attack in the bar that is the degree carries it.
+ * A strong attack earlier in the bar does not.
+ */
+export function questionSlot(
+  notes: readonly DegreeNote[],
+  shape: PhraseShapePlan,
+): number {
+  const start = (shape.question.bar - 1) * 4;
+  const end = shape.question.bar * 4;
+  const wanted = Number(shape.question.degree);
+  const inBar: number[] = [];
+  notes.forEach((note, index) => {
+    if (note.beat >= start && note.beat < end) inBar.push(index);
+  });
+  if (!inBar.length) return -1;
+  const last = inBar[inBar.length - 1];
+  if (
+    last !== undefined &&
+    scaleDegreeNumber(notes[last]?.degree ?? '') === wanted
+  )
+    return last;
+  for (let cursor = inBar.length - 1; cursor >= 0; cursor--) {
+    const index = inBar[cursor];
+    if (index === undefined) continue;
+    const note = notes[index];
+    if (!note || isStrongBeat(note.beat)) continue;
+    if (scaleDegreeNumber(note.degree) === wanted) return index;
+  }
+  return -1;
+}
+
 export function questionHits(
   notes: readonly DegreeNote[],
   shape: PhraseShapePlan,
 ): boolean {
-  const start = (shape.question.bar - 1) * 4;
-  const end = shape.question.bar * 4;
-  const inBar = notes.filter((note) => note.beat >= start && note.beat < end);
-  const last = inBar[inBar.length - 1];
-  if (!last) return false;
-  return scaleDegreeNumber(last.degree) === Number(shape.question.degree);
+  return questionSlot(notes, shape) >= 0;
 }
 
 /** Bar 3's degrees differ from bar 1. Only meaningful for 4-bar phrases. */

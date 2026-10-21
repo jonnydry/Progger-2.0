@@ -4,9 +4,12 @@ import {
   BAR_VARIATIONS,
   contourDeltas,
   isQuestionDegree,
+  isStrongBeat,
   motifBeatLimit,
+  motifRhythmsFor,
   motifRoleIndexes,
   questionHits,
+  questionSlot,
   rollShape,
   sanitizeShape,
   scaleDegreeNumber,
@@ -319,11 +322,8 @@ export function cadencePitchClasses(
   return pcs;
 }
 
-export function isStrongBeat(beat: number): boolean {
-  const within = ((beat % 4) + 4) % 4;
-  const half = Math.round(within * 2) / 2;
-  return half === 0 || half === 2;
-}
+// phrase-shape.ts owns this test. Importing lib/phrase.ts from there would cycle.
+export { isStrongBeat };
 
 export function phraseOnsets(rhythm: RhythmId, bars: 2 | 4): number[] {
   const pattern = RHYTHM_ONSETS[rhythm];
@@ -590,6 +590,28 @@ function applyLocks(
     register: locks?.register ?? plan.register,
     cadence,
     ...(shape ? { shape } : {}),
+  };
+}
+
+/**
+ * The rhythm lock can delete a rules motif whose rhythm does not fit the
+ * grid. Roll one replacement on the locked rhythm. The fitter's own redraws
+ * still run from that shape.
+ */
+function relockedRulesPlan(
+  seed: number,
+  rules: PhrasePlan,
+  locks: PhraseLocks | undefined,
+  available: readonly CadenceTarget[],
+  bars: 2 | 4,
+): PhrasePlan {
+  const locked = applyLocks(rules, locks, available, bars);
+  if (locked.shape || !rules.shape) return locked;
+  const rhythm = locks?.rhythm ?? locked.rhythm;
+  if (motifRhythmsFor(rhythm).includes(rules.shape.motif.rhythm)) return locked;
+  return {
+    ...locked,
+    shape: rollShape(mulberry32((seed + 0x6c1e) >>> 0), bars, rhythm),
   };
 }
 
@@ -4009,23 +4031,44 @@ function varietyWithinLimits(midis: readonly number[]): boolean {
 }
 
 function questionNoteIndex(
-  notes: readonly { beat: number }[],
+  notes: readonly { beat: number; degree: string }[],
   shape: PhraseShapePlan,
 ): number {
-  const start = (shape.question.bar - 1) * 4;
-  const end = shape.question.bar * 4;
-  let found = -1;
-  notes.forEach((note, index) => {
-    if (note.beat >= start && note.beat < end) found = index;
+  return questionSlot(notes, shape);
+}
+
+/**
+ * Last attack of the question bar, then earlier weak attacks, latest first.
+ * A strong attack is only tried when it is the last note of the bar.
+ */
+export function questionEventOrder(
+  events: readonly { beat: number; strong: boolean }[],
+  bar: 1 | 2,
+): number[] {
+  const start = (bar - 1) * 4;
+  const end = bar * 4;
+  const inBar: number[] = [];
+  events.forEach((event, index) => {
+    if (event.beat >= start && event.beat < end) inBar.push(index);
   });
-  return found;
+  const last = inBar[inBar.length - 1];
+  if (last === undefined) return [];
+  const order = [last];
+  for (let cursor = inBar.length - 2; cursor >= 0; cursor--) {
+    const index = inBar[cursor];
+    if (index === undefined || events[index]?.strong) continue;
+    order.push(index);
+  }
+  return order;
 }
 
 /**
  * Rewrite pitches on the existing grid. The question lands on the nearest
- * reachable in-scale 2, 4, or 6, and that degree is what the plan stores.
- * Later bars copy the motif's scale-degree shape when a variation can be
- * played without breaking a floor.
+ * reachable in-scale 2, 4, or 6, on the last note of the question bar when
+ * that note can take one, and otherwise on the latest weak attack in the
+ * bar that can. That degree is what the plan stores. Later bars copy the
+ * motif's scale-degree shape when a variation can be played without
+ * breaking a floor.
  */
 function applyPhraseShape(
   indexes: readonly number[],
@@ -4061,25 +4104,21 @@ function applyPhraseShape(
     bare: indexes,
     plan,
   };
-  const questionEvents = events.flatMap((event, index) =>
-    event.beat >= (shape.question.bar - 1) * 4 &&
-    event.beat < shape.question.bar * 4
-      ? [index]
-      : [],
-  );
-  const questionIndex = questionEvents[questionEvents.length - 1];
-  if (
-    questionIndex === undefined ||
-    questionIndex <= 0 ||
-    questionIndex >= indexes.length - 1
-  ) {
-    shapeReject = 'question-unreachable';
-    return null;
-  }
   const requested = Number(shape.question.degree);
-  const working = indexes.slice();
-  const placed = questionDegreesNear(fit, working, questionIndex, requested);
-  if (placed === null) {
+  let working = indexes.slice();
+  let questionIndex = -1;
+  let placed: number | null = null;
+  for (const candidate of questionEventOrder(events, shape.question.bar)) {
+    if (candidate <= 0 || candidate >= indexes.length - 1) continue;
+    const trial = indexes.slice();
+    const found = questionDegreesNear(fit, trial, candidate, requested);
+    if (found === null) continue;
+    working = trial;
+    questionIndex = candidate;
+    placed = found;
+    break;
+  }
+  if (placed === null || questionIndex < 0) {
     shapeReject = 'question-unreachable';
     return null;
   }
@@ -4588,7 +4627,7 @@ export async function generatePhraseWithPlanner(input: {
   nextSearchAttempt();
   const shapedRules = assemble(
     input,
-    applyLocks(rules, input.locks, available, input.bars),
+    relockedRulesPlan(input.seed, rules, input.locks, available, input.bars),
     'rules',
   );
   if (shapedRules.ok) return shapedRules;
