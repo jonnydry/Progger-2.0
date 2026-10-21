@@ -123,7 +123,10 @@ void test('repeated 5xx grows the backoff to five minutes and a success resets i
     const planner = createPhrasePlanner({
       fetch: (async (_url, init) => {
         fetches += 1;
-        const body = JSON.parse(String(init?.body)) as { chord?: string };
+        const raw = init?.body;
+        const body = (
+          typeof raw === 'string' ? JSON.parse(raw) : {}
+        ) as { chord?: string };
         if (body.chord === 'G') {
           return jsonResponse({ error: 'planner-unavailable' }, 503);
         }
@@ -271,7 +274,10 @@ void test('a 403 latch does not block another context, and 429 waits out its per
     const planner = createPhrasePlanner({
       fetch: (async (_url, init) => {
         fetches += 1;
-        const body = JSON.parse(String(init?.body)) as { chord?: string };
+        const raw = init?.body;
+        const body = (
+          typeof raw === 'string' ? JSON.parse(raw) : {}
+        ) as { chord?: string };
         if (body.chord === 'C') {
           return jsonResponse({ error: 'bad-request' }, 400);
         }
