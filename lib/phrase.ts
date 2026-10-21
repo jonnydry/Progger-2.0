@@ -5,6 +5,7 @@ import {
   contourDeltas,
   isQuestionDegree,
   motifBeatLimit,
+  motifRhythmsFor,
   motifRoleIndexes,
   questionHits,
   questionSlot,
@@ -581,6 +582,28 @@ function applyLocks(
     register: locks?.register ?? plan.register,
     cadence,
     ...(shape ? { shape } : {}),
+  };
+}
+
+/**
+ * The rhythm lock can delete a rules motif whose rhythm does not fit the
+ * grid. Roll one replacement on the locked rhythm. The fitter's own redraws
+ * still run from that shape.
+ */
+function relockedRulesPlan(
+  seed: number,
+  rules: PhrasePlan,
+  locks: PhraseLocks | undefined,
+  available: readonly CadenceTarget[],
+  bars: 2 | 4,
+): PhrasePlan {
+  const locked = applyLocks(rules, locks, available, bars);
+  if (locked.shape || !rules.shape) return locked;
+  const rhythm = locks?.rhythm ?? locked.rhythm;
+  if (motifRhythmsFor(rhythm).includes(rules.shape.motif.rhythm)) return locked;
+  return {
+    ...locked,
+    shape: rollShape(mulberry32((seed + 0x6c1e) >>> 0), bars, rhythm),
   };
 }
 
@@ -4593,7 +4616,7 @@ export async function generatePhraseWithPlanner(input: {
   nextSearchAttempt();
   const shapedRules = assemble(
     input,
-    applyLocks(rules, input.locks, available, input.bars),
+    relockedRulesPlan(input.seed, rules, input.locks, available, input.bars),
     'rules',
   );
   if (shapedRules.ok) return shapedRules;
