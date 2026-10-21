@@ -228,9 +228,20 @@ type ChoiceQuestion = {
 };
 
 const cache = new Map<string, PhrasePlanDistributions>();
+let missingSaltWarned = false;
 
 export function resetPhrasePlanStateForTests(): void {
   cache.clear();
+  missingSaltWarned = false;
+}
+
+/** One warning per process. The salt value is never included. */
+function warnMissingSalt(): void {
+  if (missingSaltWarned) return;
+  missingSaltWarned = true;
+  console.warn(
+    '[phrase-plan] JEV_IP_HASH_SALT missing: Jev disabled, serving rules',
+  );
 }
 
 function cachedDistributions(key: string): PhrasePlanDistributions | undefined {
@@ -413,7 +424,7 @@ function probabilityMap(
     out[id] = value;
     total += value;
   }
-  if (!(total > 0)) return null;
+  if (!Number.isFinite(total) || !(total > 0)) return null;
   return out;
 }
 
@@ -734,6 +745,7 @@ export async function handlePhrasePlan(
   }
   const salt = env.JEV_IP_HASH_SALT;
   if (!salt) {
+    warnMissingSalt();
     unavailable(response);
     return;
   }

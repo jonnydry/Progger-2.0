@@ -23,9 +23,10 @@ line. The function reads `TYPESAFE_API_KEY`, `JEV_COUNTER_DATABASE_URL`, and
 `JEV_IP_HASH_SALT`. None of those values is logged. The database URL points
 at a Neon Postgres database. `db/jev-spend.sql` creates `jev_spend` and
 `jev_ip` and is not run by the build or by the function; apply it by hand
-before the planner can spend. A missing URL, a missing salt, a database
-error, or a database timeout skips the planner. Requests whose Origin is
-not progger.studio, www.progger.studio, exactly `https://${VERCEL_URL}` or
+before the planner can spend. A missing URL, a database error, or a database
+timeout skips the planner. A missing salt does the same, after one warning
+that does not include the salt. Requests whose Origin is not
+progger.studio, www.progger.studio, exactly `https://${VERCEL_URL}` or
 `https://${VERCEL_BRANCH_URL}`, or localhost in development are rejected
 before the database or the key is touched.
 

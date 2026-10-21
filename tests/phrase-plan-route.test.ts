@@ -152,7 +152,11 @@ void test('menus copied into the route still match the shape module', () => {
   const route = readFileSync(new URL('../api/phrase-plan.ts', import.meta.url), 'utf8');
   assert.equal(route.includes('CREATE TABLE'), false);
   assert.equal(route.includes('x-forwarded-for'), false);
-  assert.equal(route.includes('console.'), false);
+  assert.equal(route.split('console.').length - 1, 1);
+  assert.match(
+    route,
+    /console\.warn\(\s*'\[phrase-plan\] JEV_IP_HASH_SALT missing: Jev disabled, serving rules',?\s*\)/,
+  );
   assert.equal(route.includes('progger-jev-ip-v1'), false);
   assert.equal(route.includes('jonnys-projects'), false);
   assert.equal(route.includes('JEV_IP_HASH_SALT'), true);
@@ -600,6 +604,36 @@ void test('a missing salt skips Jev before a query or an unsalted hash', async (
   }
 });
 
+void test('a missing salt warns once per cold start and does not print a value', async () => {
+  resetPhrasePlanStateForTests();
+  const warnings: unknown[][] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+  try {
+    const env = {
+      JEV_IP_HASH_SALT: undefined,
+      JEV_COUNTER_DATABASE_URL: 'postgres://counter.example/jev',
+      VERCEL_ENV: 'production',
+    };
+    const first = harness({ env });
+    await first.done;
+    const second = harness({ env });
+    await second.done;
+    assert.equal(first.result().status, 503);
+    assert.equal(second.result().status, 503);
+    assert.deepEqual(first.result().payload, { error: 'planner-unavailable' });
+    assert.equal(warnings.length, 1);
+    assert.deepEqual(warnings[0], [
+      '[phrase-plan] JEV_IP_HASH_SALT missing: Jev disabled, serving rules',
+    ]);
+    assert.equal(JSON.stringify(warnings[0]).includes('test-salt'), false);
+  } finally {
+    console.warn = original;
+  }
+});
+
 void test('non-finite and all-zero menus are rejected and never cached', async () => {
   assert.equal(
     distributionsFromAnswers(PLAN_REQUEST, weightedAnswers(NON_FINITE)),
@@ -636,6 +670,60 @@ void test('non-finite and all-zero menus are rejected and never cached', async (
   }
 });
 
+void test('an all-zero contour menu is rejected and not cached', async () => {
+  const answers = weightedAnswers(1);
+  answers.motifContour = { probabilities: { 'step-up-step-down': 0 } };
+  assert.equal(distributionsFromAnswers(PLAN_REQUEST, answers), null);
+  resetPhrasePlanStateForTests();
+  let fetches = 0;
+  const fetch = async () => {
+    fetches += 1;
+    return {
+      ok: true,
+      json: async () => ({ answers, usage: { input_tokens: 40 } }),
+    };
+  };
+  const first = harness({ sql: acceptingSql().sql, fetch });
+  await first.done;
+  const second = harness({ sql: acceptingSql().sql, fetch });
+  await second.done;
+  assert.equal(first.result().status, 503);
+  assert.equal(second.result().status, 503);
+  assert.equal(fetches, 2);
+});
+
+void test('weights that sum to Infinity are rejected and not cached', async () => {
+  const answers = weightedAnswers(1);
+  answers.motifContour = {
+    probabilities: {
+      'step-up-step-down': Number.MAX_VALUE,
+      'step-down-step-down': Number.MAX_VALUE,
+    },
+  };
+  assert.equal(Number.isFinite(Number.MAX_VALUE), true);
+  assert.equal(
+    Number.isFinite(Number.MAX_VALUE + Number.MAX_VALUE),
+    false,
+  );
+  assert.equal(distributionsFromAnswers(PLAN_REQUEST, answers), null);
+  resetPhrasePlanStateForTests();
+  let fetches = 0;
+  const fetch = async () => {
+    fetches += 1;
+    return {
+      ok: true,
+      json: async () => ({ answers, usage: { input_tokens: 40 } }),
+    };
+  };
+  const first = harness({ sql: acceptingSql().sql, fetch });
+  await first.done;
+  const second = harness({ sql: acceptingSql().sql, fetch });
+  await second.done;
+  assert.equal(first.result().status, 503);
+  assert.equal(second.result().status, 503);
+  assert.equal(fetches, 2);
+});
+
 void test('the browser client does not cache a non-finite or all-zero menu', async () => {
   const scale = SCALES.find((item) => item.id === 'major');
   assert.ok(scale);
@@ -652,6 +740,17 @@ void test('the browser client does not cache a non-finite or all-zero menu', asy
   assert.equal(parseDistributions(menu(NON_FINITE)), null);
   assert.equal(parseDistributions(menu(0)), null);
   assert.equal(parseDistributions(menu(2))?.motifRhythm.even, 2);
+  const finite = menu(1);
+  const overflow = {
+    distributions: {
+      ...finite.distributions,
+      motifContour: {
+        'step-up-step-down': Number.MAX_VALUE,
+        'step-down-step-down': Number.MAX_VALUE,
+      },
+    },
+  };
+  assert.equal(parseDistributions(overflow), null);
   const input = {
     seed: 3,
     bars: 2 as const,
@@ -690,6 +789,26 @@ void test('the browser client does not cache a non-finite or all-zero menu', asy
   await generatePhraseWithPlanner({ ...input, planner: caching });
   await generatePhraseWithPlanner({ ...input, seed: 9, planner: caching });
   assert.equal(cachedFetches, 1);
+  let overflowFetches = 0;
+  const overflowing = createPhrasePlanner({
+    fetch: (async () => {
+      overflowFetches += 1;
+      return Object.assign(new Response(null, { status: 200 }), {
+        json: async () => overflow,
+      });
+    }) as typeof fetch,
+  });
+  const overflowed = await generatePhraseWithPlanner({
+    ...input,
+    planner: overflowing,
+  });
+  await generatePhraseWithPlanner({
+    ...input,
+    seed: 5,
+    planner: overflowing,
+  });
+  assert.equal(overflowed.ok && overflowed.phrase.source, 'rules');
+  assert.equal(overflowFetches, 2);
 });
 
 void test('the 500 ms upstream timeout falls back and keeps the reservation', async () => {

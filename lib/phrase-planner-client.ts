@@ -46,7 +46,7 @@ function weights<T extends string>(
     out[item] = raw;
     total += raw;
   }
-  if (!(total > 0)) return null;
+  if (!Number.isFinite(total) || !(total > 0)) return null;
   return out;
 }
 
