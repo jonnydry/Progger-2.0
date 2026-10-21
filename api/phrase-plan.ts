@@ -7,11 +7,14 @@
  * moves only when the spend reservation is written, and the spend
  * row moves only when that IP write returns. The Jev fetch starts
  * only after both are confirmed. A database timeout or error does
- * not fetch. A deadlock is retried once inside the database budget
- * and does not arm the outage skip. A refund of the whole reservation
- * runs only when the fetch never started. A completed 200 with a
- * valid usage object gives back the unused part of that reservation.
- * One process shares a 200 for an in-flight context, and nothing else.
+ * not fetch. A deadlock is retried once inside the database budget.
+ * A second deadlock does not arm the outage skip. A timeout on that
+ * retry does. A refund of the whole reservation runs only when the
+ * fetch never started. A completed 200 with a valid usage object gives
+ * back the unused part of that reservation. Usage above the reservation
+ * adds the excess, up to the cap. One process shares a 200 for an
+ * in-flight context, and nothing else. A waiter behind a refusal stays
+ * inside the 1700 ms server budget.
  * Counters live in Neon.
  * db/jev-spend.sql is applied by hand and is not run from this function.
  */
@@ -121,8 +124,9 @@ const PHRASE_PLAN_BUDGET_TOKENS = 238_000_000;
  * byte of the upstream body. At the largest body that is about 45
  * thousand calls inside this cap. A 200 with a valid usage object
  * returns the unused bytes: billed tokens are input_tokens plus
- * output_tokens when the response reports output_tokens. At the
- * recorded 40 input tokens, this cap is about 3.5 million calls.
+ * output_tokens when the response reports output_tokens. Usage above
+ * the reservation adds that excess, and the cap still bounds the row.
+ * At the recorded 40 input tokens, this cap is about 3.5 million calls.
  * The price is $0.042 per million tokens, and $10 is 238_000_000
  * in this file. The exact $10 count is 238_095_238.
  *
@@ -797,17 +801,29 @@ type SqlOutcome =
   | { ok: true; rows: readonly Record<string, unknown>[] }
   | { ok: false; reason: 'timeout' | 'deadlock' | 'error' };
 
+function errorName(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null || !('name' in error)) return null;
+  const name = (error as { name?: unknown }).name;
+  return typeof name === 'string' ? name : null;
+}
+
+/** AbortSignal.timeout, including when Neon wraps it on sourceError. */
+function isTimeoutSignal(error: unknown): boolean {
+  const name = errorName(error);
+  if (name === 'TimeoutError') return true;
+  if (name !== 'AbortError') return false;
+  if (typeof error !== 'object' || error === null || !('cause' in error)) return false;
+  return errorName((error as { cause?: unknown }).cause) === 'TimeoutError';
+}
+
 function failureReason(error: unknown): 'timeout' | 'deadlock' | 'error' {
   if (error === DB_TIMEOUT) return 'timeout';
   const state = sqlState(error);
   if (state === '40P01' || state === '40001') return 'deadlock';
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'name' in error &&
-    (error as { name?: unknown }).name === 'TimeoutError'
-  ) {
-    return 'timeout';
+  if (isTimeoutSignal(error)) return 'timeout';
+  if (typeof error === 'object' && error !== null && 'sourceError' in error) {
+    const source = (error as { sourceError?: unknown }).sourceError;
+    if (source && source !== error && isTimeoutSignal(source)) return 'timeout';
   }
   return 'error';
 }
@@ -853,11 +869,17 @@ export type PhrasePlanGateInput = {
   cap: number;
 };
 
-/** The month row has to exist before the gate locks it. 0 spends nothing. */
-export function phrasePlanEnsureMonth(
+/**
+ * The month row has to exist before the gate locks it. 0 spends nothing.
+ * A plain select does not take the spend lock. The insert runs only when
+ * that select is empty, so an existing month does not queue here.
+ */
+export async function phrasePlanEnsureMonth(
   sql: PhrasePlanSql,
   month: string,
 ): Promise<readonly Record<string, unknown>[]> {
+  const found = await sql`SELECT month FROM jev_spend WHERE month = ${month}`;
+  if (found.length > 0) return found;
   return sql`
     INSERT INTO jev_spend (month, tokens, updated_at)
     VALUES (${month}, 0, now())
@@ -888,6 +910,20 @@ export function phrasePlanReconcile(
   return sql`
     UPDATE jev_spend
     SET tokens = LEAST(GREATEST(tokens - ${unused}, ${billed}), ${cap}),
+        updated_at = now()
+    WHERE month = ${month}
+  `;
+}
+
+/** Count billed usage above this call's reservation. The cap still bounds the row. */
+export function phrasePlanCountExcess(
+  sql: PhrasePlanSql,
+  input: { month: string; excess: number; cap: number },
+): Promise<readonly Record<string, unknown>[]> {
+  const { month, excess, cap } = input;
+  return sql`
+    UPDATE jev_spend
+    SET tokens = LEAST(tokens + ${excess}, ${cap}),
         updated_at = now()
     WHERE month = ${month}
   `;
@@ -955,13 +991,13 @@ export function phrasePlanGate(
 
 export type PhrasePlanReserveResult =
   | { status: 'ok'; rows: readonly Record<string, unknown>[]; attempts: number }
-  | { status: 'down'; attempts: number }
+  | { status: 'down'; attempts: number; reason: 'timeout' | 'error' }
   | { status: 'deadlock'; attempts: number };
 
 /**
  * Ensure the month row, then run the gate. One retry on SQLSTATE 40P01
- * or 40001, inside the same database budget. A deadlock does not become
- * an outage. Any other failure is an outage.
+ * or 40001, inside the same database budget. A second deadlock is not an
+ * outage. A timeout or any other error on that retry is an outage.
  */
 export async function phrasePlanReserve(
   sql: PhrasePlanSql,
@@ -974,7 +1010,7 @@ export async function phrasePlanReserve(
     log: boolean,
   ): Promise<
     | { status: 'ok'; rows: readonly Record<string, unknown>[] }
-    | { status: 'down' }
+    | { status: 'down'; reason: 'timeout' | 'error' }
     | { status: 'deadlock' }
   > => {
     const remaining = () => budget - (Date.now() - started);
@@ -982,13 +1018,13 @@ export async function phrasePlanReserve(
     if (!ensured.ok) {
       if (ensured.reason === 'deadlock') return { status: 'deadlock' };
       if (log) logDbFailure(ensured.reason);
-      return { status: 'down' };
+      return { status: 'down', reason: ensured.reason };
     }
     const gated = await runSql(phrasePlanGate(sql, input), remaining());
     if (!gated.ok) {
       if (gated.reason === 'deadlock') return { status: 'deadlock' };
       if (log) logDbFailure(gated.reason);
-      return { status: 'down' };
+      return { status: 'down', reason: gated.reason };
     }
     return { status: 'ok', rows: gated.rows };
   };
@@ -996,8 +1032,12 @@ export async function phrasePlanReserve(
   if (first.status !== 'deadlock') return { ...first, attempts: 1 };
   const second = await attempt(false);
   if (second.status === 'ok') return { status: 'ok', rows: second.rows, attempts: 2 };
-  console.warn('db_deadlock');
-  return { status: 'deadlock', attempts: 2 };
+  if (second.status === 'deadlock') {
+    console.warn('db_deadlock');
+    return { status: 'deadlock', attempts: 2 };
+  }
+  logDbFailure(second.reason);
+  return { status: 'down', attempts: 2, reason: second.reason };
 }
 
 function countOf(
@@ -1030,12 +1070,10 @@ function startUpstream(
   fetchImpl: FetchLike,
   key: string,
   body: string,
+  timeoutMs: number,
 ): UpstreamCall {
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    PHRASE_PLAN_UPSTREAM_TIMEOUT_MS,
-  );
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const done = (async (): Promise<
     { ok: true; payload: unknown } | { ok: false }
   > => {
@@ -1064,7 +1102,7 @@ type BilledUsage =
   | { kind: 'ok'; billed: number }
   | { kind: 'absent' }
   | { kind: 'bad' }
-  | { kind: 'over' };
+  | { kind: 'over'; billed: number };
 
 function wholeTokens(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return null;
@@ -1089,7 +1127,7 @@ function readBilled(payload: unknown, reservation: number): BilledUsage {
     output = parsed;
   }
   const billed = input + output;
-  if (billed > reservation) return { kind: 'over' };
+  if (billed > reservation) return { kind: 'over', billed };
   return { kind: 'ok', billed };
 }
 
@@ -1121,13 +1159,26 @@ async function settleRefund(
   else if (!outcome.ok) console.warn('db_deadlock');
 }
 
+async function settleAdjustment(
+  work: Promise<readonly Record<string, unknown>[]>,
+): Promise<void> {
+  const outcome = await runSql(work, PHRASE_PLAN_DB_TIMEOUT_MS);
+  if (outcome.ok) return;
+  console.warn(outcome.reason === 'timeout' ? 'reconcile_timeout' : 'reconcile_error');
+}
+
 async function settleReconcile(
   sql: PhrasePlanSql,
   input: { month: string; unused: number; billed: number; cap: number },
 ): Promise<void> {
-  const outcome = await runSql(phrasePlanReconcile(sql, input), PHRASE_PLAN_DB_TIMEOUT_MS);
-  if (outcome.ok) return;
-  console.warn(outcome.reason === 'timeout' ? 'reconcile_timeout' : 'reconcile_error');
+  await settleAdjustment(phrasePlanReconcile(sql, input));
+}
+
+async function settleExcess(
+  sql: PhrasePlanSql,
+  input: { month: string; excess: number; cap: number },
+): Promise<void> {
+  await settleAdjustment(phrasePlanCountExcess(sql, input));
 }
 
 async function settleCleanup(sql: PhrasePlanSql, day: string): Promise<void> {
@@ -1197,12 +1248,23 @@ export async function handlePhrasePlan(
     response.status(200).json({ model: MODEL, distributions: cached });
     return;
   }
+  const callerArrived = Date.now();
+  const serverBudgetMs = PHRASE_PLAN_DB_TIMEOUT_MS + PHRASE_PLAN_UPSTREAM_TIMEOUT_MS;
+  let waited = false;
   while (inflight.has(keyForContext)) {
+    waited = true;
     const pending = inflight.get(keyForContext);
     if (!pending) break;
     const shared = await pending;
     if (shared.status === 200) {
       response.status(200).json(shared.payload);
+      return;
+    }
+    // The leader already used the server budget. Another full attempt
+    // would run past the client wait. Do not reserve, and do not arm
+    // the outage skip: the database has not failed this caller.
+    if (Date.now() - callerArrived >= serverBudgetMs) {
+      unavailable(response);
       return;
     }
     if (inflight.get(keyForContext) !== pending) continue;
@@ -1271,8 +1333,19 @@ export async function handlePhrasePlan(
     unavailable(response);
     return;
   }
+  let dbBudget = PHRASE_PLAN_DB_TIMEOUT_MS;
+  let upstreamBudget = PHRASE_PLAN_UPSTREAM_TIMEOUT_MS;
+  if (waited) {
+    const remaining = serverBudgetMs - (Date.now() - callerArrived);
+    upstreamBudget = Math.min(PHRASE_PLAN_UPSTREAM_TIMEOUT_MS, Math.max(0, remaining));
+    dbBudget = Math.min(PHRASE_PLAN_DB_TIMEOUT_MS, remaining - upstreamBudget);
+    if (dbBudget <= 0 || upstreamBudget <= 0) {
+      unavailable(response);
+      return;
+    }
+  }
   const started = Date.now();
-  const budget = PHRASE_PLAN_DB_TIMEOUT_MS;
+  const budget = dbBudget;
   const sql: PhrasePlanSql = (strings, ...values) => {
     const remaining = Math.max(1, budget - (Date.now() - started));
     const query = deps?.sql ?? neonSql(databaseUrl, remaining);
@@ -1300,10 +1373,16 @@ export async function handlePhrasePlan(
     // The statement may still commit after we stop waiting. That can
     // only leave a counter higher. This process does not fetch, and it
     // skips Jev until skipUpstreamUntil. A deadlock is not this path.
-    skipUpstreamUntil = Math.max(
-      skipUpstreamUntil,
-      now + PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
-    );
+    // A waiter on a shortened budget can time out without the database
+    // being down, so that timeout does not arm the skip.
+    const shortenedTimeout =
+      gateResult.reason === 'timeout' && dbBudget < PHRASE_PLAN_DB_TIMEOUT_MS;
+    if (!shortenedTimeout) {
+      skipUpstreamUntil = Math.max(
+        skipUpstreamUntil,
+        now + PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
+      );
+    }
     unavailable(response);
     return;
   }
@@ -1334,15 +1413,23 @@ export async function handlePhrasePlan(
     return;
   }
   const fetchImpl = deps?.fetch ?? (globalThis.fetch as FetchLike);
-  const upstream = startUpstream(fetchImpl, key, bodyForJev);
+  const upstream = startUpstream(fetchImpl, key, bodyForJev, upstreamBudget);
   const answered = await upstream.done;
   if (!answered.ok) {
     unavailable(response);
     return;
   }
   const usage = readBilled(answered.payload, reservation);
-  if (usage.kind === 'over') console.warn('usage_over_reservation');
-  else if (usage.kind === 'ok' && usage.billed < reservation) {
+  if (usage.kind === 'over') {
+    console.warn('usage_over_reservation');
+    schedule(
+      settleExcess(later(), {
+        month,
+        excess: usage.billed - reservation,
+        cap,
+      }),
+    );
+  } else if (usage.kind === 'ok' && usage.billed < reservation) {
     schedule(
       settleReconcile(later(), {
         month,

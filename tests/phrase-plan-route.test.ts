@@ -1507,6 +1507,7 @@ void test('a deadlock does not arm the 30 s skip', async () => {
     const background: Promise<unknown>[] = [];
     const failing: PhrasePlanSql = (strings) => {
       const text = strings.join('?');
+      if (text.includes('SELECT month FROM jev_spend')) return Promise.resolve([]);
       if (text.includes('ON CONFLICT')) ensures += 1;
       const error = new Error(`connect failed ${secret}`) as Error & { code?: string };
       error.code = '40P01';
@@ -1530,6 +1531,55 @@ void test('a deadlock does not arm the 30 s skip', async () => {
     await again.done;
     assert.equal(again.result().status, 200);
     assert.equal(again.keyReads(), 1);
+  } finally {
+    console.warn = original;
+  }
+});
+
+void test('a deadlock retry that times out arms the 30 s skip', async () => {
+  resetPhrasePlanStateForTests();
+  const logs: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    logs.push(args.map((item) => String(item)).join(' '));
+  };
+  try {
+    let conflicts = 0;
+    let queriedAgain = false;
+    const started = Date.now();
+    const first = harness({
+      now: () => started,
+      sql: (strings) => {
+        const text = strings.join('?');
+        if (text.includes('SELECT month FROM jev_spend')) return Promise.resolve([]);
+        if (text.includes('ON CONFLICT')) {
+          conflicts += 1;
+          if (conflicts === 1) {
+            const error = new Error('deadlock detected') as Error & { code?: string };
+            error.code = '40P01';
+            return Promise.reject(error);
+          }
+          return new Promise(() => undefined);
+        }
+        return Promise.resolve([]);
+      },
+    });
+    await first.done;
+    assert.equal(first.result().status, 503);
+    assert.equal(conflicts, 2);
+    assert.equal(logs.includes('db_timeout'), true);
+    assert.equal(logs.includes('db_deadlock'), false);
+    assert.equal(logs.includes('db_error'), false);
+    const again = harness({
+      now: () => started + 1,
+      sql: () => {
+        queriedAgain = true;
+        return Promise.resolve([]);
+      },
+    });
+    await again.done;
+    assert.equal(again.result().status, 503);
+    assert.equal(queriedAgain, false);
   } finally {
     console.warn = original;
   }
@@ -1562,6 +1612,148 @@ void test('one deadlock is retried inside the database budget', async () => {
   assert.equal(failures, 1);
   assert.equal(fetches, 1);
   assert.equal(run.result().status, 200);
+});
+
+void test('a serialization failure is retried inside the database budget', async () => {
+  resetPhrasePlanStateForTests();
+  let failures = 0;
+  let fetches = 0;
+  const run = harness({
+    sql: (strings) => {
+      const text = strings.join('?');
+      if (text.includes('ON CONFLICT') && failures < 1) {
+        failures += 1;
+        const error = new Error('serialization failure') as Error & { code?: string };
+        error.code = '40001';
+        return Promise.reject(error);
+      }
+      if (text.includes('INSERT INTO jev_ip')) {
+        return Promise.resolve([{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }]);
+      }
+      return Promise.resolve([]);
+    },
+    fetch: async () => {
+      fetches += 1;
+      return { ok: true, json: async () => ANSWERS };
+    },
+  });
+  await run.done;
+  assert.equal(failures, 1);
+  assert.equal(fetches, 1);
+  assert.equal(run.result().status, 200);
+});
+
+void test('a Neon timeout wrapped in NeonDbError logs db_timeout', async () => {
+  resetPhrasePlanStateForTests();
+  const secret = 'postgres://jev:secret-password@ep-example.neon.tech/jev';
+  const logs: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    logs.push(args.map((item) => String(item)).join(' '));
+  };
+  const wrapped = (sourceName: 'TimeoutError' | 'AbortError') => {
+    const source = new Error('The operation was aborted due to timeout');
+    source.name = sourceName;
+    if (sourceName === 'AbortError') {
+      const cause = new Error('The operation was aborted due to timeout');
+      cause.name = 'TimeoutError';
+      (source as Error & { cause?: Error }).cause = cause;
+    }
+    const error = new Error(`Error connecting to database: ${secret}`) as Error & {
+      sourceError?: Error;
+    };
+    error.name = 'NeonDbError';
+    error.sourceError = source;
+    return error;
+  };
+  try {
+    for (const sourceName of ['TimeoutError', 'AbortError'] as const) {
+      resetPhrasePlanStateForTests();
+      logs.length = 0;
+      let queriedAgain = false;
+      const started = Date.now();
+      const run = harness({
+        now: () => started,
+        sql: () => Promise.reject(wrapped(sourceName)),
+      });
+      await run.done;
+      assert.equal(run.result().status, 503, sourceName);
+      assert.equal(logs.includes('db_timeout'), true, sourceName);
+      assert.equal(logs.includes('db_error'), false, sourceName);
+      assert.equal(logs.join('\n').includes(secret), false, sourceName);
+      const again = harness({
+        now: () => started + 1,
+        sql: () => {
+          queriedAgain = true;
+          return Promise.resolve([]);
+        },
+      });
+      await again.done;
+      assert.equal(again.result().status, 503, sourceName);
+      assert.equal(queriedAgain, false, sourceName);
+    }
+    resetPhrasePlanStateForTests();
+    logs.length = 0;
+    const plainAbort = new Error('The operation was aborted');
+    plainAbort.name = 'AbortError';
+    const other = harness({
+      sql: () => Promise.reject(plainAbort),
+    });
+    await other.done;
+    assert.equal(other.result().status, 503);
+    assert.equal(logs.includes('db_error'), true);
+    assert.equal(logs.includes('db_timeout'), false);
+  } finally {
+    console.warn = original;
+  }
+});
+
+void test('a waiter behind a failed call does not start a second full budget', async () => {
+  resetPhrasePlanStateForTests();
+  const leaderIp = '203.0.113.8';
+  const waiterIp = '203.0.113.9';
+  let gates = 0;
+  const sql: PhrasePlanSql = async (strings) => {
+    const text = strings.join('?');
+    if (!text.includes('INSERT INTO jev_ip')) return [];
+    gates += 1;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
+  };
+  const fetch = (
+    _url: string,
+    init: { signal?: AbortSignal },
+  ): Promise<{ ok: boolean; json: () => Promise<unknown> }> =>
+    new Promise((_resolve, reject) => {
+      const signal = init.signal;
+      const fail = () => reject(signal?.reason ?? new Error('aborted'));
+      if (!signal) {
+        fail();
+        return;
+      }
+      if (signal.aborted) fail();
+      else signal.addEventListener('abort', fail, { once: true });
+    });
+  const started = Date.now();
+  const leader = harness({
+    headers: { 'x-vercel-forwarded-for': leaderIp },
+    sql,
+    fetch,
+  });
+  for (let turn = 0; turn < 20 && gates < 1; turn += 1) await Promise.resolve();
+  assert.equal(gates, 1);
+  const waiter = harness({
+    headers: { 'x-vercel-forwarded-for': waiterIp },
+    sql,
+    fetch,
+  });
+  await leader.done;
+  await waiter.done;
+  const elapsed = Date.now() - started;
+  assert.equal(leader.result().status, 503);
+  assert.equal(waiter.result().status, 503);
+  assert.equal(gates, 1);
+  assert.ok(elapsed < 2_500, `elapsed ${elapsed}`);
 });
 
 void test('40-token usage lowers the month by exactly reservation - 40', async () => {
@@ -1642,28 +1834,26 @@ void test('missing, negative, or NaN usage keeps the reservation', async () => {
   }
 });
 
-void test('billed usage above the reservation changes nothing', async () => {
+void test('billed usage above the reservation adds the excess up to the cap', async () => {
   resetPhrasePlanStateForTests();
   const logs: string[] = [];
   const original = console.warn;
   console.warn = (...args: unknown[]) => {
     logs.push(args.map((item) => String(item)).join(' '));
   };
+  const background: Promise<unknown>[] = [];
   try {
-    let tokens = 0;
-    let reservation = 0;
-    let adjustments = 0;
-    const background: Promise<unknown>[] = [];
-    const run = harness({
+    let seen = 0;
+    const open = harness({
       sql: async (strings, ...values) => {
         const text = strings.join('?');
         if (text.includes('INSERT INTO jev_ip')) {
-          reservation = Number(values[4]);
-          tokens += reservation;
-          return [{ calls: 1, tokens, ip_ok: true, spend_ok: true }];
+          seen = Number(values[4]);
+          return [{ calls: 1, tokens: seen, ip_ok: true, spend_ok: true }];
         }
-        if (text.includes('tokens -') || text.includes('tokens +')) {
-          adjustments += 1;
+        if (text.includes('LEAST(tokens +')) {
+          const excess = Number(values[0]);
+          seen += excess;
           return [];
         }
         return [];
@@ -1676,11 +1866,44 @@ void test('billed usage above the reservation changes nothing', async () => {
         background.push(work);
       },
     });
-    await run.done;
+    await open.done;
     await Promise.all(background);
-    assert.equal(run.result().status, 200);
-    assert.equal(adjustments, 0);
-    assert.equal(tokens, reservation);
+    assert.equal(open.result().status, 200);
+    assert.equal(seen, 1_000_000);
+    assert.deepEqual(logs, ['usage_over_reservation']);
+
+    resetPhrasePlanStateForTests();
+    logs.length = 0;
+    background.length = 0;
+    let capped = 0;
+    const limited = harness({
+      tokenCap: 50_000,
+      sql: async (strings, ...values) => {
+        const text = strings.join('?');
+        if (text.includes('INSERT INTO jev_ip')) {
+          capped = Number(values[4]);
+          return [{ calls: 1, tokens: capped, ip_ok: true, spend_ok: true }];
+        }
+        if (text.includes('LEAST(tokens +')) {
+          const excess = Number(values[0]);
+          const cap = Number(values[1]);
+          capped = Math.min(capped + excess, cap);
+          return [];
+        }
+        return [];
+      },
+      fetch: async () => ({
+        ok: true,
+        json: async () => ({ ...ANSWERS, usage: { input_tokens: 1_000_000 } }),
+      }),
+      waitUntil(work) {
+        background.push(work);
+      },
+    });
+    await limited.done;
+    await Promise.all(background);
+    assert.equal(limited.result().status, 200);
+    assert.equal(capped, 50_000);
     assert.deepEqual(logs, ['usage_over_reservation']);
   } finally {
     console.warn = original;

@@ -23,23 +23,46 @@ line. The function reads `TYPESAFE_API_KEY`, `JEV_COUNTER_DATABASE_URL`, and
 `JEV_IP_HASH_SALT`. None of those values is logged. The database URL points
 at a Neon Postgres database. `db/jev-spend.sql` creates `jev_spend` and
 `jev_ip` and is not run by the build or by the function; apply it by hand
-before the planner can spend. The function inserts the month row at 0 if it is missing, then locks
-the spend row before the IP row. It writes the IP counter only when the
-spend reservation is written, and writes that reservation only when the
-IP write returns, and calls TypeSafe only after both succeed. A refused
-month does not spend a daily IP slot. Stale IP rows are deleted in a
-separate best-effort statement after the response. A deadlock (SQLSTATE
-40P01 or 40001) is retried once inside the 1200 ms database budget and
-does not arm the 30 s outage skip. The whole reservation is refunded
-only when the call never starts. A 200 with a valid usage object gives
-back the unused part of that reservation in `waitUntil`: billed tokens
-are `input_tokens` plus `output_tokens` when the response reports them.
-Anything else keeps the full reservation. At 40 tokens a call, the
-143,080,000 cap is about 3.5 million calls. A database failure is logged
-as `db_error`, `db_timeout`, or `db_deadlock`; a reconcile failure is
-`reconcile_error` or `reconcile_timeout`; usage above the reservation is
-`usage_over_reservation`. The error text is not logged. A missing salt
-does the same, after one warning that does not include the salt. One
+before the planner can spend. The counter role is also applied by hand.
+`jev_counter` can log in, its `statement_timeout` is 2 seconds, and it
+has `USAGE` on `public` with no `CREATE`. It can `SELECT`, `INSERT`,
+`UPDATE`, and `DELETE` `jev_ip`, and `SELECT`, `INSERT`, and `UPDATE`
+`jev_spend`. The password below is a placeholder:
+
+```sql
+CREATE ROLE jev_counter LOGIN PASSWORD '<password>';
+ALTER ROLE jev_counter SET statement_timeout = '2s';
+GRANT USAGE ON SCHEMA public TO jev_counter;
+GRANT SELECT, INSERT, UPDATE, DELETE ON jev_ip TO jev_counter;
+GRANT SELECT, INSERT, UPDATE ON jev_spend TO jev_counter;
+```
+
+The function reads the month row and
+inserts it at 0 only when that read is empty, so an existing month does
+not queue on the spend lock. The gate still locks that row before the
+IP row. It writes the IP counter only when the spend reservation is
+written, and writes that reservation only when the IP write returns,
+and calls TypeSafe only after both succeed. A refused month does not
+spend a daily IP slot. Stale IP rows are deleted in a separate
+best-effort statement after the response. A deadlock (SQLSTATE 40P01
+or 40001) is retried once inside the 1200 ms database budget. A second
+deadlock logs `db_deadlock` and does not arm the 30 s outage skip. A
+timeout on that retry logs `db_timeout` and does arm it. The whole
+reservation is refunded only when the call never starts. A 200 with a
+valid usage object gives back the unused part of that reservation in
+`waitUntil`: billed tokens are `input_tokens` plus `output_tokens` when
+the response reports them. Usage above the reservation logs
+`usage_over_reservation` and adds the excess, up to the cap. Anything
+else keeps the full reservation. At 40 tokens a call, the 143,080,000
+cap is about 3.5 million calls. A database failure is logged as
+`db_error`, `db_timeout`, or `db_deadlock`. A reconcile failure is
+`reconcile_error` or `reconcile_timeout`. Stale-IP cleanup is
+`ip_cleanup_error` or `ip_cleanup_timeout`. The error text is not
+logged. A missing salt
+does the same, after one warning that does not include the salt. A
+waiter behind a non-200 keeps the rest of its work inside the 1700 ms
+server budget, and returns without reserving when that remainder
+cannot hold both a database attempt and an upstream attempt. One
 process shares a 200 for an in-flight context. Any other status is not
 reused, so that caller runs its own reservation. Another instance can
 still reserve the same context; each of those duplicates is counted
