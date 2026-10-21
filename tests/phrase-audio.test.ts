@@ -4235,3 +4235,225 @@ void test('a stall past the armed bar does not flam the old downbeat', async () 
   assert.ok(fade, 'notes already sounding did not keep the seam fade');
   player.stop();
 });
+
+void test('turning loop off during a stall ramps the muted note back in', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 8, RATE);
+  context.resume = () => Promise.resolve();
+  const destination = context.createGain();
+  destination.connect(context.destination);
+  const clock = new AudioClock();
+  const sets: { node: GainNode; value: number; time: number }[] = [];
+  const ramps: {
+    node: GainNode;
+    value: number;
+    end: number;
+    anchor: number;
+    anchorValue: number;
+  }[] = [];
+  const anchors = new WeakMap<AudioParam, { time: number; value: number }>();
+  const createGain = context.createGain.bind(context);
+  context.createGain = () => {
+    const node = createGain();
+    const gain = node.gain;
+    const setValue = gain.setValueAtTime.bind(gain);
+    const ramp = gain.linearRampToValueAtTime.bind(gain);
+    gain.setValueAtTime = (value: number, time: number) => {
+      anchors.set(gain, { time, value });
+      sets.push({ node, value, time });
+      return setValue(value, time);
+    };
+    gain.linearRampToValueAtTime = (value: number, time: number) => {
+      const anchor = anchors.get(gain);
+      ramps.push({
+        node,
+        value,
+        end: time,
+        anchor: anchor?.time ?? Number.NaN,
+        anchorValue: anchor?.value ?? Number.NaN,
+      });
+      return ramp(value, time);
+    };
+    return node;
+  };
+  const { starts, dropped } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [
+    queuedNote(0, 0),
+    queuedNote(4, 4),
+    queuedNote(2, 6),
+    queuedNote(8, 8, 2),
+  ];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination,
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  const boundary = lead + 2;
+  await rollClock(clock, lead + 0.4);
+  assert.equal(nextPhraseBarLine(lead, clock.currentTime, tempo), boundary);
+  const returning = starts.find(
+    (item) => nearPitch(item, 4) && Math.abs(item.when - boundary) < 1e-6,
+  );
+  assert.ok(returning, 'the note on the bar was not scheduled');
+  player.queuePhrase({
+    notes: [queuedNote(10, 0)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination,
+    clock,
+  });
+  const muted = sets.filter(
+    (item) => item.value === 0 && Math.abs(item.time - boundary) < 1e-4,
+  );
+  assert.ok(muted.length >= 1, 'the armed switch did not mute the bar');
+  // The audio clock has passed the mute, and the late handoff has not
+  // run. Loop off is the N4 release of that mute.
+  const stall = boundary + 0.04;
+  assert.ok(stall > boundary + PHRASE_LOOKAHEAD_SEC * 0.2);
+  clock.currentTime = stall;
+  player.finishPass();
+  assert.equal(
+    dropped.has(returning.oscillator),
+    false,
+    'loop off dropped the note the mute had been holding',
+  );
+  const rises = ramps.filter(
+    (item) =>
+      item.value > 0.5 &&
+      Math.abs(item.anchor - stall) < 1e-4 &&
+      Math.abs(item.end - stall - 0.02) < 1e-4,
+  );
+  assert.ok(rises.length >= 1, 'the returning note did not ramp in');
+  for (const rise of rises) {
+    assert.ok(
+      rise.anchorValue < 0.02,
+      `the ramp started at ${rise.anchorValue}, not near 0`,
+    );
+    assert.ok(
+      Math.abs(rise.end - rise.anchor - 0.02) < 1e-4,
+      `the ramp took ${rise.end - rise.anchor}s`,
+    );
+  }
+  const steps = sets.filter(
+    (item) => Math.abs(item.time - stall) < 1e-4 && item.value > 0.02,
+  );
+  assert.equal(steps.length, 0, 'the returning note stepped back to full gain');
+  const rendered = await context.startRendering();
+  const channel = rendered.getChannelData(0);
+  const windowPeak = (from: number, to: number) => {
+    const start = Math.max(0, Math.floor(from * RATE));
+    const end = Math.min(channel.length, Math.floor(to * RATE));
+    let peak = 0;
+    for (let index = start; index < end; index += 1) {
+      peak = Math.max(peak, Math.abs(channel[index] ?? 0));
+    }
+    return peak;
+  };
+  const silent = windowPeak(boundary + 0.008, stall - 0.004);
+  const attack = windowPeak(stall, stall + 0.004);
+  const settled = windowPeak(stall + 0.03, stall + 0.08);
+  assert.ok(silent < 0.002, `the mute was still audible at ${silent}`);
+  assert.ok(settled > 0.02, `the returning note stayed silent at ${settled}`);
+  assert.ok(
+    attack < settled * 0.45,
+    `the first 4 ms peaked at ${attack}, level with ${settled}`,
+  );
+  assert.ok(attack > silent, 'the ramp never left silence');
+  player.stop();
+});
+
+void test('notes before the switch point keep the seam fade', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 12, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const { ramps } = spyGains(context);
+  const { starts, dropped, stops } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [
+    queuedNote(0, 0),
+    queuedNote(3, 2),
+    queuedNote(5, 6),
+    queuedNote(8, 8, 2),
+  ];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  await rollClock(clock, lead + 0.4);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  assert.equal(boundary, lead + 2);
+  const before = starts.filter((item) => item.when < boundary - 1e-3);
+  assert.ok(
+    before.some((item) => nearPitch(item, 0)),
+    'the note before the switch was not scheduled',
+  );
+  assert.ok(
+    before.some((item) => nearPitch(item, 3)),
+    'the later note before the switch was not scheduled',
+  );
+  player.queuePhrase({
+    notes: [queuedNote(10, 0)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  await rollClock(clock, boundary + 0.05);
+  for (const item of before) {
+    assert.equal(
+      dropped.has(item.oscillator),
+      false,
+      `a note at ${item.when}s was cut at the switch`,
+    );
+  }
+  const fade = ramps.find(
+    (item) =>
+      item.value === 0 &&
+      item.anchorValue === SPY_GAIN &&
+      Math.abs(item.anchor - boundary) < 1e-4 &&
+      Math.abs(item.end - boundary - PHRASE_END_RELEASE_SEC) < 1e-4,
+  );
+  assert.ok(fade, 'the seam fade left the switch point');
+  assert.ok(fade.anchorValue > 0, 'the seam fade stepped to silence');
+  for (const item of before) {
+    assert.ok(
+      stops.some(
+        (stop) =>
+          stop.oscillator === item.oscillator &&
+          Math.abs(stop.when - (boundary + PHRASE_END_RELEASE_SEC)) < 1e-3,
+      ),
+      `a note at ${item.when}s did not ride the seam fade`,
+    );
+  }
+  const after = starts.find(
+    (item) => nearPitch(item, 5) && item.when > boundary - 1e-4,
+  );
+  assert.ok(after, 'the note after the switch was not scheduled');
+  assert.equal(
+    dropped.has(after.oscillator),
+    true,
+    'a note after the switch kept the seam fade',
+  );
+  player.stop();
+});

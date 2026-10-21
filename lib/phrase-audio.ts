@@ -459,9 +459,10 @@ export class PhrasePlayer {
   /**
    * Notes the armed switch will not play. Their bus is silent from the
    * bar line, including when this thread stalls past the handoff.
-   * Loop off puts the level back so those notes still sound.
+   * Loop off puts the level back so those notes still sound. `at` is
+   * the instant the bus steps to 0.
    */
-  private switchMutes: { bus: GainNode; level: number }[] = [];
+  private switchMutes: { bus: GainNode; level: number; at: number }[] = [];
   /** Boundary the queue timer is waiting on. */
   private queueAt = Number.NaN;
   private scheduler: LookaheadScheduler | null = null;
@@ -874,8 +875,9 @@ export class PhrasePlayer {
     const now = this.clock.now();
     const boundary = nextPhraseBarLine(this.startedAt, now, this.soundingTempo);
     // Silence notes at or after the bar on the audio clock. Turning Loop
-    // off before the bar releases that mute, so they still play. The
-    // handoff drops them when the switch commits.
+    // off before the bar releases that mute, so they still play. Once
+    // the bar has muted them, the release rises over 20 ms. The handoff
+    // drops them when the switch commits.
     this.muteVoicesFrom(boundary);
     this.scheduler.suppressFrom(boundary, () => {
       this.armQueuedStart(boundary);
@@ -911,7 +913,7 @@ export class PhrasePlayer {
       } catch {
         continue;
       }
-      this.switchMutes.push({ bus, level });
+      this.switchMutes.push({ bus, level, at: boundary });
     }
   }
 
@@ -922,7 +924,16 @@ export class PhrasePlayer {
     for (const mute of mutes) {
       try {
         mute.bus.gain.cancelScheduledValues(now);
-        mute.bus.gain.setValueAtTime(mute.level, now);
+        // The mute is still ahead of the clock. The note is at its
+        // level, so put that level back in one event.
+        if (mute.at > now + 1e-4) {
+          mute.bus.gain.setValueAtTime(mute.level, now);
+          continue;
+        }
+        // The bar already stepped this bus to 0. Setting the saved
+        // level here would click. Rise over the same 20 ms as halt.
+        mute.bus.gain.setValueAtTime(0, now);
+        mute.bus.gain.linearRampToValueAtTime(mute.level, now + 0.02);
       } catch {
         // The context may already be closed.
       }
