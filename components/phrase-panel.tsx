@@ -111,9 +111,9 @@ function controlIsDisabled(node: HTMLElement): boolean {
 
 /**
  * Widths follow the deck's grid areas, so tab order can match the picture.
- * Reordering moves the focused node. Chrome keeps focus across that move;
- * Firefox and Safari blur it onto the document. Remember the control and put
- * it back before paint, then on the next frame if that call was ignored.
+ * Moving a focused control clears it onto the document. A focus() call in
+ * that same turn sticks in Chrome and can be ignored in Firefox and Safari,
+ * so try again on the next frame when the document still has focus.
  */
 function useDeckBreakpoints(): {
   phone: boolean;

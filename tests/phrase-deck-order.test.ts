@@ -249,6 +249,43 @@ void test(
       viewport: { width: 1200, height: 900 },
       deviceScaleFactor: 1,
     });
+    // Chrome accepts focus() in the same turn a focused node moves. Firefox
+    // and Safari can ignore that call and leave the document focused. This
+    // page ignores same-turn focus() inside the deck, then allows it on the
+    // next frame, so the test locks that later restore.
+    await page.addInitScript({
+      content: `(() => {
+        let blockDeckFocus = false;
+        const orig = HTMLElement.prototype.focus;
+        HTMLElement.prototype.focus = function () {
+          if (blockDeckFocus && this.closest && this.closest('.phrase-deck')) {
+            return;
+          }
+          return orig.apply(this, arguments);
+        };
+        const arm = (node) => {
+          if (!(node instanceof HTMLElement) || !node.closest('.phrase-deck')) {
+            return;
+          }
+          blockDeckFocus = true;
+          requestAnimationFrame(() => {
+            blockDeckFocus = false;
+          });
+        };
+        const insert = Node.prototype.insertBefore;
+        Node.prototype.insertBefore = function (node, child) {
+          const result = insert.call(this, node, child);
+          arm(node);
+          return result;
+        };
+        const append = Node.prototype.appendChild;
+        Node.prototype.appendChild = function (node) {
+          const result = append.call(this, node);
+          arm(node);
+          return result;
+        };
+      })();`,
+    });
     await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.phrase-open');
     await openPhrases(page);
