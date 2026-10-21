@@ -57,10 +57,14 @@ void test('postgres phrase plan gate', async (t) => {
     t.skip('PG_TEST_URL is unset');
     return;
   }
+  // The route budget is 1200 ms. These races share one spend row, so on
+  // the CI container the later calls wait longer than that. A wider
+  // budget lets the test see the reservation. A deadlock stays a deadlock.
+  const raceBudget = { budgetMs: 60_000 };
   const pool = new pg.Pool({
     connectionString: url,
     max: 320,
-    statement_timeout: 10_000,
+    statement_timeout: 120_000,
   });
   t.after(() => pool.end());
   try {
@@ -161,7 +165,7 @@ void test('postgres phrase plan gate', async (t) => {
         reservation: 100,
         limit: 200,
         cap: 1_000_000_000,
-      }),
+      }, raceBudget),
     );
     tally('a-300-new', results);
     assert.equal(results.filter(succeeded).length, 300);
@@ -186,7 +190,7 @@ void test('postgres phrase plan gate', async (t) => {
         reservation: 100,
         limit: 200,
         cap: 1_000_000_000,
-      }),
+      }, raceBudget),
     );
     tally('b-200-stale-empty', results);
     assert.equal(results.filter(succeeded).length, 200);
@@ -212,7 +216,7 @@ void test('postgres phrase plan gate', async (t) => {
         reservation,
         limit: 200,
         cap,
-      }),
+      }, raceBudget),
     );
     tally('c-near-cap', results);
     const wins = results.filter(succeeded);
@@ -241,7 +245,7 @@ void test('postgres phrase plan gate', async (t) => {
         reservation: 100,
         limit: 200,
         cap: 1_000_000,
-      }),
+      }, raceBudget),
     );
     tally('d-ip-199', results);
     assert.equal(results.filter(succeeded).length, 1);
@@ -265,7 +269,7 @@ void test('postgres phrase plan gate', async (t) => {
           reservation,
           limit: 200,
           cap,
-        });
+        }, raceBudget);
         assert.equal(reserved.status, 'ok');
         await phrasePlanReconcile(sql, {
           month,
