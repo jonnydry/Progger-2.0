@@ -8,9 +8,13 @@ import {
   MOTIF_RHYTHMS,
   PHRASE_PLAN_CACHE_LIMIT,
   PHRASE_PLAN_DB_TIMEOUT_MS,
+  PHRASE_PLAN_INFLIGHT_LIMIT,
   PHRASE_PLAN_IP_DAILY_LIMIT,
+  PHRASE_PLAN_MAX_CALL_TOKENS,
   PHRASE_PLAN_TOKEN_CAP,
+  PHRASE_PLAN_TOKEN_MARGIN,
   PHRASE_PLAN_UPSTREAM_TIMEOUT_MS,
+  phrasePlanReservationBytes,
   QUESTION_DEGREES,
   distributionsFromAnswers,
   handlePhrasePlan,
@@ -365,7 +369,29 @@ void test('a reservation above the cap refuses before the key, and a full month 
   assert.equal(again.result().status, 503);
   assert.equal(again.keyReads(), 0);
   assert.equal(again.sent.url, undefined);
-  assert.equal(PHRASE_PLAN_TOKEN_CAP, 238_000_000);
+  assert.equal(PHRASE_PLAN_INFLIGHT_LIMIT, 30_000);
+  assert.equal(
+    PHRASE_PLAN_TOKEN_MARGIN,
+    PHRASE_PLAN_INFLIGHT_LIMIT * PHRASE_PLAN_MAX_CALL_TOKENS,
+  );
+  assert.equal(PHRASE_PLAN_TOKEN_CAP + PHRASE_PLAN_TOKEN_MARGIN, 238_000_000);
+  assert.ok(PHRASE_PLAN_TOKEN_CAP > 0);
+  const largest = phrasePlanReservationBytes({
+    scaleId: 'locrian-natural6',
+    root: 'C#',
+    chord: 'C#m7b5',
+    bars: 4,
+    rhythm: 'eighths',
+  });
+  assert.equal(largest, PHRASE_PLAN_MAX_CALL_TOKENS);
+  const smaller = phrasePlanReservationBytes({
+    scaleId: 'major',
+    root: 'C',
+    chord: 'C',
+    bars: 2,
+    rhythm: 'quarters',
+  });
+  assert.ok(smaller < PHRASE_PLAN_MAX_CALL_TOKENS);
 });
 
 void test('missing database config, a database error, and a hung query fail closed', async () => {

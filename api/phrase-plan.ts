@@ -98,8 +98,31 @@ function motifRhythmsFor(rhythm: ShapeRhythm): readonly MotifRhythm[] {
 
 const MODEL = 'jev-1.13.0';
 const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
-/** $10 at $0.042 per million tokens. */
-export const PHRASE_PLAN_TOKEN_CAP = 238_000_000;
+/** $10 at $0.042 per million input tokens. */
+const PHRASE_PLAN_BUDGET_TOKENS = 238_000_000;
+/**
+ * Calls that can reach Jev before a reservation refusal is known.
+ * The spend UPDATE is atomic, so the counter never passes the coded cap.
+ * Typesafe can still bill a call whose fetch already started when the
+ * reservation comes back refused. After one confirmed refusal, this
+ * process latches that UTC month and does not start another fetch.
+ * The margin is the wave already in flight when that happens.
+ *
+ * A call counts as one token per UTF-8 byte of the largest upstream
+ * body. That is the reservation this route already makes. The recorded
+ * fixture's Jev input_tokens is 40, so the byte bound overestimates the
+ * bill. The price is $0.042 per million tokens, and $10 is 238_000_000.
+ *
+ * Vercel Hobby and Pro scale to 30,000 concurrent executions. The burst
+ * admits 1,000 per 10 seconds per region, and this route allows 200
+ * calls per IP per UTC day. Both sit inside 30,000, so neither lowers
+ * the worst case: every allowed execution is this function, each at the
+ * max body, each refused after the fetch started. That product fits
+ * under $10. Enterprise's 100,000 does not. Assumption: this project is
+ * not on an Enterprise allowance above 30,000. vercel.json sets no
+ * maxConcurrency.
+ */
+export const PHRASE_PLAN_INFLIGHT_LIMIT = 30_000;
 /** Uncached planner calls one IP may make in a UTC day. */
 export const PHRASE_PLAN_IP_DAILY_LIMIT = 200;
 /**
@@ -403,6 +426,50 @@ export function phrasePlanQuestions(
   }
   return questions;
 }
+
+function upstreamBody(input: PhrasePlanRequest, random: () => number): string {
+  return JSON.stringify({
+    model: MODEL,
+    state: stateFor(input),
+    questions: phrasePlanQuestions(input, random),
+  });
+}
+
+/** UTF-8 bytes of the upstream body. The route reserves one token per byte. */
+export function phrasePlanReservationBytes(input: PhrasePlanRequest): number {
+  return Buffer.byteLength(upstreamBody(input, () => 0));
+}
+
+function maxUpstreamTokens(): number {
+  let max = 0;
+  const rhythms = ['quarters', 'eighths', 'long-short', 'push'] as const;
+  for (const scaleId of Object.keys(SCALES)) {
+    for (const root of ROOTS) {
+      for (const bars of [2, 4] as const) {
+        for (const rhythm of rhythms) {
+          const size = phrasePlanReservationBytes({
+            scaleId,
+            root,
+            chord: 'C#m7b5',
+            bars,
+            rhythm,
+          });
+          if (size > max) max = size;
+        }
+      }
+    }
+  }
+  return max;
+}
+
+/** Largest upstream body, counted as one token per byte. */
+export const PHRASE_PLAN_MAX_CALL_TOKENS = maxUpstreamTokens();
+/** Platform concurrency ceiling times the per-call token ceiling. */
+export const PHRASE_PLAN_TOKEN_MARGIN =
+  PHRASE_PLAN_INFLIGHT_LIMIT * PHRASE_PLAN_MAX_CALL_TOKENS;
+/** Budget minus the in-flight margin. The counter never passes this. */
+export const PHRASE_PLAN_TOKEN_CAP =
+  PHRASE_PLAN_BUDGET_TOKENS - PHRASE_PLAN_TOKEN_MARGIN;
 
 function stateFor(input: PhrasePlanRequest): string {
   const scale = SCALES[input.scaleId] ?? input.scaleId;
@@ -841,12 +908,8 @@ export async function handlePhrasePlan(
     return;
   }
   const random = deps?.random ?? cryptoRandom;
-  const upstreamBody = JSON.stringify({
-    model: MODEL,
-    state: stateFor(parsed),
-    questions: phrasePlanQuestions(parsed, random),
-  });
-  const reservation = Buffer.byteLength(upstreamBody);
+  const bodyForJev = upstreamBody(parsed, random);
+  const reservation = Buffer.byteLength(bodyForJev);
   if (reservation > cap) {
     unavailable(response);
     return;
@@ -896,7 +959,7 @@ export async function handlePhrasePlan(
     `,
   );
   const fetchImpl = deps?.fetch ?? (globalThis.fetch as FetchLike);
-  const upstream = key ? startUpstream(fetchImpl, key, upstreamBody) : null;
+  const upstream = key ? startUpstream(fetchImpl, key, bodyForJev) : null;
   const [ipRows, spendRows] = await Promise.all([ipPromise, spendPromise]);
   const ipOk =
     ipRows !== 'down' &&
