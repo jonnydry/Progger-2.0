@@ -111,7 +111,7 @@ function thirdMeans(midis: readonly number[]): [number, number, number] {
 
 void test('timing, cadence roles, and seeds are deterministic tables', () => {
   assert.equal(PHRASE_RANGE, 18);
-  assert.equal(PHRASE_PLANNER_TIMEOUT_MS, 1_800);
+  assert.equal(PHRASE_PLANNER_TIMEOUT_MS, 2_000);
   assert.equal(cadenceRole('1'), 'root');
   assert.equal(cadenceRole('8'), 'root');
   assert.equal(cadenceRole('b3'), 'third');

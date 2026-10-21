@@ -26,10 +26,11 @@ import {
 
 /**
  * The server confirms the database reservation before it calls upstream.
- * Worst case is the 1200 ms database cap plus the 500 ms upstream cap.
- * The panel does not wait on this before playing the rules line.
+ * The database budget is 1200 ms and includes one deadlock retry.
+ * Upstream is capped at 500 ms, so the coded worst case is 1700 ms.
+ * This waits 2000 ms, leaving 300 ms. The panel plays the rules line first.
  */
-export const PHRASE_PLANNER_TIMEOUT_MS = 1_800;
+export const PHRASE_PLANNER_TIMEOUT_MS = 2_000;
 /** The planner timer aborts with this. A panel cleanup uses the other reason. */
 export const PHRASE_PLANNER_TIMEOUT_REASON = 'phrase-planner-timeout';
 /** Phrase-panel cleanup and a replacement Generate abort with this. */

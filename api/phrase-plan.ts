@@ -3,13 +3,16 @@
  * This file does not log, echo, or return the key, the database URL, an
  * IP address, or its hash. The key is read only after the origin, salt,
  * and address checks, and only when this request's body fits under the
- * cap. One statement locks the IP and spend rows and writes them only
- * when both still have room. Postgres will not apply two changes to
- * the same row, so a refusal does not undo an increment afterwards.
- * The Jev fetch starts only after that statement confirms both. A
- * database timeout or error does not fetch. A refund runs only when
- * the fetch never started. One process shares one in-flight plan per
- * context. Counters live in Neon.
+ * cap. The spend row is locked before the IP row. The IP counter
+ * moves only when the spend reservation is written, and the spend
+ * row moves only when that IP write returns. The Jev fetch starts
+ * only after both are confirmed. A database timeout or error does
+ * not fetch. A deadlock is retried once inside the database budget
+ * and does not arm the outage skip. A refund of the whole reservation
+ * runs only when the fetch never started. A completed 200 with a
+ * valid usage object gives back the unused part of that reservation.
+ * One process shares a 200 for an in-flight context, and nothing else.
+ * Counters live in Neon.
  * db/jev-spend.sql is applied by hand and is not run from this function.
  */
 
@@ -109,19 +112,19 @@ const PHRASE_PLAN_BUDGET_TOKENS = 238_000_000;
  * a billed call was reserved first and the counter cannot pass this cap.
  * Concurrency does not open a gap above it: the spend row is locked in
  * that statement, including when Fluid runs many calls in one instance.
- * 143_080_000 stays as a deliberate margin under the $10 budget. It is
- * not required to cover fetches that start before a refusal. After one
- * confirmed spend refusal, this process latches that UTC month and does
- * not start another statement. A later cold start begins with an empty
- * latch. Repeated cold starts after the month is full sit outside this
- * margin.
+ * 143_080_000 stays as a deliberate margin under the $10 budget. Plini
+ * kept this constant. After one confirmed spend refusal, this process
+ * latches that UTC month and does not start another statement. A later
+ * cold start begins with an empty latch.
  *
- * A call counts as one token per UTF-8 byte of the largest upstream
- * body. That is the reservation this route already makes. The recorded
- * fixture's Jev input_tokens is 40, so the byte bound overestimates the
- * bill. The price is $0.042 per million tokens, and $10 is 238_000_000
- * in this file. The exact $10 count is 238_095_238, and this constant
- * is left for a later decision.
+ * Until a 200 reports usage, the reservation is one token per UTF-8
+ * byte of the upstream body. At the largest body that is about 45
+ * thousand calls inside this cap. A 200 with a valid usage object
+ * returns the unused bytes: billed tokens are input_tokens plus
+ * output_tokens when the response reports output_tokens. At the
+ * recorded 40 input tokens, this cap is about 3.5 million calls.
+ * The price is $0.042 per million tokens, and $10 is 238_000_000
+ * in this file. The exact $10 count is 238_095_238.
  *
  * Vercel Hobby and Pro scale to 30,000 concurrent executions. That
  * product with the largest body is the margin that was subtracted. The
@@ -269,7 +272,7 @@ type ChoiceQuestion = {
 
 const cache = new Map<string, PhrasePlanDistributions>();
 type PhrasePlanFlight = { status: number; payload: unknown };
-/** One in-flight plan per context on this instance. Cross-instance duplicates each reserve. */
+/** One in-flight 200 per context on this instance. A refusal is not shared. */
 const inflight = new Map<string, Promise<PhrasePlanFlight>>();
 let missingSaltWarned = false;
 /** UTC month whose spend reservation was refused. This process stops calling Jev. */
@@ -766,10 +769,10 @@ function utcDay(now: number): string {
   return `${date.getUTCFullYear()}-${month}-${day}`;
 }
 
-function neonSql(url: string): PhrasePlanSql {
+function neonSql(url: string, budgetMs: number): PhrasePlanSql {
   const query = neon(url, {
     fetchOptions: {
-      signal: AbortSignal.timeout(PHRASE_PLAN_DB_TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.max(1, budgetMs)),
     },
   });
   return (strings, ...values) =>
@@ -780,37 +783,56 @@ const DB_TIMEOUT = Symbol('db_timeout');
 
 /**
  * Neon 1.2.0 appends the connection URL, password included, to the error.
- * Log a fixed code only. Do not return, log, or rethrow the error or its
+ * Callers log a fixed code only. Nothing here reads or returns the error
  * message.
  */
-function dbLogCode(error: unknown): 'db_timeout' | 'db_error' {
-  if (error === DB_TIMEOUT) return 'db_timeout';
+function sqlState(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return null;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code !== 'string' || !/^[0-9A-Z]{5}$/.test(code)) return null;
+  return code;
+}
+
+type SqlOutcome =
+  | { ok: true; rows: readonly Record<string, unknown>[] }
+  | { ok: false; reason: 'timeout' | 'deadlock' | 'error' };
+
+function failureReason(error: unknown): 'timeout' | 'deadlock' | 'error' {
+  if (error === DB_TIMEOUT) return 'timeout';
+  const state = sqlState(error);
+  if (state === '40P01' || state === '40001') return 'deadlock';
   if (
     typeof error === 'object' &&
     error !== null &&
     'name' in error &&
     (error as { name?: unknown }).name === 'TimeoutError'
   ) {
-    return 'db_timeout';
+    return 'timeout';
   }
-  return 'db_error';
+  return 'error';
 }
 
-async function timedRows(
+async function runSql(
   work: Promise<readonly Record<string, unknown>[]>,
-): Promise<readonly Record<string, unknown>[] | 'down'> {
+  budgetMs: number,
+): Promise<SqlOutcome> {
+  if (budgetMs <= 0) return { ok: false, reason: 'timeout' };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(DB_TIMEOUT), PHRASE_PLAN_DB_TIMEOUT_MS);
+    timer = setTimeout(() => reject(DB_TIMEOUT), budgetMs);
   });
   try {
-    return await Promise.race([work, timeout]);
+    const rows = await Promise.race([work, timeout]);
+    return { ok: true, rows };
   } catch (error) {
-    console.warn(dbLogCode(error));
-    return 'down';
+    return { ok: false, reason: failureReason(error) };
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function logDbFailure(reason: 'timeout' | 'error'): void {
+  console.warn(reason === 'timeout' ? 'db_timeout' : 'db_error');
 }
 
 function flagOf(
@@ -822,44 +844,87 @@ function flagOf(
   return value === true || value === 't' || value === 'true';
 }
 
+export type PhrasePlanGateInput = {
+  day: string;
+  hash: string;
+  month: string;
+  reservation: number;
+  limit: number;
+  cap: number;
+};
+
+/** The month row has to exist before the gate locks it. 0 spends nothing. */
+export function phrasePlanEnsureMonth(
+  sql: PhrasePlanSql,
+  month: string,
+): Promise<readonly Record<string, unknown>[]> {
+  return sql`
+    INSERT INTO jev_spend (month, tokens, updated_at)
+    VALUES (${month}, 0, now())
+    ON CONFLICT (month) DO NOTHING
+  `;
+}
+
 /**
- * One round trip. The IP write is conditional on both counters having
- * room, and the spend write runs only from a returned IP row. A second
- * update of either row in this statement would not see the first.
+ * Stale IP rows are not part of the gate. A delete in that statement
+ * deadlocks with the row locks. This runs after the response.
+ */
+export function phrasePlanReleaseStaleIps(
+  sql: PhrasePlanSql,
+  day: string,
+): Promise<readonly Record<string, unknown>[]> {
+  return sql`DELETE FROM jev_ip WHERE day < CAST(${day} AS date)`;
+}
+
+/**
+ * Give back the unused part of this call's own reservation. The floor
+ * is this call's billed usage, and the cap still bounds the row.
+ */
+export function phrasePlanReconcile(
+  sql: PhrasePlanSql,
+  input: { month: string; unused: number; billed: number; cap: number },
+): Promise<readonly Record<string, unknown>[]> {
+  const { month, unused, billed, cap } = input;
+  return sql`
+    UPDATE jev_spend
+    SET tokens = LEAST(GREATEST(tokens - ${unused}, ${billed}), ${cap}),
+        updated_at = now()
+    WHERE month = ${month}
+  `;
+}
+
+/**
+ * Spend is locked first, then the IP row. The IP write runs only when
+ * both still have room. The spend update runs only from a returned IP
+ * row, so neither counter moves alone. The month row is not inserted
+ * here: a second write of that row in this statement would not see the
+ * first. Stale IP cleanup is a separate statement.
  */
 export function phrasePlanGate(
   sql: PhrasePlanSql,
-  input: {
-    day: string;
-    hash: string;
-    month: string;
-    reservation: number;
-    limit: number;
-    cap: number;
-  },
+  input: PhrasePlanGateInput,
 ): Promise<readonly Record<string, unknown>[]> {
   const { day, hash, month, reservation, limit, cap } = input;
   return sql`
-    WITH cleaned AS (
-      DELETE FROM jev_ip WHERE day < CAST(${day} AS date)
-    ),
-    ip_state AS (
-      SELECT calls
-      FROM jev_ip
-      WHERE day = CAST(${day} AS date)
-        AND ip_hash = ${hash}
-      FOR UPDATE
-    ),
-    spend_state AS (
+    WITH spend_lock AS (
       SELECT tokens
       FROM jev_spend
       WHERE month = ${month}
       FOR UPDATE
     ),
+    ip_lock AS (
+      SELECT calls
+      FROM jev_ip
+      WHERE day = CAST(${day} AS date)
+        AND ip_hash = ${hash}
+        AND EXISTS (SELECT 1 FROM spend_lock)
+      FOR UPDATE
+    ),
     room AS (
       SELECT
-        COALESCE((SELECT calls FROM ip_state), 0) + 1 <= ${limit} AS ip_ok,
-        COALESCE((SELECT tokens FROM spend_state), 0) + ${reservation} <= ${cap} AS spend_ok
+        COALESCE((SELECT calls FROM ip_lock), 0) + 1 <= ${limit} AS ip_ok,
+        (SELECT count(*) FROM spend_lock) = 1
+          AND (SELECT tokens FROM spend_lock) + ${reservation} <= ${cap} AS spend_ok
     ),
     ip_try AS (
       INSERT INTO jev_ip (day, ip_hash, calls)
@@ -873,15 +938,12 @@ export function phrasePlanGate(
       RETURNING calls
     ),
     spend_try AS (
-      INSERT INTO jev_spend (month, tokens, updated_at)
-      SELECT ${month}, ${reservation}, now()
-      FROM ip_try
-      ON CONFLICT (month) DO UPDATE
-      SET tokens = jev_spend.tokens + ${reservation},
+      UPDATE jev_spend AS spend
+      SET tokens = spend.tokens + ${reservation},
           updated_at = now()
-      WHERE jev_spend.tokens + ${reservation} <= ${cap}
-        AND EXISTS (SELECT 1 FROM ip_try)
-      RETURNING tokens
+      FROM ip_try
+      WHERE spend.month = ${month}
+      RETURNING spend.tokens
     )
     SELECT
       (SELECT calls FROM ip_try) AS calls,
@@ -889,6 +951,53 @@ export function phrasePlanGate(
       (SELECT ip_ok FROM room) AS ip_ok,
       (SELECT spend_ok FROM room) AS spend_ok
   `;
+}
+
+export type PhrasePlanReserveResult =
+  | { status: 'ok'; rows: readonly Record<string, unknown>[]; attempts: number }
+  | { status: 'down'; attempts: number }
+  | { status: 'deadlock'; attempts: number };
+
+/**
+ * Ensure the month row, then run the gate. One retry on SQLSTATE 40P01
+ * or 40001, inside the same database budget. A deadlock does not become
+ * an outage. Any other failure is an outage.
+ */
+export async function phrasePlanReserve(
+  sql: PhrasePlanSql,
+  input: PhrasePlanGateInput,
+  options?: { budgetMs?: number; started?: number },
+): Promise<PhrasePlanReserveResult> {
+  const budget = options?.budgetMs ?? PHRASE_PLAN_DB_TIMEOUT_MS;
+  const started = options?.started ?? Date.now();
+  const attempt = async (
+    log: boolean,
+  ): Promise<
+    | { status: 'ok'; rows: readonly Record<string, unknown>[] }
+    | { status: 'down' }
+    | { status: 'deadlock' }
+  > => {
+    const remaining = () => budget - (Date.now() - started);
+    const ensured = await runSql(phrasePlanEnsureMonth(sql, input.month), remaining());
+    if (!ensured.ok) {
+      if (ensured.reason === 'deadlock') return { status: 'deadlock' };
+      if (log) logDbFailure(ensured.reason);
+      return { status: 'down' };
+    }
+    const gated = await runSql(phrasePlanGate(sql, input), remaining());
+    if (!gated.ok) {
+      if (gated.reason === 'deadlock') return { status: 'deadlock' };
+      if (log) logDbFailure(gated.reason);
+      return { status: 'down' };
+    }
+    return { status: 'ok', rows: gated.rows };
+  };
+  const first = await attempt(true);
+  if (first.status !== 'deadlock') return { ...first, attempts: 1 };
+  const second = await attempt(false);
+  if (second.status === 'ok') return { status: 'ok', rows: second.rows, attempts: 2 };
+  console.warn('db_deadlock');
+  return { status: 'deadlock', attempts: 2 };
 }
 
 function countOf(
@@ -951,6 +1060,85 @@ function startUpstream(
   return { cancel: () => controller.abort(), done };
 }
 
+type BilledUsage =
+  | { kind: 'ok'; billed: number }
+  | { kind: 'absent' }
+  | { kind: 'bad' }
+  | { kind: 'over' };
+
+function wholeTokens(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return null;
+  return value;
+}
+
+/** input_tokens plus output_tokens when that field is present. */
+function readBilled(payload: unknown, reservation: number): BilledUsage {
+  if (!payload || typeof payload !== 'object' || !('usage' in payload)) {
+    return { kind: 'absent' };
+  }
+  const usage = (payload as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return { kind: 'bad' };
+  const record = usage as Record<string, unknown>;
+  if (!('input_tokens' in record)) return { kind: 'bad' };
+  const input = wholeTokens(record.input_tokens);
+  if (input === null) return { kind: 'bad' };
+  let output = 0;
+  if ('output_tokens' in record) {
+    const parsed = wholeTokens(record.output_tokens);
+    if (parsed === null) return { kind: 'bad' };
+    output = parsed;
+  }
+  const billed = input + output;
+  if (billed > reservation) return { kind: 'over' };
+  return { kind: 'ok', billed };
+}
+
+function refundReservation(
+  sql: PhrasePlanSql,
+  month: string,
+  reservation: number,
+  cap: number,
+): Promise<readonly Record<string, unknown>[]> {
+  return sql`
+    UPDATE jev_spend
+    SET tokens = LEAST(GREATEST(tokens + ${-reservation}, 0), ${cap}),
+        updated_at = now()
+    WHERE month = ${month}
+  `;
+}
+
+async function settleRefund(
+  sql: PhrasePlanSql,
+  month: string,
+  reservation: number,
+  cap: number,
+): Promise<void> {
+  const outcome = await runSql(
+    refundReservation(sql, month, reservation, cap),
+    PHRASE_PLAN_DB_TIMEOUT_MS,
+  );
+  if (!outcome.ok && outcome.reason !== 'deadlock') logDbFailure(outcome.reason);
+  else if (!outcome.ok) console.warn('db_deadlock');
+}
+
+async function settleReconcile(
+  sql: PhrasePlanSql,
+  input: { month: string; unused: number; billed: number; cap: number },
+): Promise<void> {
+  const outcome = await runSql(phrasePlanReconcile(sql, input), PHRASE_PLAN_DB_TIMEOUT_MS);
+  if (outcome.ok) return;
+  console.warn(outcome.reason === 'timeout' ? 'reconcile_timeout' : 'reconcile_error');
+}
+
+async function settleCleanup(sql: PhrasePlanSql, day: string): Promise<void> {
+  const outcome = await runSql(
+    phrasePlanReleaseStaleIps(sql, day),
+    PHRASE_PLAN_DB_TIMEOUT_MS,
+  );
+  if (outcome.ok) return;
+  console.warn(outcome.reason === 'timeout' ? 'ip_cleanup_timeout' : 'ip_cleanup_error');
+}
+
 function defer(
   work: Promise<unknown>,
   wait: (task: Promise<unknown>) => void,
@@ -1009,11 +1197,17 @@ export async function handlePhrasePlan(
     response.status(200).json({ model: MODEL, distributions: cached });
     return;
   }
-  const pending = inflight.get(keyForContext);
-  if (pending) {
+  while (inflight.has(keyForContext)) {
+    const pending = inflight.get(keyForContext);
+    if (!pending) break;
     const shared = await pending;
-    response.status(shared.status).json(shared.payload);
-    return;
+    if (shared.status === 200) {
+      response.status(200).json(shared.payload);
+      return;
+    }
+    if (inflight.get(keyForContext) !== pending) continue;
+    await Promise.resolve();
+    if (inflight.get(keyForContext) === pending) break;
   }
   let resolveFlight: (result: PhrasePlanFlight) => void = () => undefined;
   const flight = new Promise<PhrasePlanFlight>((resolve) => {
@@ -1077,40 +1271,35 @@ export async function handlePhrasePlan(
     unavailable(response);
     return;
   }
-  const query = async (
-    work: (sql: PhrasePlanSql) => Promise<readonly Record<string, unknown>[]>,
-  ) => {
-    const sql = deps?.sql ?? neonSql(databaseUrl);
-    return timedRows(work(sql));
+  const started = Date.now();
+  const budget = PHRASE_PLAN_DB_TIMEOUT_MS;
+  const sql: PhrasePlanSql = (strings, ...values) => {
+    const remaining = Math.max(1, budget - (Date.now() - started));
+    const query = deps?.sql ?? neonSql(databaseUrl, remaining);
+    return query(strings, ...values);
   };
-  const adjust = (delta: number) => {
-    if (delta === 0) return Promise.resolve();
-    return query(
-      (sql) => sql`
-        UPDATE jev_spend
-        SET tokens = LEAST(GREATEST(tokens + ${delta}, 0), ${cap}),
-            updated_at = now()
-        WHERE month = ${month}
-      `,
-    );
-  };
+  const later = (): PhrasePlanSql =>
+    deps?.sql ?? neonSql(databaseUrl, PHRASE_PLAN_DB_TIMEOUT_MS);
   const schedule = (work: Promise<unknown>) => {
     defer(work, deps?.waitUntil ?? waitUntil);
   };
-  const gate = await query((sql) =>
-    phrasePlanGate(sql, {
+  const gateResult = await phrasePlanReserve(
+    sql,
+    {
       day,
       hash,
       month,
       reservation,
       limit: PHRASE_PLAN_IP_DAILY_LIMIT,
       cap,
-    }),
+    },
+    { budgetMs: budget, started },
   );
-  if (gate === 'down') {
+  schedule(settleCleanup(later(), day));
+  if (gateResult.status === 'down') {
     // The statement may still commit after we stop waiting. That can
     // only leave a counter higher. This process does not fetch, and it
-    // skips Jev until skipUpstreamUntil.
+    // skips Jev until skipUpstreamUntil. A deadlock is not this path.
     skipUpstreamUntil = Math.max(
       skipUpstreamUntil,
       now + PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
@@ -1118,6 +1307,11 @@ export async function handlePhrasePlan(
     unavailable(response);
     return;
   }
+  if (gateResult.status !== 'ok') {
+    unavailable(response);
+    return;
+  }
+  const gate = gateResult.rows;
   const calls = countOf(gate[0], 'calls');
   const reserved = countOf(gate[0], 'tokens');
   if (calls === null || reserved === null) {
@@ -1136,7 +1330,7 @@ export async function handlePhrasePlan(
   const key = env.TYPESAFE_API_KEY;
   if (!key) {
     unavailable(response);
-    schedule(adjust(-reservation));
+    schedule(settleRefund(later(), month, reservation, cap));
     return;
   }
   const fetchImpl = deps?.fetch ?? (globalThis.fetch as FetchLike);
@@ -1145,6 +1339,18 @@ export async function handlePhrasePlan(
   if (!answered.ok) {
     unavailable(response);
     return;
+  }
+  const usage = readBilled(answered.payload, reservation);
+  if (usage.kind === 'over') console.warn('usage_over_reservation');
+  else if (usage.kind === 'ok' && usage.billed < reservation) {
+    schedule(
+      settleReconcile(later(), {
+        month,
+        unused: reservation - usage.billed,
+        billed: usage.billed,
+        cap,
+      }),
+    );
   }
   const answers =
     answered.payload && typeof answered.payload === 'object'

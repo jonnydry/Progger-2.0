@@ -312,6 +312,44 @@ void test('a seed-only change reuses the in-flight request', async () => {
   assert.notEqual(earlier, later);
 });
 
+void test('one of two sharing callers can leave without aborting the request', async () => {
+  let fetches = 0;
+  const signals: AbortSignal[] = [];
+  let release: (response: Response) => void = () => undefined;
+  const gate = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  const planner = createPhrasePlanner({
+    fetch: ((_url, init) => {
+      fetches += 1;
+      if (init?.signal) signals.push(init.signal);
+      return gate;
+    }) as typeof fetch,
+  });
+  const firstSignal = new AbortController();
+  const secondSignal = new AbortController();
+  const { planner: _planner, ...firstRequest } = request(planner, 1);
+  void _planner;
+  const first = planner.propose({ ...firstRequest, seed: 1, signal: firstSignal.signal });
+  const second = planner.propose({
+    ...firstRequest,
+    seed: 2,
+    signal: secondSignal.signal,
+  });
+  await Promise.resolve();
+  assert.equal(fetches, 1);
+  firstSignal.abort(PHRASE_PLANNER_CANCEL_REASON);
+  await Promise.resolve();
+  assert.equal(signals[0]?.aborted, false);
+  assert.equal(secondSignal.signal.aborted, false);
+  release(jsonResponse(PLAN, 200));
+  const [earlier, later] = await Promise.all([first, second]);
+  assert.equal(fetches, 1);
+  assert.equal(signals[0]?.aborted, false);
+  assert.equal(earlier?.cadence, 'third');
+  assert.equal(later?.cadence, 'third');
+});
+
 void test('a panel cleanup abort does not arm the backoff', async (context) => {
   context.mock.timers.enable({
     apis: ['setTimeout', 'Date'],

@@ -165,7 +165,7 @@ void test('menus copied into the route still match the shape module', () => {
   const route = readFileSync(new URL('../api/phrase-plan.ts', import.meta.url), 'utf8');
   assert.equal(route.includes('CREATE TABLE'), false);
   assert.equal(route.includes('x-forwarded-for'), false);
-  assert.equal(route.split('console.').length - 1, 2);
+  assert.equal(route.split('console.').length - 1, 7);
   assert.match(
     route,
     /console\.warn\(\s*'\[phrase-plan\] JEV_IP_HASH_SALT missing: Jev disabled, serving rules',?\s*\)/,
@@ -337,18 +337,20 @@ void test('the daily cap stores a salted hash and falls back once it is spent', 
   const run = harness({ sql });
   await run.done;
   assert.deepEqual(run.result(), { status: 429, payload: { error: 'rate-limit' } });
-  const ipQuery = queries.find((query) => query.text.includes('jev_ip'));
+  const ipQuery = queries.find((query) => query.text.includes('INSERT INTO jev_ip'));
   assert.ok(ipQuery);
-  assert.match(ipQuery.text, /DELETE FROM jev_ip/);
-  assert.match(ipQuery.text, /day < CAST\(\? AS date\)/);
+  assert.equal(ipQuery.text.includes('DELETE FROM jev_ip'), false);
   assert.match(ipQuery.text, /INSERT INTO jev_ip/);
   assert.match(ipQuery.text, /jev_ip\.calls \+ 1 <= \?/);
+  assert.match(ipQuery.text, /spend_lock/);
+  assert.match(ipQuery.text, /ip_lock/);
+  assert.ok(ipQuery.text.indexOf('spend_lock') < ipQuery.text.indexOf('ip_lock'));
+  assert.match(ipQuery.text, /FROM ip_try/);
   const hash = phrasePlanIpHash('203.0.113.9', 'test-salt', '2026-10-21');
-  assert.equal(ipQuery.values[0], '2026-10-21');
+  assert.equal(ipQuery.values[0], '2026-10');
   assert.equal(ipQuery.values[1], '2026-10-21');
   assert.equal(ipQuery.values[2], hash);
-  assert.equal(ipQuery.values[3], '2026-10');
-  assert.equal(ipQuery.values[4], PHRASE_PLAN_IP_DAILY_LIMIT);
+  assert.equal(ipQuery.values[3], PHRASE_PLAN_IP_DAILY_LIMIT);
   assert.equal(ipQuery.values.includes(hash), true);
   assert.equal(ipQuery.values.includes('203.0.113.9'), false);
   assert.equal(JSON.stringify(run.result().payload).includes('test-key'), false);
@@ -356,6 +358,10 @@ void test('the daily cap stores a salted hash and falls back once it is spent', 
   assert.match(ipQuery.text, /FOR UPDATE/);
   assert.match(ipQuery.text, /WHERE ip_ok AND spend_ok/);
   assert.equal(ipQuery.text.includes('ip_undo'), false);
+  const cleanup = queries.find((query) => query.text.includes('DELETE FROM jev_ip'));
+  assert.ok(cleanup);
+  assert.match(cleanup.text, /day < CAST\(\? AS date\)/);
+  assert.equal(cleanup.values[0], '2026-10-21');
 });
 
 void test('a reservation above the cap refuses before the key, and a full month discards Jev', async () => {
@@ -437,8 +443,7 @@ void test('missing database config, a database error, and a hung query fail clos
 void test('a successful call reserves, then reads the key and does not refund', async () => {
   resetPhrasePlanStateForTests();
   const { sql, queries } = sqlMock((query) => {
-    if (query.text.includes('UPDATE jev_spend')) return [];
-    if (query.text.includes('jev_ip')) return [{ calls: 1, tokens: '80' }];
+    if (query.text.includes('INSERT INTO jev_ip')) return [{ calls: 1, tokens: '80' }];
     return [];
   });
   const run = harness({ sql });
@@ -451,14 +456,16 @@ void test('a successful call reserves, then reads the key and does not refund', 
   const body = JSON.parse(run.sent.init?.body ?? '{}') as { model?: string };
   assert.equal(body.model, 'jev-1.13.0');
   const reservation = Buffer.byteLength(run.sent.init?.body ?? '');
-  const spend = queries.find((query) => query.text.includes('INSERT INTO jev_spend'));
-  assert.equal(spend?.values[3], '2026-10');
-  assert.equal(spend?.values[5], reservation);
-  assert.equal(spend?.values[6], PHRASE_PLAN_TOKEN_CAP);
+  const spend = queries.find((query) => query.text.includes('INSERT INTO jev_ip'));
+  assert.equal(spend?.values[0], '2026-10');
+  assert.equal(spend?.values[4], reservation);
+  assert.equal(spend?.values[5], PHRASE_PLAN_TOKEN_CAP);
+  assert.equal(spend?.values[9], reservation);
   assert.equal(spend?.values[10], '2026-10');
-  assert.equal(spend?.values[11], reservation);
-  assert.equal(spend?.values[14], PHRASE_PLAN_TOKEN_CAP);
-  assert.equal(queries.some((query) => query.text.includes('UPDATE jev_spend')), false);
+  const reconcile = queries.find((query) => query.text.includes('tokens -'));
+  assert.equal(reconcile?.values[0], reservation - 40);
+  assert.equal(reconcile?.values[1], 40);
+  assert.equal(queries.some((query) => query.text.includes('GREATEST(tokens +')), false);
   const payload = result.payload as { distributions?: { cadence?: { third?: number } } };
   assert.equal(payload.distributions?.cadence?.third, 1);
   const again = harness({
@@ -475,8 +482,7 @@ void test('a successful call reserves, then reads the key and does not refund', 
 void test('a missing key refunds the reservation and does not call upstream', async () => {
   resetPhrasePlanStateForTests();
   const { sql, queries } = sqlMock((query) => {
-    if (query.text.includes('UPDATE jev_spend')) return [];
-    if (query.text.includes('jev_ip')) return [{ calls: 1, tokens: 20 }];
+    if (query.text.includes('INSERT INTO jev_ip')) return [{ calls: 1, tokens: 20 }];
     return [];
   });
   const run = harness({
@@ -491,16 +497,15 @@ void test('a missing key refunds the reservation and does not call upstream', as
   assert.equal(run.result().status, 503);
   assert.equal(run.sent.url, undefined);
   assert.equal(run.keyReads(), 1);
-  const refund = queries.find((query) => query.text.includes('UPDATE jev_spend'));
-  const reservation = queries.find((query) => query.text.includes('INSERT INTO jev_spend'));
-  assert.equal(refund?.values[0], -Number(reservation?.values[5]));
+  const refund = queries.find((query) => query.text.includes('GREATEST(tokens +'));
+  const reservation = queries.find((query) => query.text.includes('INSERT INTO jev_ip'));
+  assert.equal(refund?.values[0], -Number(reservation?.values[4]));
 });
 
 void test('an upstream failure keeps the reservation', async () => {
   resetPhrasePlanStateForTests();
   const { sql, queries } = sqlMock((query) => {
-    if (query.text.includes('UPDATE jev_spend')) return [];
-    if (query.text.includes('jev_ip')) return [{ calls: 1, tokens: 20 }];
+    if (query.text.includes('INSERT INTO jev_ip')) return [{ calls: 1, tokens: 20 }];
     return [];
   });
   const run = harness({
@@ -509,7 +514,8 @@ void test('an upstream failure keeps the reservation', async () => {
   });
   await run.done;
   assert.equal(run.result().status, 503);
-  assert.equal(queries.some((query) => query.text.includes('UPDATE jev_spend')), false);
+  assert.equal(queries.some((query) => query.text.includes('tokens -')), false);
+  assert.equal(queries.some((query) => query.text.includes('GREATEST(tokens +')), false);
 });
 
 void test('the browser client backs off a 503 or 429 and latches a 403', async () => {
@@ -590,8 +596,9 @@ function weightedAnswers(value: number) {
 
 function acceptingSql() {
   return sqlMock((query) => {
-    if (query.text.includes('UPDATE jev_spend')) return [];
-    if (query.text.includes('jev_ip')) return [{ calls: 1, tokens: '80' }];
+    if (query.text.includes('INSERT INTO jev_ip')) {
+      return [{ calls: 1, tokens: '80', ip_ok: true, spend_ok: true }];
+    }
     return [];
   });
 }
@@ -880,10 +887,8 @@ void test('the 500 ms upstream timeout falls back and keeps the reservation', as
   assert.equal(run.result().status, 503);
   assert.ok(elapsed >= 450, `elapsed ${elapsed}`);
   assert.ok(elapsed < 2000, `elapsed ${elapsed}`);
-  assert.equal(
-    queries.some((query) => query.text.includes('UPDATE jev_spend')),
-    false,
-  );
+  assert.equal(queries.some((query) => query.text.includes('tokens -')), false);
+  assert.equal(queries.some((query) => query.text.includes('GREATEST(tokens +')), false);
   let fetchedAgain = false;
   const again = harness({
     sql: acceptingSql().sql,
@@ -1050,12 +1055,20 @@ void test('a negative usage count keeps the reservation and does not zero the mo
   let reservation = 0;
   const sql: PhrasePlanSql = (strings, ...values) => {
     const text = strings.join('?');
-    if (text.includes('jev_ip')) {
-      reservation = Number(values[5]);
+    if (text.includes('INSERT INTO jev_ip')) {
+      reservation = Number(values[4]);
       tokens += reservation;
-      return Promise.resolve([{ calls: 1, tokens }]);
+      return Promise.resolve([{ calls: 1, tokens, ip_ok: true, spend_ok: true }]);
     }
-    if (text.includes('UPDATE jev_spend')) {
+    if (text.includes('tokens -')) {
+      updates += 1;
+      const unused = Number(values[0]);
+      const billed = Number(values[1]);
+      const limit = Number(values[2]);
+      tokens = Math.min(Math.max(tokens - unused, billed), limit);
+      return Promise.resolve([]);
+    }
+    if (text.includes('tokens +')) {
       updates += 1;
       const delta = Number(values[0]);
       const limit = Number(values[1]);
@@ -1090,8 +1103,8 @@ void test('a negative usage count keeps the reservation and does not zero the mo
   });
   await positive.done;
   assert.equal(positive.result().status, 200);
-  assert.equal(updates, 0);
-  assert.equal(tokens, 50_000 + reservation);
+  assert.equal(updates, 1);
+  assert.equal(tokens, 50_000 + 40);
 });
 
 void test('a spend refusal does not fetch or raise the counter', async () => {
@@ -1102,9 +1115,8 @@ void test('a spend refusal does not fetch or raise the counter', async () => {
   let fetches = 0;
   const sql: PhrasePlanSql = (strings, ...values) => {
     const text = strings.join('?');
-    if (text.includes('UPDATE jev_spend')) return Promise.resolve([]);
-    if (text.includes('jev_ip')) {
-      const reservation = Number(values[5]);
+    if (text.includes('INSERT INTO jev_ip')) {
+      const reservation = Number(values[4]);
       const ipOk = calls + 1 <= PHRASE_PLAN_IP_DAILY_LIMIT;
       const spendOk = tokens + reservation <= cap;
       if (!(ipOk && spendOk)) {
@@ -1143,7 +1155,7 @@ void test('a lost reservation race does not latch the month', async () => {
   let fetches = 0;
   const sql: PhrasePlanSql = async (strings) => {
     const text = strings.join('?');
-    if (!text.includes('jev_ip')) return [];
+    if (!text.includes('INSERT INTO jev_ip')) return [];
     gates += 1;
     if (gates === 1) return [{ ip_ok: true, spend_ok: true }];
     return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
@@ -1173,9 +1185,9 @@ void test('two concurrent same-context calls reserve and fetch once', async () =
   });
   const sql: PhrasePlanSql = async (strings) => {
     const text = strings.join('?');
-    if (text.includes('UPDATE jev_spend') && !text.includes('jev_ip')) return [];
+    if (!text.includes('INSERT INTO jev_ip')) return [];
     await db;
-    if (text.includes('jev_ip')) {
+    if (text.includes('INSERT INTO jev_ip')) {
       reservations += 1;
       return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
     }
@@ -1206,10 +1218,7 @@ void test('an over-limit IP does not fetch for uncached contexts', async () => {
   let updates = 0;
   const sql: PhrasePlanSql = (strings) => {
     const text = strings.join('?');
-    if (text.includes('UPDATE jev_spend')) {
-      updates += 1;
-      return Promise.resolve([]);
-    }
+    if (text.includes('GREATEST(tokens +') || text.includes('tokens -')) updates += 1;
     return Promise.resolve([]);
   };
   const fetch = async () => {
@@ -1233,17 +1242,30 @@ void test('an over-limit IP does not fetch for uncached contexts', async () => {
 
 void test('a fetch that has started is not refunded', async () => {
   resetPhrasePlanStateForTests();
-  let updates = 0;
+  let tokens = 0;
+  let reservation = 0;
+  let reconciled = false;
   const background: Promise<unknown>[] = [];
+  const started = Date.now();
   const run = harness({
-    sql: (strings) => {
+    sql: async (strings, ...values) => {
       const text = strings.join('?');
-      if (text.includes('UPDATE jev_spend')) {
-        updates += 1;
-        return Promise.resolve([]);
+      if (text.includes('INSERT INTO jev_ip')) {
+        reservation = Number(values[4]);
+        tokens += reservation;
+        return [{ calls: 1, tokens, ip_ok: true, spend_ok: true }];
       }
-      if (text.includes('jev_ip')) return Promise.resolve([{ calls: 1, tokens: 80 }]);
-      return Promise.resolve([]);
+      if (text.includes('tokens +')) return [];
+      if (text.includes('tokens -')) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const unused = Number(values[0]);
+        const billed = Number(values[1]);
+        const limit = Number(values[2]);
+        tokens = Math.min(Math.max(tokens - unused, billed), limit);
+        reconciled = true;
+        return [];
+      }
+      return [];
     },
     fetch: async () => ({
       ok: true,
@@ -1254,10 +1276,15 @@ void test('a fetch that has started is not refunded', async () => {
     },
   });
   await run.done;
-  await Promise.all(background);
+  const elapsed = Date.now() - started;
   assert.equal(run.result().status, 200);
-  assert.equal(updates, 0);
-  assert.equal(background.length, 0);
+  assert.equal(reconciled, false);
+  assert.ok(elapsed < 350, `elapsed ${elapsed}`);
+  assert.equal(background.length, 2);
+  assert.equal(tokens, reservation);
+  await Promise.all(background);
+  assert.equal(reconciled, true);
+  assert.equal(tokens, 40);
 });
 
 void test('a missing key refunds through waitUntil without holding the response', async () => {
@@ -1274,12 +1301,12 @@ void test('a missing key refunds through waitUntil without holding the response'
     },
     sql: async (strings) => {
       const text = strings.join('?');
-      if (text.includes('UPDATE jev_spend')) {
+      if (text.includes('GREATEST(tokens +')) {
         await new Promise((resolve) => setTimeout(resolve, 400));
         refunded = true;
         return [];
       }
-      if (text.includes('jev_ip')) return [{ calls: 1, tokens: 80 }];
+      if (text.includes('INSERT INTO jev_ip')) return [{ calls: 1, tokens: 80 }];
       return [];
     },
     fetch: async () => {
@@ -1296,7 +1323,7 @@ void test('a missing key refunds through waitUntil without holding the response'
   assert.equal(fetches, 0);
   assert.equal(refunded, false);
   assert.ok(elapsed < 350, `elapsed ${elapsed}`);
-  assert.equal(background.length, 1);
+  assert.equal(background.length, 2);
   await Promise.all(background);
   assert.equal(refunded, true);
   assert.equal(JSON.stringify(run.result().payload).includes('test-key'), false);
@@ -1312,9 +1339,8 @@ void test('a retry after the client timeout reads the cache', async () => {
   });
   const sql: PhrasePlanSql = async (strings) => {
     const text = strings.join('?');
-    if (text.includes('UPDATE jev_spend')) return [];
-    await db;
-    if (text.includes('jev_ip')) {
+    if (text.includes('INSERT INTO jev_ip')) {
+      await db;
       reservations += 1;
       return [{ calls: 1, tokens: 80 }];
     }
@@ -1366,24 +1392,30 @@ void test('a database error is not logged or returned', async () => {
   }
   try {
     let fetches = 0;
+    const background: Promise<unknown>[] = [];
     const run = harness({
       sql: () => Promise.reject(new Error(`connect failed ${secret}`)),
       fetch: async () => {
         fetches += 1;
         return { ok: true, json: async () => ANSWERS };
       },
+      waitUntil(work) {
+        background.push(work);
+      },
     });
     await run.done;
+    await Promise.all(background);
     assert.equal(fetches, 0);
     assert.deepEqual(run.result(), {
       status: 503,
       payload: { error: 'planner-unavailable' },
     });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const dumped = `${logs.join('\n')}\n${JSON.stringify(run.result().payload)}`;
     assert.equal(dumped.includes(secret), false);
     assert.equal(dumped.includes('secret-password'), false);
     assert.equal(dumped.includes('ep-example'), false);
-    assert.deepEqual(logs, ['db_error']);
+    assert.deepEqual(logs, ['db_error', 'ip_cleanup_error']);
   } finally {
     for (const method of methods) {
       const saved = original.get(method);
@@ -1412,4 +1444,278 @@ void test('a malformed body returns 400', async () => {
   const ok = harness({ body: JSON.stringify(BODY), sql: acceptingSql().sql });
   await ok.done;
   assert.equal(ok.result().status, 200);
+});
+
+void test('a fresh IP does not inherit another caller’s rate limit', async () => {
+  resetPhrasePlanStateForTests();
+  const leaderIp = '203.0.113.1';
+  const waiterIp = '203.0.113.2';
+  const leaderHash = phrasePlanIpHash(leaderIp, 'test-salt', '2026-10-21');
+  const waiterHash = phrasePlanIpHash(waiterIp, 'test-salt', '2026-10-21');
+  let releaseLeader = () => {};
+  const hold = new Promise<void>((resolve) => {
+    releaseLeader = resolve;
+  });
+  let leaderWaiting = false;
+  let fetches = 0;
+  const sql: PhrasePlanSql = async (strings, ...values) => {
+    const text = strings.join('?');
+    if (!text.includes('INSERT INTO jev_ip')) return [];
+    if (values.includes(leaderHash)) {
+      leaderWaiting = true;
+      await hold;
+      return [{ ip_ok: false, spend_ok: true }];
+    }
+    assert.ok(values.includes(waiterHash));
+    return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
+  };
+  const fetch = async () => {
+    fetches += 1;
+    return { ok: true, json: async () => ANSWERS };
+  };
+  const leader = harness({
+    headers: { 'x-vercel-forwarded-for': leaderIp },
+    sql,
+    fetch,
+  });
+  for (let turn = 0; turn < 20 && !leaderWaiting; turn += 1) await Promise.resolve();
+  assert.equal(leaderWaiting, true);
+  const waiter = harness({
+    headers: { 'x-vercel-forwarded-for': waiterIp },
+    sql,
+    fetch,
+  });
+  await Promise.resolve();
+  releaseLeader();
+  await leader.done;
+  await waiter.done;
+  assert.deepEqual(leader.result(), { status: 429, payload: { error: 'rate-limit' } });
+  assert.equal(waiter.result().status, 200);
+  assert.equal(fetches, 1);
+});
+
+void test('a deadlock does not arm the 30 s skip', async () => {
+  resetPhrasePlanStateForTests();
+  const secret = 'postgres://jev:secret-password@ep-example.neon.tech/jev';
+  const logs: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    logs.push(args.map((item) => String(item)).join(' '));
+  };
+  try {
+    let ensures = 0;
+    const background: Promise<unknown>[] = [];
+    const failing: PhrasePlanSql = (strings) => {
+      const text = strings.join('?');
+      if (text.includes('ON CONFLICT')) ensures += 1;
+      const error = new Error(`connect failed ${secret}`) as Error & { code?: string };
+      error.code = '40P01';
+      return Promise.reject(error);
+    };
+    const first = harness({
+      sql: failing,
+      waitUntil(work) {
+        background.push(work);
+      },
+    });
+    await first.done;
+    await Promise.all(background);
+    assert.equal(first.result().status, 503);
+    assert.equal(ensures, 2);
+    assert.equal(logs.join('\n').includes(secret), false);
+    assert.equal(logs.includes('db_deadlock'), true);
+    assert.equal(logs.includes('db_timeout'), false);
+    assert.equal(logs.includes('db_error'), false);
+    const again = harness({ sql: acceptingSql().sql });
+    await again.done;
+    assert.equal(again.result().status, 200);
+    assert.equal(again.keyReads(), 1);
+  } finally {
+    console.warn = original;
+  }
+});
+
+void test('one deadlock is retried inside the database budget', async () => {
+  resetPhrasePlanStateForTests();
+  let failures = 0;
+  let fetches = 0;
+  const run = harness({
+    sql: (strings) => {
+      const text = strings.join('?');
+      if (text.includes('ON CONFLICT') && failures < 1) {
+        failures += 1;
+        const error = new Error('deadlock detected') as Error & { code?: string };
+        error.code = '40P01';
+        return Promise.reject(error);
+      }
+      if (text.includes('INSERT INTO jev_ip')) {
+        return Promise.resolve([{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }]);
+      }
+      return Promise.resolve([]);
+    },
+    fetch: async () => {
+      fetches += 1;
+      return { ok: true, json: async () => ANSWERS };
+    },
+  });
+  await run.done;
+  assert.equal(failures, 1);
+  assert.equal(fetches, 1);
+  assert.equal(run.result().status, 200);
+});
+
+void test('40-token usage lowers the month by exactly reservation - 40', async () => {
+  resetPhrasePlanStateForTests();
+  let tokens = 0;
+  let reservation = 0;
+  const background: Promise<unknown>[] = [];
+  const run = harness({
+    sql: async (strings, ...values) => {
+      const text = strings.join('?');
+      if (text.includes('INSERT INTO jev_ip')) {
+        reservation = Number(values[4]);
+        tokens += reservation;
+        return [{ calls: 1, tokens, ip_ok: true, spend_ok: true }];
+      }
+      if (text.includes('tokens -')) {
+        const unused = Number(values[0]);
+        const billed = Number(values[1]);
+        const limit = Number(values[2]);
+        tokens = Math.min(Math.max(tokens - unused, billed), limit);
+        return [];
+      }
+      return [];
+    },
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ...ANSWERS, usage: { input_tokens: 30, output_tokens: 10 } }),
+    }),
+    waitUntil(work) {
+      background.push(work);
+    },
+  });
+  await run.done;
+  await Promise.all(background);
+  assert.equal(run.result().status, 200);
+  assert.equal(tokens, 40);
+  assert.equal(tokens, reservation - (reservation - 40));
+});
+
+void test('missing, negative, or NaN usage keeps the reservation', async () => {
+  const bodies = [
+    { ...ANSWERS, usage: undefined },
+    { answers: ANSWERS.answers },
+    { ...ANSWERS, usage: { input_tokens: -1 } },
+    { ...ANSWERS, usage: { input_tokens: Number.NaN } },
+    { ...ANSWERS, usage: { input_tokens: 40.5 } },
+    { ...ANSWERS, usage: { input_tokens: 20, output_tokens: -5 } },
+  ];
+  for (const body of bodies) {
+    resetPhrasePlanStateForTests();
+    let tokens = 0;
+    let reservation = 0;
+    let adjustments = 0;
+    const background: Promise<unknown>[] = [];
+    const run = harness({
+      sql: async (strings, ...values) => {
+        const text = strings.join('?');
+        if (text.includes('INSERT INTO jev_ip')) {
+          reservation = Number(values[4]);
+          tokens += reservation;
+          return [{ calls: 1, tokens, ip_ok: true, spend_ok: true }];
+        }
+        if (text.includes('tokens -') || text.includes('tokens +')) {
+          adjustments += 1;
+          return [];
+        }
+        return [];
+      },
+      fetch: async () => ({ ok: true, json: async () => body }),
+      waitUntil(work) {
+        background.push(work);
+      },
+    });
+    await run.done;
+    await Promise.all(background);
+    assert.equal(adjustments, 0, JSON.stringify(body));
+    assert.equal(tokens, reservation, JSON.stringify(body));
+  }
+});
+
+void test('billed usage above the reservation changes nothing', async () => {
+  resetPhrasePlanStateForTests();
+  const logs: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    logs.push(args.map((item) => String(item)).join(' '));
+  };
+  try {
+    let tokens = 0;
+    let reservation = 0;
+    let adjustments = 0;
+    const background: Promise<unknown>[] = [];
+    const run = harness({
+      sql: async (strings, ...values) => {
+        const text = strings.join('?');
+        if (text.includes('INSERT INTO jev_ip')) {
+          reservation = Number(values[4]);
+          tokens += reservation;
+          return [{ calls: 1, tokens, ip_ok: true, spend_ok: true }];
+        }
+        if (text.includes('tokens -') || text.includes('tokens +')) {
+          adjustments += 1;
+          return [];
+        }
+        return [];
+      },
+      fetch: async () => ({
+        ok: true,
+        json: async () => ({ ...ANSWERS, usage: { input_tokens: 1_000_000 } }),
+      }),
+      waitUntil(work) {
+        background.push(work);
+      },
+    });
+    await run.done;
+    await Promise.all(background);
+    assert.equal(run.result().status, 200);
+    assert.equal(adjustments, 0);
+    assert.equal(tokens, reservation);
+    assert.deepEqual(logs, ['usage_over_reservation']);
+  } finally {
+    console.warn = original;
+  }
+});
+
+void test('an aborted upstream call keeps the reservation', async () => {
+  resetPhrasePlanStateForTests();
+  let adjustments = 0;
+  const { sql, queries } = sqlMock((query) => {
+    if (query.text.includes('INSERT INTO jev_ip')) {
+      return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
+    }
+    if (query.text.includes('tokens -') || query.text.includes('tokens +')) {
+      adjustments += 1;
+    }
+    return [];
+  });
+  const run = harness({
+    sql,
+    fetch: (_url, init) => {
+      const signal = init.signal;
+      return new Promise((_resolve, reject) => {
+        const fail = () => reject(signal?.reason ?? new Error('aborted'));
+        if (!signal) {
+          fail();
+          return;
+        }
+        if (signal.aborted) fail();
+        else signal.addEventListener('abort', fail, { once: true });
+      });
+    },
+  });
+  await run.done;
+  assert.equal(run.result().status, 503);
+  assert.equal(adjustments, 0);
+  assert.equal(queries.some((query) => query.text.includes('tokens -')), false);
 });

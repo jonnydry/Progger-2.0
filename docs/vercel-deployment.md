@@ -23,21 +23,31 @@ line. The function reads `TYPESAFE_API_KEY`, `JEV_COUNTER_DATABASE_URL`, and
 `JEV_IP_HASH_SALT`. None of those values is logged. The database URL points
 at a Neon Postgres database. `db/jev-spend.sql` creates `jev_spend` and
 `jev_ip` and is not run by the build or by the function; apply it by hand
-before the planner can spend. The function reserves the IP counter and the
-monthly spend in one statement, and calls TypeSafe only after both succeed.
-The IP row is written only when the spend row also has room, so a refused
-month does not spend a daily IP slot. It refunds that reservation only when
-the call never starts. A missing URL, a database error, or a database timeout
-skips the planner and does not call TypeSafe. A database failure is logged as
-`db_error` or `db_timeout`; the error text is not logged. A missing salt does
-the same, after one warning that does not include the salt. One process keeps
-a single in-flight plan per context, so a second request on that instance
-waits and does not reserve or fetch again. Another instance can still reserve
-the same context; each of those duplicates is counted under the cap. The
-browser waits up to 1800 ms for a plan. The rules line is already playing, so
-that wait does not delay the sound. A change of seed alone reuses the
-in-flight request. The request is aborted when the musical context changes
-or the panel unmounts.
+before the planner can spend. The function inserts the month row at 0 if it is missing, then locks
+the spend row before the IP row. It writes the IP counter only when the
+spend reservation is written, and writes that reservation only when the
+IP write returns, and calls TypeSafe only after both succeed. A refused
+month does not spend a daily IP slot. Stale IP rows are deleted in a
+separate best-effort statement after the response. A deadlock (SQLSTATE
+40P01 or 40001) is retried once inside the 1200 ms database budget and
+does not arm the 30 s outage skip. The whole reservation is refunded
+only when the call never starts. A 200 with a valid usage object gives
+back the unused part of that reservation in `waitUntil`: billed tokens
+are `input_tokens` plus `output_tokens` when the response reports them.
+Anything else keeps the full reservation. At 40 tokens a call, the
+143,080,000 cap is about 3.5 million calls. A database failure is logged
+as `db_error`, `db_timeout`, or `db_deadlock`; a reconcile failure is
+`reconcile_error` or `reconcile_timeout`; usage above the reservation is
+`usage_over_reservation`. The error text is not logged. A missing salt
+does the same, after one warning that does not include the salt. One
+process shares a 200 for an in-flight context. Any other status is not
+reused, so that caller runs its own reservation. Another instance can
+still reserve the same context; each of those duplicates is counted
+under the cap. The browser waits up to 2000 ms. The coded server worst
+case is 1700 ms, so the margin is 300 ms. The rules line is already
+playing, so that wait does not delay the sound. A change of seed alone
+reuses the in-flight request. The request is aborted when the musical
+context changes or the panel unmounts.
 Requests whose Origin is not
 progger.studio, www.progger.studio, exactly `https://${VERCEL_URL}` or
 `https://${VERCEL_BRANCH_URL}`, or localhost in development are rejected
