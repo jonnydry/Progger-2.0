@@ -606,7 +606,8 @@ html:is([data-scene='tidepool'], [data-scene='twilight'])
 }
 
 html:is([data-scene='tidepool'], [data-scene='twilight']) .music-select-popup {
-  scrollbar-color: var(--input) var(--card);
+  background: var(--surface-pop);
+  scrollbar-color: var(--input) transparent;
 }
 
 html:is([data-scene='tidepool'], [data-scene='twilight'])

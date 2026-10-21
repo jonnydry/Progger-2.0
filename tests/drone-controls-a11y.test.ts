@@ -251,8 +251,12 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   );
   assert.match(css, /height:\s*18px/);
   assert.match(css, /border:\s*1px solid var\(--border\)/);
-  assert.match(css, /outline:\s*3px solid var\(--amber\)/);
-  assert.match(css, /outline-offset:\s*3px/);
+  assert.match(css, /outline:\s*var\(--focus-ring\)/);
+  assert.match(css, /outline-offset:\s*var\(--focus-offset\)/);
+  assert.match(
+    readFileSync(new URL('../app/deck-tokens.css', import.meta.url), 'utf8'),
+    /--focus-ring:\s*3px solid var\(--amber\)/,
+  );
   assert.match(css, /z-index:\s*4/);
   assert.match(css, /\.drone-toggle:hover:not\(\[aria-pressed='true'\]\)/);
   assert.match(css, /\.drone-walk:hover:not\(\[aria-pressed='true'\]\)/);
@@ -391,4 +395,31 @@ void test('a fixed popover follows its container so a shell offset cannot cover 
     x: 24,
     y: 280,
   });
+});
+
+void test('the sound menu keeps 44px targets and focuses only once it is placed', () => {
+  const css = readFileSync(
+    new URL('../app/drone-controls.css', import.meta.url),
+    'utf8',
+  );
+  const tokens = readFileSync(
+    new URL('../app/deck-tokens.css', import.meta.url),
+    'utf8',
+  );
+  const view = readFileSync(
+    new URL('../components/drone-controls.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(tokens, new RegExp(`--tap:\\s*${DRONE_TAP_TARGET_PX}px`));
+  assert.match(
+    css,
+    /\.drone-volume-popover input\[type='range'\] \{[^}]*min-height:\s*var\(--tap\)/,
+  );
+  assert.match(
+    css,
+    /\.drone-sound-options button \{[^}]*min-height:\s*var\(--tap\)/,
+  );
+  // A hidden slider cannot take focus, so ArrowDown waits for the position.
+  assert.match(view, /if \(didFocus\.current \|\| !origin\) return;/);
+  assert.match(view, /\[anchorRef, initialFocus, origin\]/);
 });

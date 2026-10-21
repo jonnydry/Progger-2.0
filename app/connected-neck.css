@@ -10,7 +10,7 @@
   gap: 4px;
   margin-top: 6px;
   color: var(--quiet);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .connection-controls > label {
   display: grid;
@@ -19,7 +19,7 @@
   flex: 1;
 }
 .connection-controls > label > span {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--quiet);
 }
 .connection-controls .form-picker {
@@ -40,19 +40,29 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--quiet);
-  font-size: 12px;
+  gap: var(--space-2);
+  min-height: var(--tap);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
+  color: var(--foreground);
+  background: var(--surface-key);
+  box-shadow: inset 0 1px 0 var(--edge-sheen);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.overview-toggle svg {
+  color: var(--green);
 }
 .overview-toggle:hover,
 .overview-toggle[aria-expanded='true'] {
   color: var(--green);
   background: var(--accent);
   border-color: var(--green);
+}
+.overview-toggle:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 .connection-caption {
   padding: 14px 16px;
@@ -72,7 +82,7 @@
   font-weight: 400;
 }
 .connection-caption .pan-hint {
-  font-size: 11px;
+  font-size: var(--text-xs);
   margin-top: 7px;
 }
 .connection-legend {
@@ -85,7 +95,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .connection-legend i {
   width: 12px;
@@ -158,18 +168,19 @@ html
   outline-color: var(--amber);
 }
 .neck-overview {
-  margin-top: 16px;
-  padding: 16px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  margin-top: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface-panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  box-shadow: inset 0 1px 0 var(--edge-sheen);
 }
 .overview-heading {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
   color: var(--quiet);
   margin-bottom: 14px;
 }
@@ -182,11 +193,11 @@ html
   height: 96px;
   cursor: crosshair;
   touch-action: none;
-  border-radius: 4px;
+  border-radius: var(--radius-key);
 }
 .overview-map:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 4px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 .overview-notes {
   position: absolute;
@@ -234,14 +245,18 @@ html
   inset-block: -3px;
   border: 2px solid var(--green);
   background: color-mix(in srgb, var(--green) 7%, transparent);
-  border-radius: 4px;
+  border-radius: var(--radius-key);
 }
+/* Two equal outer tracks keep "12" on the centre of the fret-12 column. */
 .overview-ruler {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   color: var(--quiet);
-  font-size: 10px;
+  font-size: var(--text-xs);
   margin-top: 10px;
+}
+.overview-ruler > :last-child {
+  justify-self: end;
 }
 @media (max-width: 500px) {
   /* Paint the fretboard above the form controls before hydration, and keep
@@ -288,21 +303,29 @@ html
     flex-basis: calc(50% - 10px);
   }
   .connection-controls .music-select-trigger {
-    font-size: 12px;
-    padding: 8px;
+    font-size: var(--text-xs);
+    padding: var(--space-2);
   }
   .overview-toggle {
     flex: 1 1 calc(50% - 10px);
-    font-size: 11px;
+    font-size: var(--text-xs);
   }
   .connection-caption {
-    padding: 12px;
-    font-size: 11px;
+    padding: var(--space-3);
+    font-size: var(--text-xs);
   }
   .connection-legend {
     gap: 9px 14px;
   }
   .neck-overview {
     padding: 14px 10px;
+  }
+}
+/* Below this, two pickers side by side cut "Higher neighbor" to an
+   ellipsis. Each takes the full row. */
+@media (max-width: 380px) {
+  .connection-controls > label,
+  .connection-controls .form-picker {
+    flex-basis: 100%;
   }
 }
