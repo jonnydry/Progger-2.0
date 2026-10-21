@@ -935,7 +935,7 @@ void test('the lock guard ignores a cross-tab write for a different key or phras
         };
         const entry = parsed.entries[parsed.index];
         if (!entry) throw new Error('the showing phrase is missing');
-        entry.locks = { ...(entry.locks ?? {}), rhythm: id };
+        entry.locks = { ...entry.locks, rhythm: id };
         const next = JSON.stringify(parsed);
         localStorage.setItem(key, next);
         window.dispatchEvent(
