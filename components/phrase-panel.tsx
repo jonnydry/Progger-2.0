@@ -36,6 +36,7 @@ import {
   CONTOUR_LABEL,
   defaultChordNotes,
   generatePhrase,
+  generatePhraseWithPlanner,
   onsetSeconds,
   parseSeed,
   phraseFocusFret,
@@ -47,10 +48,13 @@ import {
   SWING_AMOUNT_MAX,
   SWING_AMOUNT_MIN,
   SWING_AMOUNT_STEP,
+  tonicChordSymbol,
   type FingeredNote,
   type PhraseDotVisibility,
   type PhraseLocks,
+  type PhraseResult,
 } from '@/lib/phrase';
+import { createPhrasePlanner } from '@/lib/phrase-planner-client';
 import { publishPhrasePlayhead, type PhraseFretMark } from '@/lib/phrase-marks';
 import {
   emptyPhraseHistory,
@@ -65,6 +69,7 @@ import {
   subscribePhraseHistory,
   type PhraseHistoryChord,
   type PhraseHistoryPlace,
+  type PhraseHistoryPlayed,
 } from '@/lib/phrase-history';
 import {
   bindPhraseStop,
@@ -76,6 +81,8 @@ import {
 } from '@/lib/tray';
 import '@/app/phrase.css';
 import '@/app/phrase-deck.css';
+
+const phrasePlanner = createPhrasePlanner();
 
 const EMPTY_LOCKS: PhraseLocks = {};
 
@@ -100,6 +107,52 @@ function sameLocks(a: PhraseLocks, b: PhraseLocks): boolean {
     a.register === b.register &&
     a.cadence === b.cadence
   );
+}
+
+function samePhraseLine(a: PhraseResult, b: PhraseResult): boolean {
+  if (!a.ok || !b.ok || a.phrase.source !== b.phrase.source) return false;
+  if (a.phrase.notes.length !== b.phrase.notes.length) return false;
+  return a.phrase.notes.every((note, index) => {
+    const other = b.phrase.notes[index];
+    return (
+      other !== undefined &&
+      note.midi === other.midi &&
+      note.beat === other.beat &&
+      note.string === other.string &&
+      note.fret === other.fret
+    );
+  });
+}
+
+function playedLine(result: PhraseResult): PhraseHistoryPlayed | undefined {
+  if (!result.ok) return undefined;
+  const plan = result.phrase.plan;
+  const played: PhraseHistoryPlayed = {
+    source: result.phrase.source,
+    plan: {
+      contour: plan.contour,
+      rhythm: plan.rhythm,
+      register: plan.register,
+      cadence: plan.cadence,
+      ...(plan.shape ? { shape: plan.shape } : {}),
+    },
+    notes: result.phrase.notes.map((note) => ({
+      name: note.name,
+      pc: note.pc,
+      degree: note.degree,
+      midi: note.midi,
+      beat: note.beat,
+      duration: note.duration,
+      strong: note.strong,
+      chordTone: note.chordTone,
+      string: note.string,
+      fret: note.fret,
+      finger: note.finger,
+      position: note.position,
+      shift: note.shift,
+    })),
+  };
+  return played;
 }
 
 function historyPlace(
@@ -199,6 +252,7 @@ export function PhrasePanel({
     [chord, scaleNotes],
   );
   const chordSymbol = chord?.symbol ?? `${scaleRoot} tonic`;
+  const plannerChord = chord?.symbol ?? tonicChordSymbol(scaleRoot, scaleNotes);
   const [opening] = useState(() => {
     const saved = phraseHistoryOpening(getPhraseHistory(), {
       scaleRoot,
@@ -208,8 +262,12 @@ export function PhrasePanel({
       chordNotes,
       locks,
     });
-    return saved ?? { seed: randomSeed(), bars: 2 as const };
+    if (saved) return { ...saved, replay: true as const };
+    return { seed: randomSeed(), bars: 2 as const, replay: false as const };
   });
+  const [plannerMode, setPlannerMode] = useState<'live' | 'replay'>(
+    opening.replay ? 'replay' : 'live',
+  );
   const [bars, setBars] = useState<2 | 4>(opening.bars);
   const [swing, setSwing] = useState(SWING_AMOUNT_DEFAULT);
   const [tempo, setTempo] = useState(PHRASE_TEMPO_DEFAULT);
@@ -222,6 +280,7 @@ export function PhrasePanel({
   const [notice, setNotice] = useState('');
   const player = useRef<PhrasePlayer | null>(null);
   const seenHeld = useRef<{ id: string; key: string } | null>(null);
+  const ignoreContext = useRef(false);
   const [heldCursor, setHeldCursor] = useState<string | null>(null);
   const live = useRef(false);
   const tempoRef = useRef(tempo);
@@ -271,7 +330,7 @@ export function PhrasePanel({
   // the previous object so playback does not see a new phrase.
   const [stableLocks, setStableLocks] = useState(generationLocks);
   if (!sameLocks(stableLocks, generationLocks)) setStableLocks(generationLocks);
-  const phrase = useMemo(() => {
+  const rulesPhrase = useMemo(() => {
     if (held) {
       return {
         ok: true as const,
@@ -292,33 +351,95 @@ export function PhrasePanel({
       locks: stableLocks,
     });
   }, [held, seed, bars, scaleNotes, chordNotes, stableLocks]);
-  if (phrase.ok && phrase.phrase.seed !== seed && seedText === String(seed)) {
-    setSeed(phrase.phrase.seed);
-    setSeedText(String(phrase.phrase.seed));
+  const replayPhrase = useMemo(() => {
+    if (plannerMode !== 'replay' || held || !onHistory || !cursor?.played)
+      return null;
+    return {
+      ok: true as const,
+      phrase: {
+        seed: cursor.seed,
+        bars: cursor.bars,
+        plan: cursor.played.plan,
+        source: cursor.played.source,
+        notes: cursor.played.notes,
+      },
+    };
+  }, [plannerMode, held, onHistory, cursor]);
+  const planKey = `${scaleId}|${scaleRoot}|${plannerChord}|${bars}|${seed}|${stableLocks.contour ?? ''}|${stableLocks.rhythm ?? ''}|${stableLocks.register ?? ''}|${stableLocks.cadence ?? ''}`;
+  const [planned, setPlanned] = useState<{
+    key: string;
+    result: PhraseResult;
+  } | null>(null);
+  const plannedPhrase =
+    plannerMode === 'live' &&
+    planned?.key === planKey &&
+    planned.result.ok &&
+    planned.result.phrase.source === 'planner'
+      ? planned.result
+      : null;
+  const candidate = replayPhrase ?? plannedPhrase ?? rulesPhrase;
+  // A looping pass, or the closing note after Loop is turned off, keeps the
+  // staff on the phrase that is actually sounding. The flag is set from
+  // Play, Loop, and Stop, and cleared from the player — not from the
+  // effect that queues the next line. Idle plans follow before paint.
+  const [deferLine, setDeferLine] = useState(false);
+  const [display, setDisplay] = useState(candidate);
+  const deferRef = useRef(false);
+  const heldRef = useRef(candidate);
+  if (!deferLine && display !== candidate) setDisplay(candidate);
+  const shown = display;
+  const followLine = (next: PhraseResult, hold: boolean) => {
+    heldRef.current = next;
+    deferRef.current = hold;
+    setDisplay(next);
+    setDeferLine(hold);
+  };
+  if (
+    candidate.ok &&
+    candidate.phrase.seed !== seed &&
+    seedText === String(seed)
+  ) {
+    setSeed(candidate.phrase.seed);
+    setSeedText(String(candidate.phrase.seed));
   }
   const playbackTempo = clampPhraseTempo(slow ? tempo / 2 : tempo);
   const tempoMax = slow ? PHRASE_TEMPO_MAX / 2 : PHRASE_TEMPO_MAX;
   const trueHalf = slow && playbackTempo * 2 === tempo;
   const notes = useMemo(
-    () => (phrase.ok ? phrase.phrase.notes : EMPTY_NOTES),
-    [phrase],
+    () => (shown.ok ? shown.phrase.notes : EMPTY_NOTES),
+    [shown],
   );
-  const phraseRef = useRef(phrase);
+  const phraseRef = useRef(candidate);
+  const latest = useRef(candidate);
   const barsRef = useRef(bars);
   useEffect(() => {
     const current = new PhrasePlayer((next) => {
-      if (next === 'idle' || next === 'error') live.current = false;
+      if (next === 'idle' || next === 'error') {
+        live.current = false;
+        deferRef.current = false;
+        setDeferLine(false);
+      }
       setStatus(next);
+    });
+    current.armPhraseListener(() => {
+      heldRef.current = latest.current;
+      setDisplay(latest.current);
+      deferRef.current = loopRef.current;
+      setDeferLine(loopRef.current);
     });
     player.current = current;
     const pause = () => {
       live.current = false;
       current.stop();
+      deferRef.current = false;
+      setDeferLine(false);
     };
     const unbind = bindPhraseLifecycle(document, window, pause);
     const unbindStop = bindPhraseStop(window, 'panel', () => {
       live.current = false;
       current.stop();
+      deferRef.current = false;
+      setDeferLine(false);
     });
     return () => {
       unbindStop();
@@ -328,6 +449,64 @@ export function PhrasePanel({
       publishPhrasePlayhead(null);
     };
   }, []);
+  useEffect(() => {
+    if (held || plannerMode !== 'live') return;
+    const controller = new AbortController();
+    let cancelled = false;
+    const key = planKey;
+    void generatePhraseWithPlanner({
+      seed,
+      bars,
+      scaleNotes,
+      chordNotes,
+      locks: stableLocks,
+      planner: phrasePlanner,
+      signal: controller.signal,
+      scaleId,
+      scaleRoot,
+      chordSymbol: plannerChord,
+    }).then((result) => {
+      if (cancelled) return;
+      if (!result.ok || result.phrase.source !== 'planner') return;
+      setPlanned((current) =>
+        current?.key === key && samePhraseLine(current.result, result)
+          ? current
+          : { key, result },
+      );
+      if (!onHistory) return;
+      const entry = phraseHistoryEntry({
+        seed,
+        bars,
+        scaleRoot,
+        scaleId,
+        place,
+        chord: savedChord,
+        chordNotes,
+        locks: stableLocks,
+        played: playedLine(result),
+      });
+      if (entry) rememberPhrase(entry);
+    });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    held,
+    plannerMode,
+    planKey,
+    seed,
+    bars,
+    scaleNotes,
+    chordNotes,
+    stableLocks,
+    scaleId,
+    scaleRoot,
+    plannerChord,
+    onHistory,
+    place,
+    savedChord,
+  ]);
   useEffect(() => {
     if (!held) {
       seenHeld.current = null;
@@ -339,12 +518,25 @@ export function PhrasePanel({
     }
     if (seenHeld.current.key !== contextKey) onReleaseHeld?.();
   }, [held, contextKey, onReleaseHeld]);
+  const contextSeen = useRef(false);
+  useEffect(() => {
+    if (!contextSeen.current) {
+      contextSeen.current = true;
+      return;
+    }
+    if (ignoreContext.current) {
+      ignoreContext.current = false;
+      return;
+    }
+    setPlannerMode('live');
+  }, [scaleId, scaleRoot, chord?.symbol, chord?.root, chord?.qualityId, chord?.fromContext]);
   useEffect(() => {
     const turnedOff = loopRef.current && !loop;
     loopRef.current = loop;
+    latest.current = candidate;
     const phraseChanged =
-      phraseRef.current !== phrase || barsRef.current !== bars;
-    phraseRef.current = phrase;
+      phraseRef.current !== candidate || barsRef.current !== bars;
+    phraseRef.current = candidate;
     barsRef.current = bars;
     if (!active) {
       live.current = false;
@@ -352,7 +544,7 @@ export function PhrasePanel({
       return;
     }
     if (!live.current) return;
-    if (!phrase.ok) {
+    if (!candidate.ok) {
       live.current = false;
       player.current?.stop();
       return;
@@ -366,7 +558,7 @@ export function PhrasePanel({
       slow ? tempoRef.current / 2 : tempoRef.current,
     );
     const next = {
-      notes: phrase.phrase.notes,
+      notes: candidate.phrase.notes,
       bars,
       tempo: tempoNow,
       swing: swingRef.current,
@@ -376,6 +568,8 @@ export function PhrasePanel({
     // is sounding. Looping switches on the next bar line. A finishing
     // pass keeps its closing note. Only the latest request is kept.
     // Stop still cuts immediately. Tempo and swing are the ones above.
+    // The staff stays put until the handoff listener, which reads
+    // latest after this assignment.
     if (phraseChanged && player.current?.phraseChangeWaits()) {
       soundingTempo.current = tempoNow;
       soundingSwing.current = swingRef.current;
@@ -383,15 +577,39 @@ export function PhrasePanel({
       return;
     }
     if (turnedOff) return;
+    // Half speed, or Loop switched back on, must not cut a pass that is
+    // waiting for the bar line or the closing note. Keep that line on
+    // screen and only refresh the phrase that will start at the boundary.
+    if (
+      deferRef.current &&
+      heldRef.current !== candidate &&
+      player.current?.phraseChangeWaits()
+    ) {
+      soundingTempo.current = tempoNow;
+      soundingSwing.current = swingRef.current;
+      player.current.queuePhrase(next);
+      return;
+    }
     soundingTempo.current = tempoNow;
     soundingSwing.current = swingRef.current;
+    // This start replaces the sounding phrase now, including a resume
+    // that had not reached the loop yet. Publish that line after paint.
+    // A queued handoff does not: its listener moves the staff at the bar.
+    const started = candidate;
+    const hold = loop;
+    queueMicrotask(() => {
+      heldRef.current = started;
+      setDisplay(started);
+      deferRef.current = hold;
+      setDeferLine(hold);
+    });
     void player.current?.start(next);
-  }, [active, phrase, bars, slow, loop]);
+  }, [active, candidate, bars, slow, loop]);
   const marks = useMemo(
-    () => (phrase.ok ? phraseFretMarks(notes, dots) : null),
-    [phrase.ok, notes, dots],
+    () => (shown.ok ? phraseFretMarks(notes, dots) : null),
+    [shown.ok, notes, dots],
   );
-  const focus = phrase.ok ? phraseFocusFret(notes) : null;
+  const focus = shown.ok ? phraseFocusFret(notes) : null;
   useEffect(() => {
     onMarks(marks, focus);
   }, [marks, focus, onMarks]);
@@ -403,11 +621,16 @@ export function PhrasePanel({
       setSeedText(String(seed));
       return;
     }
+    setPlannerMode('live');
     onReleaseHeld?.();
     setSeed(parsed);
     setSeedText(String(parsed));
   }
-  function historyEntry(nextSeed: number, entryLocks: PhraseLocks) {
+  function historyEntry(
+    nextSeed: number,
+    entryLocks: PhraseLocks,
+    lineResult: PhraseResult | null,
+  ) {
     return phraseHistoryEntry({
       seed: nextSeed,
       bars,
@@ -417,6 +640,7 @@ export function PhrasePanel({
       chord: savedChord,
       chordNotes,
       locks: entryLocks,
+      played: lineResult ? playedLine(lineResult) : undefined,
     });
   }
   function showHistoryPhrase(entry: {
@@ -427,6 +651,7 @@ export function PhrasePanel({
     place: PhraseHistoryPlace;
     chord: PhraseHistoryChord | null;
   }) {
+    ignoreContext.current = true;
     onReleaseHeld?.();
     onRestoreContext?.({
       scaleRoot: entry.scaleRoot,
@@ -434,15 +659,20 @@ export function PhrasePanel({
       place: entry.place,
       chord: entry.chord,
     });
+    setPlannerMode('replay');
     setBars(entry.bars);
     setSeed(entry.seed);
     setSeedText(String(entry.seed));
     setNotice('');
+    window.setTimeout(() => {
+      ignoreContext.current = false;
+    }, 0);
   }
   function regenerate() {
     const next = randomSeed();
-    const outgoing = historyEntry(seed, generationLocks);
-    const incoming = historyEntry(next, locks);
+    setPlannerMode('live');
+    const outgoing = historyEntry(seed, generationLocks, shown);
+    const incoming = historyEntry(next, locks, null);
     const drifted = Boolean(
       cursor &&
       !onHistory &&
@@ -484,6 +714,7 @@ export function PhrasePanel({
     if (node && !node.disabled) node.focus({ preventScroll: true });
   }, [history.index, seed, bars, scaleRoot, scaleId]);
   function chooseBars(next: 2 | 4) {
+    setPlannerMode('live');
     onReleaseHeld?.();
     setBars(next);
     setNotice('');
@@ -506,9 +737,9 @@ export function PhrasePanel({
     [],
   );
   function saveToTray() {
-    if (!phrase.ok) return;
+    if (!shown.ok) return;
     const saved = savePhrase({
-      notes: phrase.phrase.notes.map((note) => ({
+      notes: shown.phrase.notes.map((note) => ({
         name: note.name,
         pc: note.pc,
         degree: note.degree,
@@ -540,12 +771,12 @@ export function PhrasePanel({
             fromContext: chord.fromContext,
           }
         : null,
-      bars: phrase.phrase.bars,
+      bars: shown.phrase.bars,
       tempo,
       slow,
       swing,
-      plan: phrase.phrase.plan,
-      seed: phrase.phrase.seed,
+      plan: shown.phrase.plan,
+      seed: shown.phrase.seed,
       ...capture,
     });
     const message = traySaveMessage(saved.status, 'phrase', saved.removed);
@@ -563,14 +794,15 @@ export function PhrasePanel({
     }, 1500);
   }
   function startPlayback() {
-    if (!phrase.ok) return;
+    if (!candidate.ok) return;
     dispatchPhraseStop(window, 'panel');
     const tempoNow = clampPhraseTempo(slow ? tempo / 2 : tempo);
     soundingTempo.current = tempoNow;
     soundingSwing.current = swing;
     live.current = true;
+    followLine(candidate, loop);
     void player.current?.start({
-      notes: phrase.phrase.notes,
+      notes: candidate.phrase.notes,
       bars,
       tempo: tempoNow,
       swing,
@@ -578,10 +810,12 @@ export function PhrasePanel({
     });
   }
   function togglePlay() {
-    if (!phrase.ok) return;
+    if (!candidate.ok) return;
     if (live.current || status === 'playing' || status === 'starting') {
       live.current = false;
       player.current?.stop();
+      deferRef.current = false;
+      setDeferLine(false);
       return;
     }
     startPlayback();
@@ -593,10 +827,32 @@ export function PhrasePanel({
     setTempo(written);
   }
   function commitTempo() {
-    if (live.current) startPlayback();
+    if (!live.current) return;
+    // Releasing Tempo or Swing restarts the sounding phrase. A line that
+    // is only queued for the next bar stays queued, so the staff does not
+    // jump to it before the downbeat.
+    if (
+      deferRef.current &&
+      heldRef.current !== candidate &&
+      candidate.ok &&
+      player.current?.phraseChangeWaits()
+    ) {
+      const tempoNow = clampPhraseTempo(slow ? tempo / 2 : tempo);
+      soundingTempo.current = tempoNow;
+      soundingSwing.current = swing;
+      player.current.queuePhrase({
+        notes: candidate.phrase.notes,
+        bars: candidate.phrase.bars,
+        tempo: tempoNow,
+        swing,
+        loop,
+      });
+      return;
+    }
+    startPlayback();
   }
   const busy = status === 'playing' || status === 'starting';
-  const plan = phrase.ok ? phrase.phrase.plan : null;
+  const plan = shown.ok ? shown.phrase.plan : null;
   const phoneKeys = useMatchMedia('(max-width: 640px)');
   const stackedPlate = useMatchMedia('(max-width: 420px)');
   const midPlate = useMatchMedia('(max-width: 960px)');
@@ -605,7 +861,7 @@ export function PhrasePanel({
       key="play"
       type="button"
       className={`phrase-action deck-key deck-key-play${busy ? ' is-latched' : ''}`}
-      disabled={!phrase.ok}
+      disabled={!candidate.ok}
       onClick={togglePlay}
     >
       {busy ? (
@@ -664,7 +920,16 @@ export function PhrasePanel({
       type="button"
       className="phrase-action deck-key deck-key-loop"
       aria-pressed={loop}
-      onClick={() => setLoop((current) => !current)}
+      onClick={() => {
+        const next = !loop;
+        // Freeze the sounding line before the loop flag commits, so the
+        // staff does not paint the next phrase while this pass continues.
+        if (next && live.current) {
+          deferRef.current = true;
+          setDeferLine(true);
+        }
+        setLoop(next);
+      }}
     >
       <Repeat size={18} aria-hidden="true" />
       <span className="deck-key-label">Loop</span>
@@ -675,7 +940,7 @@ export function PhrasePanel({
       key="save"
       type="button"
       className={`phrase-action deck-key deck-key-rec${savedMark ? ' is-saved' : ''}`}
-      disabled={!phrase.ok}
+      disabled={!candidate.ok}
       onClick={saveToTray}
     >
       <span className="deck-rec-dot" aria-hidden="true" />
@@ -806,8 +1071,8 @@ export function PhrasePanel({
       <div className="phrase-heading">
         <h2>Phrase</h2>
         <p>
-          Over {pretty(chordSymbol)} in {pretty(scaleRoot)} {scaleName}. Rules
-          only: chord tones on beats 1 and 3, mostly steps, and a landing on the{' '}
+          Over {pretty(chordSymbol)} in {pretty(scaleRoot)} {scaleName}. Chord
+          tones on beats 1 and 3, mostly steps, and a landing on the{' '}
           {plan ? CADENCE_LABEL[plan.cadence] : 'chord'}.
         </p>
       </div>
@@ -828,16 +1093,16 @@ export function PhrasePanel({
                         : 'Playing this phrase.'
                       : 'Same seed replays this phrase.'}
             </p>
-            {!phrase.ok && (
+            {!shown.ok && (
               <p className="phrase-status">
-                {phrase.reason === 'no-shared-tones'
+                {shown.reason === 'no-shared-tones'
                   ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
                   : 'This plan has no playable line in the register. Try a new phrase.'}
               </p>
             )}
-            {plan && (
+            {plan && shown.ok && (
               <p className="phrase-plan">
-                {bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
+                {shown.phrase.bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
                 {RHYTHM_LABEL[plan.rhythm]} · {REGISTER_LABEL[plan.register]}{' '}
                 register · ends on the {CADENCE_LABEL[plan.cadence]} · swing{' '}
                 {Math.round(swing * 100)}%
@@ -863,17 +1128,17 @@ export function PhrasePanel({
       >
         {saveAnnounce}
       </p>
-      {phrase.ok && dots === 'shown' && (
+      {shown.ok && dots === 'shown' && (
         <PhraseStaff
           notes={notes}
-          bars={bars}
+          bars={shown.phrase.bars}
           swing={soundingSwing}
           playing={status === 'playing'}
           player={player}
           tempoRef={soundingTempo}
         />
       )}
-      {phrase.ok && (
+      {shown.ok && (
         <ol className="sr-only">
           {notes.map((note, index) => (
             <li key={`spoken-${index}`}>

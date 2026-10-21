@@ -464,6 +464,8 @@ export class PhrasePlayer {
   private switchMutes: { bus: GainNode; level: number }[] = [];
   /** Boundary the queue timer is waiting on. */
   private queueAt = Number.NaN;
+  /** The panel reveals a queued line when this pass hands off. Null is a no-op. */
+  private phraseListener: (() => void) | null = null;
   private scheduler: LookaheadScheduler | null = null;
   private context: AudioContext | null = null;
   private trim: GainNode | null = null;
@@ -532,6 +534,11 @@ export class PhrasePlayer {
    */
   phraseChangeWaits(): boolean {
     return this.looping || this.finishing;
+  }
+
+  /** Fired at the start of a queued handoff. A null listener does nothing. */
+  armPhraseListener(listener: (() => void) | null): void {
+    this.phraseListener = listener;
   }
 
   /**
@@ -999,6 +1006,7 @@ export class PhrasePlayer {
     const input = this.pending;
     this.pending = null;
     if (!input) return;
+    this.phraseListener?.();
     // A note from the old phrase at or after the bar would land on the
     // new downbeat, including when this handoff woke up late. Drop it.
     // Notes already going stay on the graph and fade with the seam.

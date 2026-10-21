@@ -17,10 +17,21 @@ The script verifies both `index.html` and `index.txt` (static RSC hydration
 payload) exist before succeeding. The normal development and Workers-preview
 commands remain available.
 
-There are no deployed server functions or music API calls. The initial page and
-hydration payload are prerendered; matching, diagrams, themes and audio run in
-the browser. Hash navigation needs no catch-all rewrite; missing assets stay 404.
-Only hashed `/_next/static/` assets receive immutable cache headers.
+There is one deployed server function, `api/phrase-plan`. It plans a phrase
+with TypeSafe (`jev-1.13.0`) and otherwise leaves the browser on its rules
+line. The function reads `TYPESAFE_API_KEY` and `JEV_COUNTER_DATABASE_URL`.
+Neither value is logged. The database URL points at a Neon Postgres database.
+`db/jev-spend.sql` creates `jev_spend` and `jev_ip` and is not run by the
+build or by the function; apply it by hand before the planner can spend.
+A missing URL, a database error, or a database timeout skips the planner.
+Requests whose Origin is not progger.studio, www.progger.studio, a progger
+preview on `jonnys-projects-8f4138ff.vercel.app`, or localhost in development
+are rejected before the database or the key is touched.
+
+The initial page and hydration payload are still prerendered. Matching,
+diagrams, themes, and audio run in the browser. Hash navigation needs no
+catch-all rewrite; missing assets stay 404. Only hashed `/_next/static/`
+assets receive immutable cache headers.
 
 Before publishing changes:
 

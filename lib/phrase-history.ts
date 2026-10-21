@@ -1,5 +1,6 @@
 import { QUALITIES } from './harmony.ts';
 import { ROOTS, SCALES } from './music.ts';
+import { sanitizeShape, type PhraseShapePlan } from './phrase-shape.ts';
 
 /**
  * Phrase history, version 1.
@@ -24,6 +25,37 @@ export type PhraseHistoryLocks = {
   rhythm?: 'quarters' | 'eighths' | 'long-short' | 'push';
   register?: 'low' | 'mid' | 'high';
   cadence?: 'root' | 'third' | 'fifth';
+};
+
+export type PhraseHistoryPlayedNote = {
+  name: string;
+  pc: number;
+  degree: string;
+  midi: number;
+  beat: number;
+  duration: number;
+  strong: boolean;
+  chordTone: boolean;
+  string: number;
+  fret: number;
+  finger: number;
+  position: number;
+  shift: boolean;
+};
+
+export type PhraseHistoryPlan = {
+  contour: 'arch' | 'rise' | 'fall' | 'wave';
+  rhythm: 'quarters' | 'eighths' | 'long-short' | 'push';
+  register: 'low' | 'mid' | 'high';
+  cadence: 'root' | 'third' | 'fifth';
+  shape?: PhraseShapePlan;
+};
+
+/** The line that was actually played. Absent on entries saved before it. */
+export type PhraseHistoryPlayed = {
+  source: 'rules' | 'planner';
+  plan: PhraseHistoryPlan;
+  notes: PhraseHistoryPlayedNote[];
 };
 
 export type PhraseHistoryNote = {
@@ -60,6 +92,7 @@ export type PhraseHistoryEntry = {
   chord: PhraseHistoryChord | null;
   chordNotes: PhraseHistoryNote[];
   locks: PhraseHistoryLocks;
+  played?: PhraseHistoryPlayed;
 };
 
 export type PhraseHistoryState = {
@@ -219,6 +252,116 @@ function placeAgrees(
   return chord === null || chord.fromContext;
 }
 
+function finite(value: unknown, min: number, max: number): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  if (value < min || value > max) return null;
+  return value;
+}
+
+function playedNoteOf(value: unknown): PhraseHistoryPlayedNote | null {
+  if (!isRecord(value)) return null;
+  const name = text(value.name, 16);
+  const degree = text(value.degree, 16);
+  const pc = integer(value.pc, 0, 11);
+  const midi = integer(value.midi, 0, 127);
+  const beat = finite(value.beat, 0, 64);
+  const duration = finite(value.duration, 0.01, 64);
+  const string = integer(value.string, 0, 5);
+  const fret = integer(value.fret, 0, 24);
+  const finger = integer(value.finger, 0, 4);
+  const position = integer(value.position, 0, 48);
+  if (
+    !name ||
+    !degree ||
+    pc === null ||
+    midi === null ||
+    beat === null ||
+    duration === null ||
+    string === null ||
+    fret === null ||
+    finger === null ||
+    position === null ||
+    typeof value.strong !== 'boolean' ||
+    typeof value.chordTone !== 'boolean' ||
+    typeof value.shift !== 'boolean'
+  ) {
+    return null;
+  }
+  return {
+    name,
+    pc,
+    degree,
+    midi,
+    beat,
+    duration,
+    strong: value.strong,
+    chordTone: value.chordTone,
+    string,
+    fret,
+    finger,
+    position,
+    shift: value.shift,
+  };
+}
+
+/** A bad line is dropped. The seed entry is kept so an old phrase still opens. */
+function playedOf(
+  value: unknown,
+  bars: 2 | 4,
+): PhraseHistoryPlayed | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !isRecord(value.plan)) return undefined;
+  const source =
+    value.source === 'rules' || value.source === 'planner'
+      ? value.source
+      : null;
+  const contour = oneOf<PhraseHistoryPlan['contour']>(
+    value.plan.contour,
+    CONTOURS,
+  );
+  const rhythm = oneOf<PhraseHistoryPlan['rhythm']>(value.plan.rhythm, RHYTHMS);
+  const register = oneOf<PhraseHistoryPlan['register']>(
+    value.plan.register,
+    REGISTERS,
+  );
+  const cadence = oneOf<PhraseHistoryPlan['cadence']>(
+    value.plan.cadence,
+    CADENCES,
+  );
+  if (!source || !contour || !rhythm || !register || !cadence) return undefined;
+  if (!Array.isArray(value.notes) || value.notes.length < 1 || value.notes.length > 64)
+    return undefined;
+  const notes: PhraseHistoryPlayedNote[] = [];
+  for (const note of value.notes) {
+    const parsed = playedNoteOf(note);
+    if (!parsed) return undefined;
+    notes.push(parsed);
+  }
+  const plan: PhraseHistoryPlan = { contour, rhythm, register, cadence };
+  if (value.plan.shape !== undefined) {
+    const shape = sanitizeShape(value.plan.shape, bars, rhythm);
+    if (!shape) return undefined;
+    plan.shape = shape;
+  }
+  return { source, plan, notes };
+}
+
+function samePlayed(
+  a: PhraseHistoryPlayed | undefined,
+  b: PhraseHistoryPlayed | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function samePhraseHistoryRecord(
+  a: PhraseHistoryEntry,
+  b: PhraseHistoryEntry,
+): boolean {
+  return samePhraseHistoryEntry(a, b) && samePlayed(a.played, b.played);
+}
+
 /** A clean entry, or null when the value cannot regenerate a phrase. */
 export function phraseHistoryEntry(input: {
   seed: number;
@@ -229,6 +372,7 @@ export function phraseHistoryEntry(input: {
   chord: PhraseHistoryChord | null;
   chordNotes: readonly PhraseHistoryNote[];
   locks?: PhraseHistoryLocks;
+  played?: PhraseHistoryPlayed;
 }): PhraseHistoryEntry | null {
   const seed = integer(input.seed, 0, 0xffffffff);
   const bars = input.bars === 2 || input.bars === 4 ? input.bars : null;
@@ -258,7 +402,19 @@ export function phraseHistoryEntry(input: {
   ) {
     return null;
   }
-  return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
+  const played = playedOf(input.played, bars);
+  const entry: PhraseHistoryEntry = {
+    seed,
+    bars,
+    scaleRoot,
+    scaleId,
+    place,
+    chord,
+    chordNotes,
+    locks,
+  };
+  if (played) entry.played = played;
+  return entry;
 }
 
 function sameLocks(a: PhraseHistoryLocks, b: PhraseHistoryLocks): boolean {
@@ -306,7 +462,7 @@ function samePhraseHistoryState(
   if (a.index !== b.index || a.entries.length !== b.entries.length) return false;
   return a.entries.every((entry, index) => {
     const other = b.entries[index];
-    return other !== undefined && samePhraseHistoryEntry(entry, other);
+    return other !== undefined && samePhraseHistoryRecord(entry, other);
   });
 }
 
@@ -397,10 +553,24 @@ export function pushPhraseHistory(
   const kept = state.entries.slice(0, index + 1);
   const current = kept.length > 0 ? kept[kept.length - 1] : null;
   if (current && samePhraseHistoryEntry(current, clean)) {
-    if (kept.length === state.entries.length && index === state.index) {
+    const played = clean.played ?? current.played;
+    const lineChanged = !samePlayed(current.played, played);
+    const nextCurrent = lineChanged
+      ? played
+        ? { ...current, played }
+        : current
+      : current;
+    if (
+      nextCurrent === current &&
+      kept.length === state.entries.length &&
+      index === state.index
+    ) {
       return state;
     }
-    return { version: 1, entries: kept, index: kept.length - 1 };
+    const entries = lineChanged
+      ? [...kept.slice(0, -1), nextCurrent]
+      : kept;
+    return { version: 1, entries, index: entries.length - 1 };
   }
   const withoutRepeat = kept.filter(
     (item) => !samePhraseHistoryEntry(item, clean),
@@ -452,7 +622,7 @@ export function stepPhraseHistory(
 export function phraseHistoryOpening(
   state: PhraseHistoryState,
   context: PhraseHistoryContext,
-): { seed: number; bars: 2 | 4 } | null {
+): { seed: number; bars: 2 | 4; played?: PhraseHistoryPlayed } | null {
   const index = clampedIndex(state);
   const entry = index >= 0 ? state.entries[index] : null;
   if (
@@ -464,6 +634,9 @@ export function phraseHistoryOpening(
     })
   ) {
     return null;
+  }
+  if (entry.played) {
+    return { seed: entry.seed, bars: entry.bars, played: entry.played };
   }
   return { seed: entry.seed, bars: entry.bars };
 }
@@ -501,7 +674,19 @@ function entryOf(value: unknown): PhraseHistoryEntry | null {
   ) {
     return null;
   }
-  return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
+  const played = playedOf(value.played, bars);
+  const entry: PhraseHistoryEntry = {
+    seed,
+    bars,
+    scaleRoot,
+    scaleId,
+    place,
+    chord,
+    chordNotes,
+    locks,
+  };
+  if (played) entry.played = played;
+  return entry;
 }
 
 type HistoryDoc = {

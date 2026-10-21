@@ -1,14 +1,13 @@
 /**
- * Main vs shaped phrases, played by PhrasePlayer.
+ * Main, shaped, and recorded-Jev phrases, played by PhrasePlayer.
  * Loop on restarts at the next bar line and leaves the cadence out.
  * Loop off plays one pass, including the closing note and its hold.
- * The live panel still calls generatePhrase. This script is the opt-in path.
  *
  * Run: node --experimental-strip-types scripts/render-shape-playback-clips.ts <outDir>
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OfflineAudioContext } from 'node-web-audio-api';
 import { parseChord } from '../lib/harmony.ts';
@@ -25,11 +24,13 @@ import {
 } from '../lib/phrase-audio.ts';
 import {
   generatePhrase,
+  generatePhraseWithPlanner,
   generateShapedPhrase,
   onsetSeconds,
   phrasePeriodBeats,
   type FingeredNote,
 } from '../lib/phrase.ts';
+import { recordedPhrasePlanner } from '../tests/phrase-plan-fixture.ts';
 
 const RATE = 44100;
 const TEMPO = 120;
@@ -104,22 +105,25 @@ function lineKey(notes: readonly FingeredNote[]): string {
   return notes.map((note) => `${note.midi}@${note.beat}`).join(',');
 }
 
-function pickSeed(
+async function pickSeed(
   root: string,
   scaleId: string,
   chordSymbol: string,
-): {
+  planner: ReturnType<typeof recordedPhrasePlanner>,
+): Promise<{
   seed: number;
   main: FingeredNote[];
   shaped: FingeredNote[];
+  jev: FingeredNote[];
   shapeKept: boolean;
-} {
+}> {
   const notes = scaleNotes(root, scaleId);
   const chordNotes = parseChord(chordSymbol).notes;
   let fallback: {
     seed: number;
     main: FingeredNote[];
     shaped: FingeredNote[];
+    jev: FingeredNote[];
     shapeKept: boolean;
   } | null = null;
   for (let seed = 1; seed <= 64; seed++) {
@@ -135,11 +139,22 @@ function pickSeed(
       scaleNotes: notes,
       chordNotes,
     });
-    if (!main.ok || !shaped.ok) continue;
+    const planned = await generatePhraseWithPlanner({
+      seed,
+      bars: BARS,
+      scaleNotes: notes,
+      chordNotes,
+      scaleId,
+      scaleRoot: root,
+      chordSymbol,
+      planner,
+    });
+    if (!main.ok || !shaped.ok || !planned.ok) continue;
     const pair = {
       seed,
       main: main.phrase.notes,
       shaped: shaped.phrase.notes,
+      jev: planned.phrase.notes,
       shapeKept: Boolean(shaped.phrase.plan.shape),
     };
     if (!fallback) fallback = pair;
@@ -147,13 +162,19 @@ function pickSeed(
     const shapedLast = pair.shaped.at(-1)?.midi;
     const mainFirst = pair.main[0]?.midi;
     const mainLast = pair.main.at(-1)?.midi;
+    const jevFirst = pair.jev[0]?.midi;
+    const jevLast = pair.jev.at(-1)?.midi;
+    // The loop render treats a downbeat at the cadence pitch as the
+    // closing note striking again. Each arm needs a different pitch there.
     if (
       pair.shapeKept &&
       lineKey(pair.main) !== lineKey(pair.shaped) &&
       shapedFirst !== undefined &&
       mainFirst !== undefined &&
+      jevFirst !== undefined &&
       shapedFirst !== shapedLast &&
-      mainFirst !== mainLast
+      mainFirst !== mainLast &&
+      jevFirst !== jevLast
     ) {
       return pair;
     }
@@ -341,7 +362,7 @@ const manifest: {
     file: string;
     context: string;
     loop: boolean;
-    arm: 'main' | 'shaped';
+    arm: 'main' | 'shaped' | 'jev';
     seed: number;
     shapeKept: boolean;
     seconds: number;
@@ -349,27 +370,43 @@ const manifest: {
   }[];
 } = { tempo: TEMPO, bars: BARS, swing: SWING, clips: [] };
 
+const recorded = JSON.parse(
+  readFileSync(
+    new URL('../tests/fixtures/phrase-plan-jev-recorded.json', import.meta.url),
+    'utf8',
+  ),
+) as { contexts: Record<string, unknown> };
+const planner = recordedPhrasePlanner(recorded.contexts);
+
 for (const context of CONTEXTS) {
-  const picked = pickSeed(context.root, context.scaleId, context.chord);
+  const picked = await pickSeed(
+    context.root,
+    context.scaleId,
+    context.chord,
+    planner,
+  );
   if (!picked.shapeKept) {
     throw new Error(`${context.id} kept no shape in seeds 1–64`);
   }
   for (const loop of [true, false]) {
     const mainRendered = await renderPhrase(picked.main, loop);
     const shapedRendered = await renderPhrase(picked.shaped, loop);
+    const jevRendered = await renderPhrase(picked.jev, loop);
     const mainSamples = mainRendered.samples;
     const shapedSamples = shapedRendered.samples;
+    const jevSamples = jevRendered.samples;
     const loopName = loop ? 'loop-on' : 'loop-off';
     const sides = [
-      ['main', mainSamples],
-      ['shaped', shapedSamples],
+      ['main', mainSamples, picked.main, mainRendered.onsets],
+      ['shaped', shapedSamples, picked.shaped, shapedRendered.onsets],
+      ['jev', jevSamples, picked.jev, jevRendered.onsets],
     ] as const;
     if (sameSamples(mainSamples, shapedSamples)) {
       throw new Error(
         `${context.id} ${loopName} main and shaped are the same audio`,
       );
     }
-    for (const [arm, samples] of sides) {
+    for (const [arm, samples, source, played] of sides) {
       const peak = samplePeak(samples);
       if (!(peak > 0.01)) {
         throw new Error(`${context.id} ${loopName} ${arm} is silent`);
@@ -386,11 +423,8 @@ for (const context of CONTEXTS) {
           `${context.id} ${loopName} ${arm} stays silent until ${(firstAudible / RATE).toFixed(3)}s`,
         );
       }
-      const source = arm === 'main' ? picked.main : picked.shaped;
       const firstMidi = source[0]?.midi;
       const lastMidi = source.at(-1)?.midi;
-      const played =
-        arm === 'main' ? mainRendered.onsets : shapedRendered.onsets;
       if (firstMidi === undefined || lastMidi === undefined) {
         throw new Error(`${context.id} has no notes`);
       }

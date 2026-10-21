@@ -1031,3 +1031,31 @@ void test('the tray stays out of the eager phrase graph', () => {
     assert.equal(source.includes('.play('), false, file);
   }
 });
+
+void test('a stash phrase keeps a valid shape and an old plan omits the key', () => {
+  const plain = phrase();
+  const shape = {
+    version: 1 as const,
+    motif: {
+      contour: 'step-up-step-down' as const,
+      rhythm: 'even' as const,
+    },
+    variations: ['sequence-up' as const],
+    question: { bar: 1 as const, degree: '4' as const },
+  };
+  const shaped: TrayPhrase = {
+    ...phrase(),
+    id: 'phrase-shaped',
+    plan: { ...phrase().plan, shape },
+  };
+  const parsed = parseTray(
+    JSON.stringify({ version: 1, items: [plain, shaped] }),
+  );
+  const [first, second] = parsed.state.items;
+  assert.equal(first?.type, 'phrase');
+  assert.equal(second?.type, 'phrase');
+  if (first?.type !== 'phrase' || second?.type !== 'phrase') return;
+  assert.equal('shape' in first.plan, false);
+  assert.deepEqual(second.plan.shape, shape);
+  assert.deepEqual(first.plan, plain.plan);
+});
