@@ -1,14 +1,34 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { OfflineAudioContext } from 'node-web-audio-api';
 import { parseChord } from '../lib/harmony.ts';
 import { SCALES, spell } from '../lib/music.ts';
+import {
+  PHRASE_END_RELEASE_SEC,
+  PHRASE_START_LEAD_SEC,
+  PHRASE_TICK_SEC,
+  PhrasePlayer,
+  nextPhraseBarLine,
+  phraseClosingIndex,
+  phraseLoopBeats,
+  type PhraseClock,
+} from '../lib/phrase-audio.ts';
+import {
+  emptyPhraseHistory,
+  phraseHistoryEntry,
+  pushPhraseHistory,
+  stepPhraseHistory,
+} from '../lib/phrase-history.ts';
 import {
   generatePhrase,
   generatePhraseWithPlanner,
   generateShapedPhrase,
   mulberry32,
+  onsetSeconds,
+  phrasePeriodBeats,
   rulePlan,
+  type FingeredNote,
   type PhrasePlanner,
 } from '../lib/phrase.ts';
 import {
@@ -463,4 +483,520 @@ void test('CI loads a hand-authored distribution fixture and never a live Jev ca
   assert.equal(recorded.recordedFromJev, true);
   assert.equal(Object.keys(recorded.contexts).length, 64);
   assert.ok(parseDistributions(recorded.contexts['major|C|C|4|quarters']));
+});
+
+const PLAYBACK_CORPUS: readonly (readonly [string, string, string])[] = [
+  ['C', 'major', 'C'],
+  ['A', 'minor', 'Am'],
+  ['A', 'dorian', 'Am'],
+  ['C', 'major', 'G7'],
+  ['F#', 'major', 'F#maj7'],
+  ['A', 'harmonic-minor', 'E7'],
+  ['C', 'minor-pentatonic', 'Cm'],
+  ['C', 'minor-blues', 'C7'],
+  ['Bb', 'mixolydian', 'Bb7'],
+];
+
+function scaleNotesFor(root: string, scaleId: string) {
+  const scale = SCALES.find((item) => item.id === scaleId);
+  if (!scale) throw new Error(scaleId);
+  return spell(root, scale.formula);
+}
+
+void test('a shaped phrase keeps the grid the player loops, closes, and holds', () => {
+  let shaped = 0;
+  for (const [root, scaleId, symbol] of PLAYBACK_CORPUS) {
+    const scaleNotes = scaleNotesFor(root, scaleId);
+    const chordNotes = parseChord(symbol).notes;
+    for (const bars of [2, 4] as const) {
+      for (let seed = 1; seed <= 24; seed++) {
+        const live = generatePhrase({ seed, bars, scaleNotes, chordNotes });
+        const next = generateShapedPhrase({
+          seed,
+          bars,
+          scaleNotes,
+          chordNotes,
+        });
+        assert.equal(live.ok, true);
+        assert.equal(next.ok, true);
+        if (!live.ok || !next.ok) continue;
+        assert.equal(live.phrase.plan.shape, undefined);
+        assert.deepEqual(
+          live.phrase.notes.map((note) => [note.beat, note.duration]),
+          next.phrase.notes.map((note) => [note.beat, note.duration]),
+        );
+        const notes = next.phrase.notes;
+        const tail = notes[notes.length - 1];
+        assert.ok(tail);
+        assert.equal(notes[0]?.beat, 0);
+        assert.equal(phraseLoopBeats(notes), bars * 4);
+        assert.equal(phraseClosingIndex(notes), notes.length - 1);
+        assert.equal(tail.beat, bars * 4);
+        assert.equal(tail.beat + tail.duration, phrasePeriodBeats(bars));
+        assert.equal(
+          notes.some((note) => note.strong && !note.chordTone),
+          false,
+        );
+        assert.equal(
+          notes.some((note) => note.fret < 0 || note.fret > 24),
+          false,
+        );
+        if (next.phrase.plan.shape) shaped += 1;
+        else {
+          assert.deepEqual(
+            live.phrase.notes.map((note) => note.midi),
+            notes.map((note) => note.midi),
+          );
+        }
+      }
+    }
+  }
+  assert.ok(shaped > 0);
+});
+
+class PlaybackClock implements PhraseClock {
+  currentTime = 0;
+  private nextId = 1;
+  private timers = new Map<number, { at: number; fn: () => void }>();
+
+  now(): number {
+    return this.currentTime;
+  }
+
+  after(delaySec: number, fn: () => void): number {
+    if (!(delaySec > 1e-4)) {
+      throw new Error(`wake did not move at ${this.currentTime}`);
+    }
+    const id = this.nextId++;
+    this.timers.set(id, { at: this.currentTime + delaySec, fn });
+    return id;
+  }
+
+  cancel(handle: unknown): void {
+    this.timers.delete(handle as number);
+  }
+
+  advance(to: number): void {
+    this.currentTime = to;
+    for (;;) {
+      let due: { id: number; at: number; fn: () => void } | null = null;
+      for (const [id, timer] of this.timers) {
+        if (
+          timer.at <= this.currentTime + 1e-9 &&
+          (!due || timer.at < due.at)
+        ) {
+          due = { id, at: timer.at, fn: timer.fn };
+        }
+      }
+      if (!due) break;
+      this.timers.delete(due.id);
+      due.fn();
+    }
+  }
+}
+
+async function roll(clock: PlaybackClock, to: number): Promise<void> {
+  let steps = 0;
+  while (clock.currentTime + 1e-9 < to) {
+    clock.advance(Math.min(to, clock.currentTime + PHRASE_TICK_SEC));
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.ok(++steps < 40000, 'the clock spun');
+  }
+}
+
+function midiHz(midi: number): number {
+  return 440 * 2 ** ((midi - 69) / 12);
+}
+
+function spyStarts(context: OfflineAudioContext) {
+  const starts: {
+    when: number;
+    frequency: number;
+    dropped: boolean;
+  }[] = [];
+  const stops: number[] = [];
+  const create = context.createOscillator.bind(context);
+  context.createOscillator = () => {
+    const oscillator = create();
+    const entry = { when: 0, frequency: 0, dropped: false };
+    const start = oscillator.start.bind(oscillator);
+    oscillator.start = (when = 0) => {
+      entry.when = when;
+      entry.frequency = oscillator.frequency.value;
+      starts.push(entry);
+      return start(when);
+    };
+    const stop = oscillator.stop.bind(oscillator);
+    oscillator.stop = (when = 0) => {
+      stops.push(when);
+      return stop(when);
+    };
+    const disconnect = oscillator.disconnect.bind(oscillator);
+    oscillator.disconnect = () => {
+      entry.dropped = true;
+      return disconnect();
+    };
+    return oscillator;
+  };
+  return { starts, stops };
+}
+
+function spyRamps(): {
+  ramps: { value: number; when: number }[];
+  restore: () => void;
+} {
+  const sample = new OfflineAudioContext(1, 8000, 8000).createGain();
+  const proto = Object.getPrototypeOf(sample.gain);
+  const original = proto.linearRampToValueAtTime;
+  const ramps: { value: number; when: number }[] = [];
+  proto.linearRampToValueAtTime = function (
+    this: AudioParam,
+    value: number,
+    when: number,
+  ) {
+    ramps.push({ value, when });
+    return original.call(this, value, when);
+  };
+  return {
+    ramps,
+    restore() {
+      proto.linearRampToValueAtTime = original;
+    },
+  };
+}
+
+function matchesMidi(frequency: number, midi: number): boolean {
+  return Math.abs(frequency - midiHz(midi)) < 1e-2;
+}
+
+async function playShaped(
+  notes: readonly FingeredNote[],
+  bars: 2 | 4,
+  loop: boolean,
+  clock: PlaybackClock,
+) {
+  const context = new OfflineAudioContext(1, 44100 * 20, 44100);
+  context.resume = () => Promise.resolve();
+  const { starts, stops } = spyStarts(context);
+  const states: string[] = [];
+  const player = new PhrasePlayer((state) => states.push(state));
+  await player.start({
+    notes,
+    bars,
+    tempo: 120,
+    swing: 0,
+    loop,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  return { player, states, context, starts, stops };
+}
+
+void test('a shaped phrase uses the live switch, history, closing note, and stop', async () => {
+  const scaleNotes = major();
+  const chord = parseChord('C');
+  const chordNotes = chord.notes.map((note) => ({
+    name: note.name,
+    pc: note.pc,
+    degree: note.degree,
+  }));
+  let shaped: FingeredNote[] | null = null;
+  let shapedSeed = 0;
+  let restored: FingeredNote[] | null = null;
+  let restoredSeed = 0;
+  for (let seed = 1; seed <= 48 && !shaped; seed++) {
+    const next = generateShapedPhrase({
+      seed,
+      bars: 2,
+      scaleNotes,
+      chordNotes: chord.notes,
+    });
+    const live = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes,
+      chordNotes: chord.notes,
+    });
+    if (!next.ok || !live.ok || !next.phrase.plan.shape) continue;
+    const shapedLine = next.phrase.notes.map((note) => note.midi).join(',');
+    const liveLine = live.phrase.notes.map((note) => note.midi).join(',');
+    if (shapedLine === liveLine) continue;
+    if (next.phrase.notes[0]?.midi === next.phrase.notes.at(-1)?.midi) continue;
+    for (let other = 1; other <= 48; other++) {
+      if (other === seed) continue;
+      const previous = generatePhrase({
+        seed: other,
+        bars: 2,
+        scaleNotes,
+        chordNotes: chord.notes,
+      });
+      if (!previous.ok) continue;
+      const first = previous.phrase.notes[0]?.midi;
+      if (first === undefined) continue;
+      const early = next.phrase.notes.some(
+        (note) => note.beat < 4 && note.midi === first,
+      );
+      if (early) continue;
+      shaped = next.phrase.notes;
+      shapedSeed = next.phrase.seed;
+      restored = previous.phrase.notes;
+      restoredSeed = previous.phrase.seed;
+      break;
+    }
+  }
+  assert.ok(
+    shaped && restored,
+    'no shaped phrase to play through the live path',
+  );
+  if (!shaped || !restored) return;
+
+  const historyChord = {
+    symbol: chord.symbol,
+    root: chord.root,
+    qualityId: chord.quality.id,
+    fromContext: false,
+    notes: chordNotes,
+  };
+  const currentEntry = phraseHistoryEntry({
+    seed: shapedSeed,
+    bars: 2,
+    scaleRoot: 'C',
+    scaleId: 'major',
+    place: 'chord',
+    chord: historyChord,
+    chordNotes,
+    locks: {},
+  });
+  const previousEntry = phraseHistoryEntry({
+    seed: restoredSeed,
+    bars: 2,
+    scaleRoot: 'C',
+    scaleId: 'major',
+    place: 'chord',
+    chord: historyChord,
+    chordNotes,
+    locks: {},
+  });
+  assert.ok(currentEntry && previousEntry);
+  if (!currentEntry || !previousEntry) return;
+  const stepped = stepPhraseHistory(
+    pushPhraseHistory(
+      pushPhraseHistory(emptyPhraseHistory(), previousEntry),
+      currentEntry,
+    ),
+    -1,
+  );
+  const showing = stepped.entries[stepped.index];
+  assert.ok(showing);
+  assert.equal(showing.seed, restoredSeed);
+  assert.equal(showing.bars, 2);
+  assert.equal(showing.scaleRoot, 'C');
+  assert.equal(showing.scaleId, 'major');
+  assert.equal(showing.chord?.symbol, chord.symbol);
+  const fromHistory = generatePhrase({
+    seed: showing.seed,
+    bars: showing.bars,
+    scaleNotes,
+    chordNotes: chord.notes,
+  });
+  assert.equal(fromHistory.ok, true);
+  if (!fromHistory.ok) return;
+  assert.deepEqual(
+    fromHistory.phrase.notes.map((note) => note.midi),
+    restored.map((note) => note.midi),
+  );
+
+  const tempo = 120;
+  const lead = PHRASE_START_LEAD_SEC;
+  const loopClock = new PlaybackClock();
+  const looping = await playShaped(shaped, 2, true, loopClock);
+  const loopStarts = looping.starts;
+  assert.equal(looping.player.phraseChangeWaits(), true);
+  await roll(loopClock, lead + 0.4);
+  const boundary = nextPhraseBarLine(lead, loopClock.currentTime, tempo);
+  const bar = 4 * (60 / tempo);
+  assert.ok(boundary - loopClock.currentTime > bar / 2);
+  looping.player.queuePhrase({
+    notes: fromHistory.phrase.notes,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context: looping.context,
+    destination: looping.context.destination,
+    clock: loopClock,
+  });
+  const restoredFirst = fromHistory.phrase.notes[0]?.midi ?? -1;
+  await roll(loopClock, boundary - 0.02);
+  assert.equal(
+    loopStarts.some(
+      (item) =>
+        item.when < boundary - 1e-6 &&
+        matchesMidi(item.frequency, restoredFirst),
+    ),
+    false,
+  );
+  await roll(loopClock, boundary + 0.05);
+  assert.equal(
+    loopStarts.some(
+      (item) =>
+        Math.abs(item.when - boundary) < 1e-6 &&
+        matchesMidi(item.frequency, restoredFirst),
+    ),
+    true,
+  );
+  looping.player.stop();
+  assert.equal(looping.states.at(-1), 'idle');
+  assert.equal(looping.player.phraseChangeWaits(), false);
+  assert.equal(looping.player.isLooping, false);
+
+  const openClock = new PlaybackClock();
+  const open = await playShaped(shaped, 2, false, openClock);
+  const openStarts = open.starts;
+  await roll(openClock, lead + 0.4);
+  assert.equal(open.player.phraseChangeWaits(), false);
+  const switchedAt = openClock.currentTime + lead;
+  const laterBar = nextPhraseBarLine(lead, openClock.currentTime, tempo);
+  assert.ok(laterBar - switchedAt > 0.5);
+  const fade = spyRamps();
+  open.player.queuePhrase({
+    notes: fromHistory.phrase.notes,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: false,
+    context: open.context,
+    destination: open.context.destination,
+    clock: openClock,
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  await roll(openClock, switchedAt + 0.05);
+  assert.equal(
+    openStarts.some(
+      (item) =>
+        Math.abs(item.when - switchedAt) < 1e-6 &&
+        matchesMidi(item.frequency, restoredFirst),
+    ),
+    true,
+  );
+  assert.equal(
+    openStarts.some(
+      (item) =>
+        Math.abs(item.when - laterBar) < 1e-6 &&
+        matchesMidi(item.frequency, restoredFirst),
+    ),
+    false,
+  );
+  assert.equal(
+    fade.ramps.some(
+      (ramp) =>
+        ramp.value === 0 &&
+        Math.abs(ramp.when - (switchedAt + PHRASE_END_RELEASE_SEC)) < 1e-4,
+    ),
+    true,
+  );
+  fade.restore();
+  open.player.stop();
+
+  const closingClock = new PlaybackClock();
+  const closing = await playShaped(shaped, 2, true, closingClock);
+  const closingStarts = closing.starts;
+  const loopSec = 8 * (60 / tempo);
+  const cadenceAt = lead + onsetSeconds(8, tempo, 0);
+  assert.equal(cadenceAt, lead + loopSec);
+  await roll(closingClock, lead + 60 / tempo);
+  assert.equal(
+    closingStarts.some(
+      (item) =>
+        Math.abs(item.when - cadenceAt) < 1e-6 &&
+        matchesMidi(item.frequency, shaped[0]?.midi ?? -1),
+    ),
+    true,
+  );
+  const landing = shaped.at(-1)?.midi ?? -2;
+  assert.equal(
+    closingStarts.some(
+      (item) =>
+        Math.abs(item.when - cadenceAt) < 1e-6 &&
+        matchesMidi(item.frequency, landing),
+    ),
+    false,
+  );
+  const release = spyRamps();
+  closing.player.finishPass();
+  assert.equal(closing.player.phraseChangeWaits(), true);
+  const holdEnd = lead + onsetSeconds(phrasePeriodBeats(2), tempo, 0);
+  await roll(closingClock, holdEnd + PHRASE_END_RELEASE_SEC + 0.2);
+  assert.equal(
+    closingStarts.some(
+      (item) =>
+        !item.dropped &&
+        Math.abs(item.when - cadenceAt) < 1e-6 &&
+        matchesMidi(item.frequency, landing),
+    ),
+    true,
+  );
+  assert.equal(
+    closingStarts.some(
+      (item) =>
+        !item.dropped &&
+        Math.abs(item.when - cadenceAt) < 1e-6 &&
+        matchesMidi(item.frequency, shaped[0]?.midi ?? -1),
+    ),
+    false,
+  );
+  assert.equal(
+    closingStarts.some((item) => !item.dropped && item.when > cadenceAt + 1e-4),
+    false,
+  );
+  assert.equal(
+    release.ramps.some(
+      (ramp) =>
+        ramp.value === 0 &&
+        Math.abs(ramp.when - (holdEnd + PHRASE_END_RELEASE_SEC)) < 1e-6,
+    ),
+    true,
+  );
+  release.restore();
+  closing.player.stop();
+  assert.equal(closing.states.at(-1), 'idle');
+
+  const stopClock = new PlaybackClock();
+  const stopped = await playShaped(shaped, 2, true, stopClock);
+  const stopStarts = stopped.starts;
+  await roll(stopClock, lead + 0.4);
+  const stopBoundary = nextPhraseBarLine(lead, stopClock.currentTime, tempo);
+  stopped.player.queuePhrase({
+    notes: fromHistory.phrase.notes,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context: stopped.context,
+    destination: stopped.context.destination,
+    clock: stopClock,
+  });
+  stopped.player.stop();
+  assert.equal(stopped.states.at(-1), 'idle');
+  assert.equal(stopped.player.phraseChangeWaits(), false);
+  assert.equal(
+    stopped.stops.some((when) => Math.abs(when - 0.03) < 1e-3),
+    true,
+  );
+  assert.equal(
+    stopped.stops.some((when) => Math.abs(when - stopBoundary) < 1e-3),
+    false,
+  );
+  await roll(stopClock, stopBoundary + 0.2);
+  assert.equal(
+    stopStarts.some(
+      (item) =>
+        item.when >= stopBoundary - 1e-6 &&
+        matchesMidi(item.frequency, restoredFirst),
+    ),
+    false,
+  );
 });

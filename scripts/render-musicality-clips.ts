@@ -1062,6 +1062,7 @@ async function renderTrack2(outDir: string): Promise<void> {
     `${JSON.stringify({ head: identity.head, tree: identity.tree, base: TRACK2_SHA, ...metrics, corpus: { ...metrics.corpus, C: armC } }, null, 2)}\n`,
   );
   console.log(`wrote ${join(outDir, 'metrics.json')}`);
+  if (process.argv.includes('--metrics-only')) return;
   const answer: {
     shuffleSeed: number;
     armC: string;
