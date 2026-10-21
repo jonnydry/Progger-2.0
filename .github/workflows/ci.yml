@@ -28,10 +28,27 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        command: ["postgres", "-c", "max_connections=400"]
     env:
       PG_TEST_URL: postgres://phrase:phrase@localhost:5432/phrase_plan
     steps:
+      - name: Raise the Postgres connection limit
+        run: |
+          mapfile -t ids < <(docker ps -q --filter ancestor=postgres:17)
+          cid=${ids[0]}
+          test -n "$cid"
+          docker exec "$cid" psql -U phrase -d phrase_plan -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET max_connections = 400;"
+          docker restart "$cid"
+          ready=0
+          for _ in $(seq 1 30); do
+            if docker exec "$cid" pg_isready -U phrase -d phrase_plan; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = 1
+          docker exec "$cid" psql -U phrase -d phrase_plan -tAc "SHOW max_connections;" | grep -qx 400
+
       - name: Checkout
         uses: actions/checkout@v7
 
