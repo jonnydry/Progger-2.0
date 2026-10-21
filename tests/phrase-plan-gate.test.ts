@@ -312,6 +312,13 @@ void test('postgres phrase plan gate', async (t) => {
     assert.equal((await stored()).calls, 0);
   });
 
+  await t.test('reconcile does not pull a month already above the cap down to the cap', async () => {
+    await reset();
+    await pool.query(`INSERT INTO jev_spend (month, tokens) VALUES ('2026-10', 200)`);
+    await phrasePlanReconcile(sql, { month, unused: 10, billed: 40, cap: 150 });
+    assert.equal((await stored()).tokens, 190);
+  });
+
   await t.test('300 callers on one new IP at the 1200 ms budget stop at the IP limit', async () => {
     await reset();
     assert.equal(PHRASE_PLAN_DB_TIMEOUT_MS, 1_200);

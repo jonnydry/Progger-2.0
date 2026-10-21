@@ -504,6 +504,52 @@ void test('a missing key refunds the reservation and does not call upstream', as
   assert.equal(refund?.values[0], -Number(reservation?.values[4]));
 });
 
+void test('a refund does not pull a month already above the cap down to the cap', async () => {
+  resetPhrasePlanStateForTests();
+  let tokens = 80_000;
+  let reservation = 0;
+  const background: Promise<unknown>[] = [];
+  const guarded =
+    /SET tokens = LEAST\(GREATEST\(tokens \+ \?, 0\), GREATEST\(tokens, \?\)\),/;
+  const run = harness({
+    tokenCap: 50_000,
+    sql: async (strings, ...values) => {
+      const text = strings.join('?');
+      if (text.includes('INSERT INTO jev_ip')) {
+        reservation = Number(values[4]);
+        return [{ calls: 1, tokens, ip_ok: true, spend_ok: true }];
+      }
+      if (guarded.test(text)) {
+        const delta = Number(values[0]);
+        const cap = Number(values[1]);
+        tokens = Math.min(Math.max(tokens + delta, 0), Math.max(tokens, cap));
+        return [];
+      }
+      if (text.includes('GREATEST(tokens +')) {
+        const delta = Number(values[0]);
+        const cap = Number(values[1]);
+        tokens = Math.min(Math.max(tokens + delta, 0), cap);
+        return [];
+      }
+      return [];
+    },
+    env: {
+      TYPESAFE_API_KEY: undefined,
+      JEV_COUNTER_DATABASE_URL: 'postgres://counter.example/jev',
+      VERCEL_ENV: 'production',
+    },
+    waitUntil(work) {
+      background.push(work);
+    },
+  });
+  await run.done;
+  await Promise.all(background);
+  assert.equal(run.result().status, 503);
+  assert.ok(reservation > 0);
+  assert.equal(tokens, 80_000 - reservation);
+  assert.ok(tokens > 50_000);
+});
+
 void test('an upstream failure keeps the reservation', async () => {
   resetPhrasePlanStateForTests();
   const { sql, queries } = sqlMock((query) => {
@@ -1798,11 +1844,13 @@ void test('a waiter database timeout at or above the floor arms the skip', async
     logs.push(args.map((item) => String(item)).join(' '));
   };
   let gates = 0;
+  let gateStarted = 0;
   const sql: PhrasePlanSql = async (strings) => {
     const text = strings.join('?');
     if (!text.includes('INSERT INTO jev_ip')) return [];
     gates += 1;
     if (gates === 1) return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
+    gateStarted = Date.now();
     return new Promise(() => undefined);
   };
   const fetch = (
@@ -1834,9 +1882,14 @@ void test('a waiter database timeout at or above the floor arms the skip', async
     });
     await leader.done;
     await waiter.done;
+    const gateElapsed = Date.now() - gateStarted;
     assert.equal(leader.result().status, 503);
     assert.equal(waiter.result().status, 503);
     assert.equal(gates, 2);
+    // Leader upstream is 500 ms of the 1700 ms budget, so this database
+    // slice is about 700 ms. A handler that ignores that slice waits 1200.
+    assert.ok(gateElapsed >= PHRASE_PLAN_WAITER_DB_FLOOR_MS, `gate elapsed ${gateElapsed}`);
+    assert.ok(gateElapsed < 900, `gate elapsed ${gateElapsed}`);
     assert.equal(logs.includes('db_timeout'), true);
     assert.equal(logs.includes('db_deadlock'), false);
     let queriedAgain = false;
