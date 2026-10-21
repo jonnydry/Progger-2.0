@@ -935,7 +935,8 @@ export function phrasePlanReleaseStaleIps(
 
 /**
  * Give back the unused part of this call's own reservation. The floor
- * is this call's billed usage, and the cap still bounds the row.
+ * is this call's billed usage. The cap bounds a row that is still under
+ * it. A row already above the cap is not pulled down to the cap.
  */
 export function phrasePlanReconcile(
   sql: PhrasePlanSql,
@@ -944,7 +945,7 @@ export function phrasePlanReconcile(
   const { month, unused, billed, cap } = input;
   return sql`
     UPDATE jev_spend
-    SET tokens = LEAST(GREATEST(tokens - ${unused}, ${billed}), ${cap}),
+    SET tokens = LEAST(GREATEST(tokens - ${unused}, ${billed}), GREATEST(tokens, ${cap})),
         updated_at = now()
     WHERE month = ${month}
   `;
@@ -1170,6 +1171,11 @@ function readBilled(payload: unknown, reservation: number): BilledUsage {
   return { kind: 'ok', billed };
 }
 
+/**
+ * Give back a reservation that never started a fetch. An under-cap row
+ * can fall to zero. A row already above the cap is not pulled down to
+ * the cap.
+ */
 function refundReservation(
   sql: PhrasePlanSql,
   month: string,
@@ -1178,7 +1184,7 @@ function refundReservation(
 ): Promise<readonly Record<string, unknown>[]> {
   return sql`
     UPDATE jev_spend
-    SET tokens = LEAST(GREATEST(tokens + ${-reservation}, 0), ${cap}),
+    SET tokens = LEAST(GREATEST(tokens + ${-reservation}, 0), GREATEST(tokens, ${cap})),
         updated_at = now()
     WHERE month = ${month}
   `;

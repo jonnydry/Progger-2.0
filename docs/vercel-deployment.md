@@ -29,7 +29,10 @@ has `USAGE` on `public` with no `CREATE`. It can `SELECT`, `INSERT`,
 `UPDATE`, and `DELETE` `jev_ip`, and `SELECT`, `INSERT`, and `UPDATE`
 `jev_spend`. Postgres 15 and later already withhold `CREATE` on
 `public` from `PUBLIC`. Earlier versions still grant it, so the revoke
-below is required there. The password is a placeholder:
+below is required there. On Postgres before 15,
+`REVOKE CREATE ON SCHEMA public FROM PUBLIC` affects every role in the
+database, and it must run after `db/jev-spend.sql`. The password is a
+placeholder:
 
 ```sql
 CREATE ROLE jev_counter LOGIN PASSWORD '<password>';
