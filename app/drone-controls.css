@@ -204,8 +204,8 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
 .drone-walk:focus-visible,
 .drone-volume-trigger:focus-visible,
 .drone-volume-popover input:focus-visible {
-  outline: 3px solid var(--amber);
-  outline-offset: 3px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
   z-index: 4;
 }
 
@@ -549,8 +549,8 @@ html[data-theme='day'] .drone-volume-trigger[data-playing='true'] {
 }
 
 .drone-sound-options button:focus-visible {
-  outline: 3px solid var(--amber);
-  outline-offset: 3px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
   z-index: 1;
 }
 

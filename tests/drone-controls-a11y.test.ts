@@ -251,8 +251,12 @@ void test('the control stylesheet keeps a 44px target and a smaller icon out of 
   );
   assert.match(css, /height:\s*18px/);
   assert.match(css, /border:\s*1px solid var\(--border\)/);
-  assert.match(css, /outline:\s*3px solid var\(--amber\)/);
-  assert.match(css, /outline-offset:\s*3px/);
+  assert.match(css, /outline:\s*var\(--focus-ring\)/);
+  assert.match(css, /outline-offset:\s*var\(--focus-offset\)/);
+  assert.match(
+    readFileSync(new URL('../app/deck-tokens.css', import.meta.url), 'utf8'),
+    /--focus-ring:\s*3px solid var\(--amber\)/,
+  );
   assert.match(css, /z-index:\s*4/);
   assert.match(css, /\.drone-toggle:hover:not\(\[aria-pressed='true'\]\)/);
   assert.match(css, /\.drone-walk:hover:not\(\[aria-pressed='true'\]\)/);

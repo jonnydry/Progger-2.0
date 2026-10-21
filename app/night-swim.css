@@ -94,6 +94,7 @@ html:has(.night-swim) {
 }
 .night-swim .brand {
   color: var(--green);
+  min-height: var(--tap);
 }
 .night-swim .brand > span {
   font-size: 32px;
@@ -853,9 +854,6 @@ html:has(.night-swim) {
   .night-swim .reference-tabs {
     margin: 8px 0 0;
     gap: 24px;
-  }
-  .night-swim .brand {
-    min-height: 44px;
   }
   .night-swim .reference-tabs button {
     min-width: 44px;
