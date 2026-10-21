@@ -23,9 +23,22 @@ line. The function reads `TYPESAFE_API_KEY`, `JEV_COUNTER_DATABASE_URL`, and
 `JEV_IP_HASH_SALT`. None of those values is logged. The database URL points
 at a Neon Postgres database. `db/jev-spend.sql` creates `jev_spend` and
 `jev_ip` and is not run by the build or by the function; apply it by hand
-before the planner can spend. A missing URL, a database error, or a database
-timeout skips the planner. A missing salt does the same, after one warning
-that does not include the salt. Requests whose Origin is not
+before the planner can spend. The function reserves the IP counter and the
+monthly spend in one statement, and calls TypeSafe only after both succeed.
+The IP row is written only when the spend row also has room, so a refused
+month does not spend a daily IP slot. It refunds that reservation only when
+the call never starts. A missing URL, a database error, or a database timeout
+skips the planner and does not call TypeSafe. A database failure is logged as
+`db_error` or `db_timeout`; the error text is not logged. A missing salt does
+the same, after one warning that does not include the salt. One process keeps
+a single in-flight plan per context, so a second request on that instance
+waits and does not reserve or fetch again. Another instance can still reserve
+the same context; each of those duplicates is counted under the cap. The
+browser waits up to 1800 ms for a plan. The rules line is already playing, so
+that wait does not delay the sound. A change of seed alone reuses the
+in-flight request. The request is aborted when the musical context changes
+or the panel unmounts.
+Requests whose Origin is not
 progger.studio, www.progger.studio, exactly `https://${VERCEL_URL}` or
 `https://${VERCEL_BRANCH_URL}`, or localhost in development are rejected
 before the database or the key is touched.

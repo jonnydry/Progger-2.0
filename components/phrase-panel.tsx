@@ -462,6 +462,9 @@ export function PhrasePanel({
     };
   }, [plannerMode, held, onHistory, cursor]);
   const planKey = `${scaleId}|${scaleRoot}|${plannerChord}|${bars}|${seed}|${stableLocks.contour ?? ''}|${stableLocks.rhythm ?? ''}|${stableLocks.register ?? ''}|${stableLocks.cadence ?? ''}`;
+  const plannerGrid = rulesPhrase.ok ? rulesPhrase.phrase.plan.rhythm : '';
+  const planContext = `${scaleId}|${scaleRoot}|${plannerChord}|${bars}|${plannerGrid}|${stableLocks.contour ?? ''}|${stableLocks.register ?? ''}|${stableLocks.cadence ?? ''}`;
+  const plannerFlight = useRef<AbortController | null>(null);
   const [planned, setPlanned] = useState<{
     key: string;
     result: PhraseResult;
@@ -546,8 +549,22 @@ export function PhrasePanel({
     };
   }, []);
   useEffect(() => {
-    if (held || plannerMode !== 'live') return;
+    if (held || plannerMode !== 'live') {
+      plannerFlight.current?.abort(PHRASE_PLANNER_CANCEL_REASON);
+      plannerFlight.current = null;
+      return;
+    }
     const controller = new AbortController();
+    plannerFlight.current = controller;
+    return () => {
+      controller.abort(PHRASE_PLANNER_CANCEL_REASON);
+      if (plannerFlight.current === controller) plannerFlight.current = null;
+    };
+  }, [held, plannerMode, planContext]);
+  useEffect(() => {
+    if (held || plannerMode !== 'live') return;
+    const controller = plannerFlight.current;
+    if (!controller) return;
     let cancelled = false;
     const key = planKey;
     void generatePhraseWithPlanner({
@@ -562,7 +579,7 @@ export function PhrasePanel({
       scaleRoot,
       chordSymbol: plannerChord,
     }).then((result) => {
-      if (cancelled) return;
+      if (cancelled || controller.signal.aborted) return;
       if (!result.ok || result.phrase.source !== 'planner') return;
       setPlanned((current) =>
         current?.key === key && samePhraseLine(current.result, result)
@@ -585,11 +602,11 @@ export function PhrasePanel({
     });
     return () => {
       cancelled = true;
-      controller.abort(PHRASE_PLANNER_CANCEL_REASON);
     };
   }, [
     held,
     plannerMode,
+    planContext,
     planKey,
     seed,
     bars,

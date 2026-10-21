@@ -3,10 +3,13 @@
  * This file does not log, echo, or return the key, the database URL, an
  * IP address, or its hash. The key is read only after the origin, salt,
  * and address checks, and only when this request's body fits under the
- * cap. One statement reserves the IP counter and the spend together.
+ * cap. One statement locks the IP and spend rows and writes them only
+ * when both still have room. Postgres will not apply two changes to
+ * the same row, so a refusal does not undo an increment afterwards.
  * The Jev fetch starts only after that statement confirms both. A
  * database timeout or error does not fetch. A refund runs only when
- * the fetch never started. Counters live in Neon.
+ * the fetch never started. One process shares one in-flight plan per
+ * context. Counters live in Neon.
  * db/jev-spend.sql is applied by hand and is not run from this function.
  */
 
@@ -102,28 +105,28 @@ const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 /** $10 at $0.042 per million input tokens. */
 const PHRASE_PLAN_BUDGET_TOKENS = 238_000_000;
 /**
- * The reservation statement confirms both counters before any fetch.
- * A refusal does not start a fetch, and the counter never passes this
- * cap. The margin below stays: it is the Hobby/Pro concurrency ceiling
- * times the largest body, and that margin was confirmed. After one
- * confirmed spend refusal, this process latches that UTC month and
- * does not start another statement. A later cold start begins with an
- * empty latch. Repeated cold starts after the month is full sit
- * outside this margin.
+ * The reservation statement confirms both counters before any fetch, so
+ * a billed call was reserved first and the counter cannot pass this cap.
+ * Concurrency does not open a gap above it: the spend row is locked in
+ * that statement, including when Fluid runs many calls in one instance.
+ * 143_080_000 stays as a deliberate margin under the $10 budget. It is
+ * not required to cover fetches that start before a refusal. After one
+ * confirmed spend refusal, this process latches that UTC month and does
+ * not start another statement. A later cold start begins with an empty
+ * latch. Repeated cold starts after the month is full sit outside this
+ * margin.
  *
  * A call counts as one token per UTF-8 byte of the largest upstream
  * body. That is the reservation this route already makes. The recorded
  * fixture's Jev input_tokens is 40, so the byte bound overestimates the
- * bill. The price is $0.042 per million tokens, and $10 is 238_000_000.
+ * bill. The price is $0.042 per million tokens, and $10 is 238_000_000
+ * in this file. The exact $10 count is 238_095_238, and this constant
+ * is left for a later decision.
  *
- * Vercel Hobby and Pro scale to 30,000 concurrent executions. The burst
- * admits 1,000 per 10 seconds per region, and this route allows 200
- * calls per IP per UTC day. Both sit inside 30,000, so neither lowers
- * the worst case: every allowed execution is this function, each at the
- * max body. That product fits under $10. Enterprise's 100,000 does
- * not. Assumption: this project is
- * not on an Enterprise allowance above 30,000. vercel.json sets no
- * maxConcurrency.
+ * Vercel Hobby and Pro scale to 30,000 concurrent executions. That
+ * product with the largest body is the margin that was subtracted. The
+ * burst admits 1,000 per 10 seconds per region, and this route allows
+ * 200 calls per IP per UTC day. vercel.json sets no maxConcurrency.
  */
 export const PHRASE_PLAN_INFLIGHT_LIMIT = 30_000;
 /** Uncached planner calls one IP may make in a UTC day. */
@@ -265,6 +268,9 @@ type ChoiceQuestion = {
 };
 
 const cache = new Map<string, PhrasePlanDistributions>();
+type PhrasePlanFlight = { status: number; payload: unknown };
+/** One in-flight plan per context on this instance. Cross-instance duplicates each reserve. */
+const inflight = new Map<string, Promise<PhrasePlanFlight>>();
 let missingSaltWarned = false;
 /** UTC month whose spend reservation was refused. This process stops calling Jev. */
 let capRefusedMonth: string | null = null;
@@ -273,6 +279,7 @@ let skipUpstreamUntil = 0;
 
 export function resetPhrasePlanStateForTests(): void {
   cache.clear();
+  inflight.clear();
   missingSaltWarned = false;
   capRefusedMonth = null;
   skipUpstreamUntil = 0;
@@ -806,6 +813,84 @@ async function timedRows(
   }
 }
 
+function flagOf(
+  row: Record<string, unknown> | undefined,
+  key: string,
+): boolean {
+  if (!row) return false;
+  const value = row[key];
+  return value === true || value === 't' || value === 'true';
+}
+
+/**
+ * One round trip. The IP write is conditional on both counters having
+ * room, and the spend write runs only from a returned IP row. A second
+ * update of either row in this statement would not see the first.
+ */
+export function phrasePlanGate(
+  sql: PhrasePlanSql,
+  input: {
+    day: string;
+    hash: string;
+    month: string;
+    reservation: number;
+    limit: number;
+    cap: number;
+  },
+): Promise<readonly Record<string, unknown>[]> {
+  const { day, hash, month, reservation, limit, cap } = input;
+  return sql`
+    WITH cleaned AS (
+      DELETE FROM jev_ip WHERE day < CAST(${day} AS date)
+    ),
+    ip_state AS (
+      SELECT calls
+      FROM jev_ip
+      WHERE day = CAST(${day} AS date)
+        AND ip_hash = ${hash}
+      FOR UPDATE
+    ),
+    spend_state AS (
+      SELECT tokens
+      FROM jev_spend
+      WHERE month = ${month}
+      FOR UPDATE
+    ),
+    room AS (
+      SELECT
+        COALESCE((SELECT calls FROM ip_state), 0) + 1 <= ${limit} AS ip_ok,
+        COALESCE((SELECT tokens FROM spend_state), 0) + ${reservation} <= ${cap} AS spend_ok
+    ),
+    ip_try AS (
+      INSERT INTO jev_ip (day, ip_hash, calls)
+      SELECT CAST(${day} AS date), ${hash}, 1
+      FROM room
+      WHERE ip_ok AND spend_ok
+      ON CONFLICT (day, ip_hash) DO UPDATE
+      SET calls = jev_ip.calls + 1
+      WHERE jev_ip.calls + 1 <= ${limit}
+        AND EXISTS (SELECT 1 FROM room WHERE ip_ok AND spend_ok)
+      RETURNING calls
+    ),
+    spend_try AS (
+      INSERT INTO jev_spend (month, tokens, updated_at)
+      SELECT ${month}, ${reservation}, now()
+      FROM ip_try
+      ON CONFLICT (month) DO UPDATE
+      SET tokens = jev_spend.tokens + ${reservation},
+          updated_at = now()
+      WHERE jev_spend.tokens + ${reservation} <= ${cap}
+        AND EXISTS (SELECT 1 FROM ip_try)
+      RETURNING tokens
+    )
+    SELECT
+      (SELECT calls FROM ip_try) AS calls,
+      (SELECT tokens FROM spend_try) AS tokens,
+      (SELECT ip_ok FROM room) AS ip_ok,
+      (SELECT spend_ok FROM room) AS spend_ok
+  `;
+}
+
 function countOf(
   row: Record<string, unknown> | undefined,
   key: string,
@@ -916,12 +1001,56 @@ export async function handlePhrasePlan(
     unavailable(response);
     return;
   }
-  const keyForContext = contextKey(parsed);
+  const planSalt = salt;
+  const planBody = parsed;
+  const keyForContext = contextKey(planBody);
   const cached = cachedDistributions(keyForContext);
   if (cached) {
     response.status(200).json({ model: MODEL, distributions: cached });
     return;
   }
+  const pending = inflight.get(keyForContext);
+  if (pending) {
+    const shared = await pending;
+    response.status(shared.status).json(shared.payload);
+    return;
+  }
+  let resolveFlight: (result: PhrasePlanFlight) => void = () => undefined;
+  const flight = new Promise<PhrasePlanFlight>((resolve) => {
+    resolveFlight = resolve;
+  });
+  inflight.set(keyForContext, flight);
+  let replied = false;
+  const sink = {
+    status(code: number) {
+      return {
+        json(body: unknown) {
+          if (replied) return;
+          replied = true;
+          resolveFlight({ status: code, payload: body });
+          response.status(code).json(body);
+        },
+      };
+    },
+  };
+  try {
+    await planPhrase(sink);
+  } catch {
+    // A thrown database error can include the connection URL. The fixed
+    // fallback below is the only response, and nothing here logs it.
+  } finally {
+    if (inflight.get(keyForContext) === flight) inflight.delete(keyForContext);
+    if (!replied) {
+      const fallback = { status: 503, payload: { error: 'planner-unavailable' } };
+      replied = true;
+      resolveFlight(fallback);
+      response.status(fallback.status).json(fallback.payload);
+    }
+  }
+
+  async function planPhrase(response: {
+    status: (code: number) => { json: (body: unknown) => void };
+  }): Promise<void> {
   const databaseUrl = env.JEV_COUNTER_DATABASE_URL;
   if (!databaseUrl) {
     unavailable(response);
@@ -935,14 +1064,14 @@ export async function handlePhrasePlan(
   const now = deps?.now?.() ?? Date.now();
   const day = utcDay(now);
   const month = utcMonth(now);
-  const hash = phrasePlanIpHash(ip, salt, day);
+  const hash = phrasePlanIpHash(ip, planSalt, day);
   const cap = deps?.tokenCap ?? PHRASE_PLAN_TOKEN_CAP;
   if (capRefusedMonth === month || now < skipUpstreamUntil) {
     unavailable(response);
     return;
   }
   const random = deps?.random ?? cryptoRandom;
-  const bodyForJev = upstreamBody(parsed, random);
+  const bodyForJev = upstreamBody(planBody, random);
   const reservation = Buffer.byteLength(bodyForJev);
   if (reservation > cap) {
     unavailable(response);
@@ -968,44 +1097,15 @@ export async function handlePhrasePlan(
   const schedule = (work: Promise<unknown>) => {
     defer(work, deps?.waitUntil ?? waitUntil);
   };
-  const gate = await query(
-    (sql) => sql`
-      WITH cleaned AS (
-        DELETE FROM jev_ip WHERE day < CAST(${day} AS date)
-      ),
-      ip_try AS (
-        INSERT INTO jev_ip (day, ip_hash, calls)
-        VALUES (CAST(${day} AS date), ${hash}, 1)
-        ON CONFLICT (day, ip_hash) DO UPDATE
-        SET calls = jev_ip.calls + 1
-        WHERE jev_ip.calls + 1 <= ${PHRASE_PLAN_IP_DAILY_LIMIT}
-        RETURNING calls
-      ),
-      spend_try AS (
-        INSERT INTO jev_spend (month, tokens, updated_at)
-        SELECT ${month}, ${reservation}, now()
-        FROM ip_try
-        ON CONFLICT (month) DO UPDATE
-        SET tokens = jev_spend.tokens + ${reservation},
-            updated_at = now()
-        WHERE jev_spend.tokens + ${reservation} <= ${cap}
-          AND EXISTS (SELECT 1 FROM ip_try)
-        RETURNING tokens
-      ),
-      ip_undo AS (
-        UPDATE jev_ip
-        SET calls = jev_ip.calls - 1
-        WHERE day = CAST(${day} AS date)
-          AND ip_hash = ${hash}
-          AND EXISTS (SELECT 1 FROM ip_try)
-          AND NOT EXISTS (SELECT 1 FROM spend_try)
-        RETURNING calls
-      )
-      SELECT
-        (SELECT calls FROM ip_try) AS calls,
-        (SELECT tokens FROM spend_try) AS tokens,
-        (SELECT count(*) FROM ip_undo) AS undone
-    `,
+  const gate = await query((sql) =>
+    phrasePlanGate(sql, {
+      day,
+      hash,
+      month,
+      reservation,
+      limit: PHRASE_PLAN_IP_DAILY_LIMIT,
+      cap,
+    }),
   );
   if (gate === 'down') {
     // The statement may still commit after we stop waiting. That can
@@ -1020,12 +1120,16 @@ export async function handlePhrasePlan(
   }
   const calls = countOf(gate[0], 'calls');
   const reserved = countOf(gate[0], 'tokens');
-  if (calls === null) {
-    response.status(429).json({ error: 'rate-limit' });
-    return;
-  }
-  if (reserved === null) {
-    capRefusedMonth = month;
+  if (calls === null || reserved === null) {
+    // ip_ok is false when this IP has no daily room, including an empty
+    // result. spend_ok is false only when the locked spend row refused.
+    // Both flags can still be true when a new-row insert loses the race:
+    // nothing was reserved, so this process must not latch the month.
+    if (!flagOf(gate[0], 'spend_ok') && gate[0]) capRefusedMonth = month;
+    if (!flagOf(gate[0], 'ip_ok')) {
+      response.status(429).json({ error: 'rate-limit' });
+      return;
+    }
     unavailable(response);
     return;
   }
@@ -1046,13 +1150,14 @@ export async function handlePhrasePlan(
     answered.payload && typeof answered.payload === 'object'
       ? (answered.payload as { answers?: unknown }).answers
       : undefined;
-  const distributions = distributionsFromAnswers(parsed, answers);
+  const distributions = distributionsFromAnswers(planBody, answers);
   if (!distributions) {
     unavailable(response);
     return;
   }
   storeDistributions(keyForContext, distributions);
   response.status(200).json({ model: MODEL, distributions });
+  }
 }
 
 type NodeResponse = {

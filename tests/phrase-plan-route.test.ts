@@ -347,14 +347,15 @@ void test('the daily cap stores a salted hash and falls back once it is spent', 
   assert.equal(ipQuery.values[0], '2026-10-21');
   assert.equal(ipQuery.values[1], '2026-10-21');
   assert.equal(ipQuery.values[2], hash);
-  assert.equal(ipQuery.values[3], PHRASE_PLAN_IP_DAILY_LIMIT);
+  assert.equal(ipQuery.values[3], '2026-10');
+  assert.equal(ipQuery.values[4], PHRASE_PLAN_IP_DAILY_LIMIT);
   assert.equal(ipQuery.values.includes(hash), true);
   assert.equal(ipQuery.values.includes('203.0.113.9'), false);
   assert.equal(JSON.stringify(run.result().payload).includes('test-key'), false);
   assert.equal(run.sent.url, undefined);
-  assert.match(ipQuery.text, /ip_try/);
-  assert.match(ipQuery.text, /spend_try/);
-  assert.match(ipQuery.text, /ip_undo/);
+  assert.match(ipQuery.text, /FOR UPDATE/);
+  assert.match(ipQuery.text, /WHERE ip_ok AND spend_ok/);
+  assert.equal(ipQuery.text.includes('ip_undo'), false);
 });
 
 void test('a reservation above the cap refuses before the key, and a full month discards Jev', async () => {
@@ -366,7 +367,9 @@ void test('a reservation above the cap refuses before the key, and a full month 
   assert.equal(over.queries.some((query) => query.text.includes('jev_spend')), false);
   assert.equal(tooBig.keyReads(), 0);
   resetPhrasePlanStateForTests();
-  const full = sqlMock((query) => (query.text.includes('jev_ip') ? [{ calls: 1 }] : []));
+  const full = sqlMock((query) =>
+    query.text.includes('jev_ip') ? [{ ip_ok: true, spend_ok: false }] : [],
+  );
   const blocked = harness({ sql: full.sql });
   await blocked.done;
   assert.equal(blocked.result().status, 503);
@@ -449,9 +452,12 @@ void test('a successful call reserves, then reads the key and does not refund', 
   assert.equal(body.model, 'jev-1.13.0');
   const reservation = Buffer.byteLength(run.sent.init?.body ?? '');
   const spend = queries.find((query) => query.text.includes('INSERT INTO jev_spend'));
-  assert.equal(spend?.values[4], '2026-10');
+  assert.equal(spend?.values[3], '2026-10');
   assert.equal(spend?.values[5], reservation);
-  assert.equal(spend?.values[8], PHRASE_PLAN_TOKEN_CAP);
+  assert.equal(spend?.values[6], PHRASE_PLAN_TOKEN_CAP);
+  assert.equal(spend?.values[10], '2026-10');
+  assert.equal(spend?.values[11], reservation);
+  assert.equal(spend?.values[14], PHRASE_PLAN_TOKEN_CAP);
   assert.equal(queries.some((query) => query.text.includes('UPDATE jev_spend')), false);
   const payload = result.payload as { distributions?: { cadence?: { third?: number } } };
   assert.equal(payload.distributions?.cadence?.third, 1);
@@ -814,7 +820,7 @@ void test('the browser client does not cache a non-finite or all-zero menu', asy
     const second = await generatePhraseWithPlanner({ ...input, seed: 4, planner });
     assert.equal(first.ok && first.phrase.source, 'rules');
     assert.equal(second.ok && second.phrase.source, 'rules');
-    assert.equal(fetches, 2);
+    assert.equal(fetches, 1);
   }
   let cachedFetches = 0;
   const caching = createPhrasePlanner({
@@ -847,7 +853,7 @@ void test('the browser client does not cache a non-finite or all-zero menu', asy
     planner: overflowing,
   });
   assert.equal(overflowed.ok && overflowed.phrase.source, 'rules');
-  assert.equal(overflowFetches, 2);
+  assert.equal(overflowFetches, 1);
 });
 
 void test('the 500 ms upstream timeout falls back and keeps the reservation', async () => {
@@ -1092,15 +1098,21 @@ void test('a spend refusal does not fetch or raise the counter', async () => {
   resetPhrasePlanStateForTests();
   const cap = 1_000_000;
   let tokens = cap;
+  let calls = 4;
   let fetches = 0;
   const sql: PhrasePlanSql = (strings, ...values) => {
     const text = strings.join('?');
     if (text.includes('UPDATE jev_spend')) return Promise.resolve([]);
     if (text.includes('jev_ip')) {
       const reservation = Number(values[5]);
-      if (tokens + reservation > cap) return Promise.resolve([{ calls: 1 }]);
+      const ipOk = calls + 1 <= PHRASE_PLAN_IP_DAILY_LIMIT;
+      const spendOk = tokens + reservation <= cap;
+      if (!(ipOk && spendOk)) {
+        return Promise.resolve([{ ip_ok: ipOk, spend_ok: spendOk }]);
+      }
+      calls += 1;
       tokens += reservation;
-      return Promise.resolve([{ calls: 1, tokens }]);
+      return Promise.resolve([{ calls, tokens, ip_ok: true, spend_ok: true }]);
     }
     return Promise.resolve([]);
   };
@@ -1112,6 +1124,7 @@ void test('a spend refusal does not fetch or raise the counter', async () => {
   await run.done;
   assert.equal(fetches, 0);
   assert.equal(tokens, cap);
+  assert.equal(calls, 4);
   assert.deepEqual(run.result(), {
     status: 503,
     payload: { error: 'planner-unavailable' },
@@ -1120,7 +1133,71 @@ void test('a spend refusal does not fetch or raise the counter', async () => {
   await again.done;
   assert.equal(fetches, 0);
   assert.equal(tokens, cap);
+  assert.equal(calls, 4);
   assert.equal(again.result().status, 503);
+});
+
+void test('a lost reservation race does not latch the month', async () => {
+  resetPhrasePlanStateForTests();
+  let gates = 0;
+  let fetches = 0;
+  const sql: PhrasePlanSql = async (strings) => {
+    const text = strings.join('?');
+    if (!text.includes('jev_ip')) return [];
+    gates += 1;
+    if (gates === 1) return [{ ip_ok: true, spend_ok: true }];
+    return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
+  };
+  const fetch = async () => {
+    fetches += 1;
+    return { ok: true, json: async () => ANSWERS };
+  };
+  const first = harness({ sql, fetch });
+  await first.done;
+  assert.equal(first.result().status, 503);
+  assert.equal(fetches, 0);
+  const second = harness({ sql, fetch });
+  await second.done;
+  assert.equal(second.result().status, 200);
+  assert.equal(fetches, 1);
+  assert.equal(gates, 2);
+});
+
+void test('two concurrent same-context calls reserve and fetch once', async () => {
+  resetPhrasePlanStateForTests();
+  let reservations = 0;
+  let fetches = 0;
+  let releaseDb: () => void = () => undefined;
+  const db = new Promise<void>((resolve) => {
+    releaseDb = resolve;
+  });
+  const sql: PhrasePlanSql = async (strings) => {
+    const text = strings.join('?');
+    if (text.includes('UPDATE jev_spend') && !text.includes('jev_ip')) return [];
+    await db;
+    if (text.includes('jev_ip')) {
+      reservations += 1;
+      return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
+    }
+    return [];
+  };
+  const fetch = async () => {
+    fetches += 1;
+    return { ok: true, json: async () => ANSWERS };
+  };
+  const first = harness({ sql, fetch });
+  const second = harness({ sql, fetch });
+  await Promise.resolve();
+  assert.equal(fetches, 0);
+  releaseDb();
+  await first.done;
+  await second.done;
+  assert.equal(reservations, 1);
+  assert.equal(fetches, 1);
+  assert.equal(first.result().status, 200);
+  assert.equal(second.result().status, 200);
+  assert.equal(first.keyReads(), 1);
+  assert.equal(second.keyReads(), 0);
 });
 
 void test('an over-limit IP does not fetch for uncached contexts', async () => {

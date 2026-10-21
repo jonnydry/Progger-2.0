@@ -241,6 +241,77 @@ void test('a timeout or a network error backs off like a 5xx', async (context) =
   }
 });
 
+void test('a malformed 200 backs off like a 5xx', async (context) => {
+  context.mock.timers.enable({
+    apis: ['setTimeout', 'Date'],
+    now: Date.UTC(2026, 9, 21, 15, 0, 0),
+  });
+  try {
+    let fetches = 0;
+    const planner = createPhrasePlanner({
+      fetch: (async () => {
+        fetches += 1;
+        if (fetches === 1) return jsonResponse({ nope: true }, 200);
+        return jsonResponse(PLAN, 200);
+      }) as typeof fetch,
+    });
+    const failed = await generatePhraseWithPlanner(request(planner, 1));
+    assert.equal(failed.ok && failed.phrase.source, 'rules');
+    assert.equal(fetches, 1);
+    await generatePhraseWithPlanner(request(planner, 2));
+    assert.equal(fetches, 1);
+    context.mock.timers.tick(30_000 - 1);
+    await generatePhraseWithPlanner(request(planner, 3));
+    assert.equal(fetches, 1);
+    context.mock.timers.tick(1);
+    const recovered = await generatePhraseWithPlanner(request(planner, 4));
+    assert.equal(fetches, 2);
+    assert.equal(recovered.ok && recovered.phrase.source, 'planner');
+    assert.equal(recovered.ok && recovered.phrase.plan.cadence, 'third');
+  } finally {
+    context.mock.timers.reset();
+  }
+});
+
+void test('a seed-only change reuses the in-flight request', async () => {
+  let fetches = 0;
+  const signals: AbortSignal[] = [];
+  let release: (response: Response) => void = () => undefined;
+  const gate = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  const planner = createPhrasePlanner({
+    fetch: ((_url, init) => {
+      fetches += 1;
+      if (init?.signal) signals.push(init.signal);
+      return gate;
+    }) as typeof fetch,
+  });
+  const firstSignal = new AbortController();
+  const secondSignal = new AbortController();
+  const { planner: _planner, ...firstRequest } = request(planner, 1);
+  void _planner;
+  const first = planner.propose({ ...firstRequest, seed: 1, signal: firstSignal.signal });
+  const second = planner.propose({
+    ...firstRequest,
+    seed: 2,
+    signal: secondSignal.signal,
+  });
+  await Promise.resolve();
+  assert.equal(fetches, 1);
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]?.aborted, false);
+  assert.equal(firstSignal.signal.aborted, false);
+  assert.equal(secondSignal.signal.aborted, false);
+  release(jsonResponse(PLAN, 200));
+  const [earlier, later] = await Promise.all([first, second]);
+  assert.equal(fetches, 1);
+  assert.equal(signals[0]?.aborted, false);
+  assert.equal(earlier?.cadence, 'third');
+  assert.equal(later?.cadence, 'third');
+  assert.notEqual(earlier, later);
+});
+
 void test('a panel cleanup abort does not arm the backoff', async (context) => {
   context.mock.timers.enable({
     apis: ['setTimeout', 'Date'],
