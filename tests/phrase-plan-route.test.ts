@@ -468,7 +468,7 @@ void test('an upstream failure keeps the reservation', async () => {
   assert.equal(queries.some((query) => query.text.includes('UPDATE jev_spend')), false);
 });
 
-void test('the browser client treats 503 as off and 403 or 429 as a one-shot fallback', async () => {
+void test('the browser client backs off a 503 or 429 and latches a 403', async () => {
   const scale = SCALES.find((item) => item.id === 'major');
   assert.ok(scale);
   const scaleNotes = spell('C', scale.formula);
@@ -507,7 +507,7 @@ void test('the browser client treats 503 as off and 403 or 429 as a one-shot fal
   });
   await generatePhraseWithPlanner({ ...input, planner: retry });
   await generatePhraseWithPlanner({ ...input, seed: 8, planner: retry });
-  assert.equal(limited.length, 2);
+  assert.equal(limited.length, 1);
   const forbidden: number[] = [];
   const blocked = createPhrasePlanner({
     fetch: async () => {
@@ -516,6 +516,7 @@ void test('the browser client treats 503 as off and 403 or 429 as a one-shot fal
     },
   });
   const denied = await generatePhraseWithPlanner({ ...input, planner: blocked });
+  await generatePhraseWithPlanner({ ...input, seed: 8, planner: blocked });
   assert.equal(denied.ok && denied.phrase.source, 'rules');
   assert.equal(forbidden.length, 1);
 });

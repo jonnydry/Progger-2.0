@@ -2,7 +2,9 @@
  * Browser-side planner. One request per musical context, then one sampled
  * plan per seed. The 800 ms abort is the caller's signal from
  * generatePhraseWithPlanner. The phrase panel keeps one instance of this
- * client so the cache survives re-renders.
+ * client so the cache survives re-renders. A transient failure backs off
+ * in memory and retries on a later call. A config error latches that
+ * context off.
  */
 
 import {
@@ -27,6 +29,27 @@ export type PlannerDistributions = ShapeDistributions & {
 type CacheEntry = PlannerDistributions | 'off';
 
 const CADENCES = ['root', 'third', 'fifth'] as const;
+const TRANSIENT_BACKOFF_MS = 30_000;
+const TRANSIENT_BACKOFF_CAP_MS = 5 * 60_000;
+
+function nextUtcMidnight(now: number): number {
+  const date = new Date(now);
+  return Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate() + 1,
+  );
+}
+
+async function errorName(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json();
+    if (!isRecord(body) || typeof body.error !== 'string') return null;
+    return body.error;
+  } catch {
+    return null;
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -161,6 +184,25 @@ export function createPhrasePlanner(options?: {
     string,
     PhrasePlan & { alternates: readonly PhraseShapePlan[] }
   >();
+  // One clock for the whole client. A 503, a dropped connection, and the
+  // daily rate limit are properties of the service, not of one chord.
+  let transientFailures = 0;
+  let retryAt = 0;
+  const postpone = (until: number) => {
+    if (until > retryAt) retryAt = until;
+  };
+  const noteTransient = (now: number) => {
+    const delay = Math.min(
+      TRANSIENT_BACKOFF_MS * 2 ** transientFailures,
+      TRANSIENT_BACKOFF_CAP_MS,
+    );
+    transientFailures += 1;
+    postpone(now + delay);
+  };
+  const noteSuccess = () => {
+    transientFailures = 0;
+    retryAt = 0;
+  };
   return {
     async propose(input) {
       const rules = rulePlan(
@@ -177,11 +219,12 @@ export function createPhrasePlanner(options?: {
       let distributions = contexts.get(contextKey);
       if (distributions === 'off') return null;
       if (!distributions) {
+        const scaleId = input.scaleId;
+        const root = input.scaleRoot ?? input.scaleNotes[0]?.name;
+        const chord = input.chordSymbol;
+        if (!scaleId || !root || !chord) return null;
+        if (Date.now() < retryAt) return null;
         try {
-          const scaleId = input.scaleId;
-          const root = input.scaleRoot ?? input.scaleNotes[0]?.name;
-          const chord = input.chordSymbol;
-          if (!scaleId || !root || !chord) return null;
           const response = await fetchImpl(`${origin}/api/phrase-plan`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -194,8 +237,26 @@ export function createPhrasePlanner(options?: {
             }),
             signal: input.signal,
           });
-          if (response.status === 503) {
+          // 503 planner-unavailable is also what a missing salt or key
+          // returns. The route does not distinguish those from a cold
+          // database, so every 5xx backs off instead of latching.
+          if (response.status === 429) {
+            const name = await errorName(response);
+            const now = Date.now();
+            if (name === 'rate-limit') {
+              transientFailures = 0;
+              postpone(nextUtcMidnight(now));
+            } else {
+              postpone(now + TRANSIENT_BACKOFF_CAP_MS);
+            }
+            return null;
+          }
+          if (response.status >= 400 && response.status < 500) {
             contexts.set(contextKey, 'off');
+            return null;
+          }
+          if (response.status >= 500) {
+            noteTransient(Date.now());
             return null;
           }
           if (!response.ok) return null;
@@ -203,7 +264,9 @@ export function createPhrasePlanner(options?: {
           if (!parsed) return null;
           distributions = parsed;
           contexts.set(contextKey, parsed);
+          noteSuccess();
         } catch {
+          noteTransient(Date.now());
           return null;
         }
       }
