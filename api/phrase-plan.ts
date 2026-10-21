@@ -1,14 +1,17 @@
 /**
  * Server-only phrase planner. The browser never sees TYPESAFE_API_KEY.
  * This file does not log, echo, or return the key, the database URL, an
- * IP address, or its hash. The key is read only after the origin check,
- * the per-IP reservation, and the monthly token reservation have passed.
- * Counters live in Neon. db/jev-spend.sql is applied by hand and is not
- * run from this function.
+ * IP address, or its hash. The key is read only after the origin, salt,
+ * and address checks, and only when this request's body fits under the
+ * cap. The IP counter, the spend reservation, and the Jev fetch then run
+ * together. Jev's answer is used only when both checks are confirmed.
+ * A database timeout discards that answer. Counters live in Neon.
+ * db/jev-spend.sql is applied by hand and is not run from this function.
  */
 
 import { createHash } from 'node:crypto';
 import { neon } from '@neondatabase/serverless';
+import { waitUntil } from '@vercel/functions';
 
 /**
  * Menus are copied from lib/phrase-shape.ts. This file cannot import that
@@ -99,7 +102,13 @@ const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const PHRASE_PLAN_TOKEN_CAP = 238_000_000;
 /** Uncached planner calls one IP may make in a UTC day. */
 export const PHRASE_PLAN_IP_DAILY_LIMIT = 200;
-export const PHRASE_PLAN_DB_TIMEOUT_MS = 200;
+/**
+ * Cold Neon HTTP on @neondatabase/serverless 1.2.0 (pooled) measured
+ * 875–1019 ms for the first query after about five minutes idle. A fresh
+ * process against a warm database was about 365 ms, and a warm query
+ * about 76 ms. The old 200 ms cap made that first Generate always 503.
+ */
+export const PHRASE_PLAN_DB_TIMEOUT_MS = 1_200;
 export const PHRASE_PLAN_UPSTREAM_TIMEOUT_MS = 500;
 /** Musical contexts kept in memory. The oldest is dropped past this. */
 export const PHRASE_PLAN_CACHE_LIMIT = 32;
@@ -229,10 +238,13 @@ type ChoiceQuestion = {
 
 const cache = new Map<string, PhrasePlanDistributions>();
 let missingSaltWarned = false;
+/** UTC month whose spend reservation was refused. This process stops calling Jev. */
+let capRefusedMonth: string | null = null;
 
 export function resetPhrasePlanStateForTests(): void {
   cache.clear();
   missingSaltWarned = false;
+  capRefusedMonth = null;
 }
 
 /** One warning per process. The salt value is never included. */
@@ -507,6 +519,8 @@ export type PhrasePlanDeps = {
   sql?: PhrasePlanSql;
   /** Test seam. Production uses PHRASE_PLAN_TOKEN_CAP. */
   tokenCap?: number;
+  /** Keeps a reconcile running after the response. Tests replace it. */
+  waitUntil?: (work: Promise<unknown>) => void;
 };
 
 type HeaderMap = Record<string, string | string[] | undefined> | undefined;
@@ -712,6 +726,58 @@ function unavailable(response: {
   response.status(503).json({ error: 'planner-unavailable' });
 }
 
+type UpstreamCall = {
+  cancel: () => void;
+  done: Promise<{ ok: true; payload: unknown } | { ok: false }>;
+};
+
+function startUpstream(
+  fetchImpl: FetchLike,
+  key: string,
+  body: string,
+): UpstreamCall {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    PHRASE_PLAN_UPSTREAM_TIMEOUT_MS,
+  );
+  const done = (async (): Promise<
+    { ok: true; payload: unknown } | { ok: false }
+  > => {
+    try {
+      const result = await fetchImpl(ENDPOINT, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${key}`,
+          'content-type': 'application/json',
+        },
+        body,
+        signal: controller.signal,
+      });
+      if (!result.ok) return { ok: false };
+      return { ok: true, payload: await result.json() };
+    } catch {
+      return { ok: false };
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  return { cancel: () => controller.abort(), done };
+}
+
+function defer(
+  work: Promise<unknown>,
+  wait: (task: Promise<unknown>) => void,
+): void {
+  const guarded = work.catch(() => undefined);
+  try {
+    wait(guarded);
+  } catch {
+    // The reconcile is already running. A platform without waitUntil
+    // still finishes it when the process stays alive.
+  }
+}
+
 export async function handlePhrasePlan(
   request: {
     method?: string;
@@ -770,31 +836,8 @@ export async function handlePhrasePlan(
   const month = utcMonth(now);
   const hash = phrasePlanIpHash(ip, salt, day);
   const cap = deps?.tokenCap ?? PHRASE_PLAN_TOKEN_CAP;
-  const query = async (
-    work: (sql: PhrasePlanSql) => Promise<readonly Record<string, unknown>[]>,
-  ) => {
-    const sql = deps?.sql ?? neonSql(databaseUrl);
-    return timedRows(work(sql));
-  };
-  const ipRows = await query(
-    (sql) => sql`
-      WITH cleaned AS (
-        DELETE FROM jev_ip WHERE day < CAST(${day} AS date)
-      )
-      INSERT INTO jev_ip (day, ip_hash, calls)
-      VALUES (CAST(${day} AS date), ${hash}, 1)
-      ON CONFLICT (day, ip_hash) DO UPDATE
-      SET calls = jev_ip.calls + 1
-      WHERE jev_ip.calls + 1 <= ${PHRASE_PLAN_IP_DAILY_LIMIT}
-      RETURNING calls
-    `,
-  );
-  if (ipRows === 'down') {
+  if (capRefusedMonth === month) {
     unavailable(response);
-    return;
-  }
-  if (ipRows.length === 0 || countOf(ipRows[0], 'calls') === null) {
-    response.status(429).json({ error: 'rate-limit' });
     return;
   }
   const random = deps?.random ?? cryptoRandom;
@@ -808,7 +851,41 @@ export async function handlePhrasePlan(
     unavailable(response);
     return;
   }
-  const spendRows = await query(
+  const key = env.TYPESAFE_API_KEY;
+  const query = async (
+    work: (sql: PhrasePlanSql) => Promise<readonly Record<string, unknown>[]>,
+  ) => {
+    const sql = deps?.sql ?? neonSql(databaseUrl);
+    return timedRows(work(sql));
+  };
+  const adjust = (delta: number) => {
+    if (delta === 0) return Promise.resolve();
+    return query(
+      (sql) => sql`
+        UPDATE jev_spend
+        SET tokens = LEAST(GREATEST(tokens + ${delta}, 0), ${cap}),
+            updated_at = now()
+        WHERE month = ${month}
+      `,
+    );
+  };
+  const schedule = (work: Promise<unknown>) => {
+    defer(work, deps?.waitUntil ?? waitUntil);
+  };
+  const ipPromise = query(
+    (sql) => sql`
+      WITH cleaned AS (
+        DELETE FROM jev_ip WHERE day < CAST(${day} AS date)
+      )
+      INSERT INTO jev_ip (day, ip_hash, calls)
+      VALUES (CAST(${day} AS date), ${hash}, 1)
+      ON CONFLICT (day, ip_hash) DO UPDATE
+      SET calls = jev_ip.calls + 1
+      WHERE jev_ip.calls + 1 <= ${PHRASE_PLAN_IP_DAILY_LIMIT}
+      RETURNING calls
+    `,
+  );
+  const spendPromise = query(
     (sql) => sql`
       INSERT INTO jev_spend (month, tokens, updated_at)
       VALUES (${month}, ${reservation}, now())
@@ -818,62 +895,46 @@ export async function handlePhrasePlan(
       RETURNING tokens
     `,
   );
-  if (
-    spendRows === 'down' ||
-    spendRows.length === 0 ||
-    countOf(spendRows[0], 'tokens') === null
-  ) {
-    unavailable(response);
-    return;
-  }
-  const key = env.TYPESAFE_API_KEY;
-  const adjust = async (delta: number) => {
-    if (delta === 0) return;
-    await query(
-      (sql) => sql`
-        UPDATE jev_spend
-        SET tokens = LEAST(GREATEST(tokens + ${delta}, 0), ${cap}),
-            updated_at = now()
-        WHERE month = ${month}
-      `,
-    );
-  };
-  if (!key) {
-    await adjust(-reservation);
-    unavailable(response);
-    return;
-  }
   const fetchImpl = deps?.fetch ?? (globalThis.fetch as FetchLike);
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    PHRASE_PLAN_UPSTREAM_TIMEOUT_MS,
-  );
-  let payload: unknown;
-  try {
-    const result = await fetchImpl(ENDPOINT, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${key}`,
-        'content-type': 'application/json',
-      },
-      body: upstreamBody,
-      signal: controller.signal,
-    });
-    if (!result.ok) {
-      unavailable(response);
-      return;
-    }
-    payload = await result.json();
-  } catch {
+  const upstream = key ? startUpstream(fetchImpl, key, upstreamBody) : null;
+  const [ipRows, spendRows] = await Promise.all([ipPromise, spendPromise]);
+  const ipOk =
+    ipRows !== 'down' &&
+    ipRows.length > 0 &&
+    countOf(ipRows[0], 'calls') !== null;
+  const spendOk =
+    spendRows !== 'down' &&
+    spendRows.length > 0 &&
+    countOf(spendRows[0], 'tokens') !== null;
+  const ipRefused = ipRows !== 'down' && !ipOk;
+  const spendRefused = spendRows !== 'down' && !spendOk;
+  if (spendRefused) capRefusedMonth = month;
+  // Timeout is not confirmation. The answer is discarded. A write that
+  // commits after the timeout can only leave the counter higher.
+  if (ipRefused) {
+    upstream?.cancel();
+    response.status(429).json({ error: 'rate-limit' });
+    if (spendOk) schedule(adjust(-reservation));
+    return;
+  }
+  if (spendRefused || !ipOk || !spendOk) {
+    upstream?.cancel();
     unavailable(response);
     return;
-  } finally {
-    clearTimeout(timer);
+  }
+  if (!upstream) {
+    unavailable(response);
+    schedule(adjust(-reservation));
+    return;
+  }
+  const answered = await upstream.done;
+  if (!answered.ok) {
+    unavailable(response);
+    return;
   }
   const answers =
-    payload && typeof payload === 'object'
-      ? (payload as { answers?: unknown }).answers
+    answered.payload && typeof answered.payload === 'object'
+      ? (answered.payload as { answers?: unknown }).answers
       : undefined;
   const distributions = distributionsFromAnswers(parsed, answers);
   if (!distributions) {
@@ -881,15 +942,15 @@ export async function handlePhrasePlan(
     return;
   }
   const usage =
-    payload && typeof payload === 'object'
-      ? (payload as { usage?: { input_tokens?: unknown } }).usage
+    answered.payload && typeof answered.payload === 'object'
+      ? (answered.payload as { usage?: { input_tokens?: unknown } }).usage
       : undefined;
-  const inputTokens = usage?.input_tokens;
-  if (typeof inputTokens === 'number' && Number.isFinite(inputTokens)) {
-    await adjust(Math.round(inputTokens) - reservation);
-  }
   storeDistributions(keyForContext, distributions);
   response.status(200).json({ model: MODEL, distributions });
+  const inputTokens = usage?.input_tokens;
+  if (typeof inputTokens === 'number' && Number.isFinite(inputTokens)) {
+    schedule(adjust(Math.round(inputTokens) - reservation));
+  }
 }
 
 type NodeResponse = {
