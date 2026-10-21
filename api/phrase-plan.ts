@@ -3,15 +3,14 @@
  * This file does not log, echo, or return the key, the database URL, an
  * IP address, or its hash. The key is read only after the origin, salt,
  * and address checks, and only when this request's body fits under the
- * cap. The IP counter, the spend reservation, and the Jev fetch then run
- * together. Jev's answer is used only when both checks are confirmed.
- * A database timeout discards that answer, and this process skips Jev
- * for 30 seconds. A negative usage count keeps the reservation.
- * Counters live in Neon.
+ * cap. One statement reserves the IP counter and the spend together.
+ * The Jev fetch starts only after that statement confirms both. A
+ * database timeout or error does not fetch. A refund runs only when
+ * the fetch never started. Counters live in Neon.
  * db/jev-spend.sql is applied by hand and is not run from this function.
  */
 
-import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { neon } from '@neondatabase/serverless';
 import { waitUntil } from '@vercel/functions';
 
@@ -103,15 +102,14 @@ const ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 /** $10 at $0.042 per million input tokens. */
 const PHRASE_PLAN_BUDGET_TOKENS = 238_000_000;
 /**
- * Calls that can reach Jev before a reservation refusal is known.
- * The spend UPDATE is atomic, so the counter never passes the coded cap.
- * Typesafe can still bill a call whose fetch already started when the
- * reservation comes back refused. After one confirmed refusal, this
- * process latches that UTC month and does not start another fetch.
- * The margin is the wave already in flight when that happens. A later
- * cold start begins with an empty latch and can spend another wave
- * before its own refusal is confirmed. Repeated cold starts after the
- * month is full sit outside this margin.
+ * The reservation statement confirms both counters before any fetch.
+ * A refusal does not start a fetch, and the counter never passes this
+ * cap. The margin below stays: it is the Hobby/Pro concurrency ceiling
+ * times the largest body, and that margin was confirmed. After one
+ * confirmed spend refusal, this process latches that UTC month and
+ * does not start another statement. A later cold start begins with an
+ * empty latch. Repeated cold starts after the month is full sit
+ * outside this margin.
  *
  * A call counts as one token per UTF-8 byte of the largest upstream
  * body. That is the reservation this route already makes. The recorded
@@ -122,8 +120,8 @@ const PHRASE_PLAN_BUDGET_TOKENS = 238_000_000;
  * admits 1,000 per 10 seconds per region, and this route allows 200
  * calls per IP per UTC day. Both sit inside 30,000, so neither lowers
  * the worst case: every allowed execution is this function, each at the
- * max body, each refused after the fetch started. That product fits
- * under $10. Enterprise's 100,000 does not. Assumption: this project is
+ * max body. That product fits under $10. Enterprise's 100,000 does
+ * not. Assumption: this project is
  * not on an Enterprise allowance above 30,000. vercel.json sets no
  * maxConcurrency.
  */
@@ -329,6 +327,16 @@ function cryptoRandom(): number {
 
 const CHORD =
   /^[A-G](?:#|b)?(?:maj7|maj9|m7b5|m7|m9|dim7|dim|aug|sus2|sus4|add9|6|7|9|m)?$/;
+
+/** A string body is JSON. A parse failure is a bad request, not a 500. */
+function decodeBody(body: unknown): unknown {
+  if (typeof body !== 'string') return body;
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    return null;
+  }
+}
 
 export function parsePhrasePlanRequest(
   body: unknown,
@@ -690,9 +698,7 @@ function ipv6Prefix(address: string): string | null {
 }
 
 export function phrasePlanIpHash(ip: string, salt: string, day: string): string {
-  return createHash('sha256')
-    .update(salt)
-    .update('\0')
+  return createHmac('sha256', salt)
     .update(day)
     .update('\0')
     .update(addressKey(ip))
@@ -763,19 +769,37 @@ function neonSql(url: string): PhrasePlanSql {
     query(strings, ...values) as Promise<readonly Record<string, unknown>[]>;
 }
 
+const DB_TIMEOUT = Symbol('db_timeout');
+
+/**
+ * Neon 1.2.0 appends the connection URL, password included, to the error.
+ * Log a fixed code only. Do not return, log, or rethrow the error or its
+ * message.
+ */
+function dbLogCode(error: unknown): 'db_timeout' | 'db_error' {
+  if (error === DB_TIMEOUT) return 'db_timeout';
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    (error as { name?: unknown }).name === 'TimeoutError'
+  ) {
+    return 'db_timeout';
+  }
+  return 'db_error';
+}
+
 async function timedRows(
   work: Promise<readonly Record<string, unknown>[]>,
 ): Promise<readonly Record<string, unknown>[] | 'down'> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error('timeout')),
-      PHRASE_PLAN_DB_TIMEOUT_MS,
-    );
+    timer = setTimeout(() => reject(DB_TIMEOUT), PHRASE_PLAN_DB_TIMEOUT_MS);
   });
   try {
     return await Promise.race([work, timeout]);
-  } catch {
+  } catch (error) {
+    console.warn(dbLogCode(error));
     return 'down';
   } finally {
     if (timer) clearTimeout(timer);
@@ -881,7 +905,7 @@ export async function handlePhrasePlan(
     response.status(403).json({ error: 'forbidden' });
     return;
   }
-  const parsed = parsePhrasePlanRequest(request.body);
+  const parsed = parsePhrasePlanRequest(decodeBody(request.body));
   if (!parsed) {
     response.status(400).json({ error: 'bad-request' });
     return;
@@ -924,7 +948,6 @@ export async function handlePhrasePlan(
     unavailable(response);
     return;
   }
-  const key = env.TYPESAFE_API_KEY;
   const query = async (
     work: (sql: PhrasePlanSql) => Promise<readonly Record<string, unknown>[]>,
   ) => {
@@ -945,69 +968,75 @@ export async function handlePhrasePlan(
   const schedule = (work: Promise<unknown>) => {
     defer(work, deps?.waitUntil ?? waitUntil);
   };
-  const ipPromise = query(
+  const gate = await query(
     (sql) => sql`
       WITH cleaned AS (
         DELETE FROM jev_ip WHERE day < CAST(${day} AS date)
+      ),
+      ip_try AS (
+        INSERT INTO jev_ip (day, ip_hash, calls)
+        VALUES (CAST(${day} AS date), ${hash}, 1)
+        ON CONFLICT (day, ip_hash) DO UPDATE
+        SET calls = jev_ip.calls + 1
+        WHERE jev_ip.calls + 1 <= ${PHRASE_PLAN_IP_DAILY_LIMIT}
+        RETURNING calls
+      ),
+      spend_try AS (
+        INSERT INTO jev_spend (month, tokens, updated_at)
+        SELECT ${month}, ${reservation}, now()
+        FROM ip_try
+        ON CONFLICT (month) DO UPDATE
+        SET tokens = jev_spend.tokens + ${reservation},
+            updated_at = now()
+        WHERE jev_spend.tokens + ${reservation} <= ${cap}
+          AND EXISTS (SELECT 1 FROM ip_try)
+        RETURNING tokens
+      ),
+      ip_undo AS (
+        UPDATE jev_ip
+        SET calls = jev_ip.calls - 1
+        WHERE day = CAST(${day} AS date)
+          AND ip_hash = ${hash}
+          AND EXISTS (SELECT 1 FROM ip_try)
+          AND NOT EXISTS (SELECT 1 FROM spend_try)
+        RETURNING calls
       )
-      INSERT INTO jev_ip (day, ip_hash, calls)
-      VALUES (CAST(${day} AS date), ${hash}, 1)
-      ON CONFLICT (day, ip_hash) DO UPDATE
-      SET calls = jev_ip.calls + 1
-      WHERE jev_ip.calls + 1 <= ${PHRASE_PLAN_IP_DAILY_LIMIT}
-      RETURNING calls
+      SELECT
+        (SELECT calls FROM ip_try) AS calls,
+        (SELECT tokens FROM spend_try) AS tokens,
+        (SELECT count(*) FROM ip_undo) AS undone
     `,
   );
-  const spendPromise = query(
-    (sql) => sql`
-      INSERT INTO jev_spend (month, tokens, updated_at)
-      VALUES (${month}, ${reservation}, now())
-      ON CONFLICT (month) DO UPDATE
-      SET tokens = jev_spend.tokens + ${reservation}, updated_at = now()
-      WHERE jev_spend.tokens + ${reservation} <= ${cap}
-      RETURNING tokens
-    `,
-  );
-  const fetchImpl = deps?.fetch ?? (globalThis.fetch as FetchLike);
-  const upstream = key ? startUpstream(fetchImpl, key, bodyForJev) : null;
-  const [ipRows, spendRows] = await Promise.all([ipPromise, spendPromise]);
-  const ipOk =
-    ipRows !== 'down' &&
-    ipRows.length > 0 &&
-    countOf(ipRows[0], 'calls') !== null;
-  const spendOk =
-    spendRows !== 'down' &&
-    spendRows.length > 0 &&
-    countOf(spendRows[0], 'tokens') !== null;
-  const ipRefused = ipRows !== 'down' && !ipOk;
-  const spendRefused = spendRows !== 'down' && !spendOk;
-  if (spendRefused) capRefusedMonth = month;
-  // Timeout is not confirmation. The answer is discarded. If the write
-  // commits after we stop waiting, the counter can sit higher. If the
-  // query never commits, the call is uncounted, so this process skips
-  // Jev until skipUpstreamUntil.
-  if (ipRows === 'down' || spendRows === 'down') {
+  if (gate === 'down') {
+    // The statement may still commit after we stop waiting. That can
+    // only leave a counter higher. This process does not fetch, and it
+    // skips Jev until skipUpstreamUntil.
     skipUpstreamUntil = Math.max(
       skipUpstreamUntil,
       now + PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
     );
-  }
-  if (ipRefused) {
-    upstream?.cancel();
-    response.status(429).json({ error: 'rate-limit' });
-    if (spendOk) schedule(adjust(-reservation));
-    return;
-  }
-  if (spendRefused || !ipOk || !spendOk) {
-    upstream?.cancel();
     unavailable(response);
     return;
   }
-  if (!upstream) {
+  const calls = countOf(gate[0], 'calls');
+  const reserved = countOf(gate[0], 'tokens');
+  if (calls === null) {
+    response.status(429).json({ error: 'rate-limit' });
+    return;
+  }
+  if (reserved === null) {
+    capRefusedMonth = month;
+    unavailable(response);
+    return;
+  }
+  const key = env.TYPESAFE_API_KEY;
+  if (!key) {
     unavailable(response);
     schedule(adjust(-reservation));
     return;
   }
+  const fetchImpl = deps?.fetch ?? (globalThis.fetch as FetchLike);
+  const upstream = startUpstream(fetchImpl, key, bodyForJev);
   const answered = await upstream.done;
   if (!answered.ok) {
     unavailable(response);
@@ -1022,22 +1051,8 @@ export async function handlePhrasePlan(
     unavailable(response);
     return;
   }
-  const usage =
-    answered.payload && typeof answered.payload === 'object'
-      ? (answered.payload as { usage?: { input_tokens?: unknown } }).usage
-      : undefined;
   storeDistributions(keyForContext, distributions);
   response.status(200).json({ model: MODEL, distributions });
-  // A negative or non-finite count is not a bill. Skipping the adjust
-  // keeps the byte reservation. Applying it would floor the month at 0.
-  const inputTokens = usage?.input_tokens;
-  if (
-    typeof inputTokens === 'number' &&
-    Number.isFinite(inputTokens) &&
-    inputTokens >= 0
-  ) {
-    schedule(adjust(Math.max(0, Math.round(inputTokens)) - reservation));
-  }
 }
 
 type NodeResponse = {

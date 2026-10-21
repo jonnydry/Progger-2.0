@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
@@ -91,6 +91,7 @@ function harness(options?: {
   body?: unknown;
   method?: string;
   now?: () => number;
+  waitUntil?: (work: Promise<unknown>) => void;
 }) {
   const sent: { url?: string; init?: { body: string; headers: Record<string, string> } } = {};
   let keyReads = 0;
@@ -114,7 +115,11 @@ function harness(options?: {
   let status = 0;
   let payload: unknown;
   const done = handlePhrasePlan(
-    { method: options?.method ?? 'POST', body: options?.body ?? BODY, headers },
+    {
+      method: options?.method ?? 'POST',
+      body: options && 'body' in options ? options.body : BODY,
+      headers,
+    },
     {
       status(code) {
         status = code;
@@ -131,6 +136,7 @@ function harness(options?: {
       random: () => 0.1,
       sql: options?.sql,
       tokenCap: options?.tokenCap,
+      waitUntil: options?.waitUntil,
       fetch: async (url, init) => {
         sent.url = url;
         sent.init = init;
@@ -159,7 +165,7 @@ void test('menus copied into the route still match the shape module', () => {
   const route = readFileSync(new URL('../api/phrase-plan.ts', import.meta.url), 'utf8');
   assert.equal(route.includes('CREATE TABLE'), false);
   assert.equal(route.includes('x-forwarded-for'), false);
-  assert.equal(route.split('console.').length - 1, 1);
+  assert.equal(route.split('console.').length - 1, 2);
   assert.match(
     route,
     /console\.warn\(\s*'\[phrase-plan\] JEV_IP_HASH_SALT missing: Jev disabled, serving rules',?\s*\)/,
@@ -242,9 +248,7 @@ void test('the client address comes from the platform header, never the raw forw
   const hash = phrasePlanIpHash('203.0.113.4', salt, day);
   assert.equal(
     hash,
-    createHash('sha256')
-      .update(salt)
-      .update('\0')
+    createHmac('sha256', salt)
       .update(day)
       .update('\0')
       .update('203.0.113.4')
@@ -276,9 +280,7 @@ void test('the client address comes from the platform header, never the raw forw
   );
   assert.equal(
     phrasePlanIpHash('not-an-ip', salt, day),
-    createHash('sha256')
-      .update(salt)
-      .update('\0')
+    createHmac('sha256', salt)
       .update(day)
       .update('\0')
       .update('not-an-ip')
@@ -349,6 +351,10 @@ void test('the daily cap stores a salted hash and falls back once it is spent', 
   assert.equal(ipQuery.values.includes(hash), true);
   assert.equal(ipQuery.values.includes('203.0.113.9'), false);
   assert.equal(JSON.stringify(run.result().payload).includes('test-key'), false);
+  assert.equal(run.sent.url, undefined);
+  assert.match(ipQuery.text, /ip_try/);
+  assert.match(ipQuery.text, /spend_try/);
+  assert.match(ipQuery.text, /ip_undo/);
 });
 
 void test('a reservation above the cap refuses before the key, and a full month discards Jev', async () => {
@@ -365,7 +371,7 @@ void test('a reservation above the cap refuses before the key, and a full month 
   await blocked.done;
   assert.equal(blocked.result().status, 503);
   assert.deepEqual(blocked.result().payload, { error: 'planner-unavailable' });
-  assert.equal(blocked.keyReads(), 1);
+  assert.equal(blocked.keyReads(), 0);
   const again = harness({ sql: full.sql });
   await again.done;
   assert.equal(again.result().status, 503);
@@ -425,11 +431,11 @@ void test('missing database config, a database error, and a hung query fail clos
   assert.ok(hungElapsed < 2_500, `elapsed ${hungElapsed}`);
 });
 
-void test('a successful call reserves, reads the key, then adjusts to the real token count', async () => {
+void test('a successful call reserves, then reads the key and does not refund', async () => {
   resetPhrasePlanStateForTests();
   const { sql, queries } = sqlMock((query) => {
-    if (query.text.includes('jev_ip')) return [{ calls: 1 }];
-    if (query.text.includes('INSERT INTO jev_spend')) return [{ tokens: '80' }];
+    if (query.text.includes('UPDATE jev_spend')) return [];
+    if (query.text.includes('jev_ip')) return [{ calls: 1, tokens: '80' }];
     return [];
   });
   const run = harness({ sql });
@@ -443,14 +449,10 @@ void test('a successful call reserves, reads the key, then adjusts to the real t
   assert.equal(body.model, 'jev-1.13.0');
   const reservation = Buffer.byteLength(run.sent.init?.body ?? '');
   const spend = queries.find((query) => query.text.includes('INSERT INTO jev_spend'));
-  assert.equal(spend?.values[0], '2026-10');
-  assert.equal(spend?.values[1], reservation);
-  assert.equal(spend?.values.at(-1), PHRASE_PLAN_TOKEN_CAP);
-  const adjust = queries.find((query) => query.text.includes('UPDATE jev_spend'));
-  assert.match(adjust?.text ?? '', /LEAST\(GREATEST\(tokens \+ \?, 0\), \?\)/);
-  assert.equal(adjust?.values[0], 40 - reservation);
-  assert.equal(adjust?.values[1], PHRASE_PLAN_TOKEN_CAP);
-  assert.equal(adjust?.values[2], '2026-10');
+  assert.equal(spend?.values[4], '2026-10');
+  assert.equal(spend?.values[5], reservation);
+  assert.equal(spend?.values[8], PHRASE_PLAN_TOKEN_CAP);
+  assert.equal(queries.some((query) => query.text.includes('UPDATE jev_spend')), false);
   const payload = result.payload as { distributions?: { cadence?: { third?: number } } };
   assert.equal(payload.distributions?.cadence?.third, 1);
   const again = harness({
@@ -467,8 +469,8 @@ void test('a successful call reserves, reads the key, then adjusts to the real t
 void test('a missing key refunds the reservation and does not call upstream', async () => {
   resetPhrasePlanStateForTests();
   const { sql, queries } = sqlMock((query) => {
-    if (query.text.includes('jev_ip')) return [{ calls: 1 }];
-    if (query.text.includes('INSERT INTO jev_spend')) return [{ tokens: 20 }];
+    if (query.text.includes('UPDATE jev_spend')) return [];
+    if (query.text.includes('jev_ip')) return [{ calls: 1, tokens: 20 }];
     return [];
   });
   const run = harness({
@@ -485,14 +487,14 @@ void test('a missing key refunds the reservation and does not call upstream', as
   assert.equal(run.keyReads(), 1);
   const refund = queries.find((query) => query.text.includes('UPDATE jev_spend'));
   const reservation = queries.find((query) => query.text.includes('INSERT INTO jev_spend'));
-  assert.equal(refund?.values[0], -Number(reservation?.values[1]));
+  assert.equal(refund?.values[0], -Number(reservation?.values[5]));
 });
 
 void test('an upstream failure keeps the reservation', async () => {
   resetPhrasePlanStateForTests();
   const { sql, queries } = sqlMock((query) => {
-    if (query.text.includes('jev_ip')) return [{ calls: 1 }];
-    if (query.text.includes('INSERT INTO jev_spend')) return [{ tokens: 20 }];
+    if (query.text.includes('UPDATE jev_spend')) return [];
+    if (query.text.includes('jev_ip')) return [{ calls: 1, tokens: 20 }];
     return [];
   });
   const run = harness({
@@ -582,8 +584,8 @@ function weightedAnswers(value: number) {
 
 function acceptingSql() {
   return sqlMock((query) => {
-    if (query.text.includes('jev_ip')) return [{ calls: 1 }];
-    if (query.text.includes('INSERT INTO jev_spend')) return [{ tokens: '80' }];
+    if (query.text.includes('UPDATE jev_spend')) return [];
+    if (query.text.includes('jev_ip')) return [{ calls: 1, tokens: '80' }];
     return [];
   });
 }
@@ -954,7 +956,7 @@ void test('the server cache drops the oldest context past its bound', async () =
   assert.equal(fetches, bodies.length + 4);
 });
 
-void test('a cold database that answers after Jev is used when both checks pass', async () => {
+void test('the fetch starts only after the reservation returns', async () => {
   resetPhrasePlanStateForTests();
   let release = () => {};
   const gate = new Promise<void>((resolve) => {
@@ -965,8 +967,7 @@ void test('a cold database that answers after Jev is used when both checks pass'
     await gate;
     const text = strings.join('?');
     void values;
-    if (text.includes('jev_ip')) return [{ calls: 1 }];
-    if (text.includes('INSERT INTO jev_spend')) return [{ tokens: 80 }];
+    if (text.includes('jev_ip')) return [{ calls: 1, tokens: 80 }];
     return [];
   };
   const run = harness({
@@ -977,9 +978,10 @@ void test('a cold database that answers after Jev is used when both checks pass'
     },
   });
   await Promise.resolve();
-  assert.equal(jevAnswered, true);
+  assert.equal(jevAnswered, false);
   release();
   await run.done;
+  assert.equal(jevAnswered, true);
   assert.equal(run.result().status, 200);
   const payload = run.result().payload as {
     distributions?: { cadence?: { third?: number } };
@@ -1003,7 +1005,8 @@ void test('a database timeout discards Jev and serves the rules fallback', async
     fetch,
   });
   await run.done;
-  assert.equal(fetches, 1);
+  assert.equal(fetches, 0);
+  assert.equal(run.keyReads(), 0);
   assert.deepEqual(run.result(), {
     status: 503,
     payload: { error: 'planner-unavailable' },
@@ -1015,7 +1018,7 @@ void test('a database timeout discards Jev and serves the rules fallback', async
   });
   await again.done;
   assert.equal(again.result().status, 503);
-  assert.equal(fetches, 1);
+  assert.equal(fetches, 0);
   const early = harness({
     now: () => started + PHRASE_PLAN_DB_DOWN_BACKOFF_MS - 1,
     sql: acceptingSql().sql,
@@ -1023,7 +1026,7 @@ void test('a database timeout discards Jev and serves the rules fallback', async
   });
   await early.done;
   assert.equal(early.result().status, 503);
-  assert.equal(fetches, 1);
+  assert.equal(fetches, 0);
   const later = harness({
     now: () => started + PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
     sql: acceptingSql().sql,
@@ -1031,7 +1034,7 @@ void test('a database timeout discards Jev and serves the rules fallback', async
   });
   await later.done;
   assert.equal(later.result().status, 200);
-  assert.equal(fetches, 2);
+  assert.equal(fetches, 1);
 });
 
 void test('a negative usage count keeps the reservation and does not zero the month', async () => {
@@ -1041,11 +1044,10 @@ void test('a negative usage count keeps the reservation and does not zero the mo
   let reservation = 0;
   const sql: PhrasePlanSql = (strings, ...values) => {
     const text = strings.join('?');
-    if (text.includes('jev_ip')) return Promise.resolve([{ calls: 1 }]);
-    if (text.includes('INSERT INTO jev_spend')) {
-      reservation = Number(values[1]);
+    if (text.includes('jev_ip')) {
+      reservation = Number(values[5]);
       tokens += reservation;
-      return Promise.resolve([{ tokens }]);
+      return Promise.resolve([{ calls: 1, tokens }]);
     }
     if (text.includes('UPDATE jev_spend')) {
       updates += 1;
@@ -1082,29 +1084,23 @@ void test('a negative usage count keeps the reservation and does not zero the mo
   });
   await positive.done;
   assert.equal(positive.result().status, 200);
-  assert.equal(updates, 1);
-  assert.equal(tokens, 50_040);
+  assert.equal(updates, 0);
+  assert.equal(tokens, 50_000 + reservation);
 });
 
-void test('a spend refusal after Jev answers does not serve Jev or raise the counter', async () => {
+void test('a spend refusal does not fetch or raise the counter', async () => {
   resetPhrasePlanStateForTests();
   const cap = 1_000_000;
   let tokens = cap;
   let fetches = 0;
   const sql: PhrasePlanSql = (strings, ...values) => {
     const text = strings.join('?');
-    if (text.includes('jev_ip')) return Promise.resolve([{ calls: 1 }]);
-    if (text.includes('INSERT INTO jev_spend')) {
-      const reservation = Number(values[1]);
-      if (tokens + reservation > cap) return Promise.resolve([]);
+    if (text.includes('UPDATE jev_spend')) return Promise.resolve([]);
+    if (text.includes('jev_ip')) {
+      const reservation = Number(values[5]);
+      if (tokens + reservation > cap) return Promise.resolve([{ calls: 1 }]);
       tokens += reservation;
-      return Promise.resolve([{ tokens }]);
-    }
-    if (text.includes('UPDATE jev_spend')) {
-      const delta = Number(values[0]);
-      const limit = Number(values[1]);
-      tokens = Math.min(Math.max(tokens + delta, 0), limit);
-      return Promise.resolve([]);
+      return Promise.resolve([{ calls: 1, tokens }]);
     }
     return Promise.resolve([]);
   };
@@ -1114,7 +1110,7 @@ void test('a spend refusal after Jev answers does not serve Jev or raise the cou
   };
   const run = harness({ sql, tokenCap: cap, fetch });
   await run.done;
-  assert.equal(fetches, 1);
+  assert.equal(fetches, 0);
   assert.equal(tokens, cap);
   assert.deepEqual(run.result(), {
     status: 503,
@@ -1122,132 +1118,128 @@ void test('a spend refusal after Jev answers does not serve Jev or raise the cou
   });
   const again = harness({ sql, tokenCap: cap, fetch });
   await again.done;
-  assert.equal(fetches, 1);
+  assert.equal(fetches, 0);
   assert.equal(tokens, cap);
   assert.equal(again.result().status, 503);
 });
 
-void test('a per-IP refusal in parallel discards Jev and refunds the reservation', async () => {
+void test('an over-limit IP does not fetch for uncached contexts', async () => {
   resetPhrasePlanStateForTests();
-  let calls = PHRASE_PLAN_IP_DAILY_LIMIT;
-  let tokens = 0;
   let fetches = 0;
-  const sql: PhrasePlanSql = (strings, ...values) => {
+  let updates = 0;
+  const sql: PhrasePlanSql = (strings) => {
     const text = strings.join('?');
-    if (text.includes('jev_ip')) {
-      if (calls + 1 > PHRASE_PLAN_IP_DAILY_LIMIT) return Promise.resolve([]);
-      calls += 1;
-      return Promise.resolve([{ calls }]);
-    }
-    if (text.includes('INSERT INTO jev_spend')) {
-      tokens += Number(values[1]);
-      return Promise.resolve([{ tokens }]);
-    }
     if (text.includes('UPDATE jev_spend')) {
-      tokens += Number(values[0]);
+      updates += 1;
       return Promise.resolve([]);
     }
     return Promise.resolve([]);
   };
+  const fetch = async () => {
+    fetches += 1;
+    return { ok: true, json: async () => ANSWERS };
+  };
+  const chords = ['C', 'Dm', 'Em', 'F', 'G'];
+  for (const chord of chords) {
+    const run = harness({
+      body: { ...BODY, chord },
+      sql,
+      fetch,
+    });
+    await run.done;
+    assert.deepEqual(run.result(), { status: 429, payload: { error: 'rate-limit' } });
+    assert.equal(run.sent.url, undefined);
+  }
+  assert.equal(fetches, 0);
+  assert.equal(updates, 0);
+});
+
+void test('a fetch that has started is not refunded', async () => {
+  resetPhrasePlanStateForTests();
+  let updates = 0;
+  const background: Promise<unknown>[] = [];
   const run = harness({
-    sql,
+    sql: (strings) => {
+      const text = strings.join('?');
+      if (text.includes('UPDATE jev_spend')) {
+        updates += 1;
+        return Promise.resolve([]);
+      }
+      if (text.includes('jev_ip')) return Promise.resolve([{ calls: 1, tokens: 80 }]);
+      return Promise.resolve([]);
+    },
+    fetch: async () => ({
+      ok: true,
+      json: async () => ({ ...ANSWERS, usage: { input_tokens: 40 } }),
+    }),
+    waitUntil(work) {
+      background.push(work);
+    },
+  });
+  await run.done;
+  await Promise.all(background);
+  assert.equal(run.result().status, 200);
+  assert.equal(updates, 0);
+  assert.equal(background.length, 0);
+});
+
+void test('a missing key refunds through waitUntil without holding the response', async () => {
+  resetPhrasePlanStateForTests();
+  let refunded = false;
+  let fetches = 0;
+  const background: Promise<unknown>[] = [];
+  const started = Date.now();
+  const run = harness({
+    env: {
+      TYPESAFE_API_KEY: undefined,
+      JEV_COUNTER_DATABASE_URL: 'postgres://counter.example/jev',
+      VERCEL_ENV: 'production',
+    },
+    sql: async (strings) => {
+      const text = strings.join('?');
+      if (text.includes('UPDATE jev_spend')) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        refunded = true;
+        return [];
+      }
+      if (text.includes('jev_ip')) return [{ calls: 1, tokens: 80 }];
+      return [];
+    },
     fetch: async () => {
       fetches += 1;
       return { ok: true, json: async () => ANSWERS };
     },
+    waitUntil(work) {
+      background.push(work);
+    },
   });
   await run.done;
-  assert.equal(fetches, 1);
-  assert.equal(tokens, 0);
-  assert.deepEqual(run.result(), { status: 429, payload: { error: 'rate-limit' } });
-  assert.equal(JSON.stringify(run.result().payload).includes('step-up-step-down'), false);
-});
-
-void test('waitUntil reconciles the reservation after the response', async () => {
-  resetPhrasePlanStateForTests();
-  let status = 0;
-  let payload: unknown;
-  let responded = false;
-  let reconciled = false;
-  const background: Promise<unknown>[] = [];
-  const started = Date.now();
-  await handlePhrasePlan(
-    {
-      method: 'POST',
-      body: BODY,
-      headers: {
-        origin: 'https://progger.studio',
-        'x-vercel-forwarded-for': '203.0.113.9',
-      },
-    },
-    {
-      status(code) {
-        status = code;
-        return {
-          json(body) {
-            responded = true;
-            payload = body;
-          },
-        };
-      },
-    },
-    {
-      env: {
-        VERCEL_ENV: 'production',
-        JEV_COUNTER_DATABASE_URL: 'postgres://counter.example/jev',
-        JEV_IP_HASH_SALT: 'test-salt',
-        TYPESAFE_API_KEY: 'test-key',
-      },
-      now: () => Date.UTC(2026, 9, 21, 3, 4, 5),
-      random: () => 0.1,
-      sql: async (strings, ...values) => {
-        const text = strings.join('?');
-        if (text.includes('UPDATE jev_spend')) {
-          assert.equal(responded, true);
-          await new Promise((resolve) => setTimeout(resolve, 400));
-          reconciled = true;
-          void values;
-          return [];
-        }
-        if (text.includes('jev_ip')) return [{ calls: 1 }];
-        if (text.includes('INSERT INTO jev_spend')) return [{ tokens: 80 }];
-        return [];
-      },
-      fetch: async () => ({ ok: true, json: async () => ANSWERS }),
-      waitUntil(work) {
-        background.push(work);
-      },
-    },
-  );
   const elapsed = Date.now() - started;
-  assert.equal(status, 200);
-  assert.equal(reconciled, false);
+  assert.equal(run.result().status, 503);
+  assert.equal(fetches, 0);
+  assert.equal(refunded, false);
   assert.ok(elapsed < 350, `elapsed ${elapsed}`);
   assert.equal(background.length, 1);
   await Promise.all(background);
-  assert.equal(reconciled, true);
-  const body = payload as { distributions?: { cadence?: { third?: number } } };
-  assert.equal(body.distributions?.cadence?.third, 1);
-  assert.equal(JSON.stringify(payload).includes('test-key'), false);
+  assert.equal(refunded, true);
+  assert.equal(JSON.stringify(run.result().payload).includes('test-key'), false);
 });
 
-void test('a plan that finishes after the client gave up is cached for the retry', async () => {
+void test('a retry after the client timeout reads the cache', async () => {
   resetPhrasePlanStateForTests();
   let fetches = 0;
-  let spendInserts = 0;
+  let reservations = 0;
   let releaseDb: () => void = () => undefined;
   const db = new Promise<void>((resolve) => {
     releaseDb = resolve;
   });
-  const sql: PhrasePlanSql = async (strings, ...values) => {
+  const sql: PhrasePlanSql = async (strings) => {
     const text = strings.join('?');
     if (text.includes('UPDATE jev_spend')) return [];
     await db;
-    if (text.includes('jev_ip')) return [{ calls: 1 }];
-    if (text.includes('INSERT INTO jev_spend')) {
-      spendInserts += 1;
-      void values;
-      return [{ tokens: 80 }];
+    if (text.includes('jev_ip')) {
+      reservations += 1;
+      return [{ calls: 1, tokens: 80 }];
     }
     return [];
   };
@@ -1257,15 +1249,16 @@ void test('a plan that finishes after the client gave up is cached for the retry
   };
   const first = harness({ sql, fetch });
   await Promise.resolve();
-  assert.equal(fetches, 1);
-  assert.equal(spendInserts, 0);
+  assert.equal(fetches, 0);
+  assert.equal(reservations, 0);
   releaseDb();
   await first.done;
   assert.equal(first.result().status, 200);
-  assert.equal(spendInserts, 1);
+  assert.equal(fetches, 1);
+  assert.equal(reservations, 1);
   const retry = harness({
     sql: () => {
-      spendInserts += 1;
+      reservations += 1;
       throw new Error('retry must not touch the database');
     },
     fetch,
@@ -1273,11 +1266,73 @@ void test('a plan that finishes after the client gave up is cached for the retry
   await retry.done;
   assert.equal(retry.result().status, 200);
   assert.equal(fetches, 1);
-  assert.equal(spendInserts, 1);
+  assert.equal(reservations, 1);
   assert.equal(retry.keyReads(), 0);
   assert.equal(retry.sent.url, undefined);
   const payload = retry.result().payload as {
     distributions?: { cadence?: { third?: number } };
   };
   assert.equal(payload.distributions?.cadence?.third, 1);
+});
+
+void test('a database error is not logged or returned', async () => {
+  resetPhrasePlanStateForTests();
+  const secret = 'postgres://jev:secret-password@ep-example.neon.tech/jev';
+  const logs: string[] = [];
+  const methods = ['log', 'info', 'warn', 'error', 'debug'] as const;
+  const original = new Map<(typeof methods)[number], (...args: unknown[]) => void>();
+  for (const method of methods) {
+    original.set(method, console[method]);
+    console[method] = (...args: unknown[]) => {
+      logs.push(args.map((item) => String(item)).join(' '));
+    };
+  }
+  try {
+    let fetches = 0;
+    const run = harness({
+      sql: () => Promise.reject(new Error(`connect failed ${secret}`)),
+      fetch: async () => {
+        fetches += 1;
+        return { ok: true, json: async () => ANSWERS };
+      },
+    });
+    await run.done;
+    assert.equal(fetches, 0);
+    assert.deepEqual(run.result(), {
+      status: 503,
+      payload: { error: 'planner-unavailable' },
+    });
+    const dumped = `${logs.join('\n')}\n${JSON.stringify(run.result().payload)}`;
+    assert.equal(dumped.includes(secret), false);
+    assert.equal(dumped.includes('secret-password'), false);
+    assert.equal(dumped.includes('ep-example'), false);
+    assert.deepEqual(logs, ['db_error']);
+  } finally {
+    for (const method of methods) {
+      const saved = original.get(method);
+      if (saved) console[method] = saved;
+    }
+  }
+});
+
+void test('a malformed body returns 400', async () => {
+  const bodies: unknown[] = ['{', 'null', '[]', 1, 'not-json', null];
+  for (const body of bodies) {
+    resetPhrasePlanStateForTests();
+    let queried = false;
+    const run = harness({
+      body,
+      sql: () => {
+        queried = true;
+        return Promise.resolve([]);
+      },
+    });
+    await run.done;
+    assert.equal(queried, false, JSON.stringify(body));
+    assert.deepEqual(run.result(), { status: 400, payload: { error: 'bad-request' } });
+    assert.equal(JSON.stringify(run.result().payload).includes('password'), false);
+  }
+  const ok = harness({ body: JSON.stringify(BODY), sql: acceptingSql().sql });
+  await ok.done;
+  assert.equal(ok.result().status, 200);
 });
