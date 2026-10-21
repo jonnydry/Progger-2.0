@@ -1,5 +1,6 @@
 import { QUALITIES } from './harmony.ts';
 import { ROOTS, SCALES, pretty } from './music.ts';
+import { sanitizeShape, type PhraseShapePlan } from './phrase-shape.ts';
 
 /**
  * Practice tray, version 1.
@@ -27,6 +28,7 @@ export type TrayPlan = {
   rhythm: 'quarters' | 'eighths' | 'long-short' | 'push';
   register: 'low' | 'mid' | 'high';
   cadence: 'root' | 'third' | 'fifth';
+  shape?: PhraseShapePlan;
 };
 
 /** `beat` is the onset in quarter-note beats. Playback uses it as-is. */
@@ -534,14 +536,19 @@ function chordRefOf(value: unknown): TrayChordRef | null | undefined {
     : { symbol, root, qualityId, notes, fromContext };
 }
 
-function planOf(value: unknown): TrayPlan | null {
+function planOf(value: unknown, bars: 2 | 4): TrayPlan | null {
   if (!isRecord(value)) return null;
   const contour = oneOf<TrayPlan['contour']>(value.contour, CONTOURS);
   const rhythm = oneOf<TrayPlan['rhythm']>(value.rhythm, RHYTHMS);
   const register = oneOf<TrayPlan['register']>(value.register, REGISTERS);
   const cadence = oneOf<TrayPlan['cadence']>(value.cadence, CADENCES);
   if (!contour || !rhythm || !register || !cadence) return null;
-  return { contour, rhythm, register, cadence };
+  const plan: TrayPlan = { contour, rhythm, register, cadence };
+  if (value.shape !== undefined) {
+    const shape = sanitizeShape(value.shape, bars, rhythm);
+    if (shape) plan.shape = shape;
+  }
+  return plan;
 }
 
 function handed(value: Record<string, unknown>): {
@@ -563,7 +570,7 @@ function phraseOf(value: Record<string, unknown>): TrayPhrase | null {
   const tempo = integer(value.tempo, 40, 240);
   const slow = flag(value.slow);
   const swing = numberIn(value.swing, 0, 1);
-  const plan = planOf(value.plan);
+  const plan = bars ? planOf(value.plan, bars) : null;
   const seed = integer(value.seed, 0, 0xffffffff);
   const position = integer(value.position, 0, 48);
   const view = viewOf(value.view);

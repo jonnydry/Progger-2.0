@@ -1,8 +1,9 @@
 # Progger 2.0
 
 A guitar scale, mode and chord reference with a phrase generator, a practice
-drone and a pixel frog guitarist. Everything runs in your browser: no account,
-no AI credential and no music database.
+drone and a pixel frog guitarist. Scales, chords, and playback run in the
+browser. Phrase plans can be refined by a server planner; the browser never
+holds an AI credential, and there is no account or music database.
 
 **Live at [progger.studio](https://progger.studio).**
 
@@ -34,8 +35,11 @@ no AI credential and no music database.
 
 - **Phrase generator:** builds a 2- or 4-bar guitar line over the selected
   scale and chord, then plays it and shows it on the neck. Tempo runs from 40
-  to 240 BPM, with adjustable swing and optional looping. Phrases are made by
-  seeded rules in the browser with no network calls.
+  to 240 BPM, with adjustable swing and optional looping. A rules phrase
+  appears immediately. The page then asks `/api/phrase-plan` for a plan and
+  swaps that line in when it arrives, waiting up to 2000 ms. The request carries a scale id, root,
+  and chord symbol. The API key stays on the server. If the planner is
+  unavailable, the rules line remains.
 - **Drone:** holds the key under your playing. Choose Reed or Bow (both
   synthesized with Web Audio) or Cello (CC0 samples), and set the volume.
 - **Practice tray:** save phrases, scales and chords, reopen them later, and

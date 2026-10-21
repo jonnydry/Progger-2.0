@@ -387,6 +387,7 @@
   letter-spacing: 1px;
 }
 
+/* Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
 @media (max-width: 960px) {
   .deck-plate {
     grid-template-columns: auto minmax(0, 1fr) auto;

@@ -92,6 +92,14 @@ void test('sanitize keeps a legal shape, a typed peak, and drops a repeat on bar
     ),
     undefined,
   );
+  assert.equal(
+    sanitizeShape(
+      { ...shape, question: { bar: 1, degree: shape.question.degree } },
+      4,
+      plan.rhythm,
+    ),
+    undefined,
+  );
   assert.equal(sanitizeShape({ ...shape, version: 2 }, 4), undefined);
 });
 
@@ -133,8 +141,8 @@ void test('the live generator stays unshaped and the shape path keeps its grid',
     'utf8',
   );
   assert.equal(panel.includes('generateShapedPhrase'), false);
-  assert.equal(panel.includes('phrase-planner-client'), false);
-  assert.equal(panel.includes('/api/phrase-plan'), false);
+  assert.equal(panel.includes('phrase-planner-client'), true);
+  assert.equal(panel.includes('generatePhraseWithPlanner'), true);
   assert.equal(phrase.includes('fetch('), false);
 });
 
@@ -142,7 +150,7 @@ void test('a recorded distribution is reused and a missing context falls back', 
   const scaleNotes = major();
   const chordNotes = parseChord('C').notes;
   const input = {
-    seed: 5,
+    seed: 7,
     bars: 4 as const,
     scaleNotes,
     chordNotes,
@@ -169,7 +177,7 @@ void test('a recorded distribution is reused and a missing context falls back', 
   const first = await generatePhraseWithPlanner({ ...input, planner });
   const second = await generatePhraseWithPlanner({
     ...input,
-    seed: 6,
+    seed: 12,
     planner,
   });
   assert.equal(first.ok, true);
@@ -246,11 +254,11 @@ void test('CI loads a hand-authored distribution fixture and never a live Jev ca
   assert.equal(phrase.includes('phrase-planner-client'), false);
   assert.equal(phrase.includes('api.typesafe.ai'), false);
   assert.equal(phrase.includes('fetch('), false);
-  assert.equal(panel.includes('createPhrasePlanner'), false);
-  assert.equal(panel.includes('/api/phrase-plan'), false);
+  assert.equal(panel.includes('createPhrasePlanner'), true);
+  assert.equal(panel.includes('phrase-planner-client'), true);
   assert.equal(
     existsSync(new URL('../api/phrase-plan.ts', import.meta.url)),
-    false,
+    true,
   );
   const helper = readFileSync(
     new URL('./phrase-plan-fixture.ts', import.meta.url),
@@ -259,6 +267,20 @@ void test('CI loads a hand-authored distribution fixture and never a live Jev ca
   assert.equal(helper.includes('fetch('), false);
   assert.equal(helper.includes('api.typesafe.ai'), false);
   assert.equal(helper.includes('/api/phrase-plan'), false);
+  const client = readFileSync(
+    new URL('../lib/phrase-planner-client.ts', import.meta.url),
+    'utf8',
+  );
+  assert.equal(client.includes('/api/phrase-plan'), true);
+  assert.equal(client.includes('api.typesafe.ai'), false);
+  assert.equal(client.includes('TYPESAFE_API_KEY'), false);
+  const route = readFileSync(
+    new URL('../api/phrase-plan.ts', import.meta.url),
+    'utf8',
+  );
+  assert.equal(route.includes('api.typesafe.ai'), true);
+  assert.equal(route.includes('TYPESAFE_API_KEY'), true);
+  assert.equal(route.includes('x-forwarded-for'), false);
   const root = new URL('..', import.meta.url);
   for (const dir of ['lib', 'components', 'app']) {
     const folder = new URL(`${dir}/`, root);
@@ -267,8 +289,10 @@ void test('CI loads a hand-authored distribution fixture and never a live Jev ca
       if (!name.endsWith('.ts') && !name.endsWith('.tsx')) continue;
       const source = readFileSync(join(folder.pathname, name), 'utf8');
       assert.equal(source.includes('api.typesafe.ai'), false, name);
-      assert.equal(source.includes('/api/phrase-plan'), false, name);
       assert.equal(source.includes('TYPESAFE_API_KEY'), false, name);
+      if (name !== 'phrase-planner-client.ts') {
+        assert.equal(source.includes('/api/phrase-plan'), false, name);
+      }
     }
   }
   const recorded = JSON.parse(
@@ -282,7 +306,7 @@ void test('CI loads a hand-authored distribution fixture and never a live Jev ca
   assert.ok(parseDistributions(recorded.contexts['major|C|C|4|quarters']));
   const scaleNotes = major();
   const replayed = await generatePhraseWithPlanner({
-    seed: 3,
+    seed: 2,
     bars: 4,
     scaleNotes,
     chordNotes: parseChord('C').notes,
@@ -549,10 +573,8 @@ void test('a shaped phrase uses the live switch, history, closing note, and stop
       if (!previous.ok) continue;
       const first = previous.phrase.notes[0]?.midi;
       if (first === undefined) continue;
-      const early = next.phrase.notes.some(
-        (note) => note.beat < 4 && note.midi === first,
-      );
-      if (early) continue;
+      const shares = next.phrase.notes.some((note) => note.midi === first);
+      if (shares) continue;
       shaped = next.phrase.notes;
       shapedSeed = next.phrase.seed;
       restored = previous.phrase.notes;

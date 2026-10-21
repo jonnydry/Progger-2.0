@@ -596,6 +596,101 @@ void test('a stored entry regenerates the same spelled phrase', () => {
   assert.equal(phraseHistoryOpening(emptyPhraseHistory(), context), null);
 });
 
+void test('a stored line replays exactly and a seed-only entry stays a rules seed', () => {
+  const scale = SCALES.find((item) => item.id === 'major');
+  assert.ok(scale);
+  const chordNotes = defaultChordNotes(spell('C', scale.formula));
+  const generated = generatePhrase({
+    seed: 7,
+    bars: 2,
+    scaleNotes: spell('C', scale.formula),
+    chordNotes,
+  });
+  assert.equal(generated.ok, true);
+  if (!generated.ok) return;
+  const played = {
+    source: 'rules' as const,
+    plan: generated.phrase.plan,
+    notes: generated.phrase.notes,
+  };
+  const saved = phraseHistoryEntry({
+    seed: 7,
+    bars: 2,
+    scaleRoot: 'C',
+    scaleId: 'major',
+    place: 'scale',
+    chord: null,
+    chordNotes,
+    played,
+  });
+  assert.ok(saved?.played);
+  const state = pushPhraseHistory(emptyPhraseHistory(), saved);
+  const loaded = parsePhraseHistory(
+    JSON.stringify({ version: 1, entries: state.entries, index: 0 }),
+  ).state;
+  assert.deepEqual(loaded.entries[0]?.played, saved.played);
+  assert.deepEqual(phraseHistoryOpening(loaded, {
+    scaleRoot: 'C',
+    scaleId: 'major',
+    place: 'scale',
+    chord: null,
+    chordNotes,
+  }), { seed: 7, bars: 2, played: saved.played });
+  const legacy = phraseHistoryEntry({
+    seed: 7,
+    bars: 2,
+    scaleRoot: 'C',
+    scaleId: 'major',
+    place: 'scale',
+    chord: null,
+    chordNotes,
+  });
+  assert.ok(legacy);
+  assert.equal(legacy.played, undefined);
+  assert.equal(samePhraseHistoryEntry(legacy, saved), true);
+  const replaced = pushPhraseHistory(
+    pushPhraseHistory(emptyPhraseHistory(), legacy),
+    saved,
+  );
+  assert.equal(replaced.entries.length, 1);
+  assert.deepEqual(replaced.entries[0]?.played, saved.played);
+  const again = pushPhraseHistory(replaced, saved);
+  assert.equal(again, replaced);
+  const broken = phraseHistoryEntry({
+    seed: 7,
+    bars: 2,
+    scaleRoot: 'C',
+    scaleId: 'major',
+    place: 'scale',
+    chord: null,
+    chordNotes,
+    played: {
+      source: 'planner',
+      plan: { ...generated.phrase.plan, contour: 'arch' },
+      notes: [{ name: 'nope' }],
+    } as never,
+  });
+  assert.ok(broken);
+  assert.equal(broken.played, undefined);
+  const rawLegacy = JSON.stringify({
+    version: 1,
+    entries: [
+      {
+        seed: 7,
+        bars: 2,
+        scaleRoot: 'C',
+        scaleId: 'major',
+        place: 'scale',
+        chord: null,
+        chordNotes,
+        locks: {},
+      },
+    ],
+    index: 0,
+  });
+  assert.equal(parsePhraseHistory(rawLegacy).state.entries[0]?.played, undefined);
+});
+
 void test('the panel stores history beside the stash and not in the component', () => {
   assert.equal(PHRASE_HISTORY_KEY, 'progger.phrase-history.v1');
   const history = readFileSync(

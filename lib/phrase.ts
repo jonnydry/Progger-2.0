@@ -24,7 +24,17 @@ import {
  * timeout, then the seeded rules. This module never calls the network.
  */
 
-export const PHRASE_PLANNER_TIMEOUT_MS = 800;
+/**
+ * The server confirms the database reservation before it calls upstream.
+ * The database budget is 1200 ms and includes one deadlock retry.
+ * Upstream is capped at 500 ms, so the coded worst case is 1700 ms.
+ * This waits 2000 ms, leaving 300 ms. The panel plays the rules line first.
+ */
+export const PHRASE_PLANNER_TIMEOUT_MS = 2_000;
+/** The planner timer aborts with this. A panel cleanup uses the other reason. */
+export const PHRASE_PLANNER_TIMEOUT_REASON = 'phrase-planner-timeout';
+/** Phrase-panel cleanup and a replacement Generate abort with this. */
+export const PHRASE_PLANNER_CANCEL_REASON = 'phrase-planner-cancelled';
 export const PHRASE_RANGE = 18;
 /**
  * Anchor search and gap search each count one step per call.
@@ -117,7 +127,7 @@ export type PhrasePlannerInput = {
   signal: AbortSignal;
   scaleLabel?: string;
   chordSymbol?: string;
-  /** Closed scale id for the planner route. The panel does not set this. */
+  /** Closed scale id for the planner route. The panel sets this. */
   scaleId?: string;
   scaleRoot?: string;
 };
@@ -255,6 +265,18 @@ export function cadenceRole(degree: string): CadenceTarget | null {
 /** Tonic chord tones already spelled in the scale, used when no chord is selected. */
 export function defaultChordNotes(scaleNotes: readonly Note[]): Note[] {
   return scaleNotes.filter((note) => cadenceRole(note.degree) !== null);
+}
+
+/** Symbol sent to the planner when the chord control is on the scale tonic. */
+export function tonicChordSymbol(
+  root: string,
+  scaleNotes: readonly Note[],
+): string {
+  const degrees = new Set(scaleNotes.map((note) => note.degree));
+  if (degrees.has('b5')) return `${root}dim`;
+  if (degrees.has('#5')) return `${root}aug`;
+  if (degrees.has('b3')) return `${root}m`;
+  return root;
 }
 
 export function landingPitchClasses(
@@ -3864,6 +3886,28 @@ function holdPeak(
   return false;
 }
 
+/**
+ * Loop and circle repairs walk the ladder, including octave copies past
+ * the locked register. A shaped line may take a weak note's own octave.
+ * A strong beat, and any other interval, stays inside.
+ */
+function registerHolds(fit: ShapeFit, line: readonly number[]): boolean {
+  for (let eventIndex = 0; eventIndex < line.length; eventIndex++) {
+    const index = line[eventIndex];
+    if (index === undefined || index < 0) return false;
+    if (
+      !indexAllowed(
+        fit,
+        index,
+        bareMidi(fit, eventIndex),
+        Boolean(fit.events[eventIndex]?.strong),
+      )
+    )
+      return false;
+  }
+  return true;
+}
+
 function openShapeIssues(
   fit: ShapeFit,
   line: number[],
@@ -3875,7 +3919,7 @@ function openShapeIssues(
     shapeFloor(fit, current) === 'arch' &&
     holdPeak(fit, current, questionIndex, degree)
   )
-    return current.slice();
+    return registerHolds(fit, current) ? current.slice() : null;
   if (shapeFloor(fit, current) === 'loops') {
     const opened = breakLoopsKeepArch(
       current,
@@ -3901,6 +3945,7 @@ function openShapeIssues(
   if (shapeFloor(fit, current) !== null) return null;
   if (degreeAt(fit.ladder, current[questionIndex] ?? -1) !== degree)
     return null;
+  if (!registerHolds(fit, current)) return null;
   return current;
 }
 
@@ -4149,6 +4194,63 @@ function holdReject(
   return 'other';
 }
 
+function stringSkipEvents(notes: readonly { string?: number }[]): number {
+  let count = 0;
+  for (let index = 1; index < notes.length; index++) {
+    const previous = notes[index - 1]?.string;
+    const next = notes[index]?.string;
+    if (previous === undefined || next === undefined) continue;
+    if (Math.abs(next - previous) >= 3) count += 1;
+  }
+  return count;
+}
+
+function octaveLeapEvents(notes: readonly { midi: number }[]): number {
+  let count = 0;
+  for (let index = 1; index < notes.length; index++) {
+    const previous = notes[index - 1];
+    const next = notes[index];
+    if (!previous || !next) continue;
+    if (Math.abs(next.midi - previous.midi) >= 12) count += 1;
+  }
+  return count;
+}
+
+/** The same three MIDI pitches show up again later, without sharing a note. */
+function repeatsMidiCell(notes: readonly { midi: number }[]): boolean {
+  const midis = notes.map((note) => note.midi);
+  for (let start = 0; start + 2 < midis.length; start++) {
+    for (let again = start + 3; again + 2 < midis.length; again++) {
+      if (
+        midis[start] === midis[again] &&
+        midis[start + 1] === midis[again + 1] &&
+        midis[start + 2] === midis[again + 2]
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * A shaped fingering may not add string skips, octave leaps, a repeated
+ * three-note cell, or an ostinato that the unshaped line did not already have.
+ */
+function guitarAllows(
+  shaped: readonly FingeredNote[],
+  bare: readonly FingeredNote[],
+): boolean {
+  if (stringSkipEvents(shaped) > stringSkipEvents(bare)) return false;
+  if (octaveLeapEvents(shaped) > octaveLeapEvents(bare)) return false;
+  if (repeatsMidiCell(shaped) && !repeatsMidiCell(bare)) return false;
+  const shapedLoops =
+    phraseCellLength(shaped.map((note) => note.midi)) > PHRASE_CELL_LIMIT;
+  const bareLoops =
+    phraseCellLength(bare.map((note) => note.midi)) > PHRASE_CELL_LIMIT;
+  return !shapedLoops || bareLoops;
+}
+
 function shapedNotesHold(
   notes: readonly {
     beat: number;
@@ -4227,6 +4329,16 @@ function assemble(
   let planOut = plan.shape ? plan : withoutShape(plan);
   let fingered: FingeredNote[] | null = null;
   if (plan.shape) {
+    const bareFingered = fingerNotes(
+      spreadVariety(
+        bareNotes,
+        input.scaleNotes,
+        chordPcs,
+        withoutShape(plan),
+        forms,
+      ),
+      forms,
+    );
     let last: ShapeReject = 'other';
     for (const shape of shapeAttempts(plan, input.seed, input.bars, resample)) {
       const overlaid = applyPhraseShape(shaped.indexes, ladder, shaped.events, {
@@ -4255,12 +4367,16 @@ function assemble(
       );
       const varied = fingerNotes(variedNotes, forms);
       const plain = fingerNotes(shapedNotes, forms);
-      const played =
+      const variedMusical =
         varietyWithinLimits(variedNotes.map((note) => note.midi)) &&
-        shapedNotesHold(varied, holdPlan, bareMidis)
+        shapedNotesHold(varied, holdPlan, bareMidis);
+      const plainMusical =
+        varietyWithinLimits(shapedNotes.map((note) => note.midi)) &&
+        shapedNotesHold(plain, holdPlan, bareMidis);
+      const played =
+        variedMusical && guitarAllows(varied, bareFingered)
           ? varied
-          : varietyWithinLimits(shapedNotes.map((note) => note.midi)) &&
-              shapedNotesHold(plain, holdPlan, bareMidis)
+          : plainMusical && guitarAllows(plain, bareFingered)
             ? plain
             : null;
       if (played) {
@@ -4271,7 +4387,10 @@ function assemble(
         shapeRejectTrail.push('kept');
         break;
       }
-      last = holdReject(varied, holdPlan, bareMidis);
+      last =
+        variedMusical || plainMusical
+          ? 'hand'
+          : holdReject(varied, holdPlan, bareMidis);
       shapeReject = last;
       shapeRejectTrail.push(last);
     }
@@ -4385,6 +4504,7 @@ export async function generatePhraseWithPlanner(input: {
   chordSymbol?: string;
   scaleId?: string;
   scaleRoot?: string;
+  signal?: AbortSignal;
 }): Promise<PhraseResult> {
   shapeRejectTrail = [];
   resetSearchCount();
@@ -4401,7 +4521,13 @@ export async function generatePhraseWithPlanner(input: {
     return retryUnplayable(input, available, rulesResult(input, available));
   const timeoutMs = input.timeoutMs ?? PHRASE_PLANNER_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort(input.signal?.reason);
+  if (input.signal?.aborted) controller.abort(input.signal.reason);
+  else input.signal?.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(
+    () => controller.abort(PHRASE_PLANNER_TIMEOUT_REASON),
+    timeoutMs,
+  );
   let accepted = false;
   let proposal: Partial<PhrasePlan> = {};
   let alternates: readonly PhraseShapePlan[] | undefined;
@@ -4420,9 +4546,11 @@ export async function generatePhraseWithPlanner(input: {
         scaleRoot: input.scaleRoot,
       }),
       new Promise<null>((resolve) => {
-        controller.signal.addEventListener('abort', () => resolve(null), {
-          once: true,
-        });
+        if (controller.signal.aborted) resolve(null);
+        else
+          controller.signal.addEventListener('abort', () => resolve(null), {
+            once: true,
+          });
       }),
     ]);
     proposal = sanitizePlan(result, available);
@@ -4437,6 +4565,7 @@ export async function generatePhraseWithPlanner(input: {
     accepted = false;
   } finally {
     clearTimeout(timer);
+    input.signal?.removeEventListener('abort', onAbort);
     if (!controller.signal.aborted) controller.abort();
   }
   const proposalHasShape = proposal.shape !== undefined;
