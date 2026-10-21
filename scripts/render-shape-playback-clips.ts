@@ -3,7 +3,9 @@
  * Loop on restarts at the next bar line and leaves the cadence out.
  * Loop off plays one pass, including the closing note and its hold.
  *
- * Run: node --experimental-strip-types scripts/render-shape-playback-clips.ts <outDir>
+ * Run: node --experimental-strip-types scripts/render-shape-playback-clips.ts <outDir> [--ab] [--base <sha>]
+ * `--base` is the before side of `--ab`. The default is
+ * `git merge-base HEAD cursor/jev-live-planner-15a2`.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -351,8 +353,6 @@ function sameSamples(left: Float32Array, right: Float32Array): boolean {
   return true;
 }
 
-const BASE_SHA = '4ef54187c1ec9b312b69f1a933ca4ca8a2481de5';
-
 function lineKeyOf(
   notes: readonly { midi: number; beat: number; duration?: number }[],
 ): string {
@@ -361,14 +361,14 @@ function lineKeyOf(
     .join(',');
 }
 
-async function basePlannerModule(): Promise<{
+async function basePlannerModule(baseSha: string): Promise<{
   generatePhraseWithPlanner: typeof generatePhraseWithPlanner;
 }> {
   const music = pathToFileURL(join(process.cwd(), 'lib/music.ts')).href;
   const marks = pathToFileURL(join(process.cwd(), 'lib/phrase-marks.ts')).href;
   const dir = join(tmpdir(), 'phrase-base-mod', 'lib');
   mkdirSync(dir, { recursive: true });
-  const phrase = execFileSync('git', ['show', `${BASE_SHA}:lib/phrase.ts`], {
+  const phrase = execFileSync('git', ['show', `${baseSha}:lib/phrase.ts`], {
     encoding: 'utf8',
   })
     .replaceAll("from './music.ts'", `from '${music}'`)
@@ -376,7 +376,7 @@ async function basePlannerModule(): Promise<{
   writeFileSync(join(dir, 'phrase.ts'), phrase);
   writeFileSync(
     join(dir, 'phrase-shape.ts'),
-    execFileSync('git', ['show', `${BASE_SHA}:lib/phrase-shape.ts`], {
+    execFileSync('git', ['show', `${baseSha}:lib/phrase-shape.ts`], {
       encoding: 'utf8',
     }),
   );
@@ -428,8 +428,8 @@ async function pickChangedSeed(
   );
 }
 
-async function renderComparisons(outDir: string): Promise<void> {
-  const beforeMod = await basePlannerModule();
+async function renderComparisons(outDir: string, baseSha: string): Promise<void> {
+  const beforeMod = await basePlannerModule(baseSha);
   const recorded = JSON.parse(
     readFileSync(
       new URL('../tests/fixtures/phrase-plan-jev-recorded.json', import.meta.url),
@@ -600,7 +600,7 @@ async function renderComparisons(outDir: string): Promise<void> {
   const lines = [
     '# Question placement and rhythm-lock clips',
     '',
-    'Before is `#56` head `4ef54187`. After is this branch. Loop on restarts at the next bar line. Loop off plays the closing note.',
+    `Before is \`${baseSha}\`. After is this branch. Loop on restarts at the next bar line. Loop off plays the closing note.`,
     '',
     '| File | Context | Seed | Bars | Rhythm | Path | Side | Loop | Line | md5 |',
     '| --- | --- | ---: | ---: | --- | --- | --- | --- | --- | --- |',
@@ -614,16 +614,62 @@ async function renderComparisons(outDir: string): Promise<void> {
   writeFileSync(join(outDir, 'README.md'), `${lines.join('\n')}\n`);
 }
 
-const outDir = process.argv[2];
+function argumentValue(flag: string): string | undefined {
+  const args = process.argv.slice(2);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === flag) {
+      const value = args[index + 1];
+      if (!value || value.startsWith('-')) {
+        throw new Error(`${flag} needs a commit`);
+      }
+      return value;
+    }
+    if (arg?.startsWith(`${flag}=`)) {
+      const value = arg.slice(flag.length + 1);
+      if (!value) throw new Error(`${flag} needs a commit`);
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function positionalArgs(): string[] {
+  const args = process.argv.slice(2);
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] ?? '';
+    if (arg === '--base') {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--')) continue;
+    values.push(arg);
+  }
+  return values;
+}
+
+function resolveBaseSha(): string {
+  return (
+    argumentValue('--base') ??
+    execFileSync(
+      'git',
+      ['merge-base', 'HEAD', 'cursor/jev-live-planner-15a2'],
+      { encoding: 'utf8' },
+    ).trim()
+  );
+}
+
+const outDir = positionalArgs()[0];
 if (!outDir) {
   throw new Error(
-    'Output folder is required: node --experimental-strip-types scripts/render-shape-playback-clips.ts <outDir>',
+    'Output folder is required: node --experimental-strip-types scripts/render-shape-playback-clips.ts <outDir> [--ab] [--base <sha>]',
   );
 }
 mkdirSync(outDir, { recursive: true });
 
 if (process.argv.includes('--ab')) {
-  await renderComparisons(outDir);
+  await renderComparisons(outDir, resolveBaseSha());
   process.exit(0);
 }
 
