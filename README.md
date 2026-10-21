@@ -37,7 +37,7 @@ holds an AI credential, and there is no account or music database.
   scale and chord, then plays it and shows it on the neck. Tempo runs from 40
   to 240 BPM, with adjustable swing and optional looping. A rules phrase
   appears immediately. The page then asks `/api/phrase-plan` for a plan and
-  swaps that line in when it arrives. The request carries a scale id, root,
+  swaps that line in when it arrives, waiting up to 1800 ms. The request carries a scale id, root,
   and chord symbol. The API key stays on the server. If the planner is
   unavailable, the rules line remains.
 - **Drone:** holds the key under your playing. Choose Reed or Bow (both

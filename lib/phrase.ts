@@ -25,10 +25,11 @@ import {
  */
 
 /**
- * Cold Neon needs the server's 1200 ms database cap plus margin.
+ * The server confirms the database reservation before it calls upstream.
+ * Worst case is the 1200 ms database cap plus the 500 ms upstream cap.
  * The panel does not wait on this before playing the rules line.
  */
-export const PHRASE_PLANNER_TIMEOUT_MS = 1_500;
+export const PHRASE_PLANNER_TIMEOUT_MS = 1_800;
 /** The planner timer aborts with this. A panel cleanup uses the other reason. */
 export const PHRASE_PLANNER_TIMEOUT_REASON = 'phrase-planner-timeout';
 /** Phrase-panel cleanup and a replacement Generate abort with this. */
