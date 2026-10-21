@@ -446,7 +446,9 @@ void test('back restores the key, scale, chord, and notes together', async (t) =
     await armPhraseChanges(page);
     await page.getByRole('button', { name: 'Previous phrase' }).click();
 
-    assert.deepEqual(await phraseNotes(page), firstNotes);
+    // Loop keeps the staff on the phrase that is still sounding. The key,
+    // seed, and history move now; the notes follow at the next bar line.
+    assert.deepEqual(await phraseNotes(page), secondNotes);
     assert.equal(await seedOf(page), firstSeed);
     assert.equal(await settledChangeCount(page), 1);
     assert.deepEqual(await historyEntries(page), stored);
@@ -477,13 +479,27 @@ void test('back restores the key, scale, chord, and notes together', async (t) =
       await page.locator('.phrase-heading p').innerText(),
       /Over E tonic in E Mixolydian/,
     );
+    await page.waitForFunction(
+      (expected) => {
+        const items = [
+          ...document.querySelectorAll('.phrase-panel ol.sr-only li'),
+        ].map((node) => node.textContent);
+        return (
+          items.length === expected.length &&
+          items.every((item, index) => item === expected[index])
+        );
+      },
+      firstNotes,
+      { timeout: 8000 },
+    );
+    assert.deepEqual(await phraseNotes(page), firstNotes);
 
     await page.evaluate(() => {
       const view = window as Window & { __phraseChanges?: number };
       view.__phraseChanges = 0;
     });
     await page.getByRole('button', { name: 'Next phrase' }).click();
-    assert.deepEqual(await phraseNotes(page), secondNotes);
+    assert.deepEqual(await phraseNotes(page), firstNotes);
     assert.equal(await seedOf(page), secondSeed);
     assert.equal(await settledChangeCount(page), 1);
     assert.deepEqual(await historyEntries(page), stored);
@@ -499,6 +515,20 @@ void test('back restores the key, scale, chord, and notes together', async (t) =
     );
     assert.match(await page.locator('#explore-root').innerText(), /C/);
     assert.match(await page.locator('#explore-type').innerText(), /Minor/);
+    await page.waitForFunction(
+      (expected) => {
+        const items = [
+          ...document.querySelectorAll('.phrase-panel ol.sr-only li'),
+        ].map((node) => node.textContent);
+        return (
+          items.length === expected.length &&
+          items.every((item, index) => item === expected[index])
+        );
+      },
+      secondNotes,
+      { timeout: 8000 },
+    );
+    assert.deepEqual(await phraseNotes(page), secondNotes);
     await page.locator('#drone-toggle').waitFor({ state: 'detached' });
   } finally {
     await page.close();
