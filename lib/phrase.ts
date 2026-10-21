@@ -4033,7 +4033,7 @@ function questionNoteIndex(
  * Last attack of the question bar, then earlier weak attacks, latest first.
  * A strong attack is only tried when it is the last note of the bar.
  */
-function questionEventOrder(
+export function questionEventOrder(
   events: readonly { beat: number; strong: boolean }[],
   bar: 1 | 2,
 ): number[] {

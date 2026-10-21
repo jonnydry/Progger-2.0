@@ -9,7 +9,10 @@ import {
   isStrongBeat,
   melodicMotion,
   phraseCellLength,
+  phraseOnsets,
+  questionEventOrder,
   type FingeredNote,
+  type RhythmId,
 } from '../lib/phrase.ts';
 import {
   questionHits,
@@ -115,6 +118,47 @@ function guardsHold(
     assert.equal(melodicMotion(previous.midi, note.midi, scalePcs), 'step');
   }
 }
+
+void test('strong beats stay out of the question search', () => {
+  const rhythms = ['quarters', 'eighths', 'long-short', 'push'] as const satisfies readonly RhythmId[];
+  for (const rhythm of rhythms) {
+    for (const bars of [2, 4] as const) {
+      const beats = phraseOnsets(rhythm, bars);
+      const events = beats.map((beat) => ({
+        beat,
+        strong: isStrongBeat(beat),
+      }));
+      for (const bar of [1, 2] as const) {
+        const order = questionEventOrder(events, bar);
+        const start = (bar - 1) * 4;
+        const end = bar * 4;
+        const inBar = events
+          .map((event, index) => ({ event, index }))
+          .filter(
+            (item) => item.event.beat >= start && item.event.beat < end,
+          );
+        const last = inBar[inBar.length - 1];
+        assert.ok(last);
+        if (!last) continue;
+        assert.equal(order[0], last.index);
+        for (const index of order.slice(1)) {
+          assert.equal(
+            events[index]?.strong,
+            false,
+            `${rhythm} ${bars} bar ${bar} index ${index}`,
+          );
+        }
+        const strongEarlier = inBar
+          .slice(0, -1)
+          .filter((item) => item.event.strong);
+        assert.ok(strongEarlier.length > 0);
+        for (const item of strongEarlier) {
+          assert.equal(order.includes(item.index), false);
+        }
+      }
+    }
+  }
+});
 
 void test('minor blues keeps a question on a weak attack', async () => {
   const scale = SCALES.find((item) => item.id === 'minor-blues');

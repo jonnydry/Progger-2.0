@@ -8,12 +8,13 @@ import {
   generatePhraseWithPlanner,
   isStrongBeat,
   melodicMotion,
+  mulberry32,
   phraseCellLength,
   PHRASE_CELL_LIMIT,
   rulePlan,
   type FingeredNote,
 } from '../lib/phrase.ts';
-import { motifRhythmsFor, questionHits } from '../lib/phrase-shape.ts';
+import { motifRhythmsFor, questionHits, rollShape } from '../lib/phrase-shape.ts';
 import { recordedPhrasePlanner } from './phrase-plan-fixture.ts';
 
 function guardsHold(
@@ -73,6 +74,11 @@ void test('a stripped rules motif is re-rolled on the locked rhythm', async () =
   assert.equal(result.phrase.plan.shape?.motif.rhythm, 'even');
   assert.ok(result.phrase.plan.shape);
   if (!result.phrase.plan.shape) return;
+  const relocked = rollShape(mulberry32((78 + 0x6c1e) >>> 0), 2, 'quarters');
+  const rulesStream = rollShape(mulberry32(78), 2, 'quarters');
+  assert.deepEqual(result.phrase.plan.shape, relocked);
+  assert.notDeepEqual(result.phrase.plan.shape, rulesStream);
+  assert.deepEqual(rulePlan(78, available, undefined, 2).shape, natural.shape);
   assert.equal(questionHits(result.phrase.notes, result.phrase.plan.shape), true);
   guardsHold(
     result.phrase.notes,
