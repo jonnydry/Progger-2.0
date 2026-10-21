@@ -27,11 +27,14 @@ before the planner can spend. The counter role is also applied by hand.
 `jev_counter` can log in, its `statement_timeout` is 2 seconds, and it
 has `USAGE` on `public` with no `CREATE`. It can `SELECT`, `INSERT`,
 `UPDATE`, and `DELETE` `jev_ip`, and `SELECT`, `INSERT`, and `UPDATE`
-`jev_spend`. The password below is a placeholder:
+`jev_spend`. Postgres 15 and later already withhold `CREATE` on
+`public` from `PUBLIC`. Earlier versions still grant it, so the revoke
+below is required there. The password is a placeholder:
 
 ```sql
 CREATE ROLE jev_counter LOGIN PASSWORD '<password>';
 ALTER ROLE jev_counter SET statement_timeout = '2s';
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO jev_counter;
 GRANT SELECT, INSERT, UPDATE, DELETE ON jev_ip TO jev_counter;
 GRANT SELECT, INSERT, UPDATE ON jev_spend TO jev_counter;
@@ -52,7 +55,8 @@ reservation is refunded only when the call never starts. A 200 with a
 valid usage object gives back the unused part of that reservation in
 `waitUntil`: billed tokens are `input_tokens` plus `output_tokens` when
 the response reports them. Usage above the reservation logs
-`usage_over_reservation` and adds the excess, up to the cap. Anything
+`usage_over_reservation` and adds the excess, up to the cap. A month
+already above the cap is left there. Anything
 else keeps the full reservation. At 40 tokens a call, the 143,080,000
 cap is about 3.5 million calls. A database failure is logged as
 `db_error`, `db_timeout`, or `db_deadlock`. A reconcile failure is
@@ -61,8 +65,12 @@ cap is about 3.5 million calls. A database failure is logged as
 logged. A missing salt
 does the same, after one warning that does not include the salt. A
 waiter behind a non-200 keeps the rest of its work inside the 1700 ms
-server budget, and returns without reserving when that remainder
-cannot hold both a database attempt and an upstream attempt. One
+server budget. Upstream takes the leftover time first, up to 500 ms,
+and the database gets what remains. A database slice under 250 ms
+returns without reserving and without arming the 30 s skip. A database
+timeout on a real attempt, including a waiter at or above that floor,
+arms the skip. An upstream timeout does not, because the database
+already answered. One
 process shares a 200 for an in-flight context. Any other status is not
 reused, so that caller runs its own reservation. Another instance can
 still reserve the same context; each of those duplicates is counted

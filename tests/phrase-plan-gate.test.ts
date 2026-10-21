@@ -304,6 +304,86 @@ void test('postgres phrase plan gate', async (t) => {
     assert.equal((await stored()).calls, 1);
   });
 
+  await t.test('excess does not lower a month already above the cap', async () => {
+    await reset();
+    await pool.query(`INSERT INTO jev_spend (month, tokens) VALUES ('2026-10', 200)`);
+    await phrasePlanCountExcess(sql, { month, excess: 80, cap: 150 });
+    assert.equal((await stored()).tokens, 200);
+    assert.equal((await stored()).calls, 0);
+  });
+
+  await t.test('300 callers on one new IP at the 1200 ms budget stop at the IP limit', async () => {
+    await reset();
+    assert.equal(PHRASE_PLAN_DB_TIMEOUT_MS, 1_200);
+    const reservation = 100;
+    const limit = 200;
+    await pool.query(`INSERT INTO jev_spend (month, tokens) VALUES ('2026-10', 0)`);
+    const gateTexts: string[] = [];
+    const watching: PhrasePlanSql = async (strings, ...values) => {
+      const text = strings.join('');
+      if (text.includes('INSERT INTO jev_ip')) gateTexts.push(text);
+      return sql(strings, ...values);
+    };
+    const results = await race(300, () =>
+      phrasePlanReserve(watching, {
+        day,
+        hash: 'one-new',
+        month,
+        reservation,
+        limit,
+        cap: 1_000_000_000,
+      }, { budgetMs: PHRASE_PLAN_DB_TIMEOUT_MS }),
+    );
+    const deadlocks = results.filter((result) => result.status === 'deadlock').length;
+    const downs = results.filter((result) => result.status === 'down').length;
+    const retries = results.reduce((sum, result) => sum + result.attempts - 1, 0);
+    const orphan = results.filter(callsWithoutTokens).length;
+    const ok = results.filter(succeeded).length;
+    const ipRefused = results.filter((result) => {
+      if (result.status !== 'ok') return false;
+      const row = result.rows[0];
+      return row?.ip_ok === false && row.spend_ok === true && row.calls == null && row.tokens == null;
+    }).length;
+    // A new-row insert can lose the race after both flags were true.
+    // That caller writes nothing, same as an IP-limit refusal.
+    const lostInsert = results.filter((result) => {
+      if (result.status !== 'ok') return false;
+      const row = result.rows[0];
+      return row?.ip_ok === true && row.spend_ok === true && row.calls == null && row.tokens == null;
+    }).length;
+    let after = await stored();
+    for (let turn = 0; turn < 20; turn += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const next = await stored();
+      const stable = next.calls === after.calls && next.tokens === after.tokens;
+      after = next;
+      if (stable) break;
+    }
+    console.log(JSON.stringify({
+      label: 'budget-1200-one-ip',
+      deadlocks,
+      downs,
+      retries,
+      orphan,
+      ok,
+      ipRefused,
+      lostInsert,
+      calls: after.calls,
+      tokens: after.tokens,
+    }));
+    assert.equal(deadlocks, 0);
+    assert.equal(downs, 0);
+    assert.equal(retries, 0);
+    assert.equal(orphan, 0);
+    assert.equal(ok, limit);
+    assert.equal(ipRefused + lostInsert, 300 - limit);
+    assert.equal(after.calls, limit);
+    assert.equal(after.tokens, limit * reservation);
+    assert.equal(after.ips, 1);
+    assert.ok(gateTexts.length > 0);
+    assert.ok(gateTexts.every((text) => text.includes('AND EXISTS (SELECT 1 FROM spend_lock)')));
+  });
+
   await t.test('200 existing IP rows at the 1200 ms budget do not deadlock or orphan', async () => {
     await reset();
     assert.equal(PHRASE_PLAN_DB_TIMEOUT_MS, 1_200);
