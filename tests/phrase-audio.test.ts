@@ -7,6 +7,7 @@ import { SCALES, TUNING, spell } from '../lib/music.ts';
 import {
   PHRASE_END_RELEASE_SEC,
   PHRASE_LOOKAHEAD_SEC,
+  PHRASE_MUTE_RELEASE_MARGIN_SEC,
   PHRASE_START_LEAD_SEC,
   PHRASE_TEMPO_DEFAULT,
   PHRASE_TEMPO_MAX,
@@ -4454,6 +4455,298 @@ void test('notes before the switch point keep the seam fade', async () => {
     dropped.has(after.oscillator),
     true,
     'a note after the switch kept the seam fade',
+  );
+  player.stop();
+});
+
+void test('turning loop off well before the bar keeps the note at its level', async () => {
+  assert.equal(PHRASE_MUTE_RELEASE_MARGIN_SEC, 0.01);
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 8, RATE);
+  context.resume = () => Promise.resolve();
+  const destination = context.createGain();
+  destination.connect(context.destination);
+  const clock = new AudioClock();
+  const events: {
+    kind: 'set' | 'cancel';
+    node: GainNode;
+    time: number;
+    value?: number;
+  }[] = [];
+  const ramps: {
+    node: GainNode;
+    value: number;
+    end: number;
+  }[] = [];
+  const createGain = context.createGain.bind(context);
+  context.createGain = () => {
+    const node = createGain();
+    const gain = node.gain;
+    const setValue = gain.setValueAtTime.bind(gain);
+    const ramp = gain.linearRampToValueAtTime.bind(gain);
+    const cancel = gain.cancelScheduledValues.bind(gain);
+    gain.setValueAtTime = (value: number, time: number) => {
+      events.push({ kind: 'set', node, time, value });
+      return setValue(value, time);
+    };
+    gain.linearRampToValueAtTime = (value: number, time: number) => {
+      ramps.push({ node, value, end: time });
+      return ramp(value, time);
+    };
+    gain.cancelScheduledValues = (time: number) => {
+      events.push({ kind: 'cancel', node, time });
+      return cancel(time);
+    };
+    return node;
+  };
+  const { starts, dropped } = spyPhrase(context);
+  const player = new PhrasePlayer(() => {});
+  const playing = [
+    queuedNote(0, 0),
+    queuedNote(4, 4),
+    queuedNote(2, 6),
+    queuedNote(8, 8, 2),
+  ];
+  await player.start({
+    notes: playing,
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination,
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  await rollClock(clock, lead + 0.4);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  assert.equal(boundary, lead + 2);
+  const ahead = boundary - clock.currentTime;
+  assert.ok(
+    ahead > PHRASE_MUTE_RELEASE_MARGIN_SEC + 0.5,
+    `the release was only ${ahead}s before the bar`,
+  );
+  player.queuePhrase({
+    notes: [queuedNote(10, 0)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination,
+    clock,
+  });
+  const muted = events.filter(
+    (item) =>
+      item.kind === 'set' &&
+      item.value === 0 &&
+      Math.abs(item.time - boundary) < 1e-4 &&
+      events.some(
+        (earlier) =>
+          earlier.kind === 'set' &&
+          earlier.node === item.node &&
+          (earlier.value ?? 0) > 0.5 &&
+          earlier.time < boundary - 1e-4,
+      ),
+  );
+  assert.ok(muted.length >= 1, 'the armed switch did not mute the bar');
+  const releaseAt = clock.currentTime;
+  const armed = events.length;
+  player.finishPass();
+  const barNote = starts.find(
+    (item) => nearPitch(item, 4) && Math.abs(item.when - boundary) < 1e-6,
+  );
+  assert.ok(barNote, 'the note on the bar was not scheduled');
+  assert.equal(
+    dropped.has(barNote.oscillator),
+    false,
+    'loop off dropped the note before the bar',
+  );
+  for (const mute of muted) {
+    const zeroAt = events.indexOf(mute);
+    assert.ok(
+      events
+        .slice(zeroAt + 1)
+        .some(
+          (item) =>
+            item.kind === 'cancel' &&
+            item.node === mute.node &&
+            Math.abs(item.time - releaseAt) < 1e-4,
+        ),
+      'cancelScheduledValues did not clear the mute',
+    );
+    assert.ok(
+      events.some(
+        (item, index) =>
+          index >= armed &&
+          item.kind === 'set' &&
+          item.node === mute.node &&
+          (item.value ?? 0) > 0.5 &&
+          Math.abs(item.time - releaseAt) < 1e-4,
+      ),
+      'the note was not put back at its level',
+    );
+  }
+  assert.equal(
+    ramps.some(
+      (item) =>
+        item.value > 0.5 && Math.abs(item.end - (releaseAt + 0.02)) < 1e-3,
+    ),
+    false,
+    'a release well before the bar ramped the note',
+  );
+  const rendered = await context.startRendering();
+  const channel = rendered.getChannelData(0);
+  const windowPeak = (from: number, to: number) => {
+    const start = Math.max(0, Math.floor(from * RATE));
+    const end = Math.min(channel.length, Math.floor(to * RATE));
+    let peak = 0;
+    for (let index = start; index < end; index += 1) {
+      peak = Math.max(peak, Math.abs(channel[index] ?? 0));
+    }
+    return peak;
+  };
+  const opening = windowPeak(lead + 0.008, lead + 0.04);
+  const atBar = windowPeak(boundary + 0.008, boundary + 0.04);
+  assert.ok(opening > 0.02, `the opening note peaked at ${opening}`);
+  assert.ok(atBar > 0.02, `the note at the bar peaked at ${atBar}`);
+  assert.ok(
+    atBar > opening * 0.45,
+    `the bar note peaked at ${atBar}, the opening at ${opening}`,
+  );
+  player.stop();
+});
+
+void test('turning loop off inside the mute margin ramps the note in', async () => {
+  const tempo = 120;
+  const context = new OfflineAudioContext(1, RATE * 8, RATE);
+  context.resume = () => Promise.resolve();
+  const clock = new AudioClock();
+  const events: {
+    kind: 'set' | 'cancel';
+    node: GainNode;
+    time: number;
+    value?: number;
+  }[] = [];
+  const ramps: {
+    value: number;
+    end: number;
+    anchor: number;
+    anchorValue: number;
+  }[] = [];
+  const anchors = new WeakMap<AudioParam, { time: number; value: number }>();
+  const createGain = context.createGain.bind(context);
+  context.createGain = () => {
+    const node = createGain();
+    const gain = node.gain;
+    const setValue = gain.setValueAtTime.bind(gain);
+    const ramp = gain.linearRampToValueAtTime.bind(gain);
+    const cancel = gain.cancelScheduledValues.bind(gain);
+    gain.setValueAtTime = (value: number, time: number) => {
+      anchors.set(gain, { time, value });
+      events.push({ kind: 'set', node, time, value });
+      return setValue(value, time);
+    };
+    gain.linearRampToValueAtTime = (value: number, time: number) => {
+      const anchor = anchors.get(gain);
+      ramps.push({
+        value,
+        end: time,
+        anchor: anchor?.time ?? Number.NaN,
+        anchorValue: anchor?.value ?? Number.NaN,
+      });
+      return ramp(value, time);
+    };
+    gain.cancelScheduledValues = (time: number) => {
+      events.push({ kind: 'cancel', node, time });
+      return cancel(time);
+    };
+    return node;
+  };
+  const player = new PhrasePlayer(() => {});
+  await player.start({
+    notes: [
+      queuedNote(0, 0),
+      queuedNote(4, 4),
+      queuedNote(2, 6),
+      queuedNote(8, 8, 2),
+    ],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.createGain(),
+    clock,
+  });
+  const lead = PHRASE_START_LEAD_SEC;
+  await rollClock(clock, lead + 0.4);
+  const boundary = nextPhraseBarLine(lead, clock.currentTime, tempo);
+  player.queuePhrase({
+    notes: [queuedNote(10, 0)],
+    bars: 2,
+    tempo,
+    swing: 0,
+    loop: true,
+    context,
+    destination: context.destination,
+    clock,
+  });
+  const releaseAt = boundary - PHRASE_MUTE_RELEASE_MARGIN_SEC / 2;
+  assert.ok(boundary - releaseAt < PHRASE_MUTE_RELEASE_MARGIN_SEC);
+  assert.ok(releaseAt > clock.currentTime);
+  const muted = events.filter(
+    (item) =>
+      item.kind === 'set' &&
+      item.value === 0 &&
+      Math.abs(item.time - boundary) < 1e-4 &&
+      events.some(
+        (earlier) =>
+          earlier.kind === 'set' &&
+          earlier.node === item.node &&
+          (earlier.value ?? 0) > 0.5 &&
+          earlier.time < boundary - 1e-4,
+      ),
+  );
+  assert.ok(muted.length >= 1, 'the armed switch did not mute the bar');
+  clock.currentTime = releaseAt;
+  player.finishPass();
+  for (const mute of muted) {
+    const zeroAt = events.indexOf(mute);
+    assert.ok(
+      events
+        .slice(zeroAt + 1)
+        .some(
+          (item) =>
+            item.kind === 'cancel' &&
+            item.node === mute.node &&
+            Math.abs(item.time - releaseAt) < 1e-4,
+        ),
+      'cancelScheduledValues left the mute inside the ramp',
+    );
+  }
+  const rises = ramps.filter(
+    (item) =>
+      item.value > 0.5 &&
+      Math.abs(item.anchor - releaseAt) < 1e-4 &&
+      Math.abs(item.end - releaseAt - 0.02) < 1e-4,
+  );
+  assert.ok(rises.length >= 1, 'a release inside the margin did not ramp');
+  for (const rise of rises) {
+    assert.ok(
+      rise.anchorValue < 0.02,
+      `the ramp started at ${rise.anchorValue}, not near 0`,
+    );
+  }
+  assert.equal(
+    events.filter(
+      (item) =>
+        item.kind === 'set' &&
+        Math.abs(item.time - releaseAt) < 1e-4 &&
+        (item.value ?? 0) > 0.02,
+    ).length,
+    0,
+    'a release inside the margin stepped back to full gain',
   );
   player.stop();
 });
