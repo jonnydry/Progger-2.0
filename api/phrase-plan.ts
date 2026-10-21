@@ -101,9 +101,9 @@ export const PHRASE_PLAN_TOKEN_CAP = 238_000_000;
 export const PHRASE_PLAN_IP_DAILY_LIMIT = 200;
 export const PHRASE_PLAN_DB_TIMEOUT_MS = 200;
 export const PHRASE_PLAN_UPSTREAM_TIMEOUT_MS = 500;
-const IP_HASH_SALT = 'progger-jev-ip-v1';
+/** Musical contexts kept in memory. The oldest is dropped past this. */
+export const PHRASE_PLAN_CACHE_LIMIT = 32;
 const STUDIO_HOSTS = new Set(['progger.studio', 'www.progger.studio']);
-const PREVIEW_SUFFIX = '-jonnys-projects-8f4138ff.vercel.app';
 
 const ROOTS = [
   'C',
@@ -231,6 +231,24 @@ const cache = new Map<string, PhrasePlanDistributions>();
 
 export function resetPhrasePlanStateForTests(): void {
   cache.clear();
+}
+
+function cachedDistributions(key: string): PhrasePlanDistributions | undefined {
+  const hit = cache.get(key);
+  if (!hit) return undefined;
+  cache.delete(key);
+  cache.set(key, hit);
+  return hit;
+}
+
+function storeDistributions(key: string, value: PhrasePlanDistributions): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > PHRASE_PLAN_CACHE_LIMIT) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
 }
 
 export function shuffleItems<T>(
@@ -379,13 +397,23 @@ function probabilityMap(
   menu: readonly string[],
   probabilities: unknown,
 ): Record<string, number> | null {
-  if (!probabilities || typeof probabilities !== 'object') return null;
+  if (!probabilities || typeof probabilities !== 'object' || Array.isArray(probabilities))
+    return null;
   const source = probabilities as Record<string, unknown>;
   const out: Record<string, number> = {};
+  let total = 0;
   for (const id of menu) {
     const value = source[id];
-    out[id] = typeof value === 'number' && value >= 0 ? value : 0;
+    if (value === undefined) {
+      out[id] = 0;
+      continue;
+    }
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+      return null;
+    out[id] = value;
+    total += value;
   }
+  if (!(total > 0)) return null;
   return out;
 }
 
@@ -425,6 +453,8 @@ export function distributionsFromAnswers(
     );
     if (!weights) return null;
     if (input.bars === 4 && index === 1) weights.repeat = 0;
+    const variationTotal = Object.values(weights).reduce((sum, value) => sum + value, 0);
+    if (!(variationTotal > 0)) return null;
     variations.push(weights as Record<BarVariation, number>);
   }
   return {
@@ -456,7 +486,10 @@ export type PhrasePlanDeps = {
   env: {
     TYPESAFE_API_KEY?: string;
     JEV_COUNTER_DATABASE_URL?: string;
+    JEV_IP_HASH_SALT?: string;
     VERCEL_ENV?: string;
+    VERCEL_URL?: string;
+    VERCEL_BRANCH_URL?: string;
   };
   now: () => number;
   random: () => number;
@@ -483,11 +516,84 @@ export function phrasePlanClientIp(headers: HeaderMap): string | null {
   );
 }
 
-export function phrasePlanIpHash(ip: string): string {
+/**
+ * IPv6 is hashed as its /64 so one network does not look like many clients.
+ * An IPv4 address, including one written as an IPv4-mapped IPv6 address, is
+ * hashed in full. A value that is not a parseable address is hashed as given.
+ */
+function addressKey(ip: string): string {
+  const given = ip.trim();
+  const wrapped = given.startsWith('[') && given.endsWith(']');
+  const body = wrapped ? given.slice(1, -1) : given;
+  const zone = body.indexOf('%');
+  const withoutZone = zone === -1 ? body : body.slice(0, zone);
+  if (!withoutZone.includes(':')) return given;
+  const parsed = ipv6Prefix(withoutZone);
+  return parsed ?? given;
+}
+
+/** First four hextets, or the embedded IPv4 when the address is v4-mapped. */
+function ipv6Prefix(address: string): string | null {
+  const halves = address.split('::');
+  if (halves.length > 2) return null;
+  const hextet = (value: number) => value.toString(16).padStart(4, '0');
+  const octet = (part: string): number | null => {
+    if (!/^(0|[1-9]\d{0,2})$/.test(part)) return null;
+    const value = Number(part);
+    return value <= 255 ? value : null;
+  };
+  const parseSide = (side: string): string[] | null => {
+    if (side === '') return [];
+    const groups: string[] = [];
+    for (const part of side.split(':')) {
+      if (part.includes('.')) {
+        const nums = part.split('.');
+        if (nums.length !== 4) return null;
+        const bytes = nums.map(octet);
+        if (bytes.some((item) => item === null)) return null;
+        const high = ((bytes[0] ?? 0) << 8) | (bytes[1] ?? 0);
+        const low = ((bytes[2] ?? 0) << 8) | (bytes[3] ?? 0);
+        groups.push(hextet(high), hextet(low));
+        continue;
+      }
+      if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return null;
+      groups.push(part.toLowerCase().padStart(4, '0'));
+    }
+    return groups;
+  };
+  const left = parseSide(halves[0] ?? '');
+  const right = halves.length === 2 ? parseSide(halves[1] ?? '') : [];
+  if (!left || !right) return null;
+  const missing = 8 - left.length - right.length;
+  if (halves.length === 2 ? missing <= 0 : left.length !== 8) return null;
+  const groups =
+    halves.length === 1
+      ? left
+      : [...left, ...Array<string>(missing).fill('0000'), ...right];
+  if (groups.length !== 8) return null;
+  const asInt = (group: string | undefined) => Number.parseInt(group ?? '0', 16);
+  const mapped =
+    asInt(groups[0]) === 0 &&
+    asInt(groups[1]) === 0 &&
+    asInt(groups[2]) === 0 &&
+    asInt(groups[3]) === 0 &&
+    asInt(groups[4]) === 0 &&
+    asInt(groups[5]) === 0xffff;
+  if (mapped) {
+    const high = asInt(groups[6]);
+    const low = asInt(groups[7]);
+    return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+  }
+  return groups.slice(0, 4).join(':');
+}
+
+export function phrasePlanIpHash(ip: string, salt: string, day: string): string {
   return createHash('sha256')
-    .update(IP_HASH_SALT)
+    .update(salt)
     .update('\0')
-    .update(ip)
+    .update(day)
+    .update('\0')
+    .update(addressKey(ip))
     .digest('hex');
 }
 
@@ -495,10 +601,19 @@ function devEnv(value: string | undefined): boolean {
   return value !== 'production' && value !== 'preview';
 }
 
-/** Browsers on the studio, this project's previews, and local dev. */
+function deploymentOrigin(host: string | undefined): string | null {
+  if (!host) return null;
+  const bare = host.trim().replace(/\/$/, '');
+  if (!bare || bare.includes('/') || bare.includes(' ') || bare.includes(':'))
+    return null;
+  return `https://${bare}`;
+}
+
+/** Studio, this deployment's exact preview hosts, and local dev. */
 export function phrasePlanOriginAllowed(
   origin: string | undefined,
   vercelEnv: string | undefined,
+  deployment?: { url?: string; branchUrl?: string },
 ): boolean {
   if (!origin) return false;
   let url: URL;
@@ -518,9 +633,9 @@ export function phrasePlanOriginAllowed(
   }
   if (url.protocol !== 'https:' || url.port !== '') return false;
   if (STUDIO_HOSTS.has(host)) return true;
-  if (!host.endsWith(PREVIEW_SUFFIX)) return false;
-  const prefix = host.slice(0, -PREVIEW_SUFFIX.length);
-  return prefix === 'progger' || prefix.startsWith('progger-');
+  const branch = deploymentOrigin(deployment?.branchUrl);
+  const live = deploymentOrigin(deployment?.url);
+  return origin === branch || origin === live;
 }
 
 function utcMonth(now: number): string {
@@ -603,7 +718,12 @@ export async function handlePhrasePlan(
     return;
   }
   const origin = headerHop(request.headers, 'origin');
-  if (!phrasePlanOriginAllowed(origin ?? undefined, env.VERCEL_ENV)) {
+  if (
+    !phrasePlanOriginAllowed(origin ?? undefined, env.VERCEL_ENV, {
+      url: env.VERCEL_URL,
+      branchUrl: env.VERCEL_BRANCH_URL,
+    })
+  ) {
     response.status(403).json({ error: 'forbidden' });
     return;
   }
@@ -612,8 +732,13 @@ export async function handlePhrasePlan(
     response.status(400).json({ error: 'bad-request' });
     return;
   }
+  const salt = env.JEV_IP_HASH_SALT;
+  if (!salt) {
+    unavailable(response);
+    return;
+  }
   const keyForContext = contextKey(parsed);
-  const cached = cache.get(keyForContext);
+  const cached = cachedDistributions(keyForContext);
   if (cached) {
     response.status(200).json({ model: MODEL, distributions: cached });
     return;
@@ -631,7 +756,7 @@ export async function handlePhrasePlan(
   const now = deps?.now?.() ?? Date.now();
   const day = utcDay(now);
   const month = utcMonth(now);
-  const hash = phrasePlanIpHash(ip);
+  const hash = phrasePlanIpHash(ip, salt, day);
   const cap = deps?.tokenCap ?? PHRASE_PLAN_TOKEN_CAP;
   const query = async (
     work: (sql: PhrasePlanSql) => Promise<readonly Record<string, unknown>[]>,
@@ -641,6 +766,9 @@ export async function handlePhrasePlan(
   };
   const ipRows = await query(
     (sql) => sql`
+      WITH cleaned AS (
+        DELETE FROM jev_ip WHERE day < CAST(${day} AS date)
+      )
       INSERT INTO jev_ip (day, ip_hash, calls)
       VALUES (CAST(${day} AS date), ${hash}, 1)
       ON CONFLICT (day, ip_hash) DO UPDATE
@@ -692,7 +820,8 @@ export async function handlePhrasePlan(
     await query(
       (sql) => sql`
         UPDATE jev_spend
-        SET tokens = GREATEST(tokens + ${delta}, 0), updated_at = now()
+        SET tokens = LEAST(GREATEST(tokens + ${delta}, 0), ${cap}),
+            updated_at = now()
         WHERE month = ${month}
       `,
     );
@@ -747,7 +876,7 @@ export async function handlePhrasePlan(
   if (typeof inputTokens === 'number' && Number.isFinite(inputTokens)) {
     await adjust(Math.round(inputTokens) - reservation);
   }
-  cache.set(keyForContext, distributions);
+  storeDistributions(keyForContext, distributions);
   response.status(200).json({ model: MODEL, distributions });
 }
 

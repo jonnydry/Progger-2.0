@@ -19,14 +19,15 @@ commands remain available.
 
 There is one deployed server function, `api/phrase-plan`. It plans a phrase
 with TypeSafe (`jev-1.13.0`) and otherwise leaves the browser on its rules
-line. The function reads `TYPESAFE_API_KEY` and `JEV_COUNTER_DATABASE_URL`.
-Neither value is logged. The database URL points at a Neon Postgres database.
-`db/jev-spend.sql` creates `jev_spend` and `jev_ip` and is not run by the
-build or by the function; apply it by hand before the planner can spend.
-A missing URL, a database error, or a database timeout skips the planner.
-Requests whose Origin is not progger.studio, www.progger.studio, a progger
-preview on `jonnys-projects-8f4138ff.vercel.app`, or localhost in development
-are rejected before the database or the key is touched.
+line. The function reads `TYPESAFE_API_KEY`, `JEV_COUNTER_DATABASE_URL`, and
+`JEV_IP_HASH_SALT`. None of those values is logged. The database URL points
+at a Neon Postgres database. `db/jev-spend.sql` creates `jev_spend` and
+`jev_ip` and is not run by the build or by the function; apply it by hand
+before the planner can spend. A missing URL, a missing salt, a database
+error, or a database timeout skips the planner. Requests whose Origin is
+not progger.studio, www.progger.studio, exactly `https://${VERCEL_URL}` or
+`https://${VERCEL_BRANCH_URL}`, or localhost in development are rejected
+before the database or the key is touched.
 
 The initial page and hydration payload are still prerendered. Matching,
 diagrams, themes, and audio run in the browser. Hash navigation needs no

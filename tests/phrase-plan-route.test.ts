@@ -6,17 +6,24 @@ import {
   BAR_VARIATIONS,
   MOTIF_CONTOURS,
   MOTIF_RHYTHMS,
+  PHRASE_PLAN_CACHE_LIMIT,
   PHRASE_PLAN_IP_DAILY_LIMIT,
   PHRASE_PLAN_TOKEN_CAP,
+  PHRASE_PLAN_UPSTREAM_TIMEOUT_MS,
   QUESTION_DEGREES,
+  distributionsFromAnswers,
   handlePhrasePlan,
   phrasePlanClientIp,
   phrasePlanIpHash,
   phrasePlanOriginAllowed,
   resetPhrasePlanStateForTests,
+  type PhrasePlanRequest,
   type PhrasePlanSql,
 } from '../api/phrase-plan.ts';
-import { createPhrasePlanner } from '../lib/phrase-planner-client.ts';
+import {
+  createPhrasePlanner,
+  parseDistributions,
+} from '../lib/phrase-planner-client.ts';
 import { spell, SCALES } from '../lib/music.ts';
 import { generatePhraseWithPlanner, tonicChordSymbol } from '../lib/phrase.ts';
 import {
@@ -67,7 +74,10 @@ function harness(options?: {
   env?: {
     TYPESAFE_API_KEY?: string;
     JEV_COUNTER_DATABASE_URL?: string;
+    JEV_IP_HASH_SALT?: string;
     VERCEL_ENV?: string;
+    VERCEL_URL?: string;
+    VERCEL_BRANCH_URL?: string;
   };
   sql?: PhrasePlanSql;
   fetch?: (url: string, init: { body: string; headers: Record<string, string>; signal?: AbortSignal }) => Promise<{ ok: boolean; json: () => Promise<unknown> }>;
@@ -80,6 +90,7 @@ function harness(options?: {
   const env = {
     VERCEL_ENV: 'production' as string | undefined,
     JEV_COUNTER_DATABASE_URL: 'postgres://counter.example/jev',
+    JEV_IP_HASH_SALT: 'test-salt' as string | undefined,
     ...options?.env,
     get TYPESAFE_API_KEY() {
       keyReads += 1;
@@ -142,27 +153,52 @@ void test('menus copied into the route still match the shape module', () => {
   assert.equal(route.includes('CREATE TABLE'), false);
   assert.equal(route.includes('x-forwarded-for'), false);
   assert.equal(route.includes('console.'), false);
+  assert.equal(route.includes('progger-jev-ip-v1'), false);
+  assert.equal(route.includes('jonnys-projects'), false);
+  assert.equal(route.includes('JEV_IP_HASH_SALT'), true);
 });
 
-void test('origin allowlist accepts the studio, this project’s previews, and local dev only', () => {
+void test('origin allowlist accepts the studio, this deployment’s exact hosts, and local dev only', () => {
+  const deployment = {
+    url: 'progger-abc123.vercel.app',
+    branchUrl: 'progger-git-cursor-phrase-shape-a77ca5.vercel.app',
+  };
   assert.equal(phrasePlanOriginAllowed('https://progger.studio', 'production'), true);
   assert.equal(phrasePlanOriginAllowed('https://www.progger.studio', 'production'), true);
   assert.equal(
     phrasePlanOriginAllowed(
-      'https://progger-jonnys-projects-8f4138ff.vercel.app',
-      'production',
+      'https://progger-abc123.vercel.app',
+      'preview',
+      deployment,
     ),
     true,
+  );
+  assert.equal(
+    phrasePlanOriginAllowed(
+      'https://progger-git-cursor-phrase-shape-a77ca5.vercel.app',
+      'preview',
+      deployment,
+    ),
+    true,
+  );
+  assert.equal(
+    phrasePlanOriginAllowed(
+      'https://progger-jonnys-projects-8f4138ff.vercel.app',
+      'production',
+      deployment,
+    ),
+    false,
   );
   assert.equal(
     phrasePlanOriginAllowed(
       'https://progger-git-cursor-phrase-shape-a77ca5-jonnys-projects-8f4138ff.vercel.app',
       'preview',
+      deployment,
     ),
-    true,
+    false,
   );
   assert.equal(
-    phrasePlanOriginAllowed('https://other-jonnys-projects-8f4138ff.vercel.app', 'preview'),
+    phrasePlanOriginAllowed('https://progger-other.vercel.app', 'preview', deployment),
     false,
   );
   assert.equal(phrasePlanOriginAllowed('https://progger.vercel.app', 'preview'), false);
@@ -190,12 +226,53 @@ void test('the client address comes from the platform header, never the raw forw
     '203.0.113.4',
   );
   assert.equal(phrasePlanClientIp({ 'x-forwarded-for': '203.0.113.4' }), null);
-  const hash = phrasePlanIpHash('203.0.113.4');
+  const salt = 'test-salt';
+  const day = '2026-10-21';
+  const hash = phrasePlanIpHash('203.0.113.4', salt, day);
   assert.equal(
     hash,
-    createHash('sha256').update('progger-jev-ip-v1').update('\0').update('203.0.113.4').digest('hex'),
+    createHash('sha256')
+      .update(salt)
+      .update('\0')
+      .update(day)
+      .update('\0')
+      .update('203.0.113.4')
+      .digest('hex'),
   );
   assert.equal(hash.includes('203.0.113.4'), false);
+  assert.notEqual(hash, phrasePlanIpHash('203.0.113.4', salt, '2026-10-22'));
+  assert.notEqual(hash, phrasePlanIpHash('203.0.113.4', 'other-salt', day));
+  const prefix = phrasePlanIpHash('2001:db8:85a3::8a2e:370:7334', salt, day);
+  assert.equal(
+    prefix,
+    phrasePlanIpHash('2001:0db8:85a3:0000:1111:2222:3333:4444', salt, day),
+  );
+  assert.equal(prefix, phrasePlanIpHash('2001:DB8:85A3::1%eth0', salt, day));
+  assert.notEqual(prefix, phrasePlanIpHash('2001:db8:85a3:1::1', salt, day));
+  assert.equal(phrasePlanIpHash('::ffff:203.0.113.4', salt, day), hash);
+  assert.equal(phrasePlanIpHash('[::ffff:203.0.113.4]', salt, day), hash);
+  assert.notEqual(
+    phrasePlanIpHash('not-an-ip%a', salt, day),
+    phrasePlanIpHash('not-an-ip%b', salt, day),
+  );
+  assert.notEqual(
+    phrasePlanIpHash('1:2:3:4:5:6:7::8', salt, day),
+    phrasePlanIpHash('1:2:3:4:5:6:7:8', salt, day),
+  );
+  assert.notEqual(
+    phrasePlanIpHash('::ffff:1e2.0.0.1', salt, day),
+    phrasePlanIpHash('100.0.0.1', salt, day),
+  );
+  assert.equal(
+    phrasePlanIpHash('not-an-ip', salt, day),
+    createHash('sha256')
+      .update(salt)
+      .update('\0')
+      .update(day)
+      .update('\0')
+      .update('not-an-ip')
+      .digest('hex'),
+  );
 });
 
 void test('a foreign origin is rejected before the database or the key', async () => {
@@ -248,10 +325,16 @@ void test('the daily cap stores a salted hash and falls back once it is spent', 
   await run.done;
   assert.deepEqual(run.result(), { status: 429, payload: { error: 'rate-limit' } });
   assert.equal(queries.length, 1);
+  assert.match(queries[0]?.text ?? '', /DELETE FROM jev_ip/);
+  assert.match(queries[0]?.text ?? '', /day < CAST\(\? AS date\)/);
   assert.match(queries[0]?.text ?? '', /INSERT INTO jev_ip/);
   assert.match(queries[0]?.text ?? '', /jev_ip\.calls \+ 1 <= \?/);
-  assert.equal(queries[0]?.values[1], phrasePlanIpHash('203.0.113.9'));
-  assert.equal(queries[0]?.values[2], PHRASE_PLAN_IP_DAILY_LIMIT);
+  const hash = phrasePlanIpHash('203.0.113.9', 'test-salt', '2026-10-21');
+  assert.equal(queries[0]?.values[0], '2026-10-21');
+  assert.equal(queries[0]?.values[1], '2026-10-21');
+  assert.equal(queries[0]?.values[2], hash);
+  assert.equal(queries[0]?.values[3], PHRASE_PLAN_IP_DAILY_LIMIT);
+  assert.equal(queries[0]?.values.includes(hash), true);
   assert.equal(queries[0]?.values.includes('203.0.113.9'), false);
   assert.equal(run.keyReads(), 0);
   assert.equal(run.sent.url, undefined);
@@ -324,7 +407,10 @@ void test('a successful call reserves, reads the key, then adjusts to the real t
   assert.equal(spend?.values[1], reservation);
   assert.equal(spend?.values.at(-1), PHRASE_PLAN_TOKEN_CAP);
   const adjust = queries.find((query) => query.text.includes('UPDATE jev_spend'));
+  assert.match(adjust?.text ?? '', /LEAST\(GREATEST\(tokens \+ \?, 0\), \?\)/);
   assert.equal(adjust?.values[0], 40 - reservation);
+  assert.equal(adjust?.values[1], PHRASE_PLAN_TOKEN_CAP);
+  assert.equal(adjust?.values[2], '2026-10');
   const payload = result.payload as { distributions?: { cadence?: { third?: number } } };
   assert.equal(payload.distributions?.cadence?.third, 1);
   const again = harness({
@@ -428,4 +514,286 @@ void test('the browser client treats 503 as off and 403 or 429 as a one-shot fal
   const denied = await generatePhraseWithPlanner({ ...input, planner: blocked });
   assert.equal(denied.ok && denied.phrase.source, 'rules');
   assert.equal(forbidden.length, 1);
+});
+
+const NON_FINITE = Number('1e999');
+
+const PLAN_REQUEST: PhrasePlanRequest = {
+  scaleId: 'major',
+  root: 'C',
+  chord: 'C',
+  bars: 4,
+  rhythm: 'quarters',
+};
+
+function weightedAnswers(value: number) {
+  const probabilities = (key: string) => ({ probabilities: { [key]: value } });
+  return {
+    motifContour: probabilities('step-up-step-down'),
+    motifRhythm: probabilities('even'),
+    questionDegree: probabilities('4'),
+    cadence: probabilities('third'),
+    variation2: probabilities('sequence-up'),
+    variation3: probabilities('sequence-down'),
+    variation4: probabilities('altered-ending'),
+  };
+}
+
+function acceptingSql() {
+  return sqlMock((query) => {
+    if (query.text.includes('jev_ip')) return [{ calls: 1 }];
+    if (query.text.includes('INSERT INTO jev_spend')) return [{ tokens: '80' }];
+    return [];
+  });
+}
+
+void test('a cached plan is refused once the salt is gone', async () => {
+  resetPhrasePlanStateForTests();
+  const first = harness({ sql: acceptingSql().sql });
+  await first.done;
+  assert.equal(first.result().status, 200);
+  let queried = false;
+  const second = harness({
+    env: {
+      JEV_IP_HASH_SALT: undefined,
+      JEV_COUNTER_DATABASE_URL: 'postgres://counter.example/jev',
+      VERCEL_ENV: 'production',
+    },
+    sql: () => {
+      queried = true;
+      return Promise.resolve([]);
+    },
+  });
+  await second.done;
+  assert.deepEqual(second.result(), {
+    status: 503,
+    payload: { error: 'planner-unavailable' },
+  });
+  assert.equal(queried, false);
+  assert.equal(second.keyReads(), 0);
+  assert.equal(second.sent.url, undefined);
+});
+
+void test('a missing salt skips Jev before a query or an unsalted hash', async () => {
+  for (const salt of [undefined, ''] as const) {
+    resetPhrasePlanStateForTests();
+    let queried = false;
+    const run = harness({
+      env: {
+        JEV_IP_HASH_SALT: salt,
+        JEV_COUNTER_DATABASE_URL: 'postgres://counter.example/jev',
+        VERCEL_ENV: 'production',
+      },
+      sql: () => {
+        queried = true;
+        return Promise.resolve([]);
+      },
+    });
+    await run.done;
+    assert.deepEqual(run.result(), {
+      status: 503,
+      payload: { error: 'planner-unavailable' },
+    });
+    assert.equal(queried, false);
+    assert.equal(run.keyReads(), 0);
+    assert.equal(run.sent.url, undefined);
+  }
+});
+
+void test('non-finite and all-zero menus are rejected and never cached', async () => {
+  assert.equal(
+    distributionsFromAnswers(PLAN_REQUEST, weightedAnswers(NON_FINITE)),
+    null,
+  );
+  assert.equal(distributionsFromAnswers(PLAN_REQUEST, weightedAnswers(0)), null);
+  const wide = distributionsFromAnswers(PLAN_REQUEST, weightedAnswers(2));
+  assert.equal(wide?.motifContour['step-up-step-down'], 2);
+  const repeatOnly = weightedAnswers(1);
+  repeatOnly.variation3 = { probabilities: { repeat: 1 } };
+  assert.equal(distributionsFromAnswers(PLAN_REQUEST, repeatOnly), null);
+
+  for (const value of [NON_FINITE, 0]) {
+    resetPhrasePlanStateForTests();
+    let fetches = 0;
+    const fetch = async () => {
+      fetches += 1;
+      return {
+        ok: true,
+        json: async () => ({
+          answers: weightedAnswers(value),
+          usage: { input_tokens: 40 },
+        }),
+      };
+    };
+    const first = harness({ sql: acceptingSql().sql, fetch });
+    await first.done;
+    assert.equal(first.result().status, 503);
+    const second = harness({ sql: acceptingSql().sql, fetch });
+    await second.done;
+    assert.equal(second.result().status, 503);
+    assert.equal(fetches, 2);
+    assert.equal(second.keyReads(), 1);
+  }
+});
+
+void test('the browser client does not cache a non-finite or all-zero menu', async () => {
+  const scale = SCALES.find((item) => item.id === 'major');
+  assert.ok(scale);
+  const scaleNotes = spell('C', scale.formula);
+  const menu = (value: number) => ({
+    distributions: {
+      motifContour: { 'step-up-step-down': value },
+      motifRhythm: { even: value },
+      questionDegree: { '4': value },
+      cadence: { third: value },
+      variations: [{ repeat: value }, { 'sequence-down': value }],
+    },
+  });
+  assert.equal(parseDistributions(menu(NON_FINITE)), null);
+  assert.equal(parseDistributions(menu(0)), null);
+  assert.equal(parseDistributions(menu(2))?.motifRhythm.even, 2);
+  const input = {
+    seed: 3,
+    bars: 2 as const,
+    scaleNotes,
+    chordNotes: scaleNotes.slice(0, 3),
+    scaleId: 'major',
+    scaleRoot: 'C',
+    chordSymbol: 'C',
+    locks: { rhythm: 'quarters' as const },
+  };
+  for (const value of [NON_FINITE, 0]) {
+    let fetches = 0;
+    const planner = createPhrasePlanner({
+      fetch: (async () => {
+        fetches += 1;
+        return Object.assign(new Response(null, { status: 200 }), {
+          json: async () => menu(value),
+        });
+      }) as typeof fetch,
+    });
+    const first = await generatePhraseWithPlanner({ ...input, planner });
+    const second = await generatePhraseWithPlanner({ ...input, seed: 4, planner });
+    assert.equal(first.ok && first.phrase.source, 'rules');
+    assert.equal(second.ok && second.phrase.source, 'rules');
+    assert.equal(fetches, 2);
+  }
+  let cachedFetches = 0;
+  const caching = createPhrasePlanner({
+    fetch: (async () => {
+      cachedFetches += 1;
+      return Object.assign(new Response(null, { status: 200 }), {
+        json: async () => menu(2),
+      });
+    }) as typeof fetch,
+  });
+  await generatePhraseWithPlanner({ ...input, planner: caching });
+  await generatePhraseWithPlanner({ ...input, seed: 9, planner: caching });
+  assert.equal(cachedFetches, 1);
+});
+
+void test('the 500 ms upstream timeout falls back and keeps the reservation', async () => {
+  assert.equal(PHRASE_PLAN_UPSTREAM_TIMEOUT_MS, 500);
+  resetPhrasePlanStateForTests();
+  const { sql, queries } = acceptingSql();
+  const started = Date.now();
+  const run = harness({
+    sql,
+    fetch: (_url, init) =>
+      new Promise((_resolve, reject) => {
+        const signal = init.signal;
+        if (!signal) {
+          reject(new Error('missing abort signal'));
+          return;
+        }
+        const fail = () => reject(signal.reason ?? new Error('aborted'));
+        if (signal.aborted) fail();
+        else signal.addEventListener('abort', fail, { once: true });
+      }),
+  });
+  await run.done;
+  const elapsed = Date.now() - started;
+  assert.equal(run.result().status, 503);
+  assert.ok(elapsed >= 450, `elapsed ${elapsed}`);
+  assert.ok(elapsed < 2000, `elapsed ${elapsed}`);
+  assert.equal(
+    queries.some((query) => query.text.includes('UPDATE jev_spend')),
+    false,
+  );
+  let fetchedAgain = false;
+  const again = harness({
+    sql: acceptingSql().sql,
+    fetch: async () => {
+      fetchedAgain = true;
+      return { ok: true, json: async () => ANSWERS };
+    },
+  });
+  await again.done;
+  assert.equal(fetchedAgain, true);
+  assert.equal(again.result().status, 200);
+});
+
+void test('the server cache drops the oldest context past its bound', async () => {
+  assert.equal(PHRASE_PLAN_CACHE_LIMIT, 32);
+  resetPhrasePlanStateForTests();
+  const roots = [
+    'C',
+    'C#',
+    'Db',
+    'D',
+    'D#',
+    'Eb',
+    'E',
+    'F',
+    'F#',
+    'Gb',
+    'G',
+    'G#',
+    'Ab',
+    'A',
+    'A#',
+    'Bb',
+    'B',
+  ];
+  let fetches = 0;
+  const fetch = async () => {
+    fetches += 1;
+    return { ok: true, json: async () => ANSWERS };
+  };
+  const bodies = roots.flatMap((root) =>
+    [2, 4].map((bars) => ({ ...BODY, root, bars })),
+  );
+  assert.equal(bodies.length, PHRASE_PLAN_CACHE_LIMIT + 2);
+  for (const body of bodies) {
+    const run = harness({ body, fetch, sql: acceptingSql().sql });
+    await run.done;
+    assert.equal(run.result().status, 200);
+  }
+  assert.equal(fetches, bodies.length);
+  const oldest = bodies[0];
+  const refreshed = bodies[2];
+  const nextOldest = bodies[3];
+  const hit = harness({ body: refreshed, fetch, sql: acceptingSql().sql });
+  await hit.done;
+  assert.equal(hit.result().status, 200);
+  assert.equal(fetches, bodies.length);
+  for (const scaleId of ['dorian', 'phrygian']) {
+    const run = harness({
+      body: { ...BODY, scaleId },
+      fetch,
+      sql: acceptingSql().sql,
+    });
+    await run.done;
+    assert.equal(run.result().status, 200);
+  }
+  assert.equal(fetches, bodies.length + 2);
+  const evicted = harness({ body: nextOldest, fetch, sql: acceptingSql().sql });
+  await evicted.done;
+  assert.equal(fetches, bodies.length + 3);
+  const kept = harness({ body: refreshed, fetch, sql: acceptingSql().sql });
+  await kept.done;
+  assert.equal(fetches, bodies.length + 3);
+  const first = harness({ body: oldest, fetch, sql: acceptingSql().sql });
+  await first.done;
+  assert.equal(fetches, bodies.length + 4);
 });

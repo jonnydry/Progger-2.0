@@ -38,10 +38,15 @@ function weights<T extends string>(
 ): Partial<Record<T, number>> | null {
   if (!isRecord(value)) return null;
   const out: Partial<Record<T, number>> = {};
+  let total = 0;
   for (const item of menu) {
     const raw = value[item];
-    if (typeof raw === 'number' && raw >= 0) out[item] = raw;
+    if (raw === undefined) continue;
+    if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return null;
+    out[item] = raw;
+    total += raw;
   }
+  if (!(total > 0)) return null;
   return out;
 }
 
