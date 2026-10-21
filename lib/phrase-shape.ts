@@ -413,11 +413,8 @@ function degreeDeltas(degrees: readonly number[]): number[] {
     .map((degree, index) => degree - (degrees[index] ?? degree));
 }
 
-/**
- * Downbeat and beat 3. The same beat test as `isStrongBeat` in lib/phrase.ts.
- * Question placement uses it only to choose a weak attack.
- */
-function questionAttackIsStrong(beat: number): boolean {
+/** Downbeat and beat 3. Beat 3.5 is weak. The phrase grid uses this same test. */
+export function isStrongBeat(beat: number): boolean {
   const within = ((beat % 4) + 4) % 4;
   const half = Math.round(within * 2) / 2;
   return half === 0 || half === 2;
@@ -451,7 +448,7 @@ export function questionSlot(
     const index = inBar[cursor];
     if (index === undefined) continue;
     const note = notes[index];
-    if (!note || questionAttackIsStrong(note.beat)) continue;
+    if (!note || isStrongBeat(note.beat)) continue;
     if (scaleDegreeNumber(note.degree) === wanted) return index;
   }
   return -1;

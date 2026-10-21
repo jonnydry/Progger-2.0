@@ -4,6 +4,7 @@ import {
   BAR_VARIATIONS,
   contourDeltas,
   isQuestionDegree,
+  isStrongBeat,
   motifBeatLimit,
   motifRhythmsFor,
   motifRoleIndexes,
@@ -311,11 +312,8 @@ export function cadencePitchClasses(
   return pcs;
 }
 
-export function isStrongBeat(beat: number): boolean {
-  const within = ((beat % 4) + 4) % 4;
-  const half = Math.round(within * 2) / 2;
-  return half === 0 || half === 2;
-}
+// phrase-shape.ts owns this test. Importing lib/phrase.ts from there would cycle.
+export { isStrongBeat };
 
 export function phraseOnsets(rhythm: RhythmId, bars: 2 | 4): number[] {
   const pattern = RHYTHM_ONSETS[rhythm];
