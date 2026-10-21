@@ -62,9 +62,9 @@ html:has(.night-swim) {
   padding: 0 max(28px, calc((100vw - 1384px) / 2));
   border: 0;
   gap: 48px;
-  background: color-mix(in srgb, var(--background) 78%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(1.08);
-  backdrop-filter: blur(18px) saturate(1.08);
+  background: var(--surface-glass);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
   box-shadow:
     inset 0 -1px 0 color-mix(in srgb, var(--foreground) 20%, transparent),
     0 12px 28px rgb(5 12 24 / 0.16);
@@ -94,6 +94,7 @@ html:has(.night-swim) {
 }
 .night-swim .brand {
   color: var(--green);
+  min-height: var(--tap);
 }
 .night-swim .brand > span {
   font-size: 32px;
@@ -149,7 +150,7 @@ html:has(.night-swim) {
   margin: 2px 0 0;
 }
 .night-swim .reference-tabs button {
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 1.2px;
   min-height: 44px;
   padding: 6px 0;
@@ -259,8 +260,8 @@ html:has(.night-swim) {
   align-content: center;
 }
 .note-spelling > summary:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 3px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 .note-spelling > p {
   margin: 4px 0 8px;
@@ -292,7 +293,7 @@ html:has(.night-swim) {
   font-size: 13px;
 }
 .night-swim .neck-meta .muted {
-  font-size: 11px;
+  font-size: var(--text-xs);
   letter-spacing: 0.8px;
 }
 .night-swim .neck-legend {
@@ -412,8 +413,12 @@ html:has(.night-swim) {
   color: #e1f2e8;
 }
 .night-swim .segmented button:focus-visible {
-  outline-color: #edcb79;
+  outline-color: var(--amber);
   outline-offset: -4px;
+}
+/* The inset ring sits on the lit key, so it takes the key's ink. */
+.night-swim .segmented button[aria-pressed='true']:focus-visible {
+  outline-color: var(--primary-foreground);
 }
 .night-swim .display-controls {
   width: auto;
@@ -438,8 +443,12 @@ html:has(.night-swim) {
 .night-swim .display-menu[open] > div {
   top: auto;
   bottom: 52px;
-  border-color: #586575;
-  background: #0c1928;
+  border-color: var(--edge);
+  border-radius: var(--radius-panel);
+  background: var(--surface-pop);
+  box-shadow: var(--glass-rim), var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 .dock-position {
   min-width: 110px;
@@ -452,7 +461,7 @@ html:has(.night-swim) {
   white-space: nowrap;
 }
 .dock-position small {
-  font-size: 10px;
+  font-size: var(--text-xs);
 }
 .night-swim .dock-position .music-select-trigger {
   min-height: 44px;
@@ -494,11 +503,11 @@ html:has(.night-swim) {
 .neck-slider {
   display: flex;
   align-items: center;
-  height: 34px;
+  height: var(--tap);
 }
 .neck-slider input {
   width: 100%;
-  height: 24px;
+  height: var(--tap);
   cursor: ew-resize;
   appearance: none;
   background: transparent;
@@ -677,25 +686,25 @@ html:has(.night-swim) {
   color: #aabcc5;
 }
 .music-select-popup {
-  background: #0c1c2a;
-  border-color: #5c7480;
-  color: #e1eade;
-  scrollbar-color: #71998a #0c1c2a;
+  background: var(--surface-pop);
+  border-color: var(--input);
+  color: var(--foreground);
+  scrollbar-color: var(--input) transparent;
 }
 .music-select-popup [data-slot='select-label'] {
-  color: #a7c3c5;
+  color: var(--quiet);
 }
 .music-select-popup [data-slot='select-item'][data-highlighted] {
-  color: #eaf2e5;
-  background: #254138;
+  color: var(--foreground);
+  background: var(--surface-key-lit);
 }
 .music-select-popup [data-slot='select-item'][data-selected] {
-  color: #b9e8c0;
+  color: var(--green);
 }
 .music-select-popup [data-slot='select-scroll-up-button'],
 .music-select-popup [data-slot='select-scroll-down-button'] {
-  background: #0c1c2a;
-  color: #b2c4cb;
+  background: var(--card);
+  color: var(--quiet);
 }
 @media (max-width: 1200px) {
   .instrument-dock {
@@ -763,14 +772,14 @@ html:has(.night-swim) {
     font-size: 14px;
   }
   .night-swim .neck-meta {
-    font-size: 11px;
+    font-size: var(--text-xs);
     gap: 8px;
   }
   .night-swim .neck-meta .muted {
-    font-size: 10px;
+    font-size: var(--text-xs);
   }
   .night-swim .neck-legend {
-    font-size: 11px;
+    font-size: var(--text-xs);
   }
   .night-swim .string-cell,
   .night-swim .string-labels span {
@@ -846,13 +855,10 @@ html:has(.night-swim) {
     margin: 8px 0 0;
     gap: 24px;
   }
-  .night-swim .brand {
-    min-height: 44px;
-  }
   .night-swim .reference-tabs button {
     min-width: 44px;
     min-height: 44px;
-    font-size: 10px;
+    font-size: var(--text-xs);
   }
   .night-swim .selection-bar .root-select .music-select-trigger {
     min-width: 44px;
@@ -983,7 +989,7 @@ html:has(.night-swim) {
     justify-content: space-between;
   }
   .night-swim .jump-label {
-    font-size: 11px;
+    font-size: var(--text-xs);
     gap: 8px;
   }
   .night-swim .theory-details {
@@ -1299,7 +1305,7 @@ html:has(.night-swim) {
   color: #c2ced4;
 }
 .voicing-list button span:last-child {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: #aebcc5;
 }
 .voicing-list button[aria-pressed='true'] {
@@ -1329,7 +1335,7 @@ html:has(.night-swim) {
   margin: 20px 0 0;
   color: #aebbc9;
   text-align: center;
-  font-size: 10px;
+  font-size: var(--text-xs);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -1347,7 +1353,7 @@ html:has(.night-swim) {
   border: 1px solid #53677b;
   border-radius: 4px;
   color: #cbdce9;
-  font-size: 10px;
+  font-size: var(--text-xs);
   font-weight: 400;
   vertical-align: middle;
 }

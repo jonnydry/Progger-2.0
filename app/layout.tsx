@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Silkscreen } from 'next/font/google';
 import { SkipLink } from '@/components/skip-link';
 import './globals.css';
+import './deck-tokens.css';
 import './night-swim.css';
 import './day-swim.css';
 import './theme-transition.css';

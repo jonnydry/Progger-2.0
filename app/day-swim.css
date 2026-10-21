@@ -155,7 +155,7 @@ html[data-theme='day'] .night-swim .display-menu[open] > div {
 }
 
 html[data-theme='day'] .night-swim .display-menu[open] > div {
-  box-shadow: 0 10px 28px #12362f1a;
+  box-shadow: var(--glass-rim), var(--shadow-float);
 }
 
 html[data-theme='day'] .night-swim .segmented {
@@ -374,9 +374,9 @@ html[data-theme='day'] .music-select-trigger > svg {
 html[data-theme='day'] .music-select-popup {
   color: var(--foreground);
   border-color: var(--input);
-  background: var(--day-surface);
-  scrollbar-color: var(--input) var(--day-surface);
-  box-shadow: 0 12px 35px #12362f24;
+  background: var(--surface-pop);
+  scrollbar-color: var(--input) transparent;
+  box-shadow: var(--glass-rim), var(--shadow-float);
 }
 
 html[data-theme='day'] .music-select-popup [data-slot='select-label'] {
@@ -434,13 +434,14 @@ html[data-theme='day'] .voicing svg circle[fill='#f6c56c'] {
   justify-content: center;
   gap: 8px;
   flex-shrink: 0;
-  min-height: 44px;
+  min-height: var(--tap);
   margin-left: auto;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   color: var(--green);
-  border: 0;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--background) 96%, transparent);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
+  background: var(--surface-glass);
+  box-shadow: inset 0 1px 0 var(--edge-sheen);
 }
 
 .theme-toggle .theme-icon-sun,
@@ -488,8 +489,8 @@ html[data-theme='day'] .theme-toggle .theme-switch-thumb {
 }
 
 .night-swim .theme-toggle:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 4px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 @media (prefers-reduced-motion: no-preference) {

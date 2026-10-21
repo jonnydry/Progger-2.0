@@ -26,13 +26,15 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--input);
-  border-radius: 6px;
-  background: var(--card);
   color: var(--foreground);
-  box-shadow: 0 10px 36px rgb(0 0 0 / 0.22);
+  background: var(--surface-pop);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--glass-rim), var(--shadow-float);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 .music-search-field {
   display: flex;
@@ -46,7 +48,7 @@
 .music-search-field input {
   width: 100%;
   min-width: 0;
-  min-height: 42px;
+  min-height: var(--tap);
   padding: 4px 0;
   border: 0;
   border-radius: 0;
@@ -57,7 +59,11 @@
   box-shadow: none;
 }
 .music-search-field:focus-within {
-  border-bottom-color: var(--green);
+  border-bottom-color: var(--amber);
+}
+.music-search-field input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 0;
 }
 .music-search-field input::placeholder {
   color: var(--quiet);
@@ -74,7 +80,7 @@
 }
 .music-search-group-label {
   padding: 12px 10px 5px;
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--quiet);
 }
 .music-search-item {

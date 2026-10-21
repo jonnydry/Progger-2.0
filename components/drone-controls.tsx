@@ -18,6 +18,7 @@ import { pageAudio } from '@/lib/audio-output';
 import { ReedDrone, clampDroneVolume } from '@/lib/drone-audio';
 import {
   DRONE_ICON_PX,
+  DRONE_POPOVER_MARGIN_PX,
   VOLUME_POPOVER_GUARD_SELECTORS,
   type AnchoredPopoverSide,
   type DroneBox,
@@ -139,9 +140,14 @@ function fixedFrame(node: HTMLElement): { x: number; y: number } | null {
   let current: HTMLElement | null = node.parentElement;
   while (current && current !== document.documentElement) {
     const style = getComputedStyle(current);
+    const backdrop =
+      style.backdropFilter ||
+      style.getPropertyValue('-webkit-backdrop-filter') ||
+      'none';
     const containsFixed =
       style.transform !== 'none' ||
       style.filter !== 'none' ||
+      backdrop !== 'none' ||
       style.perspective !== 'none' ||
       style.contain === 'paint' ||
       style.contain.split(' ').includes('paint') ||
@@ -186,15 +192,17 @@ function DroneVolumePopover({
   const [origin, setOrigin] = useState<{ x: number; y: number } | null>(null);
   const [side, setSide] = useState<AnchoredPopoverSide>('below');
 
+  // The menu stays visibility: hidden until it has a position, and a hidden
+  // slider cannot take focus. Wait for the first placement.
   useLayoutEffect(() => {
-    if (didFocus.current) return;
+    if (didFocus.current || !origin) return;
     didFocus.current = true;
     if (initialFocus === 'slider') {
       sliderRef.current?.focus({ preventScroll: true });
       return;
     }
     anchorRef.current?.focus({ preventScroll: true });
-  }, [anchorRef, initialFocus]);
+  }, [anchorRef, initialFocus, origin]);
 
   useLayoutEffect(() => {
     const place = () => {
@@ -249,8 +257,30 @@ function DroneVolumePopover({
         onFocusLeave();
       }, 0);
     };
+    // Open under the button. When the viewport ends too close below it,
+    // scroll just enough for the menu, but never tuck the button under
+    // the pinned bar. A viewport too short for that keeps its scroll and
+    // the menu falls back to above or a sheet.
+    const makeRoom = () => {
+      const trigger = anchorRef.current?.getBoundingClientRect();
+      if (!trigger || !panel || panel.offsetHeight < 1) return;
+      const needed =
+        trigger.bottom +
+        DRONE_POPOVER_MARGIN_PX * 2 +
+        panel.offsetHeight -
+        window.innerHeight;
+      if (needed <= 0) return;
+      const bar = document.querySelector('.site-header');
+      const barBottom = bar
+        ? Math.max(0, bar.getBoundingClientRect().bottom)
+        : 0;
+      const room = trigger.top - barBottom - DRONE_POPOVER_MARGIN_PX;
+      if (needed > room) return;
+      window.scrollBy({ top: Math.ceil(needed), behavior: 'instant' });
+    };
     panel?.addEventListener('cancel', onCancel);
     panel?.addEventListener('focusout', onFocusOut);
+    makeRoom();
     place();
     window.addEventListener('resize', place);
     window.addEventListener('scroll', place, true);
