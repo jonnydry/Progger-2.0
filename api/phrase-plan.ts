@@ -12,9 +12,12 @@
  * retry does. A refund of the whole reservation runs only when the
  * fetch never started. A completed 200 with a valid usage object gives
  * back the unused part of that reservation. Usage above the reservation
- * adds the excess, up to the cap. One process shares a 200 for an
- * in-flight context, and nothing else. A waiter behind a refusal stays
- * inside the 1700 ms server budget.
+ * adds the excess, up to the cap, and never lowers a row already above
+ * the cap. One process shares a 200 for an in-flight context, and
+ * nothing else. A waiter behind a refusal stays inside the 1700 ms
+ * server budget. Upstream takes the leftover time first. A database
+ * slice under 250 ms does not reserve and does not arm the skip. A
+ * database timeout on a real attempt does arm it.
  * Counters live in Neon.
  * db/jev-spend.sql is applied by hand and is not run from this function.
  */
@@ -146,8 +149,40 @@ export const PHRASE_PLAN_IP_DAILY_LIMIT = 200;
  */
 export const PHRASE_PLAN_DB_TIMEOUT_MS = 1_200;
 export const PHRASE_PLAN_UPSTREAM_TIMEOUT_MS = 500;
+/**
+ * A waiter database attempt shorter than this times out and can still
+ * commit, which spends an IP slot with no fetch. Below the floor the
+ * waiter does not reserve and does not arm the outage skip.
+ */
+export const PHRASE_PLAN_WAITER_DB_FLOOR_MS = 250;
 /** This process skips Jev after a database timeout, then tries again. */
 export const PHRASE_PLAN_DB_DOWN_BACKOFF_MS = 30_000;
+
+export type PhrasePlanAttemptBudgets = {
+  dbBudget: number;
+  upstreamBudget: number;
+};
+
+/**
+ * Upstream takes its slice of the leftover server budget first, up to
+ * 500 ms. The database gets what remains, up to 1200 ms. A database
+ * slice below the floor is not an attempt.
+ */
+export function phrasePlanWaiterBudgets(
+  remainingMs: number,
+): PhrasePlanAttemptBudgets | null {
+  const upstreamBudget = Math.min(
+    PHRASE_PLAN_UPSTREAM_TIMEOUT_MS,
+    Math.max(0, remainingMs),
+  );
+  const dbBudget = Math.min(
+    PHRASE_PLAN_DB_TIMEOUT_MS,
+    remainingMs - upstreamBudget,
+  );
+  if (dbBudget < PHRASE_PLAN_WAITER_DB_FLOOR_MS || upstreamBudget <= 0) return null;
+  return { dbBudget, upstreamBudget };
+}
+
 /** Musical contexts kept in memory. The oldest is dropped past this. */
 export const PHRASE_PLAN_CACHE_LIMIT = 32;
 const STUDIO_HOSTS = new Set(['progger.studio', 'www.progger.studio']);
@@ -915,7 +950,11 @@ export function phrasePlanReconcile(
   `;
 }
 
-/** Count billed usage above this call's reservation. The cap still bounds the row. */
+/**
+ * Count billed usage above this call's reservation. The cap bounds a
+ * row that is still under it. A row already above the cap stays there:
+ * LEAST alone would pull it back down.
+ */
 export function phrasePlanCountExcess(
   sql: PhrasePlanSql,
   input: { month: string; excess: number; cap: number },
@@ -923,7 +962,7 @@ export function phrasePlanCountExcess(
   const { month, excess, cap } = input;
   return sql`
     UPDATE jev_spend
-    SET tokens = LEAST(tokens + ${excess}, ${cap}),
+    SET tokens = GREATEST(tokens, LEAST(tokens + ${excess}, ${cap})),
         updated_at = now()
     WHERE month = ${month}
   `;
@@ -1337,12 +1376,16 @@ export async function handlePhrasePlan(
   let upstreamBudget = PHRASE_PLAN_UPSTREAM_TIMEOUT_MS;
   if (waited) {
     const remaining = serverBudgetMs - (Date.now() - callerArrived);
-    upstreamBudget = Math.min(PHRASE_PLAN_UPSTREAM_TIMEOUT_MS, Math.max(0, remaining));
-    dbBudget = Math.min(PHRASE_PLAN_DB_TIMEOUT_MS, remaining - upstreamBudget);
-    if (dbBudget <= 0 || upstreamBudget <= 0) {
+    const budgets = phrasePlanWaiterBudgets(remaining);
+    // Below the floor there is no database attempt, so this is not
+    // evidence the database is down. Do not reserve and do not arm
+    // the skip.
+    if (!budgets) {
       unavailable(response);
       return;
     }
+    dbBudget = budgets.dbBudget;
+    upstreamBudget = budgets.upstreamBudget;
   }
   const started = Date.now();
   const budget = dbBudget;
@@ -1373,16 +1416,13 @@ export async function handlePhrasePlan(
     // The statement may still commit after we stop waiting. That can
     // only leave a counter higher. This process does not fetch, and it
     // skips Jev until skipUpstreamUntil. A deadlock is not this path.
-    // A waiter on a shortened budget can time out without the database
-    // being down, so that timeout does not arm the skip.
-    const shortenedTimeout =
-      gateResult.reason === 'timeout' && dbBudget < PHRASE_PLAN_DB_TIMEOUT_MS;
-    if (!shortenedTimeout) {
-      skipUpstreamUntil = Math.max(
-        skipUpstreamUntil,
-        now + PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
-      );
-    }
+    // A waiter who reached this path had a real database budget, at
+    // least the floor, so a timeout arms the skip the same way a
+    // leader's timeout does.
+    skipUpstreamUntil = Math.max(
+      skipUpstreamUntil,
+      now + PHRASE_PLAN_DB_DOWN_BACKOFF_MS,
+    );
     unavailable(response);
     return;
   }
@@ -1416,6 +1456,8 @@ export async function handlePhrasePlan(
   const upstream = startUpstream(fetchImpl, key, bodyForJev, upstreamBudget);
   const answered = await upstream.done;
   if (!answered.ok) {
+    // The database already answered. An upstream timeout is not an
+    // outage, for a leader or a waiter, so the 30 s skip stays down.
     unavailable(response);
     return;
   }

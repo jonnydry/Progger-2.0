@@ -15,7 +15,9 @@ import {
   PHRASE_PLAN_TOKEN_CAP,
   PHRASE_PLAN_TOKEN_MARGIN,
   PHRASE_PLAN_UPSTREAM_TIMEOUT_MS,
+  PHRASE_PLAN_WAITER_DB_FLOOR_MS,
   phrasePlanReservationBytes,
+  phrasePlanWaiterBudgets,
   QUESTION_DEGREES,
   distributionsFromAnswers,
   handlePhrasePlan,
@@ -1754,6 +1756,161 @@ void test('a waiter behind a failed call does not start a second full budget', a
   assert.equal(waiter.result().status, 503);
   assert.equal(gates, 1);
   assert.ok(elapsed < 2_500, `elapsed ${elapsed}`);
+  let queriedAgain = false;
+  const again = harness({
+    headers: { 'x-vercel-forwarded-for': '203.0.113.10' },
+    sql: async (strings) => {
+      const text = strings.join('?');
+      if (text.includes('INSERT INTO jev_ip')) queriedAgain = true;
+      return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
+    },
+    fetch: async () => ({
+      ok: true,
+      json: async () => ANSWERS,
+    }),
+  });
+  await again.done;
+  assert.equal(again.result().status, 200);
+  assert.equal(queriedAgain, true);
+});
+
+void test('a waiter gives the leftover time to upstream before the database', () => {
+  assert.equal(PHRASE_PLAN_WAITER_DB_FLOOR_MS, 250);
+  assert.equal(PHRASE_PLAN_UPSTREAM_TIMEOUT_MS, 500);
+  assert.equal(PHRASE_PLAN_DB_TIMEOUT_MS, 1_200);
+  // 800 ms left: upstream keeps its 500, and the database gets 300.
+  assert.deepEqual(phrasePlanWaiterBudgets(800), { upstreamBudget: 500, dbBudget: 300 });
+  // The full server budget leaves both attempts at their own caps.
+  assert.deepEqual(phrasePlanWaiterBudgets(1_700), { upstreamBudget: 500, dbBudget: 1_200 });
+  // 750 ms left: the database gets exactly the floor.
+  assert.deepEqual(phrasePlanWaiterBudgets(750), { upstreamBudget: 500, dbBudget: 250 });
+  // 749 ms left: the database would get 249, which is below the floor.
+  assert.equal(phrasePlanWaiterBudgets(749), null);
+  // 400 ms left: upstream takes all of it, so there is no database attempt.
+  assert.equal(phrasePlanWaiterBudgets(400), null);
+});
+
+void test('a waiter database timeout at or above the floor arms the skip', async () => {
+  resetPhrasePlanStateForTests();
+  const logs: string[] = [];
+  const original = console.warn;
+  console.warn = (...args: unknown[]) => {
+    logs.push(args.map((item) => String(item)).join(' '));
+  };
+  let gates = 0;
+  const sql: PhrasePlanSql = async (strings) => {
+    const text = strings.join('?');
+    if (!text.includes('INSERT INTO jev_ip')) return [];
+    gates += 1;
+    if (gates === 1) return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
+    return new Promise(() => undefined);
+  };
+  const fetch = (
+    _url: string,
+    init: { signal?: AbortSignal },
+  ): Promise<{ ok: boolean; json: () => Promise<unknown> }> =>
+    new Promise((_resolve, reject) => {
+      const signal = init.signal;
+      const fail = () => reject(signal?.reason ?? new Error('aborted'));
+      if (!signal) {
+        fail();
+        return;
+      }
+      if (signal.aborted) fail();
+      else signal.addEventListener('abort', fail, { once: true });
+    });
+  try {
+    const leader = harness({
+      headers: { 'x-vercel-forwarded-for': '203.0.113.8' },
+      sql,
+      fetch,
+    });
+    for (let turn = 0; turn < 20 && gates < 1; turn += 1) await Promise.resolve();
+    assert.equal(gates, 1);
+    const waiter = harness({
+      headers: { 'x-vercel-forwarded-for': '203.0.113.9' },
+      sql,
+      fetch,
+    });
+    await leader.done;
+    await waiter.done;
+    assert.equal(leader.result().status, 503);
+    assert.equal(waiter.result().status, 503);
+    assert.equal(gates, 2);
+    assert.equal(logs.includes('db_timeout'), true);
+    assert.equal(logs.includes('db_deadlock'), false);
+    let queriedAgain = false;
+    const again = harness({
+      headers: { 'x-vercel-forwarded-for': '203.0.113.10' },
+      sql: () => {
+        queriedAgain = true;
+        return Promise.resolve([]);
+      },
+    });
+    await again.done;
+    assert.equal(again.result().status, 503);
+    assert.equal(queriedAgain, false);
+  } finally {
+    console.warn = original;
+  }
+});
+
+void test('a waiter upstream timeout does not arm the skip', async () => {
+  resetPhrasePlanStateForTests();
+  let gates = 0;
+  const sql: PhrasePlanSql = async (strings) => {
+    const text = strings.join('?');
+    if (!text.includes('INSERT INTO jev_ip')) return [];
+    gates += 1;
+    return [{ calls: gates, tokens: 80, ip_ok: true, spend_ok: true }];
+  };
+  const fetch = (
+    _url: string,
+    init: { signal?: AbortSignal },
+  ): Promise<{ ok: boolean; json: () => Promise<unknown> }> =>
+    new Promise((_resolve, reject) => {
+      const signal = init.signal;
+      const fail = () => reject(signal?.reason ?? new Error('aborted'));
+      if (!signal) {
+        fail();
+        return;
+      }
+      if (signal.aborted) fail();
+      else signal.addEventListener('abort', fail, { once: true });
+    });
+  const leader = harness({
+    headers: { 'x-vercel-forwarded-for': '203.0.113.11' },
+    sql,
+    fetch,
+  });
+  for (let turn = 0; turn < 20 && gates < 1; turn += 1) await Promise.resolve();
+  assert.equal(gates, 1);
+  const waiter = harness({
+    headers: { 'x-vercel-forwarded-for': '203.0.113.12' },
+    sql,
+    fetch,
+  });
+  await leader.done;
+  await waiter.done;
+  assert.equal(leader.result().status, 503);
+  assert.equal(waiter.result().status, 503);
+  assert.equal(gates, 2);
+  let queriedAgain = false;
+  const again = harness({
+    headers: { 'x-vercel-forwarded-for': '203.0.113.13' },
+    sql: async (strings) => {
+      const text = strings.join('?');
+      if (text.includes('INSERT INTO jev_ip')) queriedAgain = true;
+      return [{ calls: 1, tokens: 80, ip_ok: true, spend_ok: true }];
+    },
+    fetch: async () => ({
+      ok: true,
+      json: async () => ANSWERS,
+    }),
+  });
+  await again.done;
+  assert.equal(again.result().status, 200);
+  assert.equal(queriedAgain, true);
 });
 
 void test('40-token usage lowers the month by exactly reservation - 40', async () => {
@@ -1904,6 +2061,49 @@ void test('billed usage above the reservation adds the excess up to the cap', as
     await Promise.all(background);
     assert.equal(limited.result().status, 200);
     assert.equal(capped, 50_000);
+    assert.deepEqual(logs, ['usage_over_reservation']);
+
+    resetPhrasePlanStateForTests();
+    logs.length = 0;
+    background.length = 0;
+    let above = 80_000;
+    let excessQueries = 0;
+    const held = harness({
+      tokenCap: 50_000,
+      sql: async (strings, ...values) => {
+        const text = strings.join('?');
+        if (text.includes('INSERT INTO jev_ip')) {
+          return [{ calls: 1, tokens: above, ip_ok: true, spend_ok: true }];
+        }
+        if (text.includes('GREATEST(tokens, LEAST(tokens +')) {
+          excessQueries += 1;
+          const excess = Number(values[0]);
+          const cap = Number(values[1]);
+          above = Math.max(above, Math.min(above + excess, cap));
+          return [];
+        }
+        if (text.includes('LEAST(tokens +')) {
+          excessQueries += 1;
+          const excess = Number(values[0]);
+          const cap = Number(values[1]);
+          above = Math.min(above + excess, cap);
+          return [];
+        }
+        return [];
+      },
+      fetch: async () => ({
+        ok: true,
+        json: async () => ({ ...ANSWERS, usage: { input_tokens: 1_000_000 } }),
+      }),
+      waitUntil(work) {
+        background.push(work);
+      },
+    });
+    await held.done;
+    await Promise.all(background);
+    assert.equal(held.result().status, 200);
+    assert.equal(excessQueries, 1);
+    assert.equal(above, 80_000);
     assert.deepEqual(logs, ['usage_over_reservation']);
   } finally {
     console.warn = original;
