@@ -1,8 +1,14 @@
 /**
  * Browser-side planner. One request per musical context, then one sampled
- * plan per seed. The 800 ms abort is the caller's signal from
- * generatePhraseWithPlanner. The phrase panel keeps one instance of this
- * client so the cache survives re-renders.
+ * plan per seed. A second propose for that context while the request is
+ * still running reuses the promise, including when only the seed changed.
+ * The shared request aborts once every caller has aborted. generatePhraseWithPlanner
+ * aborts its own timer with PHRASE_PLANNER_TIMEOUT_REASON. A panel cleanup
+ * abort uses a different reason and must not back off. The phrase panel
+ * keeps one instance of this client so the cache survives re-renders. A
+ * transient failure backs off in memory and retries on a later call. A
+ * config error latches that context off. A 200 that does not parse backs
+ * off the same way.
  */
 
 import {
@@ -16,6 +22,7 @@ import {
   rulePlan,
   type CadenceTarget,
   type PhrasePlan,
+  PHRASE_PLANNER_TIMEOUT_REASON,
   type PhrasePlanner,
   type PhrasePlannerInput,
 } from './phrase.ts';
@@ -26,7 +33,34 @@ export type PlannerDistributions = ShapeDistributions & {
 
 type CacheEntry = PlannerDistributions | 'off';
 
+type DistributionFlight = {
+  controller: AbortController;
+  waiters: number;
+  promise: Promise<PlannerDistributions | null>;
+};
+
 const CADENCES = ['root', 'third', 'fifth'] as const;
+const TRANSIENT_BACKOFF_MS = 30_000;
+const TRANSIENT_BACKOFF_CAP_MS = 5 * 60_000;
+
+function nextUtcMidnight(now: number): number {
+  const date = new Date(now);
+  return Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate() + 1,
+  );
+}
+
+async function errorName(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json();
+    if (!isRecord(body) || typeof body.error !== 'string') return null;
+    return body.error;
+  } catch {
+    return null;
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -143,6 +177,40 @@ export function samplePlannedFields(
   return { cadence, shape, alternates };
 }
 
+/** A replacement Generate or an unmount. A timeout abort still backs off. */
+function callerCancelled(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true && signal.reason !== PHRASE_PLANNER_TIMEOUT_REASON;
+}
+
+/**
+ * Count this caller on a shared request. Abort that request only when the
+ * last caller aborts, and keep that caller's reason.
+ */
+function followFlight(
+  flight: DistributionFlight,
+  signal: AbortSignal | undefined,
+): () => void {
+  let left = false;
+  const leave = (fromAbort: boolean) => {
+    if (left) return;
+    left = true;
+    flight.waiters -= 1;
+    if (signal) signal.removeEventListener('abort', onAbort);
+    if (
+      fromAbort &&
+      flight.waiters <= 0 &&
+      !flight.controller.signal.aborted
+    ) {
+      flight.controller.abort(signal?.reason);
+    }
+  };
+  const onAbort = () => leave(true);
+  flight.waiters += 1;
+  if (signal?.aborted) leave(true);
+  else if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  return () => leave(false);
+}
+
 function contextOf(input: PhrasePlannerInput, grid: ShapeRhythm): string {
   const scale = input.scaleId ?? input.scaleLabel ?? '';
   const root = input.scaleRoot ?? input.scaleNotes[0]?.name ?? '';
@@ -157,10 +225,30 @@ export function createPhrasePlanner(options?: {
   const fetchImpl = options?.fetch ?? fetch;
   const origin = options?.origin ?? '';
   const contexts = new Map<string, CacheEntry>();
+  const flights = new Map<string, DistributionFlight>();
   const seeds = new Map<
     string,
     PhrasePlan & { alternates: readonly PhraseShapePlan[] }
   >();
+  // One clock for the whole client. A 503, a dropped connection, and the
+  // daily rate limit are properties of the service, not of one chord.
+  let transientFailures = 0;
+  let retryAt = 0;
+  const postpone = (until: number) => {
+    if (until > retryAt) retryAt = until;
+  };
+  const noteTransient = (now: number) => {
+    const delay = Math.min(
+      TRANSIENT_BACKOFF_MS * 2 ** transientFailures,
+      TRANSIENT_BACKOFF_CAP_MS,
+    );
+    transientFailures += 1;
+    postpone(now + delay);
+  };
+  const noteSuccess = () => {
+    transientFailures = 0;
+    retryAt = 0;
+  };
   return {
     async propose(input) {
       const rules = rulePlan(
@@ -177,34 +265,83 @@ export function createPhrasePlanner(options?: {
       let distributions = contexts.get(contextKey);
       if (distributions === 'off') return null;
       if (!distributions) {
-        try {
-          const scaleId = input.scaleId;
-          const root = input.scaleRoot ?? input.scaleNotes[0]?.name;
-          const chord = input.chordSymbol;
-          if (!scaleId || !root || !chord) return null;
-          const response = await fetchImpl(`${origin}/api/phrase-plan`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              scaleId,
-              root,
-              chord,
-              bars: input.bars,
-              rhythm: grid,
-            }),
-            signal: input.signal,
+        const scaleId = input.scaleId;
+        const root = input.scaleRoot ?? input.scaleNotes[0]?.name;
+        const chord = input.chordSymbol;
+        if (!scaleId || !root || !chord) return null;
+        if (Date.now() < retryAt) return null;
+        let flight = flights.get(contextKey);
+        if (!flight) {
+          const controller = new AbortController();
+          const created: DistributionFlight = {
+            controller,
+            waiters: 0,
+            promise: Promise.resolve(null),
+          };
+          created.promise = (async (): Promise<PlannerDistributions | null> => {
+            try {
+              const response = await fetchImpl(`${origin}/api/phrase-plan`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  scaleId,
+                  root,
+                  chord,
+                  bars: input.bars,
+                  rhythm: grid,
+                }),
+                signal: controller.signal,
+              });
+              // 503 planner-unavailable is also what a missing salt or key
+              // returns. The route does not distinguish those from a cold
+              // database, so every 5xx backs off instead of latching.
+              if (response.status === 429) {
+                const name = await errorName(response);
+                const now = Date.now();
+                if (name === 'rate-limit') {
+                  transientFailures = 0;
+                  postpone(nextUtcMidnight(now));
+                } else {
+                  postpone(now + TRANSIENT_BACKOFF_CAP_MS);
+                }
+                return null;
+              }
+              if (response.status >= 400 && response.status < 500) {
+                contexts.set(contextKey, 'off');
+                return null;
+              }
+              if (response.status >= 500) {
+                noteTransient(Date.now());
+                return null;
+              }
+              if (!response.ok) return null;
+              const parsed = parseDistributions(await response.json());
+              if (!parsed) {
+                noteTransient(Date.now());
+                return null;
+              }
+              contexts.set(contextKey, parsed);
+              noteSuccess();
+              return parsed;
+            } catch {
+              if (callerCancelled(controller.signal)) return null;
+              noteTransient(Date.now());
+              return null;
+            }
+          })();
+          flights.set(contextKey, created);
+          void created.promise.finally(() => {
+            if (flights.get(contextKey) === created) flights.delete(contextKey);
           });
-          if (response.status === 503) {
-            contexts.set(contextKey, 'off');
-            return null;
-          }
-          if (!response.ok) return null;
-          const parsed = parseDistributions(await response.json());
-          if (!parsed) return null;
-          distributions = parsed;
-          contexts.set(contextKey, parsed);
-        } catch {
-          return null;
+          flight = created;
+        }
+        const stopFollowing = followFlight(flight, input.signal);
+        try {
+          const loaded = await flight.promise;
+          if (!loaded) return null;
+          distributions = loaded;
+        } finally {
+          stopFollowing();
         }
       }
       const available: CadenceTarget[] = ['root', 'third', 'fifth'];
