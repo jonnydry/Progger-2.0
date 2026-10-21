@@ -52,6 +52,7 @@ import {
   type PhraseLocks,
 } from '@/lib/phrase';
 import { publishPhrasePlayhead, type PhraseFretMark } from '@/lib/phrase-marks';
+import { DECK_BREAKPOINT_QUERY } from '@/lib/deck-breakpoints';
 import {
   emptyPhraseHistory,
   getPhraseHistory,
@@ -79,18 +80,112 @@ import '@/app/phrase-deck.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
 
-/** Widths follow the deck's grid areas, so tab order can match the picture. */
-function useMatchMedia(query: string): boolean {
-  return useSyncExternalStore(
-    (notify) => {
-      const media = window.matchMedia(query);
-      media.addEventListener('change', notify);
-      return () => media.removeEventListener('change', notify);
-    },
-    () => window.matchMedia(query).matches,
-    () => false,
+type DeckMatch = {
+  phone: boolean;
+  stacked: boolean;
+  mid: boolean;
+};
+
+function sameDeckMatch(a: DeckMatch, b: DeckMatch): boolean {
+  return a.phone === b.phone && a.stacked === b.stacked && a.mid === b.mid;
+}
+
+function focusLostToDocument(): boolean {
+  const active = document.activeElement;
+  return (
+    active === null ||
+    active === document.body ||
+    active === document.documentElement
   );
 }
+
+function controlIsDisabled(node: HTMLElement): boolean {
+  return (
+    (node instanceof HTMLButtonElement ||
+      node instanceof HTMLInputElement ||
+      node instanceof HTMLSelectElement ||
+      node instanceof HTMLTextAreaElement) &&
+    node.disabled
+  );
+}
+
+/**
+ * Widths follow the deck's grid areas, so tab order can match the picture.
+ * Moving a focused control clears it onto the document. A focus() call in
+ * that same turn sticks in Chrome and can be ignored in Firefox and Safari,
+ * so try again on the next frame when the document still has focus.
+ */
+function useDeckBreakpoints(): {
+  phone: boolean;
+  stacked: boolean;
+  mid: boolean;
+  deckRef: RefObject<HTMLDivElement | null>;
+} {
+  const deckRef = useRef<HTMLDivElement>(null);
+  const [phone, setPhone] = useState(false);
+  const [stacked, setStacked] = useState(false);
+  const [mid, setMid] = useState(false);
+  const pendingFocus = useRef<HTMLElement | null>(null);
+  const layout = useRef<DeckMatch>({
+    phone: false,
+    stacked: false,
+    mid: false,
+  });
+
+  useLayoutEffect(() => {
+    layout.current = { phone, stacked, mid };
+    const node = pendingFocus.current;
+    pendingFocus.current = null;
+    if (!node) return;
+    let frame = 0;
+    const restore = () => {
+      if (!node.isConnected || controlIsDisabled(node)) return;
+      if (!focusLostToDocument()) return;
+      node.focus({ preventScroll: true });
+    };
+    restore();
+    if (node.isConnected && focusLostToDocument()) {
+      frame = requestAnimationFrame(restore);
+    }
+    return () => cancelAnimationFrame(frame);
+  }, [phone, stacked, mid]);
+
+  useLayoutEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const phoneMedia = matchMedia(DECK_BREAKPOINT_QUERY.phone);
+    const stackedMedia = matchMedia(DECK_BREAKPOINT_QUERY.stacked);
+    const midMedia = matchMedia(DECK_BREAKPOINT_QUERY.mid);
+    const sync = () => {
+      const next = {
+        phone: phoneMedia.matches,
+        stacked: stackedMedia.matches,
+        mid: midMedia.matches,
+      };
+      if (sameDeckMatch(layout.current, next)) return;
+      const active = document.activeElement;
+      const deck = deckRef.current;
+      if (active instanceof HTMLElement && deck?.contains(active)) {
+        pendingFocus.current = active;
+      }
+      layout.current = next;
+      setPhone(next.phone);
+      setStacked(next.stacked);
+      setMid(next.mid);
+    };
+    sync();
+    phoneMedia.addEventListener('change', sync);
+    stackedMedia.addEventListener('change', sync);
+    midMedia.addEventListener('change', sync);
+    return () => {
+      phoneMedia.removeEventListener('change', sync);
+      stackedMedia.removeEventListener('change', sync);
+      midMedia.removeEventListener('change', sync);
+    };
+  }, []);
+
+  return { phone, stacked, mid, deckRef };
+}
+
 const EMPTY_NOTES: readonly FingeredNote[] = [];
 
 function sameLocks(a: PhraseLocks, b: PhraseLocks): boolean {
@@ -597,9 +692,12 @@ export function PhrasePanel({
   }
   const busy = status === 'playing' || status === 'starting';
   const plan = phrase.ok ? phrase.phrase.plan : null;
-  const phoneKeys = useMatchMedia('(max-width: 640px)');
-  const stackedPlate = useMatchMedia('(max-width: 420px)');
-  const midPlate = useMatchMedia('(max-width: 960px)');
+  const {
+    phone: phoneKeys,
+    stacked: stackedPlate,
+    mid: midPlate,
+    deckRef,
+  } = useDeckBreakpoints();
   const playKey = (
     <button
       key="play"
@@ -786,13 +884,7 @@ export function PhrasePanel({
     phoneKeys && !stackedPlate
       ? [lengthControl, speedControl, tempoControl, swingControl, seedControl]
       : !phoneKeys && midPlate
-        ? [
-            lengthControl,
-            tempoControl,
-            speedControl,
-            seedControl,
-            swingControl,
-          ]
+        ? [lengthControl, tempoControl, speedControl, seedControl, swingControl]
         : [
             lengthControl,
             tempoControl,
@@ -811,7 +903,10 @@ export function PhrasePanel({
           {plan ? CADENCE_LABEL[plan.cadence] : 'chord'}.
         </p>
       </div>
-      <div className={`phrase-deck deck-tape${busy ? ' is-rolling' : ''}`}>
+      <div
+        ref={deckRef}
+        className={`phrase-deck deck-tape${busy ? ' is-rolling' : ''}`}
+      >
         <div className="deck-window">
           <span className="deck-reel" aria-hidden="true" />
           <div className="deck-window-text">
