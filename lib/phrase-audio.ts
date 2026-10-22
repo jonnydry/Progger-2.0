@@ -9,8 +9,9 @@ import { scheduleVoicing, type ScheduledVoicing } from './voicing-audio.ts';
 
 /**
  * Phrase playback uses the existing plucked voicing voice, one note at a time.
- * Each note follows that pluck for its written length, then a short release,
- * so a rest is silent and a longer note holds. It resumes the shared context
+ * Each note follows that pluck to its written end. A note that meets the
+ * next onset fades across it. A written rest fades inside the gap, and the
+ * last note fades on that same soft release. It resumes the shared context
  * and never calls the drone, so a stopped drone stays stopped. Note times sit
  * on the audio clock. A 25 ms tick only wakes the scheduler; a late tick does
  * not move a note that is still inside the lookahead.
@@ -20,8 +21,15 @@ export const PHRASE_LOOKAHEAD_SEC = 0.15;
 export const PHRASE_TICK_SEC = 0.025;
 export const PHRASE_END_RELEASE_SEC = 0.3;
 /**
- * Silence after a note's written length. A few tens of milliseconds, so the
- * waveform does not click and a rest is not filled in.
+ * Soft fade when a note meets the next onset, and after the last note.
+ * 250 ms sits in the middle of a 200–300 ms crossfade: the pluck blooms
+ * into the next note, and an eighth-note line stays a line.
+ */
+export const PHRASE_LEGATO_RELEASE_SEC = 0.25;
+/**
+ * Shortest fade inside a written rest. A longer rest uses about half its
+ * length, and never more than the legato release. The fade finishes
+ * before the next onset.
  */
 export const PHRASE_NOTE_RELEASE_SEC = 0.03;
 /**
@@ -158,22 +166,26 @@ const PLUCK_BODY_SEC = 0.65;
 const PLUCK_BODY_LEVEL = 0.12;
 const PLUCK_TAIL_SEC = 2.5;
 const PLUCK_TAIL_LEVEL = 0.0001;
+/** The pluck's own ramp reaches zero here. A phrase note does not play past it. */
+const PLUCK_ZERO_SEC = PLUCK_TAIL_SEC + 0.02;
 /** Keep the node up until the release has reached zero. */
 const NOTE_CLEANUP_MARGIN_SEC = 0.05;
 /** Stop just after the envelope hits zero, the same gap the pluck uses. */
 const NOTE_STOP_MARGIN_SEC = 0.01;
 
+type PhraseNoteTime = { beat: number; duration?: number };
+
+type NoteTail = { hold: number; release: number };
+
 /**
- * Written length in seconds. The note sounds from its own onset until
- * the onset of beat + duration, both through `onsetSeconds` at the
- * clamped tempo, so swing stretches the downbeat eighth and shortens
- * the offbeat the same way the scheduler places them. Straight time
- * stays the duration times a quarter. The span is not the gap to the
- * next note, so a rest after the written end stays silent. `null`
- * leaves the full pluck: no written length, or one the pluck cannot
- * hold past its own tail.
+ * The note's own written span, in seconds. Both ends go through
+ * `onsetSeconds` at the clamped tempo, so a swung eighth meets the next
+ * swung onset. Straight time is the duration times a quarter. When swing
+ * folds the written end onto or before the start, the straight span is
+ * used. `null` leaves the full pluck: no written length, or one the pluck
+ * cannot hold past its own tail.
  */
-function writtenNoteSeconds(
+function writtenSpanSeconds(
   beat: number,
   durationBeats: number | undefined,
   tempo: number,
@@ -190,9 +202,61 @@ function writtenNoteSeconds(
   const bpm = clampPhraseTempo(tempo);
   const start = onsetSeconds(beat, bpm, swing);
   const end = onsetSeconds(beat + durationBeats, bpm, swing);
-  const seconds = Math.max(0, end - start);
-  if (!(seconds < PLUCK_TAIL_SEC)) return null;
+  const swung = end - start;
+  const seconds = swung > 1e-6 ? swung : durationBeats * (60 / bpm);
+  if (!(seconds > 0) || !(seconds < PLUCK_TAIL_SEC)) return null;
   return seconds;
+}
+
+/** Fade inside a rest: about half the gap, at least 30 ms, and done before the next note. */
+function restReleaseSeconds(rest: number): number {
+  const half = rest * 0.5;
+  let release = Math.min(
+    PHRASE_LEGATO_RELEASE_SEC,
+    Math.max(PHRASE_NOTE_RELEASE_SEC, half),
+  );
+  if (release > rest) release = rest;
+  return Math.max(0, release);
+}
+
+/**
+ * How long the pluck holds, and how long it then fades.
+ * A note whose written end meets or passes the next onset holds to that
+ * written end and fades across the next note. A written rest ends at its
+ * own written end and fades inside the gap. The last note of a pass,
+ * including the note before a loop wraps, holds to its written end and
+ * uses the soft fade. Notes the pluck cannot hold return null.
+ */
+function noteTail(
+  notes: readonly PhraseNoteTime[],
+  index: number,
+  tempo: number,
+  swing: SwingInput,
+  /** Onsets at or after this beat are not played, so a loop does not treat the cadence as next. */
+  playBeforeBeat = Number.POSITIVE_INFINITY,
+): NoteTail | null {
+  const note = notes[index];
+  if (!note) return null;
+  const hold = writtenSpanSeconds(note.beat, note.duration, tempo, swing);
+  if (hold == null) return null;
+  const bpm = clampPhraseTempo(tempo);
+  const start = onsetSeconds(note.beat, bpm, swing);
+  const writtenEnd = start + hold;
+  let next = Number.POSITIVE_INFINITY;
+  for (let cursor = 0; cursor < notes.length; cursor += 1) {
+    if (cursor === index) continue;
+    const other = notes[cursor];
+    if (!other || !(other.beat < playBeforeBeat - 1e-9)) continue;
+    const at = onsetSeconds(other.beat, bpm, swing);
+    if (at > start + 1e-4 && at < next) next = at;
+  }
+  let release = PHRASE_LEGATO_RELEASE_SEC;
+  if (Number.isFinite(next) && next > writtenEnd + 1e-4) {
+    release = restReleaseSeconds(next - writtenEnd);
+  }
+  const room = PLUCK_ZERO_SEC - hold;
+  if (release > room) release = Math.max(0, room);
+  return { hold, release };
 }
 
 function exponentialLevel(
@@ -212,9 +276,14 @@ function exponentialLevel(
  * a linear release. Cancelling the later breakpoint also drops the curve
  * that led into it, so that stretch is drawn again.
  */
-function releasePluck(gain: AudioParam, at: number, durationSec: number): void {
+function releasePluck(
+  gain: AudioParam,
+  at: number,
+  durationSec: number,
+  releaseSec: number,
+): void {
   const releaseAt = at + durationSec;
-  const silenceAt = releaseAt + PHRASE_NOTE_RELEASE_SEC;
+  const silenceAt = releaseAt + Math.max(releaseSec, 1e-4);
   const attackEnd = at + PLUCK_ATTACK_SEC;
   const bodyEnd = at + PLUCK_BODY_SEC;
   const tailEnd = at + PLUCK_TAIL_SEC;
@@ -279,11 +348,12 @@ function releasePluck(gain: AudioParam, at: number, durationSec: number): void {
 function dampPhraseNote(
   voice: ScheduledVoicing,
   when: number,
-  durationSec: number,
+  holdSec: number,
+  releaseSec: number,
 ): void {
-  const silenceAt = when + durationSec + PHRASE_NOTE_RELEASE_SEC;
+  const silenceAt = when + holdSec + releaseSec;
   for (const part of voice.voices) {
-    releasePluck(part.envelope.gain, when, durationSec);
+    releasePluck(part.envelope.gain, when, holdSec, releaseSec);
     try {
       // A later stop() replaces the pluck's stop. The envelope is
       // already silent here, so the voice ends on this release.
@@ -294,11 +364,9 @@ function dampPhraseNote(
   }
 }
 
-function voiceEndsAt(scheduled: number, durationSec: number | null): number {
-  if (durationSec == null) return scheduled + 2.6;
-  return (
-    scheduled + durationSec + PHRASE_NOTE_RELEASE_SEC + NOTE_CLEANUP_MARGIN_SEC
-  );
+function voiceEndsAt(scheduled: number, tail: NoteTail | null): number {
+  if (tail == null) return scheduled + 2.6;
+  return scheduled + tail.hold + tail.release + NOTE_CLEANUP_MARGIN_SEC;
 }
 
 export function schedulePhrase(
@@ -317,17 +385,12 @@ export function schedulePhrase(
   const trim = context.createGain();
   trim.gain.setValueAtTime(PHRASE_TRIM, when);
   trim.connect(destination);
-  const voices = notes.map((note) => {
+  const voices = notes.map((note, index) => {
     const bpm = clampPhraseTempo(tempo);
     const start = when + onsetSeconds(note.beat, bpm, swing);
     const voice = scheduleVoicing(context, melodyFrets(note), start, trim);
-    const durationSec = writtenNoteSeconds(
-      note.beat,
-      note.duration,
-      bpm,
-      swing,
-    );
-    if (durationSec != null) dampPhraseNote(voice, start, durationSec);
+    const tail = noteTail(notes, index, tempo, swing);
+    if (tail) dampPhraseNote(voice, start, tail.hold, tail.release);
     return voice;
   });
   return { trim, voices };
@@ -927,20 +990,21 @@ export class PhrasePlayer {
             cue.scheduled,
             this.trim,
           );
-          const durationSec = writtenNoteSeconds(
-            note.beat,
-            note.duration,
+          const tail = noteTail(
+            phrase.notes,
+            cue.index,
             tempo,
             phrase.swing,
+            looping ? loopBeats : Number.POSITIVE_INFINITY,
           );
-          if (durationSec != null)
-            dampPhraseNote(voice, cue.scheduled, durationSec);
-          // A short note leaves after its release. A note the pluck cannot
+          if (tail)
+            dampPhraseNote(voice, cue.scheduled, tail.hold, tail.release);
+          // A finished note leaves after its fade. A note the pluck cannot
           // shorten stays for the old 2.6 s tail. The phrase itself still
           // waits out the period and the end release below.
           this.voices.push({
             voice,
-            ends: voiceEndsAt(cue.scheduled, durationSec),
+            ends: voiceEndsAt(cue.scheduled, tail),
             scheduled: cue.scheduled,
           });
           if (!looping && cue.index === phrase.notes.length - 1) {
