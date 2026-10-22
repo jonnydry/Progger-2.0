@@ -164,23 +164,33 @@ const NOTE_CLEANUP_MARGIN_SEC = 0.05;
 const NOTE_STOP_MARGIN_SEC = 0.01;
 
 /**
- * Written length in seconds. A beat is a quarter at the phrase tempo.
- * Swing moves an offbeat's start and does not change this length.
- * `null` leaves the full pluck: no written length, or one the pluck
- * cannot hold past its own tail.
+ * Written length in seconds. The note sounds from its own onset until
+ * the onset of beat + duration, both through `onsetSeconds` at the
+ * clamped tempo, so swing stretches the downbeat eighth and shortens
+ * the offbeat the same way the scheduler places them. Straight time
+ * stays the duration times a quarter. The span is not the gap to the
+ * next note, so a rest after the written end stays silent. `null`
+ * leaves the full pluck: no written length, or one the pluck cannot
+ * hold past its own tail.
  */
 function writtenNoteSeconds(
+  beat: number,
   durationBeats: number | undefined,
   tempo: number,
+  swing: SwingInput,
 ): number | null {
   if (
     durationBeats == null ||
     !Number.isFinite(durationBeats) ||
-    !(durationBeats > 0)
+    !(durationBeats > 0) ||
+    !Number.isFinite(beat)
   ) {
     return null;
   }
-  const seconds = durationBeats * (60 / clampPhraseTempo(tempo));
+  const bpm = clampPhraseTempo(tempo);
+  const start = onsetSeconds(beat, bpm, swing);
+  const end = onsetSeconds(beat + durationBeats, bpm, swing);
+  const seconds = Math.max(0, end - start);
   if (!(seconds < PLUCK_TAIL_SEC)) return null;
   return seconds;
 }
@@ -275,10 +285,11 @@ function dampPhraseNote(
   for (const part of voice.voices) {
     releasePluck(part.envelope.gain, when, durationSec);
     try {
+      // A later stop() replaces the pluck's stop. The envelope is
+      // already silent here, so the voice ends on this release.
       part.oscillator.stop(silenceAt + NOTE_STOP_MARGIN_SEC);
     } catch {
-      // A browser allows one stop, and the voice already took it.
-      // The envelope is silent by then, so that later stop is quiet.
+      // The context may already be closed.
     }
   }
 }
@@ -307,10 +318,15 @@ export function schedulePhrase(
   trim.gain.setValueAtTime(PHRASE_TRIM, when);
   trim.connect(destination);
   const voices = notes.map((note) => {
-    const start =
-      when + onsetSeconds(note.beat, clampPhraseTempo(tempo), swing);
+    const bpm = clampPhraseTempo(tempo);
+    const start = when + onsetSeconds(note.beat, bpm, swing);
     const voice = scheduleVoicing(context, melodyFrets(note), start, trim);
-    const durationSec = writtenNoteSeconds(note.duration, tempo);
+    const durationSec = writtenNoteSeconds(
+      note.beat,
+      note.duration,
+      bpm,
+      swing,
+    );
     if (durationSec != null) dampPhraseNote(voice, start, durationSec);
     return voice;
   });
@@ -911,7 +927,12 @@ export class PhrasePlayer {
             cue.scheduled,
             this.trim,
           );
-          const durationSec = writtenNoteSeconds(note.duration, tempo);
+          const durationSec = writtenNoteSeconds(
+            note.beat,
+            note.duration,
+            tempo,
+            phrase.swing,
+          );
           if (durationSec != null)
             dampPhraseNote(voice, cue.scheduled, durationSec);
           // A short note leaves after its release. A note the pluck cannot
