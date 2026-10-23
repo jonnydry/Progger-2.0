@@ -205,9 +205,7 @@ void test('the phrase on screen is not stored twice', () => {
 void test('an identical cross-tab read keeps the history objects', () => {
   const held = install(null);
   try {
-    rememberPhrase(
-      entry(7, { locks: { rhythm: 'eighths', cadence: 'fifth' } }),
-    );
+    rememberPhrase(entry(7, { locks: { rhythm: 'eighths', cadence: 'fifth' } }));
     rememberPhrase(entry(8));
     const before = getPhraseHistory();
     const locks = before.entries[0]?.locks;
@@ -242,7 +240,7 @@ void test('storage round-trips the phrase and leaves tempo and swing out', () =>
   const raw = store.raw() ?? '';
   assert.equal(raw.includes('tempo'), false);
   assert.equal(raw.includes('swing'), false);
-  assert.equal(raw.includes('"version":2'), true);
+  assert.equal(raw.includes('"version":1'), true);
   assert.deepEqual(parsePhraseHistory(null), {
     state: emptyPhraseHistory(),
     writable: true,
@@ -289,7 +287,7 @@ void test('corrupt storage is ignored and left untouched', () => {
     'null',
     '"history"',
     '',
-    JSON.stringify({ version: 3, entries: [entry(1)], index: 0 }),
+    JSON.stringify({ version: 2, entries: [entry(1)], index: 0 }),
     JSON.stringify({ version: 0, entries: [] }),
     JSON.stringify({ version: 1 }),
     JSON.stringify({ version: 1, entries: { seed: 1 } }),
@@ -768,81 +766,4 @@ void test('a bars change while looping lands on the next downbeat', async () => 
     );
     player.stop();
   }
-});
-
-void test('version 2 keeps plan words and a version 1 seed still loads', () => {
-  const planned = phraseHistoryEntry({
-    seed: 4,
-    bars: 2,
-    scaleRoot: 'A',
-    scaleId: 'dorian',
-    place: 'scale',
-    chord: null,
-    chordNotes: tonic,
-    locks: {},
-    plan: { form: 'answer', cells: ['q q q q', 'zr q zr q'] },
-  });
-  assert.ok(planned);
-  assert.deepEqual(planned.plan, {
-    form: 'answer',
-    cells: ['q q q q', 'zr q zr q'],
-  });
-  const merged = pushPhraseHistory(
-    pushPhraseHistory(emptyPhraseHistory(), entry(4)),
-    planned,
-  );
-  assert.equal(merged.entries.length, 1);
-  assert.deepEqual(merged.entries[0]?.plan, planned.plan);
-  assert.equal(pushPhraseHistory(merged, planned), merged);
-
-  const invalid = phraseHistoryEntry({
-    seed: 4,
-    bars: 2,
-    scaleRoot: 'A',
-    scaleId: 'dorian',
-    place: 'scale',
-    chord: null,
-    chordNotes: tonic,
-    locks: {},
-    plan: { form: 'answer', cells: ['nope', 'q'] },
-  });
-  assert.ok(invalid);
-  assert.equal(invalid.plan, undefined);
-
-  const v1 = JSON.stringify({ version: 1, index: 0, entries: [entry(4)] });
-  const loaded = parsePhraseHistory(v1);
-  assert.equal(loaded.writable, true);
-  assert.equal(loaded.state.version, 2);
-  assert.equal(loaded.state.entries[0]?.seed, 4);
-  assert.equal(loaded.state.entries[0]?.plan, undefined);
-
-  const mismatched = JSON.stringify({
-    version: 2,
-    index: 0,
-    entries: [
-      { ...entry(4), plan: { form: 'sentence', cells: ['q', 'q', 'q', 'q'] } },
-    ],
-  });
-  const dropped = parsePhraseHistory(mismatched);
-  assert.equal(dropped.writable, true);
-  assert.equal(dropped.state.entries[0]?.seed, 4);
-  assert.equal(dropped.state.entries[0]?.plan, undefined);
-
-  const kept = JSON.stringify({
-    version: 2,
-    index: 0,
-    entries: [
-      { ...entry(4), plan: { form: 'answer', cells: ['q q', 'zr q'] } },
-    ],
-  });
-  assert.deepEqual(parsePhraseHistory(kept).state.entries[0]?.plan, {
-    form: 'answer',
-    cells: ['q q', 'zr q'],
-  });
-
-  const future = JSON.stringify({ version: 3, entries: [entry(4)], index: 0 });
-  const store = memory(future);
-  assert.equal(parsePhraseHistory(future).writable, false);
-  assert.deepEqual(readPhraseHistory(store), emptyPhraseHistory());
-  assert.equal(store.raw(), future);
 });

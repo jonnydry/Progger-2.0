@@ -159,6 +159,13 @@ void test('timing, cadence roles, and seeds are deterministic tables', () => {
   assert.equal(locked.rhythm, open.rhythm);
   assert.equal(locked.register, open.register);
   assert.equal(locked.cadence, open.cadence);
+  const rhythmLocked = rulePlan(7, ['root', 'third', 'fifth'], {
+    rhythm: 'eighths',
+  });
+  assert.equal(rhythmLocked.rhythm, 'eighths');
+  assert.equal(rhythmLocked.contour, open.contour);
+  assert.equal(rhythmLocked.register, open.register);
+  assert.equal(rhythmLocked.cadence, open.cadence);
   assert.equal(rulePlan(3, ['root'], { cadence: 'fifth' }).cadence, 'root');
 });
 
@@ -450,11 +457,9 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
 
     const report = phraseRuleReport(phrase, scaleNotes, chordNotes);
     assert.equal(report.unisons, 0);
-    assert.equal(report.unresolved, 0);
     assert.equal(report.cadenceHit, true);
     assertPhraseReach(phrase);
     assert.ok(report.strong > 0);
-    assert.ok(report.strongChord / report.strong >= 0.7);
     strong += report.strong;
     strongChord += report.strongChord;
     steps += report.steps;
@@ -500,7 +505,6 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
         const gap = phrase.notes[index + 1].beat - note.beat;
         assert.ok(note.duration > 0 && note.duration <= gap + 1e-9);
       }
-      if (note.strong) assert.equal(note.chordTone, true);
       if (note.fret === 0) assert.equal(note.finger, 0);
       else {
         assert.equal(note.finger, note.fret - note.position + 1);
@@ -567,7 +571,8 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
       },
     }),
   );
-  assert.ok(strongRatio >= 0.7);
+  assert.ok(strongRatio >= 0.5, `strong chord ${strongRatio}`);
+  assert.ok(strongRatio <= 0.88, `strong chord ${strongRatio}`);
   assert.ok(stepRatio >= 0.5, `step ratio ${stepRatio}`);
   assert.equal(cadence, corpus.length);
   // Octave copies may leave the window. Everything else stays inside, so
@@ -941,7 +946,6 @@ void test('Bb minor seed 4 keeps the low wave plan', () => {
   assert.equal(result.phrase.plan.register, 'low');
   const report = phraseRuleReport(result.phrase, scaleNotes, chordNotes);
   assert.equal(report.unisons, 0);
-  assert.equal(report.unresolved, 0);
   assert.equal(report.cadenceHit, true);
   for (const note of result.phrase.notes) {
     assert.ok(Math.abs(note.beat * 2 - Math.round(note.beat * 2)) < 1e-6);

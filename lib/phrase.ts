@@ -793,51 +793,36 @@ function compileBars(): Record<RhythmId, BarPattern[]> {
 
 const BAR_PATTERNS = compileBars();
 
-/** Same checks the corpus pins: chord tones, no unison, leaps resolve. */
+type Pitched = {
+  midi: number;
+  name: string;
+  pc: number;
+  degree: string;
+  chordTone: boolean;
+  /** Ladder index. A chromatic passing tone is -1. */
+  index: number;
+};
+
+/**
+ * Cadence pitch, length, and the arrival rule. A strong beat prefers a
+ * chord tone in the weights. A leap prefers a step back. Neither is forced.
+ * The same MIDI twice in a row stays illegal: arrival rejects a gap of 0.
+ */
 function lineIsLegal(
-  indexes: readonly number[],
+  notes: readonly { midi: number }[],
   events: readonly GridEvent[],
-  ladder: readonly LadderTone[],
-  cadenceIndex: number,
+  cadenceMidi: number,
 ): boolean {
-  if (indexes.length !== events.length || indexes.length === 0) return false;
-  if (indexes[indexes.length - 1] !== cadenceIndex) return false;
-  const scalePcs = new Set(ladder.map((tone) => tone.note.pc));
-  for (let index = 0; index < indexes.length; index++) {
-    const tone = indexes[index];
-    if (tone < 0 || tone >= ladder.length) return false;
-    if (events[index].strong && !ladder[tone].chordTone) return false;
-    if (
-      events[index].strong &&
-      index > 0 &&
-      melodicMotion(
-        ladder[indexes[index - 1]].midi,
-        ladder[tone].midi,
-        scalePcs,
-      ) !== 'step'
-    )
-      return false;
+  if (notes.length !== events.length || notes.length === 0) return false;
+  if (notes[notes.length - 1].midi !== cadenceMidi) return false;
+  if (events[events.length - 1].duration !== 2) return false;
+  for (let index = 0; index < notes.length; index++) {
+    if (!spotsFor(notes[index].midi).length) return false;
     if (index === 0) continue;
-    if (tone === indexes[index - 1]) return false;
-    const motion = melodicMotion(
-      ladder[indexes[index - 1]].midi,
-      ladder[tone].midi,
-      scalePcs,
-    );
-    if (motion !== 'leap') continue;
-    const next = indexes[index + 1];
-    if (next === undefined) return false;
-    const resolution = melodicMotion(
-      ladder[tone].midi,
-      ladder[next].midi,
-      scalePcs,
-    );
-    const opposite =
-      Math.sign(ladder[next].midi - ladder[tone].midi) ===
-      -Math.sign(ladder[tone].midi - ladder[indexes[index - 1]].midi);
-    if (resolution !== 'step' || !opposite) return false;
+    const gap = Math.abs(notes[index].midi - notes[index - 1].midi);
+    if (!arrivalOk(gap, events[index].duration)) return false;
   }
-  return events[events.length - 1].duration === 2;
+  return true;
 }
 
 /**
@@ -863,22 +848,6 @@ function handSlack(duration: number): number {
 function arrivalOk(gap: number, duration: number): boolean {
   if (gap === 0 || gap > 12) return false;
   return !(duration <= 0.5 && gap > 5);
-}
-
-/**
- * Jonny, 2026-10-16, 1:10am ET: octave jumps may leave the locked register.
- * An octave jump is the same note an octave up or down (±12 from the note
- * being rewritten). Every other leap stays inside the register window.
- */
-function pitchAllowed(
-  midi: number,
-  original: number,
-  low: number,
-  high: number,
-): boolean {
-  if (midi < TUNING[0] || midi > TUNING[TUNING.length - 1] + 24) return false;
-  if (midi >= low && midi <= high) return true;
-  return Math.abs(midi - original) === 12;
 }
 
 function guideTone(degree: string): boolean {
@@ -1007,45 +976,52 @@ function pickPatterns(
   return chosen;
 }
 
-function nearestIndex(
-  options: readonly number[],
-  ladder: readonly LadderTone[],
-  goal: number,
-  strong: boolean,
-): number {
-  let best = options[0];
-  let bestScore = Infinity;
-  for (const index of options) {
-    let score = Math.abs(ladder[index].midi - goal);
-    if (strong && guideTone(ladder[index].note.degree)) score -= 1.5;
-    if (score < bestScore || (score === bestScore && index < best)) {
-      best = index;
-      bestScore = score;
-    }
-  }
-  return best;
+const PROXIMITY_VAR = 8;
+const RANGE_VAR = 29;
+const CONTOUR_VAR = 18;
+const SHARP_NAME = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const FLAT_NAME = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+
+function pitchedFromLadder(ladder: readonly LadderTone[], tone: number): Pitched {
+  const row = ladder[tone];
+  return {
+    midi: row.midi,
+    name: row.note.name,
+    pc: row.note.pc,
+    degree: row.note.degree,
+    chordTone: row.chordTone,
+    index: tone,
+  };
 }
 
-/** A scale step that is allowed to land on this event. */
-function stepOk(
-  ladder: readonly LadderTone[],
-  prev: number,
-  tone: number,
-  event: GridEvent,
-): boolean {
-  if (tone === prev || tone < 0 || tone >= ladder.length) return false;
-  const gap = Math.abs(ladder[tone].midi - ladder[prev].midi);
-  if (!arrivalOk(gap, event.duration)) return false;
-  if (!event.strong) return Math.abs(tone - prev) === 1;
-  return ladder[tone].chordTone && Math.abs(tone - prev) === 1;
+function scaleUsesFlats(ladder: readonly LadderTone[]): boolean {
+  let sharp = 0;
+  let flat = 0;
+  for (const tone of ladder) {
+    sharp += tone.note.name.split('#').length - 1;
+    flat += tone.note.name.split('b').length - 1;
+  }
+  return flat > sharp;
+}
+
+/** A chromatic passing tone, spelled in the scale's sharp or flat direction. */
+function passingPitch(midi: number, flats: boolean): Pitched {
+  const pc = mod(midi);
+  return {
+    midi,
+    name: (flats ? FLAT_NAME : SHARP_NAME)[pc],
+    pc,
+    degree: 'chr',
+    chordTone: false,
+    index: -1,
+  };
 }
 
 /**
- * Tones from which a stepwise line can still reach the cadence.
- * Strong events keep chord tones only. The forward walk stays inside this set,
- * so a dead rhythm fails before a note is chosen.
+ * Any ladder tone that can still reach the cadence under the arrival rule.
+ * A strong beat is not required to be a chord tone.
  */
-function stepAlive(
+function reachable(
   ladder: readonly LadderTone[],
   events: readonly GridEvent[],
   cadenceAt: number,
@@ -1057,10 +1033,11 @@ function stepAlive(
   for (let event = events.length - 2; event >= 0; event--) {
     const landing = events[event + 1];
     for (let tone = 0; tone < count; tone++) {
-      if (events[event].strong && !ladder[tone].chordTone) continue;
-      for (const next of [tone - 1, tone + 1]) {
+      const from = ladder[tone].midi;
+      for (let next = 0; next < count; next++) {
         if (!alive[event + 1][next]) continue;
-        if (!stepOk(ladder, tone, next, landing)) continue;
+        if (!arrivalOk(Math.abs(ladder[next].midi - from), landing.duration))
+          continue;
         alive[event][tone] = true;
         break;
       }
@@ -1069,178 +1046,533 @@ function stepAlive(
   return alive;
 }
 
+function gauss(delta: number, variance: number): number {
+  return Math.exp(-(delta * delta) / (2 * variance));
+}
+
+function pitchWeight(
+  ladder: readonly LadderTone[],
+  tone: number,
+  prevMidi: number | null,
+  prevPrevMidi: number | null,
+  goal: number,
+  centre: number,
+  event: GridEvent,
+): number {
+  const midi = ladder[tone].midi;
+  let weight = gauss(midi - goal, CONTOUR_VAR) * gauss(midi - centre, RANGE_VAR);
+  if (prevMidi !== null) {
+    const gap = midi - prevMidi;
+    const abs = Math.abs(gap);
+    weight *= gauss(gap, PROXIMITY_VAR);
+    if (
+      prevPrevMidi !== null &&
+      Math.abs(prevMidi - prevPrevMidi) >= 5 &&
+      abs > 0 &&
+      abs <= 2 &&
+      Math.sign(gap) === -Math.sign(prevMidi - prevPrevMidi)
+    ) {
+      weight *= 1.65;
+    }
+    if (prevPrevMidi !== null && midi === prevPrevMidi) weight *= 0.18;
+  }
+  if (event.strong) {
+    weight *= ladder[tone].chordTone ? 2.15 : 0.72;
+    if (ladder[tone].chordTone && guideTone(ladder[tone].note.degree))
+      weight *= 1.12;
+  }
+  return weight > 1e-9 ? weight : 1e-9;
+}
+
+function pickWeighted(weights: readonly number[], random: () => number): number {
+  let total = 0;
+  for (const weight of weights) total += weight;
+  if (total <= 0) return 0;
+  let draw = random() * total;
+  for (let index = 0; index < weights.length; index++) {
+    draw -= weights[index];
+    if (draw < 0) return index;
+  }
+  return weights.length - 1;
+}
+
+function extendsAlternation(
+  notes: readonly { midi: number }[],
+  midi: number,
+): boolean {
+  const count = notes.length;
+  if (count < 3) return false;
+  return (
+    notes[count - 1].midi === notes[count - 3].midi &&
+    midi === notes[count - 2].midi
+  );
+}
+
+/** True when any upcoming pitch would be the second return to a two-pitch pair. */
+function sequenceExtends(
+  notes: readonly { midi: number }[],
+  upcoming: readonly number[],
+): boolean {
+  const midis = notes.map((note) => note.midi);
+  for (const midi of upcoming) {
+    const count = midis.length;
+    if (
+      count >= 3 &&
+      midis[count - 1] === midis[count - 3] &&
+      midi === midis[count - 2]
+    )
+      return true;
+    midis.push(midi);
+  }
+  return false;
+}
+
+function legalIndexes(
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  index: number,
+): number[] {
+  const prev = notes.length ? notes[notes.length - 1] : null;
+  const found: number[] = [];
+  for (let tone = 0; tone < ladder.length; tone++) {
+    if (!alive[index][tone]) continue;
+    if (prev) {
+      const gap = Math.abs(ladder[tone].midi - prev.midi);
+      if (!arrivalOk(gap, events[index].duration)) continue;
+    }
+    found.push(tone);
+  }
+  return found;
+}
+
+function withoutAlternation(
+  ladder: readonly LadderTone[],
+  candidates: readonly number[],
+  notes: readonly Pitched[],
+): number[] {
+  if (notes.length < 3) return [...candidates];
+  if (notes[notes.length - 1].midi !== notes[notes.length - 3].midi)
+    return [...candidates];
+  const earlier = notes[notes.length - 2].midi;
+  const others = candidates.filter((tone) => ladder[tone].midi !== earlier);
+  return others.length ? others : [...candidates];
+}
+
+function echoIndex(
+  ladder: readonly LadderTone[],
+  chosen: number,
+  pool: readonly number[],
+  motif: readonly number[],
+  motifUsed: number,
+  notes: readonly Pitched[],
+  beat: number,
+  bars: 2 | 4,
+): { index: number; used: number } {
+  const bar = Math.floor(beat / 4);
+  const echoing =
+    (bars === 2 && bar === 1) || (bars === 4 && (bar === 1 || bar === 3));
+  const limit = bar === 3 ? 2 : 3;
+  const prev = notes.length ? notes[notes.length - 1].index : -1;
+  if (
+    !echoing ||
+    prev < 0 ||
+    motifUsed >= limit ||
+    motif[motifUsed] === undefined
+  ) {
+    return { index: chosen, used: motifUsed };
+  }
+  const want = prev + motif[motifUsed];
+  if (
+    want >= 0 &&
+    want < ladder.length &&
+    pool.includes(want) &&
+    !extendsAlternation(notes, ladder[want].midi)
+  )
+    return { index: want, used: motifUsed + 1 };
+  return { index: chosen, used: limit };
+}
+
+function recordMotif(
+  motif: number[],
+  notes: readonly Pitched[],
+  chosen: Pitched,
+  beat: number,
+): void {
+  if (Math.floor(beat / 4) !== 0 || motif.length >= 3) return;
+  const prev = notes.length ? notes[notes.length - 1] : null;
+  if (!prev || prev.index < 0 || chosen.index < 0) return;
+  motif.push(chosen.index - prev.index);
+}
+
+type AtomKind = 'run' | 'arp' | 'approach';
+
+function chooseAtom(previous: AtomKind, random: () => number): AtomKind {
+  const rows: Record<AtomKind, readonly [number, number]> = {
+    run: [0.4, 0.46],
+    arp: [0.5, 0.32],
+    approach: [0.55, 0.32],
+  };
+  const [run, arp] = rows[previous];
+  const draw = random();
+  if (draw < run) return 'run';
+  if (draw < run + arp) return 'arp';
+  return 'approach';
+}
+
+function stepAtom(
+  pool: readonly number[],
+  prev: Pitched | null,
+  goal: number,
+  atom: AtomKind,
+): number | null {
+  if (!prev || prev.index < 0) return null;
+  const dir = Math.sign(goal - prev.midi) || 1;
+  const sizes = atom === 'arp' ? [2, 3] : [1];
+  for (const size of sizes) {
+    const tone = prev.index + dir * size;
+    if (pool.includes(tone)) return tone;
+  }
+  for (const size of sizes) {
+    const tone = prev.index - dir * size;
+    if (pool.includes(tone)) return tone;
+  }
+  return null;
+}
+
+function approachFigure(
+  ladder: readonly LadderTone[],
+  events: readonly GridEvent[],
+  alive: readonly (readonly boolean[])[],
+  notes: readonly Pitched[],
+  index: number,
+  cadenceAt: number,
+  scalePcs: ReadonlySet<number>,
+  flats: boolean,
+  windowLow: number,
+  windowHigh: number,
+  goal: number,
+  centre: number,
+  random: () => number,
+): Pitched[] | null {
+  let targetAt = -1;
+  for (let cursor = index + 1; cursor < events.length; cursor++) {
+    if (cursor - index > 2) break;
+    if (cursor === events.length - 1 || events[cursor].strong) {
+      targetAt = cursor;
+      break;
+    }
+  }
+  if (targetAt < 0) return null;
+  const targets: number[] = [];
+  if (targetAt === events.length - 1) targets.push(cadenceAt);
+  else {
+    for (let tone = 0; tone < ladder.length; tone++) {
+      if (alive[targetAt][tone] && ladder[tone].chordTone) targets.push(tone);
+    }
+  }
+  if (!targets.length) return null;
+  const prev = notes.length ? notes[notes.length - 1] : null;
+  const durations = events.slice(index, targetAt + 1).map((row) => row.duration);
+  const span = targetAt - index;
+  const figures: Pitched[][] = [];
+  const ranked = targets
+    .map((tone) => ({
+      tone,
+      weight: pitchWeight(
+        ladder,
+        tone,
+        prev ? prev.midi : null,
+        notes.length > 1 ? notes[notes.length - 2].midi : null,
+        goal,
+        centre,
+        events[targetAt],
+      ),
+    }))
+    .sort((a, b) => b.weight - a.weight || a.tone - b.tone);
+  for (const item of ranked) {
+    const built = passingChain(
+      ladder[item.tone].midi,
+      span,
+      prev ? prev.midi : null,
+      durations,
+      scalePcs,
+      flats,
+      windowLow,
+      windowHigh,
+    );
+    if (!built) continue;
+    const landing = [...built.map((row) => row.midi), ladder[item.tone].midi];
+    if (sequenceExtends(notes, landing)) continue;
+    if (targetAt === events.length - 1) figures.push(built);
+    else figures.push([...built, pitchedFromLadder(ladder, item.tone)]);
+    if (figures.length >= 4) break;
+  }
+  if (!figures.length) return null;
+  return figures[Math.floor(random() * figures.length)] ?? figures[0];
+}
+
+/** Passing tones that resolve to `targetMidi`. The target itself is not included. */
+function passingChain(
+  targetMidi: number,
+  span: number,
+  prevMidi: number | null,
+  durations: readonly number[],
+  scalePcs: ReadonlySet<number>,
+  flats: boolean,
+  windowLow: number,
+  windowHigh: number,
+): Pitched[] | null {
+  const inside = (midi: number) =>
+    midi >= windowLow &&
+    midi <= windowHigh &&
+    spotsFor(midi).length > 0 &&
+    !scalePcs.has(mod(midi));
+  const chainOk = (midis: readonly number[]) => {
+    const all = prevMidi === null ? midis : [prevMidi, ...midis];
+    for (let index = 1; index < all.length; index++) {
+      const placed = index - (prevMidi === null ? 0 : 1);
+      if (!arrivalOk(Math.abs(all[index] - all[index - 1]), durations[placed] ?? 1))
+        return false;
+    }
+    return true;
+  };
+  if (span === 1) {
+    for (const delta of [1, -1, 2, -2]) {
+      const midi = targetMidi + delta;
+      if (!inside(midi)) continue;
+      if (chainOk([midi, targetMidi])) return [passingPitch(midi, flats)];
+    }
+    return null;
+  }
+  const ups = [1, 2].map((delta) => targetMidi + delta).filter(inside);
+  const downs = [1, 2].map((delta) => targetMidi - delta).filter(inside);
+  for (const up of ups) {
+    for (const down of downs) {
+      for (const pair of [
+        [up, down],
+        [down, up],
+      ] as const) {
+        if (chainOk([...pair, targetMidi]))
+          return pair.map((midi) => passingPitch(midi, flats));
+      }
+    }
+  }
+  return null;
+}
+
 /**
- * Notes stay on the scale ladder. A strong note is a chord tone reached
- * by a scale step. A leap lands on a weak beat and steps back the other way.
- * Chromatic (non-scale) approaches cannot pass the spelling rules, so an
- * enclosure is the diatonic neighbor above, then below, then the target.
+ * Default pitch choice. Every legal ladder tone is scored and sampled.
+ * Proximity, register centre, and contour are gaussians. Chord tones are
+ * preferred on strong beats. A leap is biased toward a contrary step.
+ * The first three scale-step deltas of bar 0 are copied onto an echo bar
+ * when that landing is legal and does not extend a two-pitch alternation.
  */
-function walkLine(
+function walkScored(
   ladder: readonly LadderTone[],
   events: readonly GridEvent[],
   plan: PhrasePlan,
   bars: 2 | 4,
   cadenceAt: number,
-  leaps: boolean,
-  enclose: boolean,
-): number[] | null {
-  const low = REGISTER_LOW[plan.register];
-  const high = low + PHRASE_RANGE;
-  const alive = stepAlive(ladder, events, cadenceAt);
-  if (!alive[0].some(Boolean)) return null;
-  const indexes: number[] = [];
+  alive: readonly (readonly boolean[])[],
+  random: () => number,
+): Pitched[] | null {
+  const centre = REGISTER_LOW[plan.register] + PHRASE_RANGE / 2;
+  const notes: Pitched[] = [];
   const motif: number[] = [];
   let motifUsed = 0;
-  let pending: number | null = null;
-  let encloseNext: number | null = null;
+  for (let index = 0; index < events.length; index++) {
+    if (countSearchStep()) return null;
+    if (index === events.length - 1) {
+      notes.push(pitchedFromLadder(ladder, cadenceAt));
+      continue;
+    }
+    const event = events[index];
+    const candidates = withoutAlternation(
+      ladder,
+      legalIndexes(ladder, alive, events, notes, index),
+      notes,
+    );
+    if (!candidates.length) return null;
+    const along = index / Math.max(1, events.length - 1);
+    const goal = contourMidi(plan, along);
+    const prev = notes.length ? notes[notes.length - 1] : null;
+    const weights = candidates.map((tone) =>
+      pitchWeight(
+        ladder,
+        tone,
+        prev ? prev.midi : null,
+        notes.length > 1 ? notes[notes.length - 2].midi : null,
+        goal,
+        centre,
+        event,
+      ),
+    );
+    let chosen = candidates[pickWeighted(weights, random)] ?? candidates[0];
+    const echoed = echoIndex(
+      ladder,
+      chosen,
+      candidates,
+      motif,
+      motifUsed,
+      notes,
+      event.beat,
+      bars,
+    );
+    chosen = echoed.index;
+    motifUsed = echoed.used;
+    const pitch = pitchedFromLadder(ladder, chosen);
+    recordMotif(motif, notes, pitch, event.beat);
+    notes.push(pitch);
+  }
+  if (!lineIsLegal(notes, events, ladder[cadenceAt].midi)) return null;
+  return notes;
+}
 
+/**
+ * Off by default. Runs, arpeggio skips, and chromatic approaches or
+ * enclosures into the next chord tone. Repeats stay illegal.
+ */
+function walkAtoms(
+  ladder: readonly LadderTone[],
+  events: readonly GridEvent[],
+  plan: PhrasePlan,
+  bars: 2 | 4,
+  cadenceAt: number,
+  alive: readonly (readonly boolean[])[],
+  random: () => number,
+): Pitched[] | null {
+  const flats = scaleUsesFlats(ladder);
+  const scalePcs = new Set(ladder.map((tone) => tone.note.pc));
+  const centre = REGISTER_LOW[plan.register] + PHRASE_RANGE / 2;
+  const windowLow = REGISTER_LOW[plan.register];
+  const windowHigh = windowLow + PHRASE_RANGE;
+  const notes: Pitched[] = [];
+  const planned: Pitched[] = [];
+  const motif: number[] = [];
+  let motifUsed = 0;
+  let atom: AtomKind = 'run';
+  let left = 0;
   for (let index = 0; index < events.length; index++) {
     if (countSearchStep()) return null;
     const event = events[index];
     if (index === events.length - 1) {
-      const midi = ladder[cadenceAt].midi;
-      if (!pitchAllowed(midi, midi, low, high)) return null;
-      indexes.push(cadenceAt);
-      continue;
-    }
-    const along = index / Math.max(1, events.length - 1);
-    const prev = index === 0 ? null : indexes[index - 1];
-    const next = events[index + 1];
-    const after = events[index + 2];
-    const bar = Math.floor(event.beat / 4);
-    const echoing =
-      (bars === 2 && bar === 1) || (bars === 4 && (bar === 1 || bar === 3));
-    const motifLimit = bar === 3 ? 2 : 3;
-
-    if (encloseNext !== null && prev !== null) {
-      const chosen = encloseNext;
-      encloseNext = null;
-      if (Math.abs(chosen - prev) >= 2) pending = Math.sign(chosen - prev);
-      if (bar === 0 && motif.length < 3) motif.push(chosen - prev);
-      indexes.push(chosen);
-      continue;
-    }
-    if (pending !== null && prev !== null) {
-      const chosen = prev - pending;
-      pending = null;
-      if (chosen < 0 || chosen >= ladder.length || !alive[index][chosen])
+      const cadence = pitchedFromLadder(ladder, cadenceAt);
+      const prev = notes.length ? notes[notes.length - 1] : null;
+      if (
+        prev &&
+        !arrivalOk(Math.abs(cadence.midi - prev.midi), event.duration)
+      )
         return null;
-      if (bar === 0 && motif.length < 3) motif.push(chosen - prev);
-      indexes.push(chosen);
+      notes.push(cadence);
       continue;
     }
-
-    let options: number[] = [];
-    if (prev === null) {
-      for (let tone = 0; tone < ladder.length; tone++) {
-        if (alive[index][tone]) options.push(tone);
+    if (planned.length) {
+      const next = planned[0];
+      const prev = notes[notes.length - 1];
+      const arrives =
+        !!next &&
+        (!prev ||
+          arrivalOk(Math.abs(next.midi - prev.midi), event.duration));
+      if (next && arrives && !extendsAlternation(notes, next.midi)) {
+        planned.shift();
+        recordMotif(motif, notes, next, event.beat);
+        notes.push(next);
+        continue;
       }
-    } else {
-      for (const tone of [prev - 1, prev + 1]) {
-        if (stepOk(ladder, prev, tone, event) && alive[index][tone])
-          options.push(tone);
-      }
-      const penultimate = index + 1 === events.length - 1;
-      if (leaps && !event.strong && !penultimate && next) {
-        const goal = contourMidi(plan, along);
-        const dir = Math.sign(goal - ladder[prev].midi);
-        const reach = event.duration <= 0.5 ? 2 : 3;
-        for (let size = 2; size <= reach; size++) {
-          const tone = prev + dir * size;
-          if (dir === 0 || tone < 0 || tone >= ladder.length) continue;
-          const gap = Math.abs(ladder[tone].midi - ladder[prev].midi);
-          if (!arrivalOk(gap, event.duration)) continue;
-          const back = tone - dir;
-          if (!alive[index + 1]?.[back]) continue;
-          if (!stepOk(ladder, tone, back, next)) continue;
-          options.push(tone);
-        }
-      }
+      planned.length = 0;
     }
-    options = options.filter((tone) =>
-      pitchAllowed(ladder[tone].midi, ladder[tone].midi, low, high),
-    );
-    if (plan.contour === 'wave') {
-      const mid = Math.floor((events.length - 1) / 2);
-      if (index <= mid) {
-        const capped = options.filter(
-          (tone) => Math.abs(tone - cadenceAt) <= mid - index,
-        );
-        if (capped.length) options = capped;
-      }
-    }
-    if (!options.length) return null;
-
-    let chosen = nearestIndex(
-      options,
+    const candidates = withoutAlternation(
       ladder,
-      contourMidi(plan, along),
-      event.strong,
+      legalIndexes(ladder, alive, events, notes, index),
+      notes,
     );
-    if (
-      echoing &&
-      prev !== null &&
-      motifUsed < motifLimit &&
-      motif[motifUsed] !== undefined
-    ) {
-      const want = prev + motif[motifUsed];
-      if (options.includes(want)) {
-        chosen = want;
-        motifUsed += 1;
-      } else motifUsed = motifLimit;
+    if (!candidates.length) return null;
+    if (left <= 0) {
+      atom = chooseAtom(atom, random);
+      left = atom === 'run' ? (random() < 0.4 ? 3 : 2) : 2;
     }
-    const followed = events[index + 3];
-    if (
-      enclose &&
-      prev !== null &&
-      !echoing &&
-      !event.strong &&
-      next &&
-      !next.strong &&
-      after?.strong &&
-      !followed?.strong &&
-      index + 2 < events.length - 1 &&
-      Math.abs(chosen - prev) === 1
-    ) {
-      const chords = ladder.flatMap((tone, toneIndex) =>
-        tone.chordTone ? [toneIndex] : [],
+    left -= 1;
+    const along = index / Math.max(1, events.length - 1);
+    const goal = contourMidi(plan, along);
+    const prev = notes.length ? notes[notes.length - 1] : null;
+    const weights = candidates.map((tone) =>
+      pitchWeight(
+        ladder,
+        tone,
+        prev ? prev.midi : null,
+        notes.length > 1 ? notes[notes.length - 2].midi : null,
+        goal,
+        centre,
+        event,
+      ),
+    );
+    let chosen = candidates[pickWeighted(weights, random)] ?? candidates[0];
+    if (atom === 'approach' && !event.strong) {
+      const figure = approachFigure(
+        ladder,
+        events,
+        alive,
+        notes,
+        index,
+        cadenceAt,
+        scalePcs,
+        flats,
+        windowLow,
+        windowHigh,
+        goal,
+        centre,
+        random,
       );
-      if (chords.length) {
-        const target = nearestIndex(
-          chords,
-          ladder,
-          contourMidi(
-            plan,
-            Math.min(1, (index + 2) / Math.max(1, events.length - 1)),
-          ),
-          true,
-        );
-        const above = target + 1;
-        const below = target - 1;
-        if (
-          options.includes(above) &&
-          below >= 0 &&
-          below < ladder.length &&
-          alive[index + 2]?.[target] &&
-          arrivalOk(
-            Math.abs(ladder[above].midi - ladder[below].midi),
-            next.duration,
-          ) &&
-          stepOk(ladder, below, target, after)
-        ) {
-          chosen = above;
-          encloseNext = below;
-        }
+      if (figure && figure.length) {
+        chosen = -1;
+        const first = figure[0];
+        planned.push(...figure.slice(1));
+        left = 0;
+        recordMotif(motif, notes, first, event.beat);
+        notes.push(first);
+        continue;
       }
     }
-    if (prev !== null && Math.abs(chosen - prev) >= 2)
-      pending = Math.sign(chosen - prev);
-    if (bar === 0 && prev !== null && motif.length < 3)
-      motif.push(chosen - prev);
-    indexes.push(chosen);
+    if (atom === 'run' || atom === 'arp') {
+      const stepped = stepAtom(candidates, prev, goal, atom);
+      if (stepped !== null) chosen = stepped;
+    }
+    const echoed = echoIndex(
+      ladder,
+      chosen,
+      candidates,
+      motif,
+      motifUsed,
+      notes,
+      event.beat,
+      bars,
+    );
+    chosen = echoed.index;
+    motifUsed = echoed.used;
+    const pitch = pitchedFromLadder(ladder, chosen);
+    recordMotif(motif, notes, pitch, event.beat);
+    notes.push(pitch);
   }
-  if (!lineIsLegal(indexes, events, ladder, cadenceAt)) return null;
-  return indexes;
+  if (!lineIsLegal(notes, events, ladder[cadenceAt].midi)) return null;
+  return notes;
+}
+
+function walkPitches(
+  ladder: readonly LadderTone[],
+  events: readonly GridEvent[],
+  plan: PhrasePlan,
+  bars: 2 | 4,
+  cadenceAt: number,
+  random: () => number,
+  mode: 'scored' | 'atoms',
+): Pitched[] | null {
+  const alive = reachable(ladder, events, cadenceAt);
+  if (!alive[0].some(Boolean)) return null;
+  if (mode === 'atoms')
+    return walkAtoms(ladder, events, plan, bars, cadenceAt, alive, random);
+  return walkScored(ladder, events, plan, bars, cadenceAt, alive, random);
 }
 
 function cadenceIndexOf(
@@ -1382,7 +1714,8 @@ function criticScore(
   const quarter =
     notes.every((note) => Math.abs(note.beat - Math.round(note.beat)) < 0.01) &&
     notes.slice(0, -1).every((note) => Math.abs(note.duration - 1) < 0.01);
-  let score = Math.round(100 * (strong ? strongChord / strong : 0));
+  const ratio = strong ? strongChord / strong : 0;
+  let score = Math.round(90 * (1 - Math.abs(ratio - 0.65)));
   score += strong * 12;
   score += distinct * 18;
   score += Math.min(rests, 6) * 7;
@@ -1392,6 +1725,7 @@ function criticScore(
   if (same) score -= 80;
   if (quarter) score -= 24;
   if (motifReturned(notes, bars, scalePcs)) score += 36;
+  score -= pitchCriticPenalty(notes, midis, bars);
   const cells = plan.cells ?? [];
   for (let index = 1; index < cells.length; index++) {
     if (cells[index] === cells[index - 1]) score -= 30;
@@ -1401,12 +1735,73 @@ function criticScore(
 
 const PHRASE_CANDIDATES = 4;
 
+function notesFromPitches(
+  pitches: readonly Pitched[],
+  events: readonly GridEvent[],
+): PhraseNote[] {
+  return pitches.map((tone, event) => ({
+    name: tone.name,
+    pc: tone.pc,
+    degree: tone.degree,
+    midi: tone.midi,
+    beat: events[event].beat,
+    duration: events[event].duration,
+    strong: events[event].strong,
+    chordTone: tone.chordTone,
+  }));
+}
+
+/** Target bands for step size, leaps, and the two-pitch wobble. */
+function pitchCriticPenalty(
+  notes: readonly PhraseNote[],
+  midis: readonly number[],
+  bars: 2 | 4,
+): number {
+  let penalty = 0;
+  for (let bar = 0; bar < bars; bar++) {
+    const group = notes.filter(
+      (note) => Math.floor(note.beat / 4) === bar && note.beat < bars * 4,
+    );
+    if (group.length >= 4 && new Set(group.map((note) => note.midi)).size <= 2)
+      penalty += 160;
+  }
+  let run = 1;
+  let best = 1;
+  for (let index = 1; index < midis.length; index++) {
+    if (midis[index] === midis[index - 1]) run = 1;
+    else if (index >= 2 && midis[index] === midis[index - 2]) run += 1;
+    else run = 2;
+    if (run > best) best = run;
+  }
+  if (best >= 5) penalty += 180;
+  const counts = new Map<number, number>();
+  for (const midi of midis) counts.set(midi, (counts.get(midi) ?? 0) + 1);
+  const ranked = [...counts.values()].sort((a, b) => b - a);
+  const top2 = ((ranked[0] ?? 0) + (ranked[1] ?? 0)) / Math.max(1, midis.length);
+  if (top2 > 0.45) penalty += Math.round((top2 - 0.45) * 220);
+  let total = 0;
+  let small = 0;
+  let wide = 0;
+  for (let index = 1; index < midis.length; index++) {
+    const gap = Math.abs(midis[index] - midis[index - 1]);
+    total += 1;
+    if (gap <= 2) small += 1;
+    if (gap >= 5) wide += 1;
+  }
+  if (total) {
+    penalty += Math.round(36 * Math.abs(small / total - 0.65));
+    penalty += Math.round(28 * Math.abs(wide / total - 0.12));
+  }
+  return penalty;
+}
+
 function composePhrase(
   input: {
     seed: number;
     bars: 2 | 4;
     scaleNotes: readonly Note[];
     chordNotes: readonly Note[];
+    pitch?: 'scored' | 'atoms';
   },
   plan: PhrasePlan,
   ladder: readonly LadderTone[],
@@ -1439,26 +1834,17 @@ function composePhrase(
       exact,
     );
     const events = eventsForCells(patterns, input.bars);
-    const indexes = walkLine(
+    const pitches = walkPitches(
       ladder,
       events,
       plan,
       input.bars,
       cadenceAt,
-      lane % 3 !== 0,
-      lane % 3 === 2,
+      random,
+      input.pitch === 'atoms' ? 'atoms' : 'scored',
     );
-    if (!indexes) continue;
-    const notes: PhraseNote[] = indexes.map((tone, event) => ({
-      name: ladder[tone].note.name,
-      pc: ladder[tone].note.pc,
-      degree: ladder[tone].note.degree,
-      midi: ladder[tone].midi,
-      beat: events[event].beat,
-      duration: events[event].duration,
-      strong: events[event].strong,
-      chordTone: ladder[tone].chordTone,
-    }));
+    if (!pitches) continue;
+    const notes = notesFromPitches(pitches, events);
     const nextPlan: PhrasePlan = {
       ...plan,
       form: input.bars === 2 ? 'answer' : 'sentence',
@@ -1481,26 +1867,17 @@ function composePhrase(
     if (straight) {
       const patterns = Array.from({ length: input.bars }, () => straight);
       const events = eventsForCells(patterns, input.bars);
-      const indexes = walkLine(
+      const pitches = walkPitches(
         ladder,
         events,
         plan,
         input.bars,
         cadenceAt,
-        false,
-        false,
+        mulberry32((input.seed + (lanes + 1) * 0x9e3779b9) >>> 0),
+        input.pitch === 'atoms' ? 'atoms' : 'scored',
       );
-      if (indexes) {
-        const notes: PhraseNote[] = indexes.map((tone, event) => ({
-          name: ladder[tone].note.name,
-          pc: ladder[tone].note.pc,
-          degree: ladder[tone].note.degree,
-          midi: ladder[tone].midi,
-          beat: events[event].beat,
-          duration: events[event].duration,
-          strong: events[event].strong,
-          chordTone: ladder[tone].chordTone,
-        }));
+      if (pitches) {
+        const notes = notesFromPitches(pitches, events);
         const nextPlan: PhrasePlan = {
           ...plan,
           form: input.bars === 2 ? 'answer' : 'sentence',
@@ -1758,6 +2135,7 @@ function assemble(
     bars: 2 | 4;
     scaleNotes: readonly Note[];
     chordNotes: readonly Note[];
+    pitch?: 'scored' | 'atoms';
   },
   plan: PhrasePlan,
   source: PhraseSource,
@@ -1787,6 +2165,11 @@ type PhraseRequest = {
   scaleNotes: readonly Note[];
   chordNotes: readonly Note[];
   locks?: PhraseLocks;
+  /**
+   * Pitch engine. `scored` is the default. `atoms` adds typed runs,
+   * arpeggio skips, and chromatic approaches. The panel never sets this.
+   */
+  pitch?: 'scored' | 'atoms';
 };
 
 function rulesResult(
@@ -1826,6 +2209,8 @@ export async function generatePhraseWithPlanner(input: {
   scaleNotes: readonly Note[];
   chordNotes: readonly Note[];
   locks?: PhraseLocks;
+  /** Same off-by-default pitch engine as {@link generatePhrase}. */
+  pitch?: 'scored' | 'atoms';
   planner?: PhrasePlanner;
   timeoutMs?: number;
   scaleLabel?: string;

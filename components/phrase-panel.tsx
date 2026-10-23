@@ -50,7 +50,6 @@ import {
   type FingeredNote,
   type PhraseDotVisibility,
   type PhraseLocks,
-  type PhrasePlan,
 } from '@/lib/phrase';
 import { publishPhrasePlayhead, type PhraseFretMark } from '@/lib/phrase-marks';
 import { DECK_BREAKPOINT_QUERY } from '@/lib/deck-breakpoints';
@@ -75,27 +74,11 @@ import {
   traySaveMessage,
   type TrayPhrase,
   type TrayPhraseCapture,
-  type TrayPlan,
 } from '@/lib/tray';
 import '@/app/phrase.css';
 import '@/app/phrase-deck.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
-
-/** Tray plans have no cell words. A generated plan may. */
-function historyPlanWords(
-  plan: PhrasePlan | TrayPlan,
-): { form: 'answer' | 'sentence'; cells: string[] } | undefined {
-  const words = plan as { form?: unknown; cells?: unknown };
-  if (words.form !== 'answer' && words.form !== 'sentence') return undefined;
-  if (!Array.isArray(words.cells)) return undefined;
-  const cells: string[] = [];
-  for (const cell of words.cells) {
-    if (typeof cell !== 'string') return undefined;
-    cells.push(cell);
-  }
-  return { form: words.form, cells };
-}
 
 type DeckMatch = {
   phone: boolean;
@@ -520,10 +503,6 @@ export function PhrasePanel({
     setSeedText(String(parsed));
   }
   function historyEntry(nextSeed: number, entryLocks: PhraseLocks) {
-    const remembered =
-      phrase.ok && phrase.phrase.seed === nextSeed
-        ? historyPlanWords(phrase.phrase.plan)
-        : undefined;
     return phraseHistoryEntry({
       seed: nextSeed,
       bars,
@@ -533,7 +512,6 @@ export function PhrasePanel({
       chord: savedChord,
       chordNotes,
       locks: entryLocks,
-      plan: remembered,
     });
   }
   function showHistoryPhrase(entry: {

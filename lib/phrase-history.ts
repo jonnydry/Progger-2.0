@@ -2,11 +2,9 @@ import { QUALITIES } from './harmony.ts';
 import { ROOTS, SCALES } from './music.ts';
 
 /**
- * Phrase history, version 2.
+ * Phrase history, version 1.
  * One localStorage key. A missing key is an empty history. A blob this
  * version cannot read stays in storage and this tab does not write.
- * Version 1 blobs load as seeds with no plan words, and the next save
- * writes version 2. Version 3 and later stay read-only.
  * An entry this version does not understand is ignored. This module does
  * not import the phrase generator.
  */
@@ -20,7 +18,6 @@ const CONTOURS = new Set(['arch', 'rise', 'fall', 'wave']);
 const RHYTHMS = new Set(['quarters', 'eighths', 'long-short', 'push']);
 const REGISTERS = new Set(['low', 'mid', 'high']);
 const CADENCES = new Set(['root', 'third', 'fifth']);
-const CELL_IDS = new Set(['q', 'ee', 'zr', 'rz', 'dq', 'qd', 'h', 'ant']);
 
 export type PhraseHistoryLocks = {
   contour?: 'arch' | 'rise' | 'fall' | 'wave';
@@ -54,12 +51,6 @@ export type PhraseHistoryChord = {
  * Seed, bar length, and the key, scale, and chord the generator used.
  * The same seed in another key, scale, or chord is a different phrase.
  */
-/** Form and the rhythm-cell id string for each bar. Absent on a version 1 seed. */
-export type PhraseHistoryPlan = {
-  form: 'answer' | 'sentence';
-  cells: string[];
-};
-
 export type PhraseHistoryEntry = {
   seed: number;
   bars: 2 | 4;
@@ -69,11 +60,10 @@ export type PhraseHistoryEntry = {
   chord: PhraseHistoryChord | null;
   chordNotes: PhraseHistoryNote[];
   locks: PhraseHistoryLocks;
-  plan?: PhraseHistoryPlan;
 };
 
 export type PhraseHistoryState = {
-  version: 2;
+  version: 1;
   entries: PhraseHistoryEntry[];
   index: number;
 };
@@ -93,7 +83,7 @@ export type PhraseHistoryContext = {
 };
 
 const EMPTY_PHRASE_HISTORY: PhraseHistoryState = {
-  version: 2,
+  version: 1,
   entries: [],
   index: -1,
 };
@@ -163,25 +153,6 @@ function locksOf(value: unknown): PhraseHistoryLocks | null {
     locks.cadence = cadence;
   }
   return locks;
-}
-
-function planWords(value: unknown, bars: 2 | 4): PhraseHistoryPlan | null {
-  if (value === undefined) return null;
-  if (!isRecord(value)) return null;
-  const form =
-    value.form === 'answer' || value.form === 'sentence' ? value.form : null;
-  if (!form || !Array.isArray(value.cells) || value.cells.length !== bars)
-    return null;
-  if ((form === 'answer' && bars !== 2) || (form === 'sentence' && bars !== 4))
-    return null;
-  const cells: string[] = [];
-  for (const cell of value.cells) {
-    if (typeof cell !== 'string' || !cell || cell.length > 48) return null;
-    const ids = cell.split(' ');
-    if (!ids.length || ids.some((id) => !CELL_IDS.has(id))) return null;
-    cells.push(cell);
-  }
-  return { form, cells };
 }
 
 function noteOf(value: unknown): PhraseHistoryNote | null {
@@ -258,7 +229,6 @@ export function phraseHistoryEntry(input: {
   chord: PhraseHistoryChord | null;
   chordNotes: readonly PhraseHistoryNote[];
   locks?: PhraseHistoryLocks;
-  plan?: PhraseHistoryPlan;
 }): PhraseHistoryEntry | null {
   const seed = integer(input.seed, 0, 0xffffffff);
   const bars = input.bars === 2 || input.bars === 4 ? input.bars : null;
@@ -275,10 +245,6 @@ export function phraseHistoryEntry(input: {
   const chord = chordOf(input.chord);
   const chordNotes = notesOf(input.chordNotes);
   const locks = locksOf(input.locks ?? {});
-  const plan =
-    input.plan === undefined || bars === null
-      ? null
-      : planWords(input.plan, bars);
   if (
     seed === null ||
     bars === null ||
@@ -292,18 +258,7 @@ export function phraseHistoryEntry(input: {
   ) {
     return null;
   }
-  const entry: PhraseHistoryEntry = {
-    seed,
-    bars,
-    scaleRoot,
-    scaleId,
-    place,
-    chord,
-    chordNotes,
-    locks,
-  };
-  if (plan) entry.plan = plan;
-  return entry;
+  return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
 }
 
 function sameLocks(a: PhraseHistoryLocks, b: PhraseHistoryLocks): boolean {
@@ -348,8 +303,7 @@ function samePhraseHistoryState(
   b: PhraseHistoryState,
 ): boolean {
   if (a === b) return true;
-  if (a.index !== b.index || a.entries.length !== b.entries.length)
-    return false;
+  if (a.index !== b.index || a.entries.length !== b.entries.length) return false;
   return a.entries.every((entry, index) => {
     const other = b.entries[index];
     return other !== undefined && samePhraseHistoryEntry(entry, other);
@@ -443,14 +397,10 @@ export function pushPhraseHistory(
   const kept = state.entries.slice(0, index + 1);
   const current = kept.length > 0 ? kept[kept.length - 1] : null;
   if (current && samePhraseHistoryEntry(current, clean)) {
-    if (!current.plan && clean.plan) {
-      const entries = [...kept.slice(0, -1), { ...current, plan: clean.plan }];
-      return { version: 2, entries, index: entries.length - 1 };
-    }
     if (kept.length === state.entries.length && index === state.index) {
       return state;
     }
-    return { version: 2, entries: kept, index: kept.length - 1 };
+    return { version: 1, entries: kept, index: kept.length - 1 };
   }
   const withoutRepeat = kept.filter(
     (item) => !samePhraseHistoryEntry(item, clean),
@@ -459,7 +409,7 @@ export function pushPhraseHistory(
   if (entries.length > PHRASE_HISTORY_LIMIT) {
     entries.splice(0, entries.length - PHRASE_HISTORY_LIMIT);
   }
-  return { version: 2, entries, index: entries.length - 1 };
+  return { version: 1, entries, index: entries.length - 1 };
 }
 
 export type PhraseHistoryStepFocus = 'previous' | 'next' | 'new';
@@ -489,9 +439,9 @@ export function stepPhraseHistory(
   const next = index + direction;
   if (next < 0 || next >= state.entries.length) {
     if (index === state.index) return state;
-    return { version: 2, entries: state.entries, index };
+    return { version: 1, entries: state.entries, index };
   }
-  return { version: 2, entries: state.entries, index: next };
+  return { version: 1, entries: state.entries, index: next };
 }
 
 /**
@@ -551,19 +501,7 @@ function entryOf(value: unknown): PhraseHistoryEntry | null {
   ) {
     return null;
   }
-  const plan = planWords(value.plan, bars);
-  const entry: PhraseHistoryEntry = {
-    seed,
-    bars,
-    scaleRoot,
-    scaleId,
-    place,
-    chord,
-    chordNotes,
-    locks,
-  };
-  if (plan) entry.plan = plan;
-  return entry;
+  return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
 }
 
 type HistoryDoc = {
@@ -578,7 +516,7 @@ function project(raw: string | null, failedRead = false): HistoryDoc {
     const parsed: unknown = JSON.parse(raw);
     if (
       !isRecord(parsed) ||
-      (parsed.version !== 1 && parsed.version !== 2) ||
+      parsed.version !== 1 ||
       !Array.isArray(parsed.entries)
     ) {
       return { writable: false, state: EMPTY_PHRASE_HISTORY };
@@ -625,7 +563,7 @@ export function writePhraseHistory(
   storage.setItem(
     PHRASE_HISTORY_KEY,
     JSON.stringify({
-      version: 2,
+      version: 1,
       entries: state.entries,
       index: state.index,
     }),
@@ -719,10 +657,10 @@ function capLoadedHistory(
   const overflow = Math.max(0, entries.length - PHRASE_HISTORY_LIMIT);
   const kept = overflow > 0 ? entries.slice(overflow) : entries;
   return {
-    version: 2,
+    version: 1,
     entries: kept,
     index: clampedIndex({
-      version: 2,
+      version: 1,
       entries: kept,
       index: index - overflow,
     }),
@@ -735,7 +673,7 @@ function commit(state: PhraseHistoryState): boolean {
   const storage = browserStorage();
   if (!storage) return false;
   const payload = JSON.stringify({
-    version: 2,
+    version: 1,
     entries: state.entries,
     index: state.index,
   });
