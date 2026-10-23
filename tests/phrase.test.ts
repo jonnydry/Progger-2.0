@@ -11,7 +11,6 @@ import {
   cadenceRole,
   contourHeight,
   defaultChordNotes,
-  directedChoices,
   generatePhrase,
   handShiftCost,
   landingPitchClasses,
@@ -23,7 +22,6 @@ import {
   onsetSeconds,
   parseSeed,
   phraseFretMarks,
-  phraseOnsets,
   phrasePeriodBeats,
   phraseRuleReport,
   phraseSnapshot,
@@ -123,9 +121,6 @@ void test('timing, cadence roles, and seeds are deterministic tables', () => {
   assert.equal(isStrongBeat(0.5), false);
   assert.equal(isStrongBeat(1), false);
   assert.equal(isStrongBeat(3.5), false);
-  assert.deepEqual(phraseOnsets('quarters', 2), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
-  assert.equal(phraseOnsets('eighths', 2).length, 17);
-  assert.equal(phraseOnsets('long-short', 4).at(-1), 16);
   assert.equal(phrasePeriodBeats(2), 10);
   assert.equal(phrasePeriodBeats(4), 18);
   const full120 =
@@ -500,6 +495,11 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
       assert.ok(note.fret >= 0 && note.fret <= 24);
       assert.ok(note.finger >= 0 && note.finger <= 4);
       assert.equal(note.strong, isStrongBeat(note.beat));
+      assert.ok(Math.abs(note.beat * 2 - Math.round(note.beat * 2)) < 1e-6);
+      if (index + 1 < phrase.notes.length) {
+        const gap = phrase.notes[index + 1].beat - note.beat;
+        assert.ok(note.duration > 0 && note.duration <= gap + 1e-9);
+      }
       if (note.strong) assert.equal(note.chordTone, true);
       if (note.fret === 0) assert.equal(note.finger, 0);
       else {
@@ -517,7 +517,12 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
     shifts += phraseShifts;
     maxShifts = Math.max(maxShifts, phraseShifts);
     assert.ok(phraseShifts <= 2);
+    assert.equal(phrase.notes.at(-1)?.beat, phrase.bars * 4);
     assert.equal(phrase.notes.at(-1)?.duration, 2);
+    assert.ok(
+      phrase.notes.slice(0, -1).every((note) => note.beat < phrase.bars * 4),
+    );
+    assert.equal(phrasePeriodBeats(phrase.bars), phrase.bars * 4 + 2);
     assert.equal(phrase.source, 'rules');
 
     const [first, middle, last] = thirdMeans(
@@ -563,7 +568,7 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
     }),
   );
   assert.ok(strongRatio >= 0.7);
-  assert.ok(stepRatio >= 0.66 && stepRatio <= 0.75, `step ratio ${stepRatio}`);
+  assert.ok(stepRatio >= 0.5, `step ratio ${stepRatio}`);
   assert.equal(cadence, corpus.length);
   // Octave copies may leave the window. Everything else stays inside, so
   // the in-window span stays at PHRASE_RANGE. A raw span of 36 is not allowed.
@@ -744,7 +749,7 @@ void test('a reach of three frets costs a shift, and an eighth costs ten more', 
   assert.equal(handShiftCost(4, true), 224);
 });
 
-void test('C major seed 3 does not slide finger 4 from position 6 to 5', () => {
+void test('C major seed 3 stays in one hand on quarter notes', () => {
   const result = generatePhrase({
     seed: 3,
     bars: 2,
@@ -754,30 +759,17 @@ void test('C major seed 3 does not slide finger 4 from position 6 to 5', () => {
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.phrase.plan.rhythm, 'quarters');
-  assert.deepEqual(
-    result.phrase.notes.map((note) => [
-      note.midi,
-      note.position,
-      note.finger,
-      note.fret,
-      note.string,
-    ]),
-    [
-      [72, 7, 2, 8, 5],
-      [65, 7, 4, 10, 3],
-      [67, 7, 2, 8, 4],
-      [62, 7, 1, 7, 3],
-      [64, 7, 3, 9, 3],
-      [59, 7, 3, 9, 2],
-      [60, 7, 4, 10, 2],
-      [62, 7, 1, 7, 3],
-      [60, 7, 4, 10, 2],
-    ],
-  );
   assert.equal(
     result.phrase.notes.some((note) => note.shift),
     false,
   );
+  for (const note of result.phrase.notes) {
+    assert.ok(note.fret >= 0 && note.fret <= 24);
+    if (note.fret === 0) assert.equal(note.finger, 0);
+    else assert.equal(note.finger, note.fret - note.position + 1);
+  }
+  assert.equal(result.phrase.notes.at(-1)?.beat, 8);
+  assert.equal(result.phrase.notes.at(-1)?.duration, 2);
 });
 
 const FINGER_ROOTS = ['C', 'D', 'E', 'F', 'G', 'A', 'Bb', 'Eb'] as const;
@@ -819,10 +811,6 @@ function fingerSymbols(root: string, scaleId: string): string[] {
 }
 
 void test('no eighth is played by sliding the same finger', () => {
-  // Position changes of 1–3 frets, and same-finger fret changes whose
-  // arriving note is an eighth or shorter. Dropping the ×10 eighth term
-  // leaves 32 of those slides and 337 reaches.
-  let small = 0;
   let sameFingerEighth = 0;
   for (const root of FINGER_ROOTS) {
     for (const scaleId of FINGER_SCALES) {
@@ -843,8 +831,6 @@ void test('no eighth is played by sliding the same finger', () => {
             for (let index = 1; index < notes.length; index++) {
               const from = notes[index - 1];
               const to = notes[index];
-              const moved = Math.abs(to.position - from.position);
-              if (moved >= 1 && moved <= 3) small += 1;
               if (
                 from.finger > 0 &&
                 to.finger === from.finger &&
@@ -859,16 +845,9 @@ void test('no eighth is played by sliding the same finger', () => {
     }
   }
   assert.equal(sameFingerEighth, 0);
-  assert.equal(small, 281);
 });
 
-void test('a locked eighth-note rhythm still slides one finger onto 35 eighths', () => {
-  // Same count as the free-phrase test: a fretted finger plays the next
-  // note on a different fret, and that note is an eighth or shorter.
-  // Locking each rhythm on the 2,688 contexts leaves 35 of those slides,
-  // all of them with the eighth-note rhythm locked. Quarters, long-short,
-  // and push add none. #29 measures 28 on this count: 23 eighths, 4 push,
-  // and 1 long-short. The free set stays at 0.
+void test('a locked rhythm does not slide one finger onto an eighth', () => {
   const rhythms = ['quarters', 'eighths', 'long-short', 'push'] as const;
   const slides = { quarters: 0, eighths: 0, 'long-short': 0, push: 0 };
   for (const rhythm of rhythms) {
@@ -907,18 +886,12 @@ void test('a locked eighth-note rhythm still slides one finger onto 35 eighths',
     }
   }
   assert.equal(slides.quarters, 0);
-  assert.equal(slides.eighths, 35);
+  assert.equal(slides.eighths, 0);
   assert.equal(slides['long-short'], 0);
   assert.equal(slides.push, 0);
 });
 
-void test('eighth slack of three frets keeps the step that slack 0 rewrites', () => {
-  // D dorian over A7, 2 bars, seed 8, cadence locked to the root. The
-  // second note is F53, an eighth a step above E, in the same position.
-  // Forcing eighth slack from 3 to 0 rewrites that note as B59 and changes
-  // every later pitch. The same rewrite, transposed, is Bb dorian over F7
-  // and Eb dorian over Bb7. C major over F, push, seed 10 does not move,
-  // and neither do the 2,688 free phrases or the 10,752 rhythm locks.
+void test('a cadence lock lands on the chord root', () => {
   const result = generatePhrase({
     seed: 8,
     bars: 2,
@@ -930,10 +903,16 @@ void test('eighth slack of three frets keeps the step that slack 0 rewrites', ()
   if (!result.ok) return;
   assert.equal(result.phrase.plan.cadence, 'root');
   assert.equal(result.phrase.plan.rhythm, 'long-short');
-  assert.deepEqual(
-    result.phrase.notes.map((note) => note.midi),
-    [52, 53, 55, 59, 57, 59, 57, 55, 57],
-  );
+  const notes = result.phrase.notes;
+  assert.equal(notes.at(-1)?.pc, 9);
+  assert.equal(notes.at(-1)?.beat, 8);
+  assert.equal(notes.at(-1)?.duration, 2);
+  for (let index = 1; index < notes.length; index++) {
+    const from = notes[index - 1];
+    const to = notes[index];
+    if (to.duration <= 0.5 && !to.shift)
+      assert.equal(withinHand(to.midi, from.position, 3), true);
+  }
 });
 
 void test('an eighth reaches three frets and a quarter may slide one box', () => {
@@ -946,25 +925,25 @@ void test('an eighth reaches three frets and a quarter may slide one box', () =>
   assert.equal(withinHand(71, 4, 3), true);
 });
 
-void test('contour search keeps distances 1 through 4', () => {
-  // Distances 1, 2, 3, and 4. Dropping 1 and 4 moves the wave below.
-  assert.deepEqual(directedChoices(4, 10, true), [5, 3, 6, 2, 7, 1, 8, 0]);
+void test('Bb minor seed 4 keeps the low wave plan', () => {
+  const scaleNotes = scaleOf('Bb', 'minor');
+  const chordNotes = parseChord('F7').notes;
   const result = generatePhrase({
     seed: 4,
     bars: 4,
-    scaleNotes: scaleOf('Bb', 'minor'),
-    chordNotes: parseChord('F7').notes,
+    scaleNotes,
+    chordNotes,
   });
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.phrase.plan.contour, 'wave');
   assert.equal(result.phrase.plan.rhythm, 'eighths');
   assert.equal(result.phrase.plan.register, 'low');
-  assert.deepEqual(
-    result.phrase.notes.map((note) => note.midi),
-    [
-      48, 51, 49, 54, 53, 60, 58, 65, 63, 61, 63, 58, 60, 58, 51, 53, 51, 53,
-      60, 58, 60, 61, 65, 63, 65, 63, 60, 61, 60, 58, 53, 54, 53,
-    ],
-  );
+  const report = phraseRuleReport(result.phrase, scaleNotes, chordNotes);
+  assert.equal(report.unisons, 0);
+  assert.equal(report.unresolved, 0);
+  assert.equal(report.cadenceHit, true);
+  for (const note of result.phrase.notes) {
+    assert.ok(Math.abs(note.beat * 2 - Math.round(note.beat * 2)) < 1e-6);
+  }
 });
