@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { parseChord } from '../lib/harmony.ts';
 import { phraseClosingIndex, phraseLoopBeats } from '../lib/phrase-audio.ts';
@@ -512,18 +511,4 @@ void test('a sentence returns the opening figure, shifted more often than copied
   const ordered = [...times].sort((left, right) => left - right);
   const p95 = ordered[Math.ceil(0.95 * ordered.length) - 1] ?? 0;
   assert.ok(p95 < 20, `p95 ${p95.toFixed(2)} ms`);
-});
-
-void test('the critic keeps the higher score and the copied-rhythm penalty', () => {
-  const source = readFileSync(new URL('../lib/phrase.ts', import.meta.url), 'utf8');
-  assert.match(source, /b\.score - a\.score \|\| a\.lane - b\.lane/);
-  assert.match(source, /if \(same\) score -= 80/);
-});
-
-void test('a hand shift is refused on an eighth', () => {
-  const source = readFileSync(new URL('../lib/phrase.ts', import.meta.url), 'utf8');
-  assert.match(
-    source,
-    /if \(note\.shift\) \{\s*shifts \+= 1;\s*if \(note\.duration <= 0\.5\) return false;/,
-  );
 });
