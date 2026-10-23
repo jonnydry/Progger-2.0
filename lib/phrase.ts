@@ -799,13 +799,13 @@ type Pitched = {
   pc: number;
   degree: string;
   chordTone: boolean;
-  /** Ladder index. A chromatic passing tone is -1. */
+  /** Ladder index. */
   index: number;
 };
 
 /**
- * Cadence pitch, length, and the arrival rule. A strong beat prefers a
- * chord tone in the weights. A leap prefers a step back. Neither is forced.
+ * Cadence pitch, length, and the arrival rule. A strong beat, and any
+ * note held for a beat or longer, prefers a chord tone in the weights.
  * The same MIDI twice in a row stays illegal: arrival rejects a gap of 0.
  */
 function lineIsLegal(
@@ -901,8 +901,129 @@ function eventsForCells(
   });
 }
 
-function strongHits(pattern: BarPattern): number {
-  return pattern.hits.filter((hit) => hit.at === 0 || hit.at === 4).length;
+function hasOnBeat(pattern: BarPattern): boolean {
+  return pattern.hits.some((hit) => hit.at % 2 === 0);
+}
+
+function asPattern(
+  hits: readonly { at: number; dur: number }[],
+  label: string,
+): BarPattern | null {
+  if (!barIsPlayable(hits)) return null;
+  const copy = hits.map((hit) => ({ at: hit.at, dur: hit.dur }));
+  return {
+    ids: label,
+    hits: copy,
+    onset: copy.map((hit) => hit.at).join(','),
+    notes: copy.length,
+  };
+}
+
+/** Tails that fill the eighths from `from` through the end of the bar. */
+function enumerateTails(from: number): { at: number; dur: number }[][] {
+  if (from >= 8) return [[]];
+  const found: { at: number; dur: number }[][] = [];
+  const walk = (pos: number, acc: { at: number; dur: number }[]) => {
+    if (pos === 8) {
+      found.push(acc);
+      return;
+    }
+    if (pos > 8) return;
+    walk(pos + 1, [...acc, { at: pos, dur: 1 }]);
+    if (pos + 2 <= 8) {
+      walk(pos + 2, [...acc, { at: pos, dur: 2 }]);
+      walk(pos + 2, [...acc, { at: pos + 1, dur: 1 }]);
+    }
+  };
+  walk(from, []);
+  found.sort((a, b) => {
+    const left = a.map((hit) => hit.at).join(',');
+    const right = b.map((hit) => hit.at).join(',');
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+  return found;
+}
+
+function withTail(
+  prefix: readonly { at: number; dur: number }[],
+  from: number,
+  avoidOnset: string,
+  random: () => number,
+): BarPattern | null {
+  if (from > 8) return null;
+  const options: BarPattern[] = [];
+  for (const tail of enumerateTails(from)) {
+    const built = asPattern(
+      [...prefix, ...tail],
+      `ans ${prefix.map((hit) => hit.at).join(',')}`,
+    );
+    if (!built || built.onset === avoidOnset) continue;
+    options.push(built);
+  }
+  if (!options.length) return null;
+  return options[Math.floor(random() * options.length)] ?? options[0];
+}
+
+/**
+ * Bar 2 keeps bar 1's first four attacks and then a different tail,
+ * so the figure can return without every bar sharing one rhythm.
+ */
+function answerPattern(
+  head: BarPattern,
+  random: () => number,
+): BarPattern | null {
+  if (head.hits.length < 4) return null;
+  const prefix = head.hits.slice(0, 4).map((hit) => ({ ...hit }));
+  const fourth = prefix[3];
+  if (!fourth) return null;
+  const end = fourth.at + fourth.dur;
+  if (end < 8) {
+    const built = withTail(prefix, end, head.onset, random);
+    if (built) return built;
+  }
+  if (fourth.at >= 7) return null;
+  const shrunk = prefix
+    .slice(0, 3)
+    .concat([{ at: fourth.at, dur: 1 }]);
+  return withTail(shrunk, fourth.at + 1, head.onset, random);
+}
+
+/** Two statements of bar 1's opening two attacks. */
+function fragmentPattern(
+  head: BarPattern,
+  random: () => number,
+): BarPattern | null {
+  if (head.hits.length < 2) return null;
+  const first = head.hits[0];
+  const second = head.hits[1];
+  if (!first || !second) return null;
+  const span = second.at + second.dur - first.at;
+  if (span < 1) return null;
+  const prefix = [
+    { at: first.at, dur: first.dur },
+    { at: second.at, dur: second.dur },
+  ];
+  const copyAt = first.at + span;
+  const copyNext = second.at + span;
+  if (copyAt < 8 && copyNext < 8) {
+    const room = 8 - copyNext;
+    if (room >= 1) {
+      prefix.push(
+        { at: copyAt, dur: first.dur },
+        { at: copyNext, dur: Math.min(second.dur, room) },
+      );
+    }
+  }
+  const end = prefix[prefix.length - 1];
+  if (!end) return null;
+  const from = end.at + end.dur;
+  if (from > 8) return null;
+  if (from === 8) return asPattern(prefix, 'frag');
+  return withTail(prefix, from, head.onset, random);
+}
+
+function answerable(head: BarPattern): boolean {
+  return answerPattern(head, () => 0) !== null;
 }
 
 function pickPatterns(
@@ -910,63 +1031,78 @@ function pickPatterns(
   bars: 2 | 4,
   random: () => number,
   density: number,
-  loose: boolean,
   exact: boolean,
 ): BarPattern[] {
   const catalog = BAR_PATTERNS[rhythm];
-  const busy = catalog.filter((pattern) => pattern.notes >= 6);
-  const spare = catalog.filter((pattern) => pattern.notes <= 4);
-  const open = catalog.filter((pattern) => strongHits(pattern) === 0);
+  const grounded = catalog.filter(hasOnBeat);
+  const source = grounded.length ? grounded : catalog;
+  const busy = source.filter((pattern) => pattern.notes >= 6);
+  const spare = source.filter((pattern) => pattern.notes <= 4);
   const pool =
-    loose && open.length
-      ? open
-      : density === 2 && busy.length
-        ? busy
-        : density === 0 && spare.length
-          ? spare
-          : catalog;
+    density === 2 && busy.length
+      ? busy
+      : density === 0 && spare.length
+        ? spare
+        : source;
   const chosen: BarPattern[] = [];
   let previous = '';
   for (let bar = 0; bar < bars; bar++) {
-    const echo = (bars === 4 && bar === 1) || (bars === 2 && bar === 1);
-    const fragment = bars === 4 && bar === 3;
-    const opening = chosen[0]?.ids.split(' ')[0];
-    const opens = (pattern: BarPattern, cell: string) =>
-      pattern.ids.split(' ')[0] === cell;
+    if (exact && bar > 0 && previous) {
+      const same = catalog.filter((pattern) => pattern.onset === previous);
+      if (same.length) {
+        const copy = same[0];
+        if (copy) {
+          chosen.push(copy);
+          previous = copy.onset;
+          continue;
+        }
+      }
+    }
+    if (!exact && bar === 1 && chosen[0]) {
+      const answer = answerPattern(chosen[0], random);
+      if (answer) {
+        chosen.push(answer);
+        previous = answer.onset;
+        continue;
+      }
+    }
+    if (!exact && bars === 4 && bar === 2 && chosen[0]) {
+      const fragment = fragmentPattern(chosen[0], random);
+      if (fragment) {
+        chosen.push(fragment);
+        previous = fragment.onset;
+        continue;
+      }
+    }
     let options = pool.filter((pattern) => pattern.onset !== previous);
     if (!options.length)
-      options = catalog.filter((pattern) => pattern.onset !== previous);
-    if (!options.length) options = pool.length ? pool : catalog;
-    if ((echo || fragment) && opening) {
-      const shared = options.filter((pattern) => opens(pattern, opening));
-      if (shared.length) options = shared;
-    }
-    if (bars === 4 && bar === 2 && opening) {
-      const contrast = options.filter((pattern) => !opens(pattern, opening));
-      if (contrast.length) options = contrast;
-    }
+      options = source.filter((pattern) => pattern.onset !== previous);
+    if (!options.length) options = pool.length ? pool : source;
     if (bar === 0) {
       // The loop restarts on this downbeat. A rest here opens a gap.
       let down = options.filter((pattern) =>
         pattern.hits.some((hit) => hit.at === 0),
       );
       if (!down.length) {
-        down = catalog.filter((pattern) =>
+        down = source.filter((pattern) =>
           pattern.hits.some((hit) => hit.at === 0),
         );
       }
       if (down.length) options = down;
-    }
-    if (exact && bar === 0) {
-      const longs = options.filter((pattern) =>
-        pattern.hits.every((hit) => hit.dur >= 2),
-      );
-      if (longs.length) options = longs;
-    }
-    // An exact motif repeat may copy the bar. Every other bar must differ.
-    if (exact && echo && previous) {
-      const same = catalog.filter((pattern) => pattern.onset === previous);
-      if (same.length) options = same;
+      if (!exact) {
+        // The answer leaps back to this opening. A quarter or longer
+        // can take that leap; an eighth cannot pass a fourth.
+        const held = options.filter((pattern) => (pattern.hits[0]?.dur ?? 0) >= 2);
+        if (held.length) options = held;
+        const ready = options.filter(answerable);
+        if (ready.length) options = ready;
+      }
+      if (exact) {
+        const longs = options.filter((pattern) =>
+          pattern.hits.every((hit) => hit.dur >= 2),
+        );
+        if (longs.length) options = longs;
+      }
     }
     const pattern =
       options[Math.floor(random() * options.length)] ?? options[0];
@@ -979,8 +1115,6 @@ function pickPatterns(
 const PROXIMITY_VAR = 8;
 const RANGE_VAR = 29;
 const CONTOUR_VAR = 18;
-const SHARP_NAME = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-const FLAT_NAME = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
 
 function pitchedFromLadder(ladder: readonly LadderTone[], tone: number): Pitched {
   const row = ladder[tone];
@@ -991,29 +1125,6 @@ function pitchedFromLadder(ladder: readonly LadderTone[], tone: number): Pitched
     degree: row.note.degree,
     chordTone: row.chordTone,
     index: tone,
-  };
-}
-
-function scaleUsesFlats(ladder: readonly LadderTone[]): boolean {
-  let sharp = 0;
-  let flat = 0;
-  for (const tone of ladder) {
-    sharp += tone.note.name.split('#').length - 1;
-    flat += tone.note.name.split('b').length - 1;
-  }
-  return flat > sharp;
-}
-
-/** A chromatic passing tone, spelled in the scale's sharp or flat direction. */
-function passingPitch(midi: number, flats: boolean): Pitched {
-  const pc = mod(midi);
-  return {
-    midi,
-    name: (flats ? FLAT_NAME : SHARP_NAME)[pc],
-    pc,
-    degree: 'chr',
-    chordTone: false,
-    index: -1,
   };
 }
 
@@ -1058,28 +1169,24 @@ function pitchWeight(
   goal: number,
   centre: number,
   event: GridEvent,
+  cadenceMidi: number | null,
 ): number {
   const midi = ladder[tone].midi;
   let weight = gauss(midi - goal, CONTOUR_VAR) * gauss(midi - centre, RANGE_VAR);
   if (prevMidi !== null) {
     const gap = midi - prevMidi;
-    const abs = Math.abs(gap);
     weight *= gauss(gap, PROXIMITY_VAR);
-    if (
-      prevPrevMidi !== null &&
-      Math.abs(prevMidi - prevPrevMidi) >= 5 &&
-      abs > 0 &&
-      abs <= 2 &&
-      Math.sign(gap) === -Math.sign(prevMidi - prevPrevMidi)
-    ) {
-      weight *= 1.65;
-    }
     if (prevPrevMidi !== null && midi === prevPrevMidi) weight *= 0.18;
   }
-  if (event.strong) {
+  if (event.strong || event.duration >= 1) {
     weight *= ladder[tone].chordTone ? 2.15 : 0.72;
     if (ladder[tone].chordTone && guideTone(ladder[tone].note.degree))
       weight *= 1.12;
+  }
+  if (cadenceMidi !== null) {
+    const fromCadence = Math.abs(midi - cadenceMidi);
+    if (fromCadence > 0 && fromCadence <= 2) weight *= 8;
+    else if (fromCadence >= 5) weight *= 0.35;
   }
   return weight > 1e-9 ? weight : 1e-9;
 }
@@ -1094,37 +1201,6 @@ function pickWeighted(weights: readonly number[], random: () => number): number 
     if (draw < 0) return index;
   }
   return weights.length - 1;
-}
-
-function extendsAlternation(
-  notes: readonly { midi: number }[],
-  midi: number,
-): boolean {
-  const count = notes.length;
-  if (count < 3) return false;
-  return (
-    notes[count - 1].midi === notes[count - 3].midi &&
-    midi === notes[count - 2].midi
-  );
-}
-
-/** True when any upcoming pitch would be the second return to a two-pitch pair. */
-function sequenceExtends(
-  notes: readonly { midi: number }[],
-  upcoming: readonly number[],
-): boolean {
-  const midis = notes.map((note) => note.midi);
-  for (const midi of upcoming) {
-    const count = midis.length;
-    if (
-      count >= 3 &&
-      midis[count - 1] === midis[count - 3] &&
-      midi === midis[count - 2]
-    )
-      return true;
-    midis.push(midi);
-  }
-  return false;
 }
 
 function legalIndexes(
@@ -1160,214 +1236,222 @@ function withoutAlternation(
   return others.length ? others : [...candidates];
 }
 
-function echoIndex(
+function completesCycle(
+  notes: readonly { midi: number }[],
+  midi: number,
+  period: number,
+): boolean {
+  const count = notes.length;
+  if (period < 2 || count < period * 2 - 1) return false;
+  if (midi !== notes[count - period].midi) return false;
+  for (let back = 1; back < period; back++) {
+    if (notes[count - back].midi !== notes[count - period - back].midi)
+      return false;
+  }
+  return true;
+}
+
+function withoutCycle(
   ladder: readonly LadderTone[],
-  chosen: number,
-  pool: readonly number[],
-  motif: readonly number[],
-  motifUsed: number,
+  candidates: readonly number[],
   notes: readonly Pitched[],
-  beat: number,
-  bars: 2 | 4,
-): { index: number; used: number } {
+  period: number,
+): number[] {
+  if (notes.length < period * 2 - 1) return [...candidates];
+  const others = candidates.filter(
+    (tone) => !completesCycle(notes, ladder[tone].midi, period),
+  );
+  return others.length ? others : [...candidates];
+}
+
+function endingRun(indexes: readonly number[]): number {
+  let dir = 0;
+  let length = 1;
+  for (let index = indexes.length - 1; index > 0; index--) {
+    const delta = indexes[index] - indexes[index - 1];
+    if (Math.abs(delta) !== 1) break;
+    if (dir === 0) dir = delta;
+    else if (delta !== dir) break;
+    length += 1;
+  }
+  return length;
+}
+
+function withoutMonotone(
+  ladder: readonly LadderTone[],
+  candidates: readonly number[],
+  notes: readonly Pitched[],
+): number[] {
+  if (notes.length < 4) return [...candidates];
+  if (endingRun(notes.map((note) => note.index)) < 4) return [...candidates];
+  const last = notes[notes.length - 1]?.index ?? 0;
+  const dir =
+    last - (notes[notes.length - 2]?.index ?? last);
+  const others = candidates.filter((tone) => tone - last !== dir);
+  return others.length ? others : [...candidates];
+}
+
+function shiftOrder(seed: number): number[] {
+  const order = [1, -1, 2, -2];
+  const random = mulberry32(seed >>> 0);
+  for (let index = order.length - 1; index > 0; index--) {
+    const swap = Math.floor(random() * (index + 1));
+    const held = order[index];
+    order[index] = order[swap] ?? held;
+    order[swap] = held;
+  }
+  return order;
+}
+
+function eighthOf(events: readonly GridEvent[], index: number): number {
+  const beat = events[index]?.beat ?? 0;
   const bar = Math.floor(beat / 4);
-  const echoing =
-    (bars === 2 && bar === 1) || (bars === 4 && (bar === 1 || bar === 3));
-  const limit = bar === 3 ? 2 : 3;
-  const prev = notes.length ? notes[notes.length - 1].index : -1;
-  if (
-    !echoing ||
-    prev < 0 ||
-    motifUsed >= limit ||
-    motif[motifUsed] === undefined
-  ) {
-    return { index: chosen, used: motifUsed };
-  }
-  const want = prev + motif[motifUsed];
-  if (
-    want >= 0 &&
-    want < ladder.length &&
-    pool.includes(want) &&
-    !extendsAlternation(notes, ladder[want].midi)
-  )
-    return { index: want, used: motifUsed + 1 };
-  return { index: chosen, used: limit };
+  return Math.round((beat - bar * 4) * 2);
 }
 
-function recordMotif(
-  motif: number[],
-  notes: readonly Pitched[],
-  chosen: Pitched,
-  beat: number,
-): void {
-  if (Math.floor(beat / 4) !== 0 || motif.length >= 3) return;
-  const prev = notes.length ? notes[notes.length - 1] : null;
-  if (!prev || prev.index < 0 || chosen.index < 0) return;
-  motif.push(chosen.index - prev.index);
-}
-
-type AtomKind = 'run' | 'arp' | 'approach';
-
-function chooseAtom(previous: AtomKind, random: () => number): AtomKind {
-  const rows: Record<AtomKind, readonly [number, number]> = {
-    run: [0.4, 0.46],
-    arp: [0.5, 0.32],
-    approach: [0.55, 0.32],
-  };
-  const [run, arp] = rows[previous];
-  const draw = random();
-  if (draw < run) return 'run';
-  if (draw < run + arp) return 'arp';
-  return 'approach';
-}
-
-function stepAtom(
-  pool: readonly number[],
-  prev: Pitched | null,
-  goal: number,
-  atom: AtomKind,
-): number | null {
-  if (!prev || prev.index < 0) return null;
-  const dir = Math.sign(goal - prev.midi) || 1;
-  const sizes = atom === 'arp' ? [2, 3] : [1];
-  for (const size of sizes) {
-    const tone = prev.index + dir * size;
-    if (pool.includes(tone)) return tone;
-  }
-  for (const size of sizes) {
-    const tone = prev.index - dir * size;
-    if (pool.includes(tone)) return tone;
-  }
-  return null;
-}
-
-function approachFigure(
-  ladder: readonly LadderTone[],
+function sameOpening(
   events: readonly GridEvent[],
-  alive: readonly (readonly boolean[])[],
-  notes: readonly Pitched[],
-  index: number,
-  cadenceAt: number,
-  scalePcs: ReadonlySet<number>,
-  flats: boolean,
-  windowLow: number,
-  windowHigh: number,
-  goal: number,
-  centre: number,
-  random: () => number,
-): Pitched[] | null {
-  let targetAt = -1;
-  for (let cursor = index + 1; cursor < events.length; cursor++) {
-    if (cursor - index > 2) break;
-    if (cursor === events.length - 1 || events[cursor].strong) {
-      targetAt = cursor;
-      break;
-    }
+  left: readonly number[],
+  right: readonly number[],
+  count: number,
+): boolean {
+  if (left.length < count || right.length < count) return false;
+  for (let index = 0; index < count; index++) {
+    if (eighthOf(events, left[index] ?? 0) !== eighthOf(events, right[index] ?? 0))
+      return false;
   }
-  if (targetAt < 0) return null;
-  const targets: number[] = [];
-  if (targetAt === events.length - 1) targets.push(cadenceAt);
-  else {
-    for (let tone = 0; tone < ladder.length; tone++) {
-      if (alive[targetAt][tone] && ladder[tone].chordTone) targets.push(tone);
-    }
-  }
-  if (!targets.length) return null;
-  const prev = notes.length ? notes[notes.length - 1] : null;
-  const durations = events.slice(index, targetAt + 1).map((row) => row.duration);
-  const span = targetAt - index;
-  const figures: Pitched[][] = [];
-  const ranked = targets
-    .map((tone) => ({
-      tone,
-      weight: pitchWeight(
-        ladder,
-        tone,
-        prev ? prev.midi : null,
-        notes.length > 1 ? notes[notes.length - 2].midi : null,
-        goal,
-        centre,
-        events[targetAt],
-      ),
-    }))
-    .sort((a, b) => b.weight - a.weight || a.tone - b.tone);
-  for (const item of ranked) {
-    const built = passingChain(
-      ladder[item.tone].midi,
-      span,
-      prev ? prev.midi : null,
-      durations,
-      scalePcs,
-      flats,
-      windowLow,
-      windowHigh,
-    );
-    if (!built) continue;
-    const landing = [...built.map((row) => row.midi), ladder[item.tone].midi];
-    if (sequenceExtends(notes, landing)) continue;
-    if (targetAt === events.length - 1) figures.push(built);
-    else figures.push([...built, pitchedFromLadder(ladder, item.tone)]);
-    if (figures.length >= 4) break;
-  }
-  if (!figures.length) return null;
-  return figures[Math.floor(random() * figures.length)] ?? figures[0];
+  return true;
 }
 
-/** Passing tones that resolve to `targetMidi`. The target itself is not included. */
-function passingChain(
-  targetMidi: number,
-  span: number,
-  prevMidi: number | null,
-  durations: readonly number[],
-  scalePcs: ReadonlySet<number>,
-  flats: boolean,
-  windowLow: number,
-  windowHigh: number,
-): Pitched[] | null {
-  const inside = (midi: number) =>
-    midi >= windowLow &&
-    midi <= windowHigh &&
-    spotsFor(midi).length > 0 &&
-    !scalePcs.has(mod(midi));
-  const chainOk = (midis: readonly number[]) => {
-    const all = prevMidi === null ? midis : [prevMidi, ...midis];
-    for (let index = 1; index < all.length; index++) {
-      const placed = index - (prevMidi === null ? 0 : 1);
-      if (!arrivalOk(Math.abs(all[index] - all[index - 1]), durations[placed] ?? 1))
-        return false;
-    }
-    return true;
-  };
-  if (span === 1) {
-    for (const delta of [1, -1, 2, -2]) {
-      const midi = targetMidi + delta;
-      if (!inside(midi)) continue;
-      if (chainOk([midi, targetMidi])) return [passingPitch(midi, flats)];
-    }
-    return null;
+function fragmentRhythm(
+  events: readonly GridEvent[],
+  head: readonly number[],
+  bar: readonly number[],
+): boolean {
+  if (head.length < 2 || bar.length < 4) return false;
+  const firstAt = head[0] ?? 0;
+  const secondAt = head[1] ?? 0;
+  const first = eighthOf(events, firstAt);
+  const second = eighthOf(events, secondAt);
+  const secondDur = Math.max(
+    1,
+    Math.round((events[secondAt]?.duration ?? 0.5) * 2),
+  );
+  // Same span fragmentPattern uses: end of the second attack, not the gap.
+  const span = second + secondDur - first;
+  if (span <= 0) return false;
+  return (
+    eighthOf(events, bar[0] ?? 0) === first &&
+    eighthOf(events, bar[1] ?? 0) === second &&
+    eighthOf(events, bar[2] ?? 0) === first + span &&
+    eighthOf(events, bar[3] ?? 0) === second + span
+  );
+}
+
+function blockAllowed(
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  slots: readonly number[],
+  tones: readonly number[],
+): boolean {
+  if (tones.length !== slots.length) return false;
+  const midis = notes.map((note) => note.midi);
+  const indexes = notes.map((note) => note.index);
+  let prev = notes.length ? notes[notes.length - 1].midi : null;
+  for (let step = 0; step < tones.length; step++) {
+    const tone = tones[step] ?? -1;
+    const at = slots[step] ?? 0;
+    if (tone < 0 || tone >= ladder.length || !alive[at]?.[tone]) return false;
+    const midi = ladder[tone].midi;
+    if (
+      prev !== null &&
+      !arrivalOk(Math.abs(midi - prev), events[at]?.duration ?? 1)
+    )
+      return false;
+    const soFar = midis.map((item) => ({ midi: item }));
+    // A one-step sequence of a scale overlaps into a 3-pitch cell.
+    // That return stays. The free walk still refuses a real cycle.
+    if (completesCycle(soFar, midi, 2)) return false;
+    midis.push(midi);
+    indexes.push(tone);
+    prev = midi;
   }
-  const ups = [1, 2].map((delta) => targetMidi + delta).filter(inside);
-  const downs = [1, 2].map((delta) => targetMidi - delta).filter(inside);
-  for (const up of ups) {
-    for (const down of downs) {
-      for (const pair of [
-        [up, down],
-        [down, up],
-      ] as const) {
-        if (chainOk([...pair, targetMidi]))
-          return pair.map((midi) => passingPitch(midi, flats));
-      }
+  return endingRun(indexes) < 5;
+}
+
+function chooseSequence(
+  order: readonly number[],
+  idea: readonly number[],
+  slots: readonly number[],
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  cadenceMidi: number,
+): number[] | null {
+  const lastSlot = slots[slots.length - 1];
+  const rank = (shift: number) => {
+    let score = 0;
+    for (let index = 0; index < idea.length; index++) {
+      const tone = (idea[index] ?? 0) + shift;
+      const event = events[slots[index] ?? 0];
+      if (!event || tone < 0 || tone >= ladder.length) continue;
+      if ((event.strong || event.duration >= 1) && ladder[tone].chordTone)
+        score += 2;
+    }
+    if (lastSlot === events.length - 2) {
+      const tone = (idea[idea.length - 1] ?? 0) + shift;
+      const gap =
+        tone >= 0 && tone < ladder.length
+          ? Math.abs(ladder[tone].midi - cadenceMidi)
+          : 99;
+      if (gap > 0 && gap <= 2) score += 3;
+    }
+    return score;
+  };
+  const ranked = [...order].sort((a, b) => rank(b) - rank(a));
+  const tryShift = (shift: number) => {
+    const tones = idea.map((index) => index + shift);
+    if (!blockAllowed(ladder, alive, events, notes, slots, tones)) return null;
+    return tones;
+  };
+  for (const shift of ranked) {
+    const tones = tryShift(shift);
+    if (tones) return tones;
+  }
+  return tryShift(0);
+}
+
+function chooseFragment(
+  order: readonly number[],
+  idea: readonly number[],
+  slots: readonly number[],
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+): number[] | null {
+  const left = idea[0] ?? 0;
+  const right = idea[1] ?? 0;
+  for (const shift of order) {
+    const seconds = [shift * 2, shift + Math.sign(shift)];
+    for (const second of seconds) {
+      if (second === 0 || second === shift) continue;
+      const tones = [left + shift, right + shift, left + second, right + second];
+      if (blockAllowed(ladder, alive, events, notes, slots, tones)) return tones;
     }
   }
   return null;
 }
 
 /**
- * Default pitch choice. Every legal ladder tone is scored and sampled.
- * Proximity, register centre, and contour are gaussians. Chord tones are
- * preferred on strong beats. A leap is biased toward a contrary step.
- * The first three scale-step deltas of bar 0 are copied onto an echo bar
- * when that landing is legal and does not extend a two-pitch alternation.
+ * Scored pitches, then a sentence. Bar 2 opens on bar 1's first four
+ * attacks, transposed by one or two scale steps. A 4-bar phrase sequences
+ * a two-note fragment twice in bar 3. The tail walks freely to the cadence.
+ * A second two-pitch return, a repeated three-pitch cell, and a fifth
+ * scale step in the same direction are refused when another tone is legal.
  */
 function walkScored(
   ladder: readonly LadderTone[],
@@ -1377,24 +1461,104 @@ function walkScored(
   cadenceAt: number,
   alive: readonly (readonly boolean[])[],
   random: () => number,
+  seed: number,
 ): Pitched[] | null {
   const centre = REGISTER_LOW[plan.register] + PHRASE_RANGE / 2;
+  const cadenceMidi = ladder[cadenceAt]?.midi ?? 0;
   const notes: Pitched[] = [];
-  const motif: number[] = [];
-  let motifUsed = 0;
+  const order = shiftOrder(seed);
+  const byBar: number[][] = Array.from({ length: bars }, () => []);
+  events.forEach((event, index) => {
+    const bar = Math.floor(event.beat / 4);
+    if (bar >= 0 && bar < bars) byBar[bar]?.push(index);
+  });
+  let pending: number[] = [];
   for (let index = 0; index < events.length; index++) {
     if (countSearchStep()) return null;
     if (index === events.length - 1) {
       notes.push(pitchedFromLadder(ladder, cadenceAt));
       continue;
     }
+    if (pending.length) {
+      const tone = pending.shift();
+      if (tone === undefined) return null;
+      notes.push(pitchedFromLadder(ladder, tone));
+      continue;
+    }
     const event = events[index];
-    const candidates = withoutAlternation(
+    if (!event) return null;
+    const bar = Math.floor(event.beat / 4);
+    const head = byBar[0] ?? [];
+    const here = byBar[bar] ?? [];
+    if (bar === 1 && here[0] === index && sameOpening(events, head, here, 4)) {
+      const idea = head.slice(0, 4).map((at) => notes[at]?.index ?? -1);
+      const slots = here.slice(0, 4);
+      const tones = chooseSequence(
+        order,
+        idea,
+        slots,
+        ladder,
+        alive,
+        events,
+        notes,
+        cadenceMidi,
+      );
+      if (tones) {
+        pending = tones.slice(1);
+        notes.push(pitchedFromLadder(ladder, tones[0] ?? 0));
+        continue;
+      }
+    }
+    if (
+      bar === 2 &&
+      bars === 4 &&
+      here[0] === index &&
+      fragmentRhythm(events, head, here)
+    ) {
+      const idea = [notes[head[0] ?? 0]?.index ?? -1, notes[head[1] ?? 0]?.index ?? -1];
+      const tones = chooseFragment(
+        order,
+        idea,
+        here.slice(0, 4),
+        ladder,
+        alive,
+        events,
+        notes,
+      );
+      if (tones) {
+        pending = tones.slice(1);
+        notes.push(pitchedFromLadder(ladder, tones[0] ?? 0));
+        continue;
+      }
+    }
+    let candidates = withoutMonotone(
       ladder,
-      legalIndexes(ladder, alive, events, notes, index),
+      withoutCycle(
+        ladder,
+        withoutAlternation(
+          ladder,
+          legalIndexes(ladder, alive, events, notes, index),
+          notes,
+        ),
+        notes,
+        3,
+      ),
       notes,
     );
     if (!candidates.length) return null;
+    const answerFourth = byBar[1]?.[3];
+    if (
+      head[3] === index &&
+      answerFourth !== undefined &&
+      (events[answerFourth]?.duration ?? 1) <= 0.5 &&
+      notes.length
+    ) {
+      const prevMidi = notes[notes.length - 1]?.midi ?? 0;
+      const stepped = candidates.filter(
+        (tone) => Math.abs((ladder[tone]?.midi ?? 0) - prevMidi) <= 5,
+      );
+      if (stepped.length) candidates = stepped;
+    }
     const along = index / Math.max(1, events.length - 1);
     const goal = contourMidi(plan, along);
     const prev = notes.length ? notes[notes.length - 1] : null;
@@ -1407,157 +1571,17 @@ function walkScored(
         goal,
         centre,
         event,
+        index === events.length - 2 ? cadenceMidi : null,
       ),
     );
-    let chosen = candidates[pickWeighted(weights, random)] ?? candidates[0];
-    const echoed = echoIndex(
-      ladder,
-      chosen,
-      candidates,
-      motif,
-      motifUsed,
-      notes,
-      event.beat,
-      bars,
-    );
-    chosen = echoed.index;
-    motifUsed = echoed.used;
-    const pitch = pitchedFromLadder(ladder, chosen);
-    recordMotif(motif, notes, pitch, event.beat);
-    notes.push(pitch);
+    const chosen = candidates[pickWeighted(weights, random)] ?? candidates[0];
+    if (chosen === undefined) return null;
+    notes.push(pitchedFromLadder(ladder, chosen));
   }
-  if (!lineIsLegal(notes, events, ladder[cadenceAt].midi)) return null;
+  if (!lineIsLegal(notes, events, cadenceMidi)) return null;
   return notes;
 }
 
-/**
- * Off by default. Runs, arpeggio skips, and chromatic approaches or
- * enclosures into the next chord tone. Repeats stay illegal.
- */
-function walkAtoms(
-  ladder: readonly LadderTone[],
-  events: readonly GridEvent[],
-  plan: PhrasePlan,
-  bars: 2 | 4,
-  cadenceAt: number,
-  alive: readonly (readonly boolean[])[],
-  random: () => number,
-): Pitched[] | null {
-  const flats = scaleUsesFlats(ladder);
-  const scalePcs = new Set(ladder.map((tone) => tone.note.pc));
-  const centre = REGISTER_LOW[plan.register] + PHRASE_RANGE / 2;
-  const windowLow = REGISTER_LOW[plan.register];
-  const windowHigh = windowLow + PHRASE_RANGE;
-  const notes: Pitched[] = [];
-  const planned: Pitched[] = [];
-  const motif: number[] = [];
-  let motifUsed = 0;
-  let atom: AtomKind = 'run';
-  let left = 0;
-  for (let index = 0; index < events.length; index++) {
-    if (countSearchStep()) return null;
-    const event = events[index];
-    if (index === events.length - 1) {
-      const cadence = pitchedFromLadder(ladder, cadenceAt);
-      const prev = notes.length ? notes[notes.length - 1] : null;
-      if (
-        prev &&
-        !arrivalOk(Math.abs(cadence.midi - prev.midi), event.duration)
-      )
-        return null;
-      notes.push(cadence);
-      continue;
-    }
-    if (planned.length) {
-      const next = planned[0];
-      const prev = notes[notes.length - 1];
-      const arrives =
-        !!next &&
-        (!prev ||
-          arrivalOk(Math.abs(next.midi - prev.midi), event.duration));
-      if (next && arrives && !extendsAlternation(notes, next.midi)) {
-        planned.shift();
-        recordMotif(motif, notes, next, event.beat);
-        notes.push(next);
-        continue;
-      }
-      planned.length = 0;
-    }
-    const candidates = withoutAlternation(
-      ladder,
-      legalIndexes(ladder, alive, events, notes, index),
-      notes,
-    );
-    if (!candidates.length) return null;
-    if (left <= 0) {
-      atom = chooseAtom(atom, random);
-      left = atom === 'run' ? (random() < 0.4 ? 3 : 2) : 2;
-    }
-    left -= 1;
-    const along = index / Math.max(1, events.length - 1);
-    const goal = contourMidi(plan, along);
-    const prev = notes.length ? notes[notes.length - 1] : null;
-    const weights = candidates.map((tone) =>
-      pitchWeight(
-        ladder,
-        tone,
-        prev ? prev.midi : null,
-        notes.length > 1 ? notes[notes.length - 2].midi : null,
-        goal,
-        centre,
-        event,
-      ),
-    );
-    let chosen = candidates[pickWeighted(weights, random)] ?? candidates[0];
-    if (atom === 'approach' && !event.strong) {
-      const figure = approachFigure(
-        ladder,
-        events,
-        alive,
-        notes,
-        index,
-        cadenceAt,
-        scalePcs,
-        flats,
-        windowLow,
-        windowHigh,
-        goal,
-        centre,
-        random,
-      );
-      if (figure && figure.length) {
-        chosen = -1;
-        const first = figure[0];
-        planned.push(...figure.slice(1));
-        left = 0;
-        recordMotif(motif, notes, first, event.beat);
-        notes.push(first);
-        continue;
-      }
-    }
-    if (atom === 'run' || atom === 'arp') {
-      const stepped = stepAtom(candidates, prev, goal, atom);
-      if (stepped !== null) chosen = stepped;
-    }
-    const echoed = echoIndex(
-      ladder,
-      chosen,
-      candidates,
-      motif,
-      motifUsed,
-      notes,
-      event.beat,
-      bars,
-    );
-    chosen = echoed.index;
-    motifUsed = echoed.used;
-    const pitch = pitchedFromLadder(ladder, chosen);
-    recordMotif(motif, notes, pitch, event.beat);
-    notes.push(pitch);
-  }
-  if (!lineIsLegal(notes, events, ladder[cadenceAt].midi)) return null;
-  return notes;
-}
 
 function walkPitches(
   ladder: readonly LadderTone[],
@@ -1566,13 +1590,20 @@ function walkPitches(
   bars: 2 | 4,
   cadenceAt: number,
   random: () => number,
-  mode: 'scored' | 'atoms',
+  seed: number,
 ): Pitched[] | null {
   const alive = reachable(ladder, events, cadenceAt);
   if (!alive[0].some(Boolean)) return null;
-  if (mode === 'atoms')
-    return walkAtoms(ladder, events, plan, bars, cadenceAt, alive, random);
-  return walkScored(ladder, events, plan, bars, cadenceAt, alive, random);
+  return walkScored(
+    ladder,
+    events,
+    plan,
+    bars,
+    cadenceAt,
+    alive,
+    random,
+    seed,
+  );
 }
 
 function cadenceIndexOf(
@@ -1637,36 +1668,91 @@ function scaleStepCount(
   return sign * count;
 }
 
-function motifReturned(
-  notes: readonly { midi: number; beat: number }[],
-  bars: 2 | 4,
+function longestMonotone(
+  midis: readonly number[],
   scalePcs: ReadonlySet<number>,
-): boolean {
-  const groups: number[][] = Array.from({ length: bars }, () => []);
-  for (const note of notes) {
-    const bar = Math.floor(note.beat / 4);
-    if (bar >= 0 && bar < bars) groups[bar].push(note.midi);
+): number {
+  let best = 1;
+  let run = 1;
+  let dir = 0;
+  for (let index = 1; index < midis.length; index++) {
+    const step = scaleStepCount(midis[index - 1] ?? 0, midis[index] ?? 0, scalePcs);
+    if (Math.abs(step) === 1 && step === dir) run += 1;
+    else if (Math.abs(step) === 1) {
+      dir = step;
+      run = 2;
+    } else {
+      dir = 0;
+      run = 1;
+    }
+    if (run > best) best = run;
   }
-  const deltas = groups.map((group) => {
-    const steps: number[] = [];
-    for (let index = 1; index < group.length; index++) {
-      steps.push(scaleStepCount(group[index - 1], group[index], scalePcs));
-    }
-    return steps;
-  });
-  const head = deltas[0]?.slice(0, 3) ?? [];
-  if (head.length < 2) return false;
-  for (let bar = 1; bar < deltas.length; bar++) {
-    const span = Math.min(3, head.length, deltas[bar].length);
-    if (span < 2) continue;
+  return best;
+}
+
+function repeatedPitchCell(
+  midis: readonly number[],
+  period: number,
+  cycles: number,
+  cover: readonly [number, number] | null,
+): boolean {
+  const length = period * cycles;
+  for (let start = 0; start + length <= midis.length; start++) {
+    if (cover && start >= cover[0] && start + length <= cover[1]) continue;
     let match = true;
-    for (let index = 0; index < span; index++) {
-      if (deltas[bar][index] !== head[index]) match = false;
+    for (let index = period; index < length; index++) {
+      if (midis[start + index] !== midis[start + (index % period)]) {
+        match = false;
+        break;
+      }
     }
-    if (match && span >= 3) return true;
-    if (match && span === 2 && head.length === 2) return true;
+    if (!match) continue;
+    const pitches = new Set(midis.slice(start, start + period));
+    if (pitches.size < 2) continue;
+    return true;
   }
   return false;
+}
+
+/** Index span of a shifted 4-note return, so that overlap is not an ostinato. */
+function sentenceCover(
+  notes: readonly { midi: number; beat: number }[],
+  scalePcs: ReadonlySet<number>,
+): [number, number] | null {
+  const grouped = [0, 1].map((bar) =>
+    notes
+      .map((note, index) => ({ note, index }))
+      .filter(
+        (item) =>
+          Math.floor(item.note.beat / 4) === bar && item.note.beat < 8,
+      ),
+  );
+  const left = grouped[0] ?? [];
+  const right = grouped[1] ?? [];
+  if (left.length < 4 || right.length < 4) return null;
+  const opening = left.slice(0, 4);
+  const answer = right.slice(0, 4);
+  for (let index = 0; index < 4; index++) {
+    const a = opening[index]?.note;
+    const b = answer[index]?.note;
+    if (!a || !b) return null;
+    if (Math.round((a.beat % 4) * 2) !== Math.round((b.beat % 4) * 2))
+      return null;
+  }
+  for (let index = 1; index < 4; index++) {
+    const prev = opening[index - 1]?.note.midi ?? 0;
+    const next = opening[index]?.note.midi ?? 0;
+    const otherPrev = answer[index - 1]?.note.midi ?? 0;
+    const otherNext = answer[index]?.note.midi ?? 0;
+    if (
+      scaleStepCount(prev, next, scalePcs) !==
+      scaleStepCount(otherPrev, otherNext, scalePcs)
+    )
+      return null;
+  }
+  const from = opening[0]?.index ?? 0;
+  const to = (answer[3]?.index ?? 0) + 1;
+  return [from, to];
 }
 
 function criticScore(
@@ -1724,8 +1810,7 @@ function criticScore(
   score += Math.min(range, 12);
   if (same) score -= 80;
   if (quarter) score -= 24;
-  if (motifReturned(notes, bars, scalePcs)) score += 36;
-  score -= pitchCriticPenalty(notes, midis, bars);
+  score -= pitchCriticPenalty(notes, midis, bars, scalePcs);
   const cells = plan.cells ?? [];
   for (let index = 1; index < cells.length; index++) {
     if (cells[index] === cells[index - 1]) score -= 30;
@@ -1751,11 +1836,16 @@ function notesFromPitches(
   }));
 }
 
-/** Target bands for step size, leaps, and the two-pitch wobble. */
+/**
+ * Target bands for step size, leaps, and the two-pitch wobble.
+ * A repeated 3-pitch cell and a 5-note scale run lose the lane.
+ * A shifted sentence is a different pitch level, so it is not a cell.
+ */
 function pitchCriticPenalty(
   notes: readonly PhraseNote[],
   midis: readonly number[],
   bars: 2 | 4,
+  scalePcs: ReadonlySet<number>,
 ): number {
   let penalty = 0;
   for (let bar = 0; bar < bars; bar++) {
@@ -1774,6 +1864,10 @@ function pitchCriticPenalty(
     if (run > best) best = run;
   }
   if (best >= 5) penalty += 180;
+  const cover = sentenceCover(notes, scalePcs);
+  if (longestMonotone(midis, scalePcs) >= 5) penalty += 240;
+  if (repeatedPitchCell(midis, 3, 2, cover)) penalty += 240;
+  if (repeatedPitchCell(midis, 3, 3, cover)) penalty += 200;
   const counts = new Map<number, number>();
   for (const midi of midis) counts.set(midi, (counts.get(midi) ?? 0) + 1);
   const ranked = [...counts.values()].sort((a, b) => b - a);
@@ -1801,7 +1895,6 @@ function composePhrase(
     bars: 2 | 4;
     scaleNotes: readonly Note[];
     chordNotes: readonly Note[];
-    pitch?: 'scored' | 'atoms';
   },
   plan: PhrasePlan,
   ladder: readonly LadderTone[],
@@ -1830,7 +1923,6 @@ function composePhrase(
       input.bars,
       random,
       exact ? 1 : lane % 3,
-      exact ? false : lane % 4 === 0,
       exact,
     );
     const events = eventsForCells(patterns, input.bars);
@@ -1841,7 +1933,7 @@ function composePhrase(
       input.bars,
       cadenceAt,
       random,
-      input.pitch === 'atoms' ? 'atoms' : 'scored',
+      input.seed,
     );
     if (!pitches) continue;
     const notes = notesFromPitches(pitches, events);
@@ -1859,13 +1951,11 @@ function composePhrase(
     });
   }
   if (!found.length) {
-    // The sampled bars could not reach the cadence. Repeat the busiest
-    // downbeat cell. It is a motif repeat, and only used when nothing else walked.
-    const straight = BAR_PATTERNS[plan.rhythm]
-      .filter((pattern) => pattern.hits.some((hit) => hit.at === 0))
-      .sort((a, b) => b.notes - a.notes || (a.ids < b.ids ? -1 : 1))[0];
-    if (straight) {
-      const patterns = Array.from({ length: input.bars }, () => straight);
+    // Every sampled lane missed the cadence. One more sentence, still
+    // marked exact so a varied lane would have won.
+    const random = mulberry32((input.seed + (lanes + 1) * 0x9e3779b9) >>> 0);
+    const patterns = pickPatterns(plan.rhythm, input.bars, random, 1, false);
+    if (patterns.length === input.bars) {
       const events = eventsForCells(patterns, input.bars);
       const pitches = walkPitches(
         ladder,
@@ -1873,8 +1963,8 @@ function composePhrase(
         plan,
         input.bars,
         cadenceAt,
-        mulberry32((input.seed + (lanes + 1) * 0x9e3779b9) >>> 0),
-        input.pitch === 'atoms' ? 'atoms' : 'scored',
+        random,
+        input.seed,
       );
       if (pitches) {
         const notes = notesFromPitches(pitches, events);
@@ -2135,7 +2225,6 @@ function assemble(
     bars: 2 | 4;
     scaleNotes: readonly Note[];
     chordNotes: readonly Note[];
-    pitch?: 'scored' | 'atoms';
   },
   plan: PhrasePlan,
   source: PhraseSource,
@@ -2165,11 +2254,6 @@ type PhraseRequest = {
   scaleNotes: readonly Note[];
   chordNotes: readonly Note[];
   locks?: PhraseLocks;
-  /**
-   * Pitch engine. `scored` is the default. `atoms` adds typed runs,
-   * arpeggio skips, and chromatic approaches. The panel never sets this.
-   */
-  pitch?: 'scored' | 'atoms';
 };
 
 function rulesResult(
@@ -2209,8 +2293,6 @@ export async function generatePhraseWithPlanner(input: {
   scaleNotes: readonly Note[];
   chordNotes: readonly Note[];
   locks?: PhraseLocks;
-  /** Same off-by-default pitch engine as {@link generatePhrase}. */
-  pitch?: 'scored' | 'atoms';
   planner?: PhrasePlanner;
   timeoutMs?: number;
   scaleLabel?: string;

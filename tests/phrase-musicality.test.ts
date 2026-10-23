@@ -9,7 +9,6 @@ import {
   isStrongBeat,
   phrasePeriodBeats,
   phraseRuleReport,
-  type FingeredNote,
   type Phrase,
 } from '../lib/phrase.ts';
 
@@ -226,7 +225,7 @@ void test('lines stay legal and a motif comes back on a varied rhythm', () => {
     quarterWalks / phrases < 0.15,
     `quarter walks ${quarterWalks}/${phrases}`,
   );
-  assert.ok(motif / phrases > 0.2, `motif ${motif}/${phrases}`);
+  assert.ok(motif / phrases > 0.7, `motif ${motif}/${phrases}`);
   assert.ok(rests / phrases > 1, `rests ${rests}/${phrases}`);
   assert.ok(sync / notes > 0.05, `sync ${sync}/${notes}`);
 });
@@ -311,91 +310,208 @@ void test('two-pitch wobble stays under three percent', () => {
   );
 });
 
-void test('atom pitches stay off unless asked, and chromatic notes keep frets', () => {
-  const scaleNotes = scaleOf('C', 'major');
-  const chordNotes = parseChord('C').notes;
-  const scored = generatePhrase({
-    seed: 4,
-    bars: 2,
-    scaleNotes,
-    chordNotes,
-  });
-  const again = generatePhrase({
-    seed: 4,
-    bars: 2,
-    scaleNotes,
-    chordNotes,
-    pitch: 'atoms',
-  });
-  const replay = generatePhrase({
-    seed: 4,
-    bars: 2,
-    scaleNotes,
-    chordNotes,
-    pitch: 'atoms',
-  });
-  assert.equal(scored.ok, true);
-  assert.equal(again.ok, true);
-  assert.deepEqual(replay, again);
-  if (!scored.ok || !again.ok) return;
-  assert.equal(
-    scored.phrase.notes.some((note) => note.degree === 'chr'),
-    false,
-  );
-  let chromatic = 0;
-  let checked = 0;
-  for (const [root, scaleId, symbol] of CONTEXTS) {
-    const notes = scaleOf(root, scaleId);
-    const chord = parseChord(symbol).notes;
-    const pcs = new Set(notes.map((note) => note.pc));
-    for (const bars of [2, 4] as const) {
-      for (let seed = 1; seed <= 12; seed++) {
-        const result = generatePhrase({
-          seed,
-          bars,
-          scaleNotes: notes,
-          chordNotes: chord,
-          pitch: 'atoms',
-        });
-        assert.equal(result.ok, true, `${symbol} atoms ${seed}`);
-        if (!result.ok) continue;
-        checked += 1;
-        for (let index = 0; index < result.phrase.notes.length; index++) {
-          const sounded: FingeredNote | undefined = result.phrase.notes[index];
-          if (!sounded) continue;
-          assert.ok(sounded.fret >= 0 && sounded.fret <= 24);
-          assert.equal(sounded.midi, sounded.midi | 0);
-          if (index === 0) continue;
-          const previous = result.phrase.notes[index - 1];
-          if (!previous) continue;
-          const gap = Math.abs(sounded.midi - previous.midi);
-          assert.ok(gap > 0 && gap <= 12);
-          if (sounded.duration <= 0.5) assert.ok(gap <= 5);
-          if (sounded.shift) assert.ok(sounded.duration > 0.5);
-          if (sounded.degree === 'chr') {
-            chromatic += 1;
-            assert.equal(pcs.has(sounded.pc), false);
-            assert.equal(((sounded.midi % 12) + 12) % 12, sounded.pc);
+function pitchCycle(
+  midis: readonly number[],
+  period: number,
+  cycles: number,
+  cover: readonly [number, number] | null = null,
+): boolean {
+  const length = period * cycles;
+  for (let start = 0; start + length <= midis.length; start++) {
+    if (cover && start >= cover[0] && start + length <= cover[1]) continue;
+    let match = true;
+    for (let index = period; index < length; index++) {
+      if (midis[start + index] !== midis[start + (index % period)]) {
+        match = false;
+        break;
+      }
+    }
+    if (!match) continue;
+    if (new Set(midis.slice(start, start + period)).size < 2) continue;
+    return true;
+  }
+  return false;
+}
+
+function monotoneRun(midis: readonly number[], pcs: ReadonlySet<number>): number {
+  let best = 1;
+  let run = 1;
+  let dir = 0;
+  for (let index = 1; index < midis.length; index++) {
+    const delta = scaleSteps(
+      [midis[index - 1] ?? 0, midis[index] ?? 0],
+      pcs,
+    )[0] ?? 0;
+    if (Math.abs(delta) === 1 && delta === dir) run += 1;
+    else if (Math.abs(delta) === 1) {
+      dir = delta;
+      run = 2;
+    } else {
+      dir = 0;
+      run = 1;
+    }
+    if (run > best) best = run;
+  }
+  return best;
+}
+
+void test('a sentence returns the opening figure, shifted more often than copied', () => {
+  let phrases = 0;
+  let returned = 0;
+  let shifted = 0;
+  let exact = 0;
+  let identical = 0;
+  let bars = 0;
+  let silent = 0;
+  let strong = 0;
+  let strongChord = 0;
+  let wide = 0;
+  let period3 = 0;
+  let period9 = 0;
+  let period2 = 0;
+  let period4 = 0;
+  let runs2 = 0;
+  let runs4 = 0;
+  let twoBar = 0;
+  let fourBar = 0;
+  let alt4 = 0;
+  let aba = 0;
+  let intervals = 0;
+  let topHeavy = 0;
+  const times: number[] = [];
+  for (const [root, scaleId, symbol] of SWEEP) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(symbol).notes;
+    const pcs = new Set(scaleNotes.map((note) => note.pc));
+    for (const barsCount of [2, 4] as const) {
+      for (let seed = 1; seed <= 50; seed++) {
+        const started = performance.now();
+        const phrase = generate(root, scaleId, symbol, seed, barsCount);
+        times.push(performance.now() - started);
+        const again = generate(root, scaleId, symbol, seed, barsCount);
+        assert.deepEqual(again.notes, phrase.notes);
+        phrases += 1;
+        if (barsCount === 2) twoBar += 1;
+        else fourBar += 1;
+        const body = phrase.notes.filter((note) => note.beat < barsCount * 4);
+        const groups = Array.from({ length: barsCount }, (_, bar) =>
+          body.filter((note) => Math.floor(note.beat / 4) === bar),
+        );
+        const signatures = groups.map((group) =>
+          group.map((note) => Math.round((note.beat % 4) * 2)).join(','),
+        );
+        if (signatures.every((signature) => signature === signatures[0]))
+          identical += 1;
+        for (const group of groups) {
+          bars += 1;
+          const struck = group.some(
+            (note) => Math.abs(note.beat - Math.round(note.beat)) < 1e-6,
+          );
+          if (!struck) silent += 1;
+          for (const note of group) {
+            assert.ok(note.fret >= 0 && note.fret <= 24);
+            if (note.shift) assert.ok(note.duration > 0.5);
           }
         }
+        const opening = groups[0] ?? [];
+        const answer = groups[1] ?? [];
+        let cover: [number, number] | null = null;
+        if (opening.length >= 4 && answer.length >= 4) {
+          const left = opening
+            .slice(0, 4)
+            .map((note) => Math.round((note.beat % 4) * 2))
+            .join(',');
+          const right = answer
+            .slice(0, 4)
+            .map((note) => Math.round((note.beat % 4) * 2))
+            .join(',');
+          const leftSteps = scaleSteps(
+            opening.slice(0, 4).map((note) => note.midi),
+            pcs,
+          ).join(',');
+          const rightSteps = scaleSteps(
+            answer.slice(0, 4).map((note) => note.midi),
+            pcs,
+          ).join(',');
+          if (left === right && leftSteps === rightSteps) {
+            returned += 1;
+            const samePitch =
+              opening
+                .slice(0, 4)
+                .map((note) => note.midi)
+                .join(',') ===
+              answer
+                .slice(0, 4)
+                .map((note) => note.midi)
+                .join(',');
+            if (samePitch) exact += 1;
+            else shifted += 1;
+            const from = phrase.notes.indexOf(opening[0] ?? phrase.notes[0]);
+            const last = answer[3];
+            const to = last ? phrase.notes.indexOf(last) + 1 : from;
+            if (from >= 0 && to > from) cover = [from, to];
+          }
+        }
+        const report = phraseRuleReport(phrase, scaleNotes, chordNotes);
+        strong += report.strong;
+        strongChord += report.strongChord;
+        const midis = phrase.notes.map((note) => note.midi);
+        for (let index = 1; index < midis.length; index++) {
+          const gap = Math.abs((midis[index] ?? 0) - (midis[index - 1] ?? 0));
+          assert.ok(gap > 0 && gap <= 12);
+          const duration = phrase.notes[index]?.duration ?? 1;
+          if (duration <= 0.5) assert.ok(gap <= 5);
+          if (gap > 12) wide += 1;
+        }
+        if (pitchCycle(midis, 3, 2, cover)) period3 += 1;
+        if (pitchCycle(midis, 3, 3, cover)) period9 += 1;
+        if (pitchCycle(midis, 2, 2)) period2 += 1;
+        if (pitchCycle(midis, 4, 2)) period4 += 1;
+        if (monotoneRun(midis, pcs) >= 5) {
+          if (barsCount === 2) runs2 += 1;
+          else runs4 += 1;
+        }
+        if (alternationRun(midis) >= 4) alt4 += 1;
+        const counts = new Map<number, number>();
+        for (const midi of midis) counts.set(midi, (counts.get(midi) ?? 0) + 1);
+        const ranked = [...counts.values()].sort((left, right) => right - left);
+        const top2 =
+          ((ranked[0] ?? 0) + (ranked[1] ?? 0)) / Math.max(1, midis.length);
+        if (top2 > 0.45) topHeavy += 1;
+        for (let index = 2; index < midis.length; index++) {
+          intervals += 1;
+          if (midis[index] === midis[index - 2]) aba += 1;
+        }
+        assert.equal(phrase.notes.at(-1)?.beat, barsCount * 4);
+        assert.equal(phrase.notes.at(-1)?.duration, 2);
+        assert.equal(report.cadenceHit, true);
+        assert.equal(report.unisons, 0);
       }
     }
   }
-  assert.ok(checked === CONTEXTS.length * 12 * 2);
-  assert.ok(chromatic > 0, 'no chromatic approach');
-  const held = generatePhrase({
-    seed: 22,
-    bars: 4,
-    scaleNotes: scaleOf('A', 'harmonic-minor'),
-    chordNotes: parseChord('E7').notes,
-    pitch: 'atoms',
-  });
-  assert.equal(held.ok, true);
-  if (held.ok)
-    assert.ok(
-      alternationRun(held.phrase.notes.map((note) => note.midi)) < 4,
-      'a queued approach finished the alternation',
-    );
+  assert.equal(phrases, 800);
+  assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);
+  assert.ok(shifted / returned >= 0.4, `shifted ${shifted}/${returned}`);
+  assert.ok(exact / returned <= 0.3, `exact ${exact}/${returned}`);
+  assert.equal(identical, 0);
+  assert.ok(silent / bars <= 0.05, `no on-beat ${silent}/${bars}`);
+  assert.ok(
+    strongChord / strong >= 0.64,
+    `strong chord ${strongChord}/${strong}`,
+  );
+  assert.ok(alt4 / phrases <= 0.03, `second return ${alt4}/${phrases}`);
+  assert.ok(aba / intervals <= 0.12, `pitch two back ${aba}/${intervals}`);
+  assert.ok(topHeavy / phrases <= 0.26, `top two pitches ${topHeavy}/${phrases}`);
+  assert.ok(period3 / phrases <= 0.02, `period-3 ${period3}/${phrases}`);
+  assert.equal(period9, 0);
+  assert.ok(period2 / phrases <= 0.05, `period-2 ${period2}/${phrases}`);
+  assert.ok(period4 / phrases <= 0.05, `period-4 ${period4}/${phrases}`);
+  assert.ok(runs2 / twoBar <= 0.05, `monotone 2-bar ${runs2}/${twoBar}`);
+  assert.ok(runs4 / fourBar <= 0.12, `monotone 4-bar ${runs4}/${fourBar}`);
+  assert.equal(wide, 0);
+  const ordered = [...times].sort((left, right) => left - right);
+  const p95 = ordered[Math.ceil(0.95 * ordered.length) - 1] ?? 0;
+  assert.ok(p95 < 20, `p95 ${p95.toFixed(2)} ms`);
 });
 
 void test('the critic keeps the higher score and the copied-rhythm penalty', () => {
