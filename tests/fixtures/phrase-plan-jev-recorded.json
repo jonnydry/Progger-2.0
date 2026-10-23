@@ -1,0 +1,3031 @@
+{
+  "recordedFromJev": true,
+  "note": "Recorded once from the branch preview POST /api/phrase-plan. These are jev-1.13.0 distributions for the 64 corpus contexts. CI reads this file and does not call Jev. Input tokens were not returned.",
+  "model": "jev-1.13.0",
+  "contexts": {
+    "major|C|C|4|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.13,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.02,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.05,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.44,
+          "arpeggio-down": 0.03,
+          "repeat-then-step-up": 0.19999999999999998,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.62,
+            "sequence-up": 0.11,
+            "sequence-down": 0.03,
+            "altered-ending": 0.24
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.24,
+            "sequence-down": 0.12,
+            "altered-ending": 0.64
+          },
+          {
+            "repeat": 0.34,
+            "sequence-up": 0.01,
+            "sequence-down": 0.01,
+            "altered-ending": 0.64
+          }
+        ],
+        "questionDegree": {
+          "2": 0.44,
+          "4": 0.35,
+          "6": 0.21
+        },
+        "cadence": {
+          "root": 1,
+          "third": 0,
+          "fifth": 0
+        }
+      }
+    },
+    "dorian|A|Am|4|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.13,
+          "step-down-step-down": 0.04,
+          "step-up-step-down": 0.15,
+          "step-down-step-up": 0.06,
+          "skip-up-step-down": 0.14,
+          "skip-down-step-up": 0.04,
+          "upper-neighbor-turn": 0.08,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.17,
+          "arpeggio-down": 0.09,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 0.21,
+          "pickup-into-downbeat": 0.79
+        },
+        "variations": [
+          {
+            "repeat": 0.21,
+            "sequence-up": 0.25,
+            "sequence-down": 0.08,
+            "altered-ending": 0.46
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.21,
+            "sequence-down": 0.1,
+            "altered-ending": 0.69
+          },
+          {
+            "repeat": 0.25,
+            "sequence-up": 0.02,
+            "sequence-down": 0.03,
+            "altered-ending": 0.7
+          }
+        ],
+        "questionDegree": {
+          "2": 0.5,
+          "4": 0.27,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.85,
+          "third": 0.1,
+          "fifth": 0.05
+        }
+      }
+    },
+    "dorian|A|Am|4|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.27,
+          "step-down-step-up": 0.07,
+          "skip-up-step-down": 0.11,
+          "skip-down-step-up": 0.03,
+          "upper-neighbor-turn": 0.05,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.22,
+          "arpeggio-down": 0.07,
+          "repeat-then-step-up": 0.06,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 0.32,
+          "long-short-short": 0.68
+        },
+        "variations": [
+          {
+            "repeat": 0.31,
+            "sequence-up": 0.32,
+            "sequence-down": 0.07,
+            "altered-ending": 0.3
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.27,
+            "sequence-down": 0.09,
+            "altered-ending": 0.64
+          },
+          {
+            "repeat": 0.26,
+            "sequence-up": 0.02,
+            "sequence-down": 0.03,
+            "altered-ending": 0.68
+          }
+        ],
+        "questionDegree": {
+          "2": 0.5,
+          "4": 0.27,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.81,
+          "third": 0.1,
+          "fifth": 0.08
+        }
+      }
+    },
+    "major|C|C|4|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.11,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.05,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.39,
+          "arpeggio-down": 0.05,
+          "repeat-then-step-up": 0.15,
+          "repeat-then-step-down": 0.12
+        },
+        "motifRhythm": {
+          "even": 0.29,
+          "long-short-short": 0.71
+        },
+        "variations": [
+          {
+            "repeat": 0.69,
+            "sequence-up": 0.18,
+            "sequence-down": 0.04,
+            "altered-ending": 0.09
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.31,
+            "sequence-down": 0.14,
+            "altered-ending": 0.55
+          },
+          {
+            "repeat": 0.34,
+            "sequence-up": 0.01,
+            "sequence-down": 0.01,
+            "altered-ending": 0.64
+          }
+        ],
+        "questionDegree": {
+          "2": 0.53,
+          "4": 0.3,
+          "6": 0.17
+        },
+        "cadence": {
+          "root": 0.92,
+          "third": 0.05,
+          "fifth": 0.03
+        }
+      }
+    },
+    "major|C|C|4|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.1,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.13,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.09,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.42,
+          "arpeggio-down": 0.05,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 0.39,
+          "pickup-into-downbeat": 0.61
+        },
+        "variations": [
+          {
+            "repeat": 0.58,
+            "sequence-up": 0.1,
+            "sequence-down": 0.04,
+            "altered-ending": 0.28
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.11,
+            "sequence-down": 0.12,
+            "altered-ending": 0.77
+          },
+          {
+            "repeat": 0.29,
+            "sequence-up": 0.01,
+            "sequence-down": 0.01,
+            "altered-ending": 0.69
+          }
+        ],
+        "questionDegree": {
+          "2": 0.35,
+          "4": 0.39,
+          "6": 0.26
+        },
+        "cadence": {
+          "root": 0.98,
+          "third": 0.01,
+          "fifth": 0.01
+        }
+      }
+    },
+    "dorian|A|Am|2|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.21,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.14,
+          "step-down-step-up": 0.04,
+          "skip-up-step-down": 0.11,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.05,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.26,
+          "arpeggio-down": 0.04,
+          "repeat-then-step-up": 0.07,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 0.97,
+          "long-short-short": 0.01,
+          "short-short-long": 0.01,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.29,
+            "sequence-up": 0.14,
+            "sequence-down": 0.03,
+            "altered-ending": 0.54
+          }
+        ],
+        "questionDegree": {
+          "2": 0.56,
+          "4": 0.22,
+          "6": 0.22
+        },
+        "cadence": {
+          "root": 0.87,
+          "third": 0.07,
+          "fifth": 0.06
+        }
+      }
+    },
+    "dorian|A|Am|2|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.07,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.2,
+          "step-down-step-up": 0.09,
+          "skip-up-step-down": 0.1,
+          "skip-down-step-up": 0.03,
+          "upper-neighbor-turn": 0.05,
+          "lower-neighbor-turn": 0.04,
+          "arpeggio-up": 0.15,
+          "arpeggio-down": 0.05,
+          "repeat-then-step-up": 0.14,
+          "repeat-then-step-down": 0.06
+        },
+        "motifRhythm": {
+          "even": 0.37,
+          "long-short-short": 0.63
+        },
+        "variations": [
+          {
+            "repeat": 0.35,
+            "sequence-up": 0.2,
+            "sequence-down": 0.04,
+            "altered-ending": 0.41
+          }
+        ],
+        "questionDegree": {
+          "2": 0.55,
+          "4": 0.22,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.72,
+          "third": 0.16,
+          "fifth": 0.12
+        }
+      }
+    },
+    "dorian|A|Am|2|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.16,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.15,
+          "step-down-step-up": 0.05,
+          "skip-up-step-down": 0.13,
+          "skip-down-step-up": 0.03,
+          "upper-neighbor-turn": 0.14,
+          "lower-neighbor-turn": 0.07,
+          "arpeggio-up": 0.13,
+          "arpeggio-down": 0.06,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 0.34,
+          "pickup-into-downbeat": 0.66
+        },
+        "variations": [
+          {
+            "repeat": 0.15,
+            "sequence-up": 0.1,
+            "sequence-down": 0.03,
+            "altered-ending": 0.72
+          }
+        ],
+        "questionDegree": {
+          "2": 0.45,
+          "4": 0.3,
+          "6": 0.25
+        },
+        "cadence": {
+          "root": 0.84,
+          "third": 0.08,
+          "fifth": 0.08
+        }
+      }
+    },
+    "dorian|A|Am|2|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.13,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.2,
+          "step-down-step-up": 0.04,
+          "skip-up-step-down": 0.14,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.04,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.26,
+          "arpeggio-down": 0.03,
+          "repeat-then-step-up": 0.06,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.24,
+            "sequence-up": 0.07,
+            "sequence-down": 0.02,
+            "altered-ending": 0.67
+          }
+        ],
+        "questionDegree": {
+          "2": 0.51,
+          "4": 0.26,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.9,
+          "third": 0.06,
+          "fifth": 0.04
+        }
+      }
+    },
+    "dorian|A|Am|4|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.17,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.13,
+          "step-down-step-up": 0.04,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.03,
+          "upper-neighbor-turn": 0.06,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.27,
+          "arpeggio-down": 0.07,
+          "repeat-then-step-up": 0.08,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 0.97,
+          "long-short-short": 0,
+          "short-short-long": 0.02,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.43,
+            "sequence-up": 0.15,
+            "sequence-down": 0.03,
+            "altered-ending": 0.39
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.24,
+            "sequence-down": 0.07,
+            "altered-ending": 0.69
+          },
+          {
+            "repeat": 0.4,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.57
+          }
+        ],
+        "questionDegree": {
+          "2": 0.55,
+          "4": 0.23,
+          "6": 0.22
+        },
+        "cadence": {
+          "root": 0.91,
+          "third": 0.06,
+          "fifth": 0.03
+        }
+      }
+    },
+    "dorian|A|Am|4|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.14,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.16,
+          "step-down-step-up": 0.04,
+          "skip-up-step-down": 0.14,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.07,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.18,
+          "arpeggio-down": 0.02,
+          "repeat-then-step-up": 0.17,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.39,
+            "sequence-up": 0.26,
+            "sequence-down": 0.05,
+            "altered-ending": 0.3
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.22,
+            "sequence-down": 0.06,
+            "altered-ending": 0.72
+          },
+          {
+            "repeat": 0.39,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.58
+          }
+        ],
+        "questionDegree": {
+          "2": 0.55,
+          "4": 0.24,
+          "6": 0.21
+        },
+        "cadence": {
+          "root": 0.94,
+          "third": 0.04,
+          "fifth": 0.02
+        }
+      }
+    },
+    "harmonic-minor|A|E7|2|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.05,
+          "step-up-step-down": 0.03,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.07,
+          "skip-down-step-up": 0.03,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.58,
+          "arpeggio-down": 0.13,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.89,
+          "long-short-short": 0.02,
+          "short-short-long": 0.06,
+          "pickup-into-downbeat": 0.03
+        },
+        "variations": [
+          {
+            "repeat": 0.2,
+            "sequence-up": 0.06,
+            "sequence-down": 0.04,
+            "altered-ending": 0.7
+          }
+        ],
+        "questionDegree": {
+          "2": 0.39,
+          "4": 0.21,
+          "6": 0.4
+        },
+        "cadence": {
+          "root": 0.61,
+          "third": 0.29,
+          "fifth": 0.1
+        }
+      }
+    },
+    "harmonic-minor|A|E7|2|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.01,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.03,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.11,
+          "skip-down-step-up": 0.03,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.41,
+          "arpeggio-down": 0.24,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.04
+        },
+        "motifRhythm": {
+          "even": 0.38,
+          "long-short-short": 0.62
+        },
+        "variations": [
+          {
+            "repeat": 0.18,
+            "sequence-up": 0.09,
+            "sequence-down": 0.07,
+            "altered-ending": 0.66
+          }
+        ],
+        "questionDegree": {
+          "2": 0.35,
+          "4": 0.26,
+          "6": 0.39
+        },
+        "cadence": {
+          "root": 0.49,
+          "third": 0.36,
+          "fifth": 0.15
+        }
+      }
+    },
+    "harmonic-minor|A|E7|2|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.07,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.18000000000000002,
+          "skip-down-step-up": 0.04,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.36,
+          "arpeggio-down": 0.19,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.33,
+          "pickup-into-downbeat": 0.67
+        },
+        "variations": [
+          {
+            "repeat": 0.12,
+            "sequence-up": 0.07,
+            "sequence-down": 0.07,
+            "altered-ending": 0.74
+          }
+        ],
+        "questionDegree": {
+          "2": 0.35,
+          "4": 0.26,
+          "6": 0.39
+        },
+        "cadence": {
+          "root": 0.66,
+          "third": 0.22,
+          "fifth": 0.12
+        }
+      }
+    },
+    "harmonic-minor|A|E7|2|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.06,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.03,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.1,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.52,
+          "arpeggio-down": 0.18,
+          "repeat-then-step-up": 0.03,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.13,
+            "sequence-up": 0.02,
+            "sequence-down": 0.03,
+            "altered-ending": 0.81
+          }
+        ],
+        "questionDegree": {
+          "2": 0.39,
+          "4": 0.23,
+          "6": 0.38
+        },
+        "cadence": {
+          "root": 0.7,
+          "third": 0.2,
+          "fifth": 0.1
+        }
+      }
+    },
+    "harmonic-minor|A|E7|4|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.03,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.11,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.5599999999999999,
+          "arpeggio-down": 0.14,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 0.9299999999999999,
+          "long-short-short": 0.03,
+          "short-short-long": 0.02,
+          "pickup-into-downbeat": 0.02
+        },
+        "variations": [
+          {
+            "repeat": 0.27,
+            "sequence-up": 0.16,
+            "sequence-down": 0.12,
+            "altered-ending": 0.45
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.15,
+            "sequence-down": 0.09,
+            "altered-ending": 0.76
+          },
+          {
+            "repeat": 0.25,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.72
+          }
+        ],
+        "questionDegree": {
+          "2": 0.39,
+          "4": 0.24,
+          "6": 0.37
+        },
+        "cadence": {
+          "root": 0.73,
+          "third": 0.19,
+          "fifth": 0.08
+        }
+      }
+    },
+    "harmonic-minor|A|E7|4|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.03,
+          "step-down-step-down": 0.04,
+          "step-up-step-down": 0.05,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.14,
+          "skip-down-step-up": 0.04,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.42,
+          "arpeggio-down": 0.16,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 0.36,
+          "long-short-short": 0.64
+        },
+        "variations": [
+          {
+            "repeat": 0.28,
+            "sequence-up": 0.23,
+            "sequence-down": 0.14,
+            "altered-ending": 0.35
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.18,
+            "sequence-down": 0.13,
+            "altered-ending": 0.69
+          },
+          {
+            "repeat": 0.23,
+            "sequence-up": 0.03,
+            "sequence-down": 0.04,
+            "altered-ending": 0.7
+          }
+        ],
+        "questionDegree": {
+          "2": 0.39,
+          "4": 0.22,
+          "6": 0.39
+        },
+        "cadence": {
+          "root": 0.71,
+          "third": 0.21,
+          "fifth": 0.08
+        }
+      }
+    },
+    "harmonic-minor|A|E7|4|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.19,
+          "skip-down-step-up": 0.06,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.34,
+          "arpeggio-down": 0.19,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.31,
+          "pickup-into-downbeat": 0.69
+        },
+        "variations": [
+          {
+            "repeat": 0.22,
+            "sequence-up": 0.2,
+            "sequence-down": 0.17,
+            "altered-ending": 0.41
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.15,
+            "sequence-down": 0.13,
+            "altered-ending": 0.72
+          },
+          {
+            "repeat": 0.14,
+            "sequence-up": 0.02,
+            "sequence-down": 0.03,
+            "altered-ending": 0.81
+          }
+        ],
+        "questionDegree": {
+          "2": 0.41000000000000003,
+          "4": 0.23,
+          "6": 0.36
+        },
+        "cadence": {
+          "root": 0.68,
+          "third": 0.23,
+          "fifth": 0.09
+        }
+      }
+    },
+    "harmonic-minor|A|E7|4|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.04,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.55,
+          "arpeggio-down": 0.16,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.29,
+            "sequence-up": 0.2,
+            "sequence-down": 0.14,
+            "altered-ending": 0.37
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.14,
+            "sequence-down": 0.12,
+            "altered-ending": 0.74
+          },
+          {
+            "repeat": 0.27,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.7
+          }
+        ],
+        "questionDegree": {
+          "2": 0.41,
+          "4": 0.24,
+          "6": 0.35
+        },
+        "cadence": {
+          "root": 0.77,
+          "third": 0.17,
+          "fifth": 0.06
+        }
+      }
+    },
+    "major|C|C|2|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.05,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.09,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.02,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.66,
+          "arpeggio-down": 0.03,
+          "repeat-then-step-up": 0.07,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 0.97,
+          "long-short-short": 0.01,
+          "short-short-long": 0.01,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.56,
+            "sequence-up": 0.03,
+            "sequence-down": 0.01,
+            "altered-ending": 0.4
+          }
+        ],
+        "questionDegree": {
+          "2": 0.38,
+          "4": 0.37,
+          "6": 0.25
+        },
+        "cadence": {
+          "root": 0.97,
+          "third": 0.02,
+          "fifth": 0.01
+        }
+      }
+    },
+    "major|C|C|2|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.02,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.14,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.1,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.06,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.34,
+          "arpeggio-down": 0.06,
+          "repeat-then-step-up": 0.1,
+          "repeat-then-step-down": 0.12
+        },
+        "motifRhythm": {
+          "even": 0.34,
+          "long-short-short": 0.66
+        },
+        "variations": [
+          {
+            "repeat": 0.5700000000000001,
+            "sequence-up": 0.05,
+            "sequence-down": 0.02,
+            "altered-ending": 0.36
+          }
+        ],
+        "questionDegree": {
+          "2": 0.37,
+          "4": 0.41,
+          "6": 0.22
+        },
+        "cadence": {
+          "root": 0.86,
+          "third": 0.09,
+          "fifth": 0.05
+        }
+      }
+    },
+    "major|C|C|2|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.08,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.17,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.12,
+          "skip-down-step-up": 0,
+          "upper-neighbor-turn": 0.07,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.38,
+          "arpeggio-down": 0.02,
+          "repeat-then-step-up": 0.08,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 0.35,
+          "pickup-into-downbeat": 0.65
+        },
+        "variations": [
+          {
+            "repeat": 0.4,
+            "sequence-up": 0.03,
+            "sequence-down": 0.01,
+            "altered-ending": 0.55
+          }
+        ],
+        "questionDegree": {
+          "2": 0.31,
+          "4": 0.42,
+          "6": 0.27
+        },
+        "cadence": {
+          "root": 0.95,
+          "third": 0.03,
+          "fifth": 0.02
+        }
+      }
+    },
+    "major|C|C|2|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.06,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.09,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.02,
+          "skip-down-step-up": 0,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.62,
+          "arpeggio-down": 0.02,
+          "repeat-then-step-up": 0.11,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.42,
+            "sequence-up": 0.02,
+            "sequence-down": 0.01,
+            "altered-ending": 0.55
+          }
+        ],
+        "questionDegree": {
+          "2": 0.34,
+          "4": 0.45,
+          "6": 0.21
+        },
+        "cadence": {
+          "root": 0.96,
+          "third": 0.02,
+          "fifth": 0.02
+        }
+      }
+    },
+    "major|C|C|4|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.05,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.02,
+          "skip-down-step-up": 0,
+          "upper-neighbor-turn": 0.04,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.68,
+          "arpeggio-down": 0.02,
+          "repeat-then-step-up": 0.05,
+          "repeat-then-step-down": 0.04
+        },
+        "motifRhythm": {
+          "even": 0.98,
+          "long-short-short": 0,
+          "short-short-long": 0.01,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.62,
+            "sequence-up": 0.13,
+            "sequence-down": 0.03,
+            "altered-ending": 0.22
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.3,
+            "sequence-down": 0.11,
+            "altered-ending": 0.59
+          },
+          {
+            "repeat": 0.4,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.57
+          }
+        ],
+        "questionDegree": {
+          "2": 0.5,
+          "4": 0.3,
+          "6": 0.2
+        },
+        "cadence": {
+          "root": 0.99,
+          "third": 0.01,
+          "fifth": 0
+        }
+      }
+    },
+    "major|C|G7|2|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.04,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.07,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.53,
+          "arpeggio-down": 0.22,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.97,
+          "long-short-short": 0.01,
+          "short-short-long": 0.01,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.22,
+            "sequence-up": 0.03,
+            "sequence-down": 0.04,
+            "altered-ending": 0.71
+          }
+        ],
+        "questionDegree": {
+          "2": 0.33,
+          "4": 0.33999999999999997,
+          "6": 0.33
+        },
+        "cadence": {
+          "root": 0.58,
+          "third": 0.35,
+          "fifth": 0.07
+        }
+      }
+    },
+    "major|C|G7|2|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.02,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.07,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.14,
+          "skip-down-step-up": 0.05,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.31,
+          "arpeggio-down": 0.29,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 0.4,
+          "long-short-short": 0.6
+        },
+        "variations": [
+          {
+            "repeat": 0.17,
+            "sequence-up": 0.07,
+            "sequence-down": 0.06,
+            "altered-ending": 0.7
+          }
+        ],
+        "questionDegree": {
+          "2": 0.37,
+          "4": 0.39,
+          "6": 0.24
+        },
+        "cadence": {
+          "root": 0.47,
+          "third": 0.38,
+          "fifth": 0.15
+        }
+      }
+    },
+    "major|C|G7|2|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.03,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.09,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.15,
+          "skip-down-step-up": 0.05,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.31,
+          "arpeggio-down": 0.25,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.29,
+          "pickup-into-downbeat": 0.71
+        },
+        "variations": [
+          {
+            "repeat": 0.14,
+            "sequence-up": 0.04,
+            "sequence-down": 0.06,
+            "altered-ending": 0.76
+          }
+        ],
+        "questionDegree": {
+          "2": 0.36,
+          "4": 0.4,
+          "6": 0.24
+        },
+        "cadence": {
+          "root": 0.57,
+          "third": 0.34,
+          "fifth": 0.09
+        }
+      }
+    },
+    "major|C|G7|2|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.07,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.08,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.47,
+          "arpeggio-down": 0.18,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.11,
+            "sequence-up": 0.01,
+            "sequence-down": 0.03,
+            "altered-ending": 0.85
+          }
+        ],
+        "questionDegree": {
+          "2": 0.33,
+          "4": 0.39,
+          "6": 0.28
+        },
+        "cadence": {
+          "root": 0.51,
+          "third": 0.4,
+          "fifth": 0.09
+        }
+      }
+    },
+    "major|C|G7|4|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.07,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.11,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.01,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.51,
+          "arpeggio-down": 0.15,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.97,
+          "long-short-short": 0.01,
+          "short-short-long": 0.01,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.44,
+            "sequence-up": 0.12,
+            "sequence-down": 0.14,
+            "altered-ending": 0.3
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.21,
+            "sequence-down": 0.16,
+            "altered-ending": 0.63
+          },
+          {
+            "repeat": 0.26,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.71
+          }
+        ],
+        "questionDegree": {
+          "2": 0.42,
+          "4": 0.33,
+          "6": 0.25
+        },
+        "cadence": {
+          "root": 0.62,
+          "third": 0.3,
+          "fifth": 0.08
+        }
+      }
+    },
+    "major|C|G7|4|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.02,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.04,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.09,
+          "skip-down-step-up": 0.04,
+          "upper-neighbor-turn": 0.01,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.45,
+          "arpeggio-down": 0.24,
+          "repeat-then-step-up": 0.03,
+          "repeat-then-step-down": 0.04
+        },
+        "motifRhythm": {
+          "even": 0.31,
+          "long-short-short": 0.69
+        },
+        "variations": [
+          {
+            "repeat": 0.42,
+            "sequence-up": 0.16,
+            "sequence-down": 0.17,
+            "altered-ending": 0.25
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.18,
+            "sequence-down": 0.21,
+            "altered-ending": 0.61
+          },
+          {
+            "repeat": 0.14,
+            "sequence-up": 0.01,
+            "sequence-down": 0.04,
+            "altered-ending": 0.8
+          }
+        ],
+        "questionDegree": {
+          "2": 0.4,
+          "4": 0.4,
+          "6": 0.2
+        },
+        "cadence": {
+          "root": 0.55,
+          "third": 0.33,
+          "fifth": 0.11
+        }
+      }
+    },
+    "major|C|G7|4|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.1,
+          "step-down-step-up": 0.04,
+          "skip-up-step-down": 0.15,
+          "skip-down-step-up": 0.03,
+          "upper-neighbor-turn": 0.06,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.38,
+          "arpeggio-down": 0.13,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 0.33,
+          "pickup-into-downbeat": 0.67
+        },
+        "variations": [
+          {
+            "repeat": 0.27,
+            "sequence-up": 0.18,
+            "sequence-down": 0.17,
+            "altered-ending": 0.38
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.16,
+            "sequence-down": 0.21,
+            "altered-ending": 0.63
+          },
+          {
+            "repeat": 0.21,
+            "sequence-up": 0.01,
+            "sequence-down": 0.03,
+            "altered-ending": 0.75
+          }
+        ],
+        "questionDegree": {
+          "2": 0.37,
+          "4": 0.4,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.68,
+          "third": 0.23,
+          "fifth": 0.09
+        }
+      }
+    },
+    "major|C|G7|4|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.05,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.09,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.09,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.01,
+          "lower-neighbor-turn": 0,
+          "arpeggio-up": 0.5,
+          "arpeggio-down": 0.15,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.45,
+            "sequence-up": 0.13,
+            "sequence-down": 0.12,
+            "altered-ending": 0.3
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.15,
+            "sequence-down": 0.17,
+            "altered-ending": 0.6799999999999999
+          },
+          {
+            "repeat": 0.26,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.71
+          }
+        ],
+        "questionDegree": {
+          "2": 0.36,
+          "4": 0.4,
+          "6": 0.24
+        },
+        "cadence": {
+          "root": 0.59,
+          "third": 0.35,
+          "fifth": 0.06
+        }
+      }
+    },
+    "major|F#|F#maj7|2|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.05,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.03,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.03,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.75,
+          "arpeggio-down": 0.05,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.97,
+          "long-short-short": 0,
+          "short-short-long": 0.02,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.4,
+            "sequence-up": 0.1,
+            "sequence-down": 0.03,
+            "altered-ending": 0.47
+          }
+        ],
+        "questionDegree": {
+          "2": 0.45999999999999996,
+          "4": 0.35,
+          "6": 0.19
+        },
+        "cadence": {
+          "root": 0.85,
+          "third": 0.11,
+          "fifth": 0.04
+        }
+      }
+    },
+    "major|F#|F#maj7|2|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.01,
+          "step-down-step-down": 0,
+          "step-up-step-down": 0.07,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.05,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.05,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.61,
+          "arpeggio-down": 0.07,
+          "repeat-then-step-up": 0.05,
+          "repeat-then-step-down": 0.05
+        },
+        "motifRhythm": {
+          "even": 0.4,
+          "long-short-short": 0.6
+        },
+        "variations": [
+          {
+            "repeat": 0.47,
+            "sequence-up": 0.16,
+            "sequence-down": 0.06,
+            "altered-ending": 0.31
+          }
+        ],
+        "questionDegree": {
+          "2": 0.41,
+          "4": 0.39,
+          "6": 0.2
+        },
+        "cadence": {
+          "root": 0.69,
+          "third": 0.22,
+          "fifth": 0.09
+        }
+      }
+    },
+    "major|F#|F#maj7|2|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.06,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.08,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.55,
+          "arpeggio-down": 0.07,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.31,
+          "pickup-into-downbeat": 0.69
+        },
+        "variations": [
+          {
+            "repeat": 0.28,
+            "sequence-up": 0.08,
+            "sequence-down": 0.05,
+            "altered-ending": 0.59
+          }
+        ],
+        "questionDegree": {
+          "2": 0.41,
+          "4": 0.37,
+          "6": 0.22
+        },
+        "cadence": {
+          "root": 0.75,
+          "third": 0.16,
+          "fifth": 0.09
+        }
+      }
+    },
+    "major|F#|F#maj7|2|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.06,
+          "step-down-step-down": 0,
+          "step-up-step-down": 0.04,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.05,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.01,
+          "lower-neighbor-turn": 0,
+          "arpeggio-up": 0.77,
+          "arpeggio-down": 0.02,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.43,
+            "sequence-up": 0.04,
+            "sequence-down": 0.04,
+            "altered-ending": 0.49
+          }
+        ],
+        "questionDegree": {
+          "2": 0.46,
+          "4": 0.36,
+          "6": 0.18
+        },
+        "cadence": {
+          "root": 0.9,
+          "third": 0.08,
+          "fifth": 0.02
+        }
+      }
+    },
+    "major|F#|F#maj7|4|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.04,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.04,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.75,
+          "arpeggio-down": 0.04,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.97,
+          "long-short-short": 0,
+          "short-short-long": 0.02,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.52,
+            "sequence-up": 0.27,
+            "sequence-down": 0.07,
+            "altered-ending": 0.14
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.27,
+            "sequence-down": 0.13,
+            "altered-ending": 0.6
+          },
+          {
+            "repeat": 0.42,
+            "sequence-up": 0.02,
+            "sequence-down": 0.02,
+            "altered-ending": 0.54
+          }
+        ],
+        "questionDegree": {
+          "2": 0.47,
+          "4": 0.36,
+          "6": 0.17
+        },
+        "cadence": {
+          "root": 0.88,
+          "third": 0.1,
+          "fifth": 0.02
+        }
+      }
+    },
+    "major|F#|F#maj7|4|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.01,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.08,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.63,
+          "arpeggio-down": 0.05,
+          "repeat-then-step-up": 0.06,
+          "repeat-then-step-down": 0.03
+        },
+        "motifRhythm": {
+          "even": 0.35,
+          "long-short-short": 0.65
+        },
+        "variations": [
+          {
+            "repeat": 0.47,
+            "sequence-up": 0.3,
+            "sequence-down": 0.07,
+            "altered-ending": 0.16
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.24,
+            "sequence-down": 0.11,
+            "altered-ending": 0.65
+          },
+          {
+            "repeat": 0.24,
+            "sequence-up": 0.02,
+            "sequence-down": 0.05,
+            "altered-ending": 0.69
+          }
+        ],
+        "questionDegree": {
+          "2": 0.54,
+          "4": 0.33,
+          "6": 0.13
+        },
+        "cadence": {
+          "root": 0.75,
+          "third": 0.18,
+          "fifth": 0.07
+        }
+      }
+    },
+    "major|F#|F#maj7|4|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.08,
+          "step-down-step-down": 0.01,
+          "step-up-step-down": 0.04,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.04,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.71,
+          "arpeggio-down": 0.04,
+          "repeat-then-step-up": 0.01,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 0.28,
+          "pickup-into-downbeat": 0.72
+        },
+        "variations": [
+          {
+            "repeat": 0.4,
+            "sequence-up": 0.18,
+            "sequence-down": 0.09,
+            "altered-ending": 0.33
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.16,
+            "sequence-down": 0.16,
+            "altered-ending": 0.68
+          },
+          {
+            "repeat": 0.24,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.73
+          }
+        ],
+        "questionDegree": {
+          "2": 0.5,
+          "4": 0.34,
+          "6": 0.16
+        },
+        "cadence": {
+          "root": 0.88,
+          "third": 0.09,
+          "fifth": 0.03
+        }
+      }
+    },
+    "major|F#|F#maj7|4|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.03,
+          "step-down-step-down": 0,
+          "step-up-step-down": 0.04,
+          "step-down-step-up": 0.01,
+          "skip-up-step-down": 0.02,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.01,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.8,
+          "arpeggio-down": 0.03,
+          "repeat-then-step-up": 0.03,
+          "repeat-then-step-down": 0.01
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.54,
+            "sequence-up": 0.17,
+            "sequence-down": 0.14,
+            "altered-ending": 0.15
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.17,
+            "sequence-down": 0.2,
+            "altered-ending": 0.63
+          },
+          {
+            "repeat": 0.27,
+            "sequence-up": 0.01,
+            "sequence-down": 0.01,
+            "altered-ending": 0.71
+          }
+        ],
+        "questionDegree": {
+          "2": 0.51,
+          "4": 0.34,
+          "6": 0.15
+        },
+        "cadence": {
+          "root": 0.96,
+          "third": 0.03,
+          "fifth": 0.01
+        }
+      }
+    },
+    "minor-blues|C|C7|2|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.05,
+          "step-down-step-down": 0.05,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.04,
+          "skip-up-step-down": 0.13,
+          "skip-down-step-up": 0.09,
+          "upper-neighbor-turn": 0.09,
+          "lower-neighbor-turn": 0.09,
+          "arpeggio-up": 0.16,
+          "arpeggio-down": 0.06,
+          "repeat-then-step-up": 0.08,
+          "repeat-then-step-down": 0.1
+        },
+        "motifRhythm": {
+          "even": 0.95,
+          "long-short-short": 0.01,
+          "short-short-long": 0.03,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.25,
+            "sequence-up": 0.04,
+            "sequence-down": 0.02,
+            "altered-ending": 0.69
+          }
+        ],
+        "questionDegree": {
+          "2": 0.31,
+          "4": 0.49,
+          "6": 0.2
+        },
+        "cadence": {
+          "root": 0.81,
+          "third": 0.14,
+          "fifth": 0.05
+        }
+      }
+    },
+    "minor-blues|C|C7|2|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.01,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.12,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.29,
+          "skip-down-step-up": 0.07,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.06,
+          "arpeggio-up": 0.1,
+          "arpeggio-down": 0.09,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.13
+        },
+        "motifRhythm": {
+          "even": 0.45,
+          "long-short-short": 0.55
+        },
+        "variations": [
+          {
+            "repeat": 0.35,
+            "sequence-up": 0.14,
+            "sequence-down": 0.07,
+            "altered-ending": 0.44
+          }
+        ],
+        "questionDegree": {
+          "2": 0.26,
+          "4": 0.53,
+          "6": 0.21
+        },
+        "cadence": {
+          "root": 0.63,
+          "third": 0.25,
+          "fifth": 0.12
+        }
+      }
+    },
+    "minor-blues|C|C7|2|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.03,
+          "step-down-step-down": 0.04,
+          "step-up-step-down": 0.1,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.2,
+          "skip-down-step-up": 0.08,
+          "upper-neighbor-turn": 0.08,
+          "lower-neighbor-turn": 0.16,
+          "arpeggio-up": 0.09,
+          "arpeggio-down": 0.05,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.1
+        },
+        "motifRhythm": {
+          "even": 0.22,
+          "pickup-into-downbeat": 0.78
+        },
+        "variations": [
+          {
+            "repeat": 0.26,
+            "sequence-up": 0.06,
+            "sequence-down": 0.05,
+            "altered-ending": 0.63
+          }
+        ],
+        "questionDegree": {
+          "2": 0.27,
+          "4": 0.53,
+          "6": 0.2
+        },
+        "cadence": {
+          "root": 0.73,
+          "third": 0.2,
+          "fifth": 0.07
+        }
+      }
+    },
+    "minor-blues|C|C7|2|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.03,
+          "step-down-step-down": 0.06,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.04,
+          "skip-up-step-down": 0.12,
+          "skip-down-step-up": 0.06,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.08,
+          "arpeggio-up": 0.21,
+          "arpeggio-down": 0.17,
+          "repeat-then-step-up": 0.05,
+          "repeat-then-step-down": 0.09
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.32,
+            "sequence-up": 0.06,
+            "sequence-down": 0.03,
+            "altered-ending": 0.59
+          }
+        ],
+        "questionDegree": {
+          "2": 0.37,
+          "4": 0.47,
+          "6": 0.16
+        },
+        "cadence": {
+          "root": 0.86,
+          "third": 0.1,
+          "fifth": 0.04
+        }
+      }
+    },
+    "minor-blues|C|C7|4|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.04,
+          "step-up-step-down": 0.05,
+          "step-down-step-up": 0.05,
+          "skip-up-step-down": 0.15,
+          "skip-down-step-up": 0.11,
+          "upper-neighbor-turn": 0.07,
+          "lower-neighbor-turn": 0.1,
+          "arpeggio-up": 0.19,
+          "arpeggio-down": 0.06,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.1
+        },
+        "motifRhythm": {
+          "even": 0.96,
+          "long-short-short": 0.01,
+          "short-short-long": 0.02,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.47,
+            "sequence-up": 0.09,
+            "sequence-down": 0.05,
+            "altered-ending": 0.39
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.13,
+            "sequence-down": 0.1,
+            "altered-ending": 0.77
+          },
+          {
+            "repeat": 0.36,
+            "sequence-up": 0.02,
+            "sequence-down": 0.02,
+            "altered-ending": 0.6
+          }
+        ],
+        "questionDegree": {
+          "2": 0.3,
+          "4": 0.45999999999999996,
+          "6": 0.24
+        },
+        "cadence": {
+          "root": 0.85,
+          "third": 0.11,
+          "fifth": 0.04
+        }
+      }
+    },
+    "minor-blues|C|C7|4|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.01,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.09,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.22,
+          "skip-down-step-up": 0.07,
+          "upper-neighbor-turn": 0.04,
+          "lower-neighbor-turn": 0.08,
+          "arpeggio-up": 0.19,
+          "arpeggio-down": 0.13,
+          "repeat-then-step-up": 0.05,
+          "repeat-then-step-down": 0.08
+        },
+        "motifRhythm": {
+          "even": 0.33,
+          "long-short-short": 0.67
+        },
+        "variations": [
+          {
+            "repeat": 0.46,
+            "sequence-up": 0.17,
+            "sequence-down": 0.1,
+            "altered-ending": 0.27
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.16,
+            "sequence-down": 0.07,
+            "altered-ending": 0.77
+          },
+          {
+            "repeat": 0.3,
+            "sequence-up": 0.02,
+            "sequence-down": 0.02,
+            "altered-ending": 0.66
+          }
+        ],
+        "questionDegree": {
+          "2": 0.3,
+          "4": 0.48,
+          "6": 0.22
+        },
+        "cadence": {
+          "root": 0.76,
+          "third": 0.17,
+          "fifth": 0.07
+        }
+      }
+    },
+    "minor-blues|C|C7|4|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.03,
+          "step-down-step-down": 0.08,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.05,
+          "skip-up-step-down": 0.16,
+          "skip-down-step-up": 0.13,
+          "upper-neighbor-turn": 0.08,
+          "lower-neighbor-turn": 0.1,
+          "arpeggio-up": 0.12,
+          "arpeggio-down": 0.1,
+          "repeat-then-step-up": 0.03,
+          "repeat-then-step-down": 0.06
+        },
+        "motifRhythm": {
+          "even": 0.33,
+          "pickup-into-downbeat": 0.67
+        },
+        "variations": [
+          {
+            "repeat": 0.32,
+            "sequence-up": 0.12,
+            "sequence-down": 0.07,
+            "altered-ending": 0.49
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.19,
+            "sequence-down": 0.1,
+            "altered-ending": 0.71
+          },
+          {
+            "repeat": 0.19,
+            "sequence-up": 0.02,
+            "sequence-down": 0.02,
+            "altered-ending": 0.77
+          }
+        ],
+        "questionDegree": {
+          "2": 0.31,
+          "4": 0.49,
+          "6": 0.2
+        },
+        "cadence": {
+          "root": 0.87,
+          "third": 0.09,
+          "fifth": 0.04
+        }
+      }
+    },
+    "minor-blues|C|C7|4|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.05,
+          "step-down-step-down": 0.04,
+          "step-up-step-down": 0.08,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.2,
+          "skip-down-step-up": 0.08,
+          "upper-neighbor-turn": 0.09,
+          "lower-neighbor-turn": 0.07,
+          "arpeggio-up": 0.15,
+          "arpeggio-down": 0.05,
+          "repeat-then-step-up": 0.07,
+          "repeat-then-step-down": 0.09
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.38,
+            "sequence-up": 0.13,
+            "sequence-down": 0.05,
+            "altered-ending": 0.44
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.16,
+            "sequence-down": 0.11,
+            "altered-ending": 0.73
+          },
+          {
+            "repeat": 0.19,
+            "sequence-up": 0.01,
+            "sequence-down": 0.01,
+            "altered-ending": 0.79
+          }
+        ],
+        "questionDegree": {
+          "2": 0.26,
+          "4": 0.56,
+          "6": 0.18
+        },
+        "cadence": {
+          "root": 0.89,
+          "third": 0.08,
+          "fifth": 0.03
+        }
+      }
+    },
+    "minor-pentatonic|C|Cm|2|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.03,
+          "step-down-step-down": 0.08,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.1,
+          "skip-down-step-up": 0.07,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.28,
+          "arpeggio-down": 0.14,
+          "repeat-then-step-up": 0.06,
+          "repeat-then-step-down": 0.09
+        },
+        "motifRhythm": {
+          "even": 0.96,
+          "long-short-short": 0.01,
+          "short-short-long": 0.02,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.31,
+            "sequence-up": 0.04,
+            "sequence-down": 0.04,
+            "altered-ending": 0.61
+          }
+        ],
+        "questionDegree": {
+          "2": 0.35,
+          "4": 0.38,
+          "6": 0.27
+        },
+        "cadence": {
+          "root": 0.83,
+          "third": 0.14,
+          "fifth": 0.03
+        }
+      }
+    },
+    "minor-pentatonic|C|Cm|2|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.03,
+          "step-down-step-down": 0.06,
+          "step-up-step-down": 0.11,
+          "step-down-step-up": 0.05,
+          "skip-up-step-down": 0.14,
+          "skip-down-step-up": 0.1,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.16,
+          "arpeggio-down": 0.13,
+          "repeat-then-step-up": 0.06,
+          "repeat-then-step-down": 0.12
+        },
+        "motifRhythm": {
+          "even": 0.42,
+          "long-short-short": 0.58
+        },
+        "variations": [
+          {
+            "repeat": 0.29,
+            "sequence-up": 0.1,
+            "sequence-down": 0.08,
+            "altered-ending": 0.53
+          }
+        ],
+        "questionDegree": {
+          "2": 0.29,
+          "4": 0.48,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.77,
+          "third": 0.16,
+          "fifth": 0.07
+        }
+      }
+    },
+    "minor-pentatonic|C|Cm|2|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.05,
+          "step-down-step-down": 0.08,
+          "step-up-step-down": 0.09,
+          "step-down-step-up": 0.06,
+          "skip-up-step-down": 0.14,
+          "skip-down-step-up": 0.11,
+          "upper-neighbor-turn": 0.06,
+          "lower-neighbor-turn": 0.04,
+          "arpeggio-up": 0.12,
+          "arpeggio-down": 0.08,
+          "repeat-then-step-up": 0.05,
+          "repeat-then-step-down": 0.12
+        },
+        "motifRhythm": {
+          "even": 0.24,
+          "pickup-into-downbeat": 0.76
+        },
+        "variations": [
+          {
+            "repeat": 0.35,
+            "sequence-up": 0.04,
+            "sequence-down": 0.08,
+            "altered-ending": 0.53
+          }
+        ],
+        "questionDegree": {
+          "2": 0.32,
+          "4": 0.44,
+          "6": 0.24
+        },
+        "cadence": {
+          "root": 0.88,
+          "third": 0.08,
+          "fifth": 0.04
+        }
+      }
+    },
+    "minor-pentatonic|C|Cm|2|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.06,
+          "step-up-step-down": 0.03,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.06,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.24,
+          "arpeggio-down": 0.17,
+          "repeat-then-step-up": 0.1,
+          "repeat-then-step-down": 0.15
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.35,
+            "sequence-up": 0.04,
+            "sequence-down": 0.05,
+            "altered-ending": 0.56
+          }
+        ],
+        "questionDegree": {
+          "2": 0.31,
+          "4": 0.41,
+          "6": 0.28
+        },
+        "cadence": {
+          "root": 0.86,
+          "third": 0.12,
+          "fifth": 0.02
+        }
+      }
+    },
+    "minor-pentatonic|C|Cm|4|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.05,
+          "step-up-step-down": 0.05,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.11,
+          "skip-down-step-up": 0.08,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.21,
+          "arpeggio-down": 0.19,
+          "repeat-then-step-up": 0.08,
+          "repeat-then-step-down": 0.12
+        },
+        "motifRhythm": {
+          "even": 0.96,
+          "long-short-short": 0.01,
+          "short-short-long": 0.02,
+          "pickup-into-downbeat": 0.01
+        },
+        "variations": [
+          {
+            "repeat": 0.53,
+            "sequence-up": 0.13,
+            "sequence-down": 0.12,
+            "altered-ending": 0.22
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.21,
+            "sequence-down": 0.1,
+            "altered-ending": 0.69
+          },
+          {
+            "repeat": 0.31,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.66
+          }
+        ],
+        "questionDegree": {
+          "2": 0.35,
+          "4": 0.4,
+          "6": 0.25
+        },
+        "cadence": {
+          "root": 0.93,
+          "third": 0.05,
+          "fifth": 0.02
+        }
+      }
+    },
+    "minor-pentatonic|C|Cm|4|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.02,
+          "step-down-step-down": 0.06,
+          "step-up-step-down": 0.05,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.12,
+          "skip-down-step-up": 0.06,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.17,
+          "arpeggio-down": 0.15,
+          "repeat-then-step-up": 0.08,
+          "repeat-then-step-down": 0.23
+        },
+        "motifRhythm": {
+          "even": 0.49,
+          "long-short-short": 0.51
+        },
+        "variations": [
+          {
+            "repeat": 0.39999999999999997,
+            "sequence-up": 0.18,
+            "sequence-down": 0.14,
+            "altered-ending": 0.28
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.13,
+            "sequence-down": 0.11,
+            "altered-ending": 0.76
+          },
+          {
+            "repeat": 0.28,
+            "sequence-up": 0.01,
+            "sequence-down": 0.03,
+            "altered-ending": 0.67
+          }
+        ],
+        "questionDegree": {
+          "2": 0.36,
+          "4": 0.41,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.84,
+          "third": 0.12,
+          "fifth": 0.04
+        }
+      }
+    },
+    "minor-pentatonic|C|Cm|4|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.09,
+          "step-down-step-down": 0.06,
+          "step-up-step-down": 0.07,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.16,
+          "skip-down-step-up": 0.15,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.03,
+          "arpeggio-up": 0.12,
+          "arpeggio-down": 0.16,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.07
+        },
+        "motifRhythm": {
+          "even": 0.41,
+          "pickup-into-downbeat": 0.59
+        },
+        "variations": [
+          {
+            "repeat": 0.29,
+            "sequence-up": 0.2,
+            "sequence-down": 0.18,
+            "altered-ending": 0.33
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.21,
+            "sequence-down": 0.12,
+            "altered-ending": 0.67
+          },
+          {
+            "repeat": 0.26,
+            "sequence-up": 0.02,
+            "sequence-down": 0.04,
+            "altered-ending": 0.68
+          }
+        ],
+        "questionDegree": {
+          "2": 0.32,
+          "4": 0.44,
+          "6": 0.24
+        },
+        "cadence": {
+          "root": 0.92,
+          "third": 0.06,
+          "fifth": 0.02
+        }
+      }
+    },
+    "minor-pentatonic|C|Cm|4|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.06,
+          "step-down-step-down": 0.08,
+          "step-up-step-down": 0.05,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.09,
+          "skip-down-step-up": 0.07,
+          "upper-neighbor-turn": 0.01,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.26,
+          "arpeggio-down": 0.14,
+          "repeat-then-step-up": 0.07,
+          "repeat-then-step-down": 0.13
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.52,
+            "sequence-up": 0.14,
+            "sequence-down": 0.11,
+            "altered-ending": 0.23
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.2,
+            "sequence-down": 0.1,
+            "altered-ending": 0.7
+          },
+          {
+            "repeat": 0.36,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.61
+          }
+        ],
+        "questionDegree": {
+          "2": 0.36,
+          "4": 0.38,
+          "6": 0.26
+        },
+        "cadence": {
+          "root": 0.95,
+          "third": 0.03,
+          "fifth": 0.02
+        }
+      }
+    },
+    "mixolydian|Bb|Bb7|2|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.06,
+          "step-down-step-down": 0.04,
+          "step-up-step-down": 0.05,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.04,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.03,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.55,
+          "arpeggio-down": 0.12,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 0.95,
+          "long-short-short": 0.01,
+          "short-short-long": 0.02,
+          "pickup-into-downbeat": 0.02
+        },
+        "variations": [
+          {
+            "repeat": 0.28,
+            "sequence-up": 0.04,
+            "sequence-down": 0.04,
+            "altered-ending": 0.64
+          }
+        ],
+        "questionDegree": {
+          "2": 0.42,
+          "4": 0.33,
+          "6": 0.25
+        },
+        "cadence": {
+          "root": 0.85,
+          "third": 0.09,
+          "fifth": 0.06
+        }
+      }
+    },
+    "mixolydian|Bb|Bb7|2|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.02,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.14,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.04,
+          "upper-neighbor-turn": 0.05,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.32,
+          "arpeggio-down": 0.2,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.04
+        },
+        "motifRhythm": {
+          "even": 0.39,
+          "long-short-short": 0.61
+        },
+        "variations": [
+          {
+            "repeat": 0.43,
+            "sequence-up": 0.09,
+            "sequence-down": 0.09,
+            "altered-ending": 0.39
+          }
+        ],
+        "questionDegree": {
+          "2": 0.43,
+          "4": 0.34,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.64,
+          "third": 0.21,
+          "fifth": 0.15
+        }
+      }
+    },
+    "mixolydian|Bb|Bb7|2|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.11,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.14,
+          "skip-down-step-up": 0.03,
+          "upper-neighbor-turn": 0.1,
+          "lower-neighbor-turn": 0.04,
+          "arpeggio-up": 0.27,
+          "arpeggio-down": 0.17,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 0.21,
+          "pickup-into-downbeat": 0.79
+        },
+        "variations": [
+          {
+            "repeat": 0.21,
+            "sequence-up": 0.08,
+            "sequence-down": 0.08,
+            "altered-ending": 0.63
+          }
+        ],
+        "questionDegree": {
+          "2": 0.45,
+          "4": 0.33,
+          "6": 0.22
+        },
+        "cadence": {
+          "root": 0.79,
+          "third": 0.1,
+          "fifth": 0.11
+        }
+      }
+    },
+    "mixolydian|Bb|Bb7|2|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.07,
+          "step-down-step-down": 0.02,
+          "step-up-step-down": 0.07,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.06,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.37,
+          "arpeggio-down": 0.26,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.04
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.3,
+            "sequence-up": 0.05,
+            "sequence-down": 0.04,
+            "altered-ending": 0.61
+          }
+        ],
+        "questionDegree": {
+          "2": 0.45999999999999996,
+          "4": 0.3,
+          "6": 0.24
+        },
+        "cadence": {
+          "root": 0.89,
+          "third": 0.07,
+          "fifth": 0.04
+        }
+      }
+    },
+    "mixolydian|Bb|Bb7|4|eighths": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.06,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.07,
+          "step-down-step-up": 0.02,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.02,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.5,
+          "arpeggio-down": 0.15,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 0.9299999999999999,
+          "long-short-short": 0.02,
+          "short-short-long": 0.03,
+          "pickup-into-downbeat": 0.02
+        },
+        "variations": [
+          {
+            "repeat": 0.45,
+            "sequence-up": 0.13,
+            "sequence-down": 0.1,
+            "altered-ending": 0.32
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.22,
+            "sequence-down": 0.16,
+            "altered-ending": 0.62
+          },
+          {
+            "repeat": 0.37,
+            "sequence-up": 0.01,
+            "sequence-down": 0.03,
+            "altered-ending": 0.59
+          }
+        ],
+        "questionDegree": {
+          "2": 0.42,
+          "4": 0.35,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.9,
+          "third": 0.06,
+          "fifth": 0.04
+        }
+      }
+    },
+    "mixolydian|Bb|Bb7|4|long-short": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.02,
+          "step-down-step-down": 0.04,
+          "step-up-step-down": 0.06,
+          "step-down-step-up": 0.05,
+          "skip-up-step-down": 0.08,
+          "skip-down-step-up": 0.04,
+          "upper-neighbor-turn": 0.04,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.33999999999999997,
+          "arpeggio-down": 0.23,
+          "repeat-then-step-up": 0.04,
+          "repeat-then-step-down": 0.04
+        },
+        "motifRhythm": {
+          "even": 0.3,
+          "long-short-short": 0.7
+        },
+        "variations": [
+          {
+            "repeat": 0.41,
+            "sequence-up": 0.19,
+            "sequence-down": 0.16,
+            "altered-ending": 0.24
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.2,
+            "sequence-down": 0.12,
+            "altered-ending": 0.68
+          },
+          {
+            "repeat": 0.31,
+            "sequence-up": 0.01,
+            "sequence-down": 0.02,
+            "altered-ending": 0.66
+          }
+        ],
+        "questionDegree": {
+          "2": 0.45,
+          "4": 0.32,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.83,
+          "third": 0.1,
+          "fifth": 0.07
+        }
+      }
+    },
+    "mixolydian|Bb|Bb7|4|push": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.04,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.08,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.09,
+          "skip-down-step-up": 0.05,
+          "upper-neighbor-turn": 0.06,
+          "lower-neighbor-turn": 0.02,
+          "arpeggio-up": 0.37,
+          "arpeggio-down": 0.19,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.02
+        },
+        "motifRhythm": {
+          "even": 0.34,
+          "pickup-into-downbeat": 0.66
+        },
+        "variations": [
+          {
+            "repeat": 0.41000000000000003,
+            "sequence-up": 0.16,
+            "sequence-down": 0.14,
+            "altered-ending": 0.29
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.19,
+            "sequence-down": 0.17,
+            "altered-ending": 0.64
+          },
+          {
+            "repeat": 0.24,
+            "sequence-up": 0.02,
+            "sequence-down": 0.04,
+            "altered-ending": 0.7
+          }
+        ],
+        "questionDegree": {
+          "2": 0.44,
+          "4": 0.31,
+          "6": 0.25
+        },
+        "cadence": {
+          "root": 0.89,
+          "third": 0.06,
+          "fifth": 0.05
+        }
+      }
+    },
+    "mixolydian|Bb|Bb7|4|quarters": {
+      "model": "jev-1.13.0",
+      "distributions": {
+        "motifContour": {
+          "step-up-step-up": 0.07,
+          "step-down-step-down": 0.03,
+          "step-up-step-down": 0.07,
+          "step-down-step-up": 0.03,
+          "skip-up-step-down": 0.06,
+          "skip-down-step-up": 0.01,
+          "upper-neighbor-turn": 0.02,
+          "lower-neighbor-turn": 0.01,
+          "arpeggio-up": 0.47,
+          "arpeggio-down": 0.17,
+          "repeat-then-step-up": 0.02,
+          "repeat-then-step-down": 0.04
+        },
+        "motifRhythm": {
+          "even": 1
+        },
+        "variations": [
+          {
+            "repeat": 0.45,
+            "sequence-up": 0.14,
+            "sequence-down": 0.15,
+            "altered-ending": 0.26
+          },
+          {
+            "repeat": 0,
+            "sequence-up": 0.19,
+            "sequence-down": 0.1,
+            "altered-ending": 0.71
+          },
+          {
+            "repeat": 0.32,
+            "sequence-up": 0.01,
+            "sequence-down": 0.03,
+            "altered-ending": 0.64
+          }
+        ],
+        "questionDegree": {
+          "2": 0.45,
+          "4": 0.32,
+          "6": 0.23
+        },
+        "cadence": {
+          "root": 0.91,
+          "third": 0.06,
+          "fifth": 0.03
+        }
+      }
+    }
+  }
+}

@@ -1,5 +1,19 @@
 import { mod, patterns, TUNING, type Note, type Pattern } from './music.ts';
 import type { PhraseFretMark } from './phrase-marks.ts';
+import {
+  BAR_VARIATIONS,
+  contourDeltas,
+  isQuestionDegree,
+  motifBeatLimit,
+  motifRoleIndexes,
+  questionHits,
+  rollShape,
+  sanitizeShape,
+  scaleDegreeNumber,
+  type BarVariation,
+  type PhraseShapePlan,
+  type QuestionDegree,
+} from './phrase-shape.ts';
 
 /**
  * Rule-based phrase generator.
@@ -82,6 +96,8 @@ export type PhrasePlan = {
   rhythm: RhythmId;
   register: RegisterName;
   cadence: CadenceTarget;
+  /** Absent on the live path. Present when a shaped plan was realized. */
+  shape?: PhraseShapePlan;
 };
 
 /** Songwriting locks. A later step can pin any of these and save the rest. */
@@ -101,11 +117,22 @@ export type PhrasePlannerInput = {
   signal: AbortSignal;
   scaleLabel?: string;
   chordSymbol?: string;
+  /** Closed scale id for the planner route. The panel does not set this. */
+  scaleId?: string;
+  scaleRoot?: string;
 };
 
-/** One proposal per phrase. Invalid fields are ignored; a failure falls back. */
+/**
+ * One proposal per phrase. Invalid fields are ignored; a failure falls back.
+ * `alternates` are further draws from the same distribution. The realizer
+ * tries them before it drops the shape. They are not stored on the phrase.
+ */
 export type PhrasePlanner = {
-  propose(input: PhrasePlannerInput): Promise<Partial<PhrasePlan> | null>;
+  propose(
+    input: PhrasePlannerInput,
+  ): Promise<
+    (Partial<PhrasePlan> & { alternates?: readonly PhraseShapePlan[] }) | null
+  >;
 };
 
 export type PhraseNote = {
@@ -469,19 +496,25 @@ export function rulePlan(
   seed: number,
   available: readonly CadenceTarget[],
   locks?: PhraseLocks,
+  bars: 2 | 4 = 4,
 ): PhrasePlan {
   const random = mulberry32(seed);
   const choices: readonly CadenceTarget[] = available.length
     ? available
     : ['root'];
-  // Roll every field before applying locks so a lock does not reshuffle the rest.
+  // Roll the original four fields first, so a shape draw cannot move them.
+  const contour = CONTOURS[Math.floor(random() * CONTOURS.length)];
+  const rhythm = RHYTHMS[Math.floor(random() * RHYTHMS.length)];
+  const register = REGISTERS[Math.floor(random() * REGISTERS.length)];
+  const cadence = choices[Math.floor(random() * choices.length)] ?? 'root';
   const rolled: PhrasePlan = {
-    contour: CONTOURS[Math.floor(random() * CONTOURS.length)],
-    rhythm: RHYTHMS[Math.floor(random() * RHYTHMS.length)],
-    register: REGISTERS[Math.floor(random() * REGISTERS.length)],
-    cadence: choices[Math.floor(random() * choices.length)] ?? 'root',
+    contour,
+    rhythm,
+    register,
+    cadence,
+    shape: rollShape(random, bars, rhythm),
   };
-  return applyLocks(rolled, locks, choices);
+  return applyLocks(rolled, locks, choices, bars);
 }
 
 function sanitizePlan(
@@ -501,6 +534,14 @@ function sanitizePlan(
     available.includes(partial.cadence as CadenceTarget)
   )
     plan.cadence = partial.cadence;
+  const bars = partial.shape?.variations.length === 1 ? 2 : 4;
+  const grid = plan.rhythm ?? partial.rhythm;
+  const shape = sanitizeShape(
+    partial.shape,
+    bars,
+    grid && RHYTHMS.includes(grid) ? grid : undefined,
+  );
+  if (shape) plan.shape = shape;
   return plan;
 }
 
@@ -508,6 +549,7 @@ function applyLocks(
   plan: PhrasePlan,
   locks: PhraseLocks | undefined,
   available: readonly CadenceTarget[],
+  bars?: 2 | 4,
 ): PhrasePlan {
   const cadence =
     locks?.cadence && available.includes(locks.cadence)
@@ -515,12 +557,24 @@ function applyLocks(
       : available.includes(plan.cadence)
         ? plan.cadence
         : (available[0] ?? 'root');
+  const rhythm = locks?.rhythm ?? plan.rhythm;
+  const span = bars ?? (plan.shape?.variations.length === 1 ? 2 : 4);
+  const shape = plan.shape
+    ? sanitizeShape(plan.shape, span, rhythm)
+    : undefined;
   return {
     contour: locks?.contour ?? plan.contour,
-    rhythm: locks?.rhythm ?? plan.rhythm,
+    rhythm,
     register: locks?.register ?? plan.register,
     cadence,
+    ...(shape ? { shape } : {}),
   };
+}
+
+function withoutShape(plan: PhrasePlan): PhrasePlan {
+  if (!plan.shape) return plan;
+  const { shape: _shape, ...bare } = plan;
+  return bare;
 }
 
 export function phraseSnapshot(input: {
@@ -1683,6 +1737,7 @@ export function breakLoopsKeepArch(
   ladder: readonly LadderTone[],
   events: readonly GridEvent[],
   plan: PhrasePlan,
+  pinned?: ReadonlySet<number>,
 ): number[] {
   const current = indexes.slice();
   const cadence = current[current.length - 1];
@@ -1726,6 +1781,7 @@ export function breakLoopsKeepArch(
       return previous;
     };
     for (let index = 0; index < current.length - 1; index++) {
+      if (pinned?.has(index)) continue;
       for (const option of pitchChoices(current[index], ladder.length)) {
         if (index > 0 && option === current[index - 1]) continue;
         if (events[index].strong && !ladder[option].chordTone) continue;
@@ -1749,7 +1805,12 @@ export function breakLoopsKeepArch(
     }
     if (!best) {
       for (let index = 1; index < current.length - 1; index++) {
-        if (!events[index].strong) continue;
+        if (
+          !events[index].strong ||
+          pinned?.has(index) ||
+          pinned?.has(index - 1)
+        )
+          continue;
         const chord = ladder.flatMap((tone, toneIndex) =>
           tone.chordTone ? [toneIndex] : [],
         );
@@ -2077,6 +2138,7 @@ function spreadVariety(
   chordPcs: ReadonlySet<number>,
   plan: PhrasePlan,
   forms: readonly Pattern[],
+  protectIndex = -1,
 ): PhraseNote[] {
   const spelled = noteByPc(scaleNotes);
   const scalePcs = new Set(scaleNotes.map((note) => note.pc));
@@ -2106,6 +2168,7 @@ function spreadVariety(
         plan,
         low,
         high,
+        protectIndex,
       ) ??
       chainVariety(
         current,
@@ -2118,6 +2181,7 @@ function spreadVariety(
         placed,
         low,
         high,
+        protectIndex,
       );
     if (!opened) break;
     current = opened;
@@ -2384,6 +2448,7 @@ function openNarrowRun(
   plan: PhrasePlan,
   low: number,
   high: number,
+  protectIndex = -1,
 ): PhraseNote[] | null {
   const midis = notes.map((note) => note.midi);
   const baseCell = phraseCellLength(midis);
@@ -2471,6 +2536,7 @@ function openNarrowRun(
     index++
   ) {
     if (index >= notes.length - 1 || notes[index].strong) continue;
+    if (index === protectIndex) continue;
     const previous = notes[index - 1].midi;
     const atEnd = index + 1 === notes.length - 1;
     const options = new Set<number>([
@@ -2509,7 +2575,7 @@ function openNarrowRun(
         )
           consider(one, gap);
       }
-      if (atEnd) continue;
+      if (atEnd || index + 1 === protectIndex) continue;
       const seconds = new Set<number>([
         ...degreesFrom(target, 1, scalePcs, low, high),
         ...degreesFrom(target, 2, scalePcs, low, high),
@@ -2553,6 +2619,7 @@ function chainVariety(
   placed: readonly FingeredNote[],
   low: number,
   high: number,
+  protectIndex = -1,
 ): PhraseNote[] | null {
   const midis = notes.map((note) => note.midi);
   const baseCell = phraseCellLength(midis);
@@ -2695,7 +2762,8 @@ function chainVariety(
       }
       const prev = index === 0 ? null : trial[index - 1].midi;
       let options = choices(index, prev);
-      if (pending && prev !== null) {
+      if (index === protectIndex) options = [notes[index].midi];
+      else if (pending && prev !== null) {
         const step = adjacentScaleMidi(prev, -pending.dir, scalePcs);
         options =
           step !== null && pitchAllowed(step, notes[index].midi, low, high)
@@ -2923,6 +2991,1194 @@ function moveCost(
   return cost;
 }
 
+/** One original shape plus this many seeded redraws from the same distribution. */
+const SHAPE_REDRAWS = 12;
+
+type ShapeFit = {
+  ladder: readonly LadderTone[];
+  events: readonly GridEvent[];
+  cadenceIndex: number;
+  scalePcs: Set<number>;
+  low: number;
+  high: number;
+  bare: readonly number[];
+  plan: PhrasePlan;
+  /** `reach[steps][index]` can walk to the cadence in that many scale steps. */
+  reach?: boolean[][];
+};
+
+function shiftDegree(degree: number, delta: number): number {
+  return ((((degree - 1 + delta) % 7) + 7) % 7) + 1;
+}
+
+function degreeAt(ladder: readonly LadderTone[], index: number): number | null {
+  const tone = ladder[index];
+  if (!tone) return null;
+  return scaleDegreeNumber(tone.note.degree);
+}
+
+/** Same scale tones an octave up or down, so a weak note can leave the register. */
+function extendLadder(ladder: readonly LadderTone[]): LadderTone[] {
+  const have = new Set(ladder.map((tone) => tone.midi));
+  const low = TUNING[0];
+  const high = TUNING[TUNING.length - 1] + 24;
+  const extra: LadderTone[] = [];
+  for (const tone of ladder) {
+    for (const midi of [tone.midi - 12, tone.midi + 12]) {
+      if (midi < low || midi > high || have.has(midi)) continue;
+      have.add(midi);
+      extra.push({ midi, note: tone.note, chordTone: tone.chordTone });
+    }
+  }
+  return ladder.concat(extra);
+}
+
+function fitMotion(fit: ShapeFit, from: number, to: number) {
+  return melodicMotion(
+    fit.ladder[from].midi,
+    fit.ladder[to].midi,
+    fit.scalePcs,
+  );
+}
+
+function oppositeStep(
+  fit: ShapeFit,
+  from: number,
+  mid: number,
+  to: number,
+): boolean {
+  if (fitMotion(fit, mid, to) !== 'step') return false;
+  const midMidi = fit.ladder[mid].midi;
+  return (
+    Math.sign(fit.ladder[to].midi - midMidi) ===
+    -Math.sign(midMidi - fit.ladder[from].midi)
+  );
+}
+
+function insideRegister(fit: ShapeFit, index: number): boolean {
+  const midi = fit.ladder[index]?.midi;
+  return midi !== undefined && midi >= fit.low && midi <= fit.high;
+}
+
+/** The note being rewritten may jump its own octave. Any other pitch stays inside. */
+function indexAllowed(
+  fit: ShapeFit,
+  index: number,
+  originalMidi: number,
+  strong: boolean,
+): boolean {
+  if (insideRegister(fit, index)) return true;
+  if (strong) return false;
+  const midi = fit.ladder[index]?.midi;
+  return midi !== undefined && Math.abs(midi - originalMidi) === 12;
+}
+
+function bareMidi(fit: ShapeFit, eventIndex: number): number {
+  const index = fit.bare[eventIndex];
+  return index === undefined ? fit.low : (fit.ladder[index]?.midi ?? fit.low);
+}
+
+function backwardOk(
+  fit: ShapeFit,
+  line: readonly number[],
+  index: number,
+): boolean {
+  if (index <= 0) return true;
+  const previous = line[index - 1];
+  const current = line[index];
+  if (
+    previous === undefined ||
+    current === undefined ||
+    previous < 0 ||
+    current < 0 ||
+    previous >= fit.ladder.length ||
+    current >= fit.ladder.length
+  )
+    return false;
+  if (current === previous) return false;
+  const moved = fitMotion(fit, previous, current);
+  if (
+    fit.events[index]?.strong &&
+    (!fit.ladder[current].chordTone || moved !== 'step')
+  )
+    return false;
+  if (index >= 2) {
+    const before = line[index - 2];
+    if (before === undefined) return false;
+    if (
+      fitMotion(fit, before, previous) === 'leap' &&
+      !oppositeStep(fit, before, previous, current)
+    )
+      return false;
+  }
+  return true;
+}
+
+/** A locked strong note, including the cadence, has to be approached by a step. */
+function lockedApproach(
+  fit: ShapeFit,
+  line: readonly number[],
+  index: number,
+  locked: ReadonlySet<number>,
+): boolean {
+  const next = index + 1;
+  if (next >= line.length) return true;
+  const nextIndex = line[next];
+  if (nextIndex === undefined) return false;
+  const nextFixed = next === line.length - 1 || locked.has(next);
+  if (!nextFixed) return true;
+  if (
+    fit.events[next]?.strong &&
+    fitMotion(fit, line[index] ?? -1, nextIndex) !== 'step'
+  )
+    return false;
+  const previous = line[index - 1];
+  if (
+    index > 0 &&
+    previous !== undefined &&
+    fitMotion(fit, previous, line[index] ?? -1) === 'leap' &&
+    !oppositeStep(fit, previous, line[index] ?? -1, nextIndex)
+  )
+    return false;
+  return true;
+}
+
+function cadenceReach(fit: ShapeFit): boolean[][] {
+  if (fit.reach) return fit.reach;
+  const count = fit.ladder.length;
+  const neighbors = Array.from({ length: count }, (_, index) =>
+    stepNeighbors(fit, index),
+  );
+  const reach: boolean[][] = [];
+  const zero = Array<boolean>(count).fill(false);
+  if (fit.cadenceIndex >= 0 && fit.cadenceIndex < count)
+    zero[fit.cadenceIndex] = true;
+  reach.push(zero);
+  const steps = fit.events.length;
+  for (let step = 1; step <= steps; step++) {
+    const row = Array<boolean>(count).fill(false);
+    const previous = reach[step - 1] ?? zero;
+    for (let index = 0; index < count; index++) {
+      if (neighbors[index]?.some((next) => previous[next])) row[index] = true;
+    }
+    reach.push(row);
+  }
+  fit.reach = reach;
+  return reach;
+}
+
+function reachesCadence(fit: ShapeFit, index: number, steps: number): boolean {
+  return cadenceReach(fit)[steps]?.[index] === true;
+}
+
+function hasChordStep(fit: ShapeFit, index: number): boolean {
+  for (let candidate = 0; candidate < fit.ladder.length; candidate++) {
+    if (!fit.ladder[candidate]?.chordTone || !insideRegister(fit, candidate))
+      continue;
+    if (fitMotion(fit, index, candidate) === 'step') return true;
+  }
+  return false;
+}
+
+function sortByMidi(
+  fit: ShapeFit,
+  indexes: readonly number[],
+  desired: number,
+): number[] {
+  return [...indexes].sort((a, b) => {
+    const aOut = insideRegister(fit, a) ? 0 : 1;
+    const bOut = insideRegister(fit, b) ? 0 : 1;
+    return (
+      aOut - bOut ||
+      Math.abs((fit.ladder[a]?.midi ?? 0) - desired) -
+        Math.abs((fit.ladder[b]?.midi ?? 0) - desired) ||
+      a - b
+    );
+  });
+}
+
+function indexesOfDegree(
+  fit: ShapeFit,
+  degree: number,
+  strong: boolean,
+  originalMidi: number,
+): number[] {
+  const found: number[] = [];
+  for (let index = 0; index < fit.ladder.length; index++) {
+    if (degreeAt(fit.ladder, index) !== degree) continue;
+    if (strong && !fit.ladder[index]?.chordTone) continue;
+    if (!indexAllowed(fit, index, originalMidi, strong)) continue;
+    found.push(index);
+  }
+  return found;
+}
+
+function stepNeighbors(fit: ShapeFit, index: number): number[] {
+  const found: number[] = [];
+  for (let candidate = 0; candidate < fit.ladder.length; candidate++) {
+    if (!insideRegister(fit, candidate)) continue;
+    if (fitMotion(fit, index, candidate) === 'step') found.push(candidate);
+  }
+  return found;
+}
+
+function chooseRepair(
+  fit: ShapeFit,
+  line: readonly number[],
+  index: number,
+  locked: ReadonlySet<number>,
+): number | null {
+  const desired = fit.ladder[line[index] ?? -1]?.midi ?? bareMidi(fit, index);
+  const previous = line[index - 1];
+  const strong = fit.events[index]?.strong === true;
+  const pool: number[] = [];
+  for (let candidate = 0; candidate < fit.ladder.length; candidate++) {
+    if (
+      strong &&
+      (!fit.ladder[candidate]?.chordTone || !insideRegister(fit, candidate))
+    )
+      continue;
+    if (!indexAllowed(fit, candidate, bareMidi(fit, index), strong)) continue;
+    pool.push(candidate);
+  }
+  const stepsToCadence = line.length - 1 - index;
+  const rank = (candidate: number) => {
+    const step =
+      previous !== undefined && fitMotion(fit, previous, candidate) === 'step'
+        ? 0
+        : 1;
+    const reach = reachesCadence(fit, candidate, stepsToCadence) ? 0 : 1;
+    return step * 2 + reach;
+  };
+  const ordered = [...pool].sort((a, b) => {
+    const band = rank(a) - rank(b);
+    if (band !== 0) return band;
+    const aOut = insideRegister(fit, a) ? 0 : 1;
+    const bOut = insideRegister(fit, b) ? 0 : 1;
+    return (
+      aOut - bOut ||
+      Math.abs((fit.ladder[a]?.midi ?? 0) - desired) -
+        Math.abs((fit.ladder[b]?.midi ?? 0) - desired) ||
+      a - b
+    );
+  });
+  for (const candidate of ordered) {
+    if (candidate === previous) continue;
+    const trial = line.slice();
+    trial[index] = candidate;
+    if (!backwardOk(fit, trial, index)) continue;
+    if (!lockedApproach(fit, trial, index, locked)) continue;
+    const next = index + 1;
+    if (
+      next < line.length - 1 &&
+      !locked.has(next) &&
+      fit.events[next]?.strong &&
+      !hasChordStep(fit, candidate)
+    )
+      continue;
+    return candidate;
+  }
+  return null;
+}
+
+function repairForward(
+  fit: ShapeFit,
+  line: number[],
+  start: number,
+  locked: ReadonlySet<number>,
+): boolean {
+  for (let index = Math.max(1, start); index < line.length - 1; index++) {
+    if (locked.has(index)) {
+      if (
+        !backwardOk(fit, line, index) ||
+        !lockedApproach(fit, line, index, locked)
+      )
+        return false;
+      continue;
+    }
+    if (
+      backwardOk(fit, line, index) &&
+      lockedApproach(fit, line, index, locked)
+    )
+      continue;
+    const chosen = chooseRepair(fit, line, index, locked);
+    if (chosen === null) return false;
+    line[index] = chosen;
+  }
+  line[line.length - 1] = fit.cadenceIndex;
+  return lineIsLegal(line, fit.events, fit.ladder, fit.cadenceIndex);
+}
+
+/** Greedy repair can box the cadence in. Search the tail when that happens. */
+function searchTail(
+  fit: ShapeFit,
+  line: number[],
+  start: number,
+  locked: ReadonlySet<number>,
+): boolean {
+  const end = line.length - 1;
+  let nodes = 0;
+  const walk = (index: number): boolean => {
+    if (nodes > 20000) return false;
+    if (index >= end) {
+      line[end] = fit.cadenceIndex;
+      return lineIsLegal(line, fit.events, fit.ladder, fit.cadenceIndex);
+    }
+    if (locked.has(index)) {
+      if (
+        !backwardOk(fit, line, index) ||
+        !lockedApproach(fit, line, index, locked)
+      )
+        return false;
+      return walk(index + 1);
+    }
+    const saved = line[index];
+    const desired = fit.ladder[saved ?? -1]?.midi ?? bareMidi(fit, index);
+    const previous = line[index - 1];
+    const strong = fit.events[index]?.strong === true;
+    const pool: number[] = [];
+    for (let candidate = 0; candidate < fit.ladder.length; candidate++) {
+      if (
+        strong &&
+        (!fit.ladder[candidate]?.chordTone || !insideRegister(fit, candidate))
+      )
+        continue;
+      if (!indexAllowed(fit, candidate, bareMidi(fit, index), strong)) continue;
+      if (candidate === previous) continue;
+      const steps = end - index;
+      if (
+        previous !== undefined &&
+        fitMotion(fit, previous, candidate) !== 'step'
+      )
+        continue;
+      if (!reachesCadence(fit, candidate, steps)) continue;
+      pool.push(candidate);
+    }
+    for (const candidate of sortByMidi(fit, pool, desired)) {
+      nodes += 1;
+      if (nodes > 20000) return false;
+      line[index] = candidate;
+      if (
+        !backwardOk(fit, line, index) ||
+        !lockedApproach(fit, line, index, locked)
+      )
+        continue;
+      if (walk(index + 1)) return true;
+    }
+    line[index] = saved ?? line[index];
+    return false;
+  };
+  return walk(Math.max(1, start));
+}
+
+export type ShapeReject =
+  | 'kept'
+  | 'motif-window'
+  | 'question-unreachable'
+  | 'question-degree'
+  | 'unplayable'
+  | 'hand'
+  | 'arch'
+  | 'circling'
+  | 'loops'
+  | 'strong-beat'
+  | 'other';
+
+let shapeReject: ShapeReject = 'other';
+let shapeRejectTrail: ShapeReject[] = [];
+
+/** Why the last shaped assemble kept or dropped its shape. */
+export function lastShapeReject(): ShapeReject {
+  return shapeReject;
+}
+
+/** Every shaped assemble in the last generate call, in order. */
+export function lastShapeRejects(): readonly ShapeReject[] {
+  return shapeRejectTrail;
+}
+
+/**
+ * Rewrite pitches on the existing grid. Strong beats and the cadence stay
+ * put unless the question note has to step into the next downbeat.
+ * Returns null when the shape cannot be played without breaking a floor.
+ */
+function degreeDistance(fit: ShapeFit, degree: number, midi: number): number {
+  let best = Infinity;
+  for (const tone of fit.ladder) {
+    if (tone.midi < fit.low || tone.midi > fit.high) continue;
+    if (scaleDegreeNumber(tone.note.degree) !== degree) continue;
+    best = Math.min(best, Math.abs(tone.midi - midi));
+  }
+  return best;
+}
+
+/** Requested 2/4/6 wins a tie. Missing scale degrees sort last. */
+function questionOrder(
+  fit: ShapeFit,
+  currentIndex: number,
+  requested: number,
+): number[] {
+  const midi = fit.ladder[currentIndex]?.midi ?? fit.low;
+  return [2, 4, 6].sort((left, right) => {
+    const diff =
+      degreeDistance(fit, left, midi) - degreeDistance(fit, right, midi);
+    if (diff !== 0) return diff;
+    if (left === requested) return -1;
+    if (right === requested) return 1;
+    return left - right;
+  });
+}
+
+function shapeFloor(
+  fit: ShapeFit,
+  line: readonly number[],
+): ShapeReject | null {
+  if (!lineIsLegal(line, fit.events, fit.ladder, fit.cadenceIndex))
+    return 'unplayable';
+  const midis = lineMidis(line, fit.ladder);
+  const bareMidis = lineMidis(fit.bare, fit.ladder);
+  if (phraseCellLength(midis) > PHRASE_CELL_LIMIT) return 'loops';
+  if (harmsArch(fit.bare, line, fit.ladder, fit.plan)) return 'arch';
+  if (circleSpan(midis) > circleSpan(bareMidis)) return 'circling';
+  if (
+    line.some(
+      (index, event) =>
+        fit.events[event]?.strong && !fit.ladder[index]?.chordTone,
+    )
+  )
+    return 'strong-beat';
+  return null;
+}
+
+function restore(line: number[], snapshot: readonly number[]) {
+  line.splice(0, line.length, ...snapshot);
+}
+
+function pickLocal(
+  fit: ShapeFit,
+  line: number[],
+  index: number,
+  degree: number,
+  locked: ReadonlySet<number>,
+  preferred: readonly number[] | null,
+): number | null {
+  const strong = fit.events[index]?.strong === true;
+  const all = indexesOfDegree(fit, degree, strong, bareMidi(fit, index));
+  const desired = fit.ladder[line[index] ?? -1]?.midi ?? bareMidi(fit, index);
+  const first = preferred?.filter((item) => all.includes(item)) ?? [];
+  const ordered = [
+    ...sortByMidi(fit, first, desired),
+    ...sortByMidi(
+      fit,
+      all.filter((item) => !first.includes(item)),
+      desired,
+    ),
+  ];
+  const previous = line[index];
+  for (const option of ordered) {
+    line[index] = option;
+    const ok =
+      backwardOk(fit, line, index) && lockedApproach(fit, line, index, locked);
+    line[index] = previous ?? option;
+    if (ok) return option;
+  }
+  return null;
+}
+
+function windowIndexes(
+  beats: readonly number[],
+  bar: number,
+  limit: number,
+): number[] {
+  return beats.flatMap((beat, index) =>
+    beat >= bar * 4 && beat < bar * 4 + limit ? [index] : [],
+  );
+}
+
+function degreeDeltas(degrees: readonly (number | null)[]): string {
+  return degrees
+    .slice(1)
+    .map((degree, index) => (degree ?? 0) - (degrees[index] ?? 0))
+    .join(',');
+}
+
+function variationMenu(
+  planned: BarVariation,
+  allowRepeat: boolean,
+): BarVariation[] {
+  const open = BAR_VARIATIONS.filter(
+    (item) => allowRepeat || item !== 'repeat',
+  );
+  const first = open.includes(planned) ? planned : open[0];
+  if (!first) return [];
+  return [first, ...open.filter((item) => item !== first)];
+}
+
+function targetDegree(
+  motifDegree: number,
+  variation: BarVariation,
+  ordinal: number,
+  count: number,
+  strong: boolean,
+): number {
+  let degree = motifDegree;
+  if (variation === 'sequence-up') degree = shiftDegree(degree, 1);
+  if (variation === 'sequence-down') degree = shiftDegree(degree, -1);
+  if (variation === 'altered-ending' && ordinal >= count - 2 && !strong)
+    degree = shiftDegree(degree, -1);
+  return degree;
+}
+
+/**
+ * Copy the motif window's scale degrees into a later bar.
+ * Strong beats take a chord tone of that degree, approached by a step.
+ * The question note and the cadence stay put.
+ */
+function tryVariation(
+  fit: ShapeFit,
+  line: number[],
+  beats: readonly number[],
+  bar: number,
+  variation: BarVariation,
+  questionIndex: number,
+  questionDegree: number,
+  locked: ReadonlySet<number>,
+): boolean {
+  const limit = motifBeatLimit(fit.plan.rhythm);
+  const sources = windowIndexes(beats, 0, limit);
+  const targets = windowIndexes(beats, bar, limit);
+  if (sources.length < 3 || sources.length !== targets.length) return false;
+  const snapshot = line.slice();
+  const local = new Set(locked);
+  for (let ordinal = 0; ordinal < targets.length; ordinal++) {
+    const dst = targets[ordinal];
+    const src = sources[ordinal];
+    if (dst === undefined || src === undefined) {
+      restore(line, snapshot);
+      return false;
+    }
+    const motifDegree = degreeAt(fit.ladder, line[src]);
+    if (motifDegree === null) {
+      restore(line, snapshot);
+      return false;
+    }
+    const degree = targetDegree(
+      motifDegree,
+      variation,
+      ordinal,
+      targets.length,
+      fit.events[dst]?.strong === true,
+    );
+    if (dst === questionIndex || dst >= line.length - 1) {
+      if (degreeAt(fit.ladder, line[dst]) !== degree) {
+        restore(line, snapshot);
+        return false;
+      }
+      continue;
+    }
+    const next = targets[ordinal + 1];
+    let preferred: number[] | null = null;
+    if (
+      next !== undefined &&
+      fit.events[next]?.strong &&
+      !fit.events[dst]?.strong
+    ) {
+      const nextDegree = targetDegree(
+        degreeAt(fit.ladder, line[sources[ordinal + 1] ?? -1]) ?? degree,
+        variation,
+        ordinal + 1,
+        targets.length,
+        true,
+      );
+      const neighbors = new Set<number>();
+      for (const strong of indexesOfDegree(
+        fit,
+        nextDegree,
+        true,
+        bareMidi(fit, next),
+      )) {
+        for (const neighbor of stepNeighbors(fit, strong))
+          neighbors.add(neighbor);
+      }
+      const matched = indexesOfDegree(
+        fit,
+        degree,
+        false,
+        bareMidi(fit, dst),
+      ).filter((index) => neighbors.has(index));
+      if (matched.length) preferred = matched;
+    }
+    const chosen = pickLocal(fit, line, dst, degree, local, preferred);
+    if (chosen === null && fit.events[dst]?.strong) {
+      const previous = dst - 1;
+      const strongOptions = sortByMidi(
+        fit,
+        indexesOfDegree(fit, degree, true, bareMidi(fit, dst)),
+        bareMidi(fit, dst),
+      );
+      let landed = false;
+      if (
+        previous >= 0 &&
+        !fit.events[previous]?.strong &&
+        !local.has(previous)
+      ) {
+        for (const option of strongOptions) {
+          const neighbors = stepNeighbors(fit, option);
+          for (const neighbor of neighbors) {
+            line[previous] = neighbor;
+            line[dst] = option;
+            if (
+              backwardOk(fit, line, previous) &&
+              backwardOk(fit, line, dst) &&
+              lockedApproach(fit, line, dst, local)
+            ) {
+              landed = true;
+              local.add(previous);
+              break;
+            }
+          }
+          if (landed) break;
+        }
+      }
+      if (!landed) {
+        restore(line, snapshot);
+        return false;
+      }
+    } else if (chosen === null) {
+      restore(line, snapshot);
+      return false;
+    } else {
+      line[dst] = chosen;
+    }
+    local.add(dst);
+  }
+  const first = targets.find((index) => index < line.length - 1) ?? 1;
+  if (!repairForward(fit, line, first, local)) {
+    restore(line, snapshot);
+    return false;
+  }
+  if (degreeAt(fit.ladder, line[questionIndex] ?? -1) !== questionDegree) {
+    restore(line, snapshot);
+    return false;
+  }
+  if (variation !== 'altered-ending') {
+    const motif = sources.map((index) => degreeAt(fit.ladder, line[index]));
+    const later = targets.map((index) => degreeAt(fit.ladder, line[index]));
+    if (degreeDeltas(motif) !== degreeDeltas(later)) {
+      restore(line, snapshot);
+      return false;
+    }
+  }
+  if (shapeFloor(fit, line)) {
+    restore(line, snapshot);
+    return false;
+  }
+  return true;
+}
+
+function applyContour(
+  fit: ShapeFit,
+  line: number[],
+  roles: readonly number[],
+  contour: PhraseShapePlan['motif']['contour'],
+  locked: ReadonlySet<number>,
+): void {
+  const deltas = contourDeltas(contour);
+  for (let ordinal = 1; ordinal < roles.length; ordinal++) {
+    const eventIndex = roles[ordinal];
+    if (eventIndex === undefined || eventIndex >= line.length - 1) continue;
+    if (fit.events[eventIndex]?.strong || locked.has(eventIndex)) continue;
+    const previous = roles[ordinal - 1];
+    if (previous === undefined) continue;
+    const prevDegree = degreeAt(fit.ladder, line[previous]);
+    if (prevDegree === null) continue;
+    const delta = deltas[(ordinal - 1) % deltas.length] ?? 1;
+    const target = shiftDegree(prevDegree, delta);
+    const snapshot = line.slice();
+    const chosen = pickLocal(fit, line, eventIndex, target, locked, null);
+    if (chosen === null) continue;
+    line[eventIndex] = chosen;
+    if (!lineIsLegal(line, fit.events, fit.ladder, fit.cadenceIndex))
+      restore(line, snapshot);
+  }
+}
+
+function nearestFirst(
+  fit: ShapeFit,
+  indexes: readonly number[],
+  desired: number,
+): number[] {
+  return [...indexes].sort(
+    (a, b) =>
+      Math.abs((fit.ladder[a]?.midi ?? 0) - desired) -
+        Math.abs((fit.ladder[b]?.midi ?? 0) - desired) || a - b,
+  );
+}
+
+/**
+ * Land the question on a reachable 2/4/6. A strong note on either side can
+ * move to the chord tone a step away, and the weak approach before that
+ * strong note can move with it. The cadence stays.
+ */
+function questionDegreesNear(
+  fit: ShapeFit,
+  line: number[],
+  questionIndex: number,
+  requested: number,
+): number | null {
+  const snapshot = line.slice();
+  const previous = questionIndex - 1;
+  let dirty: number[] | null = null;
+  let dirtyDegree = 0;
+  const optionsFor = (degree: number) =>
+    sortByMidi(
+      fit,
+      indexesOfDegree(fit, degree, false, bareMidi(fit, questionIndex)),
+      bareMidi(fit, questionIndex),
+    );
+  for (const degree of questionOrder(
+    fit,
+    line[questionIndex] ?? 0,
+    requested,
+  )) {
+    for (const option of optionsFor(degree)) {
+      restore(line, snapshot);
+      line[questionIndex] = option;
+      const locked = new Set<number>([questionIndex, line.length - 1]);
+      let start = questionIndex + 1;
+      if (previous >= 0 && fit.events[previous]?.strong) {
+        const chords = nearestFirst(
+          fit,
+          stepNeighbors(fit, option).filter(
+            (index) => fit.ladder[index]?.chordTone,
+          ),
+          fit.ladder[snapshot[previous] ?? -1]?.midi ?? bareMidi(fit, previous),
+        );
+        let fitted = false;
+        for (const chord of chords) {
+          line[previous] = chord;
+          line[questionIndex] = option;
+          if (!backwardOk(fit, line, questionIndex)) continue;
+          const approach = previous - 1;
+          if (approach >= 0 && !backwardOk(fit, line, previous)) {
+            if (fit.events[approach]?.strong) continue;
+            let approached = false;
+            for (const neighbor of nearestFirst(
+              fit,
+              stepNeighbors(fit, chord),
+              fit.ladder[snapshot[approach] ?? -1]?.midi ?? 0,
+            )) {
+              line[approach] = neighbor;
+              if (
+                backwardOk(fit, line, approach) &&
+                backwardOk(fit, line, previous)
+              ) {
+                approached = true;
+                locked.add(approach);
+                break;
+              }
+            }
+            if (!approached) continue;
+          }
+          if (!backwardOk(fit, line, previous)) continue;
+          locked.add(previous);
+          start = Math.max(1, (approach >= 0 ? approach : previous) + 1);
+          fitted = true;
+          break;
+        }
+        if (!fitted) continue;
+      } else if (previous >= 0 && !backwardOk(fit, line, questionIndex)) {
+        const steps = nearestFirst(
+          fit,
+          stepNeighbors(fit, option),
+          fit.ladder[snapshot[previous] ?? -1]?.midi ?? 0,
+        );
+        let fitted = false;
+        for (const step of steps) {
+          line[previous] = step;
+          line[questionIndex] = option;
+          if (
+            !backwardOk(fit, line, previous) ||
+            !backwardOk(fit, line, questionIndex)
+          )
+            continue;
+          locked.add(previous);
+          start = previous + 1;
+          fitted = true;
+          break;
+        }
+        if (!fitted) continue;
+      }
+      if (fit.events[questionIndex + 1]?.strong && !hasChordStep(fit, option))
+        continue;
+      if (
+        !repairForward(fit, line, start, locked) &&
+        !searchTail(fit, line, start, locked)
+      )
+        continue;
+      if (degreeAt(fit.ladder, line[questionIndex] ?? -1) !== degree) continue;
+      const opened = openShapeIssues(fit, line.slice(), questionIndex, degree);
+      if (opened) {
+        restore(line, opened);
+        return degree;
+      }
+      if (!dirty) {
+        dirty = line.slice();
+        dirtyDegree = degree;
+      }
+    }
+  }
+  if (dirty) {
+    restore(line, dirty);
+    return dirtyDegree;
+  }
+  restore(line, snapshot);
+  return null;
+}
+
+function holdPeak(
+  fit: ShapeFit,
+  line: number[],
+  questionIndex: number,
+  degree: number,
+): boolean {
+  if (fit.plan.contour !== 'arch') return false;
+  const before = lineMidis(fit.bare, fit.ladder);
+  const after = lineMidis(line, fit.ladder);
+  const beforeMax = Math.max(...before);
+  if (Math.max(...after) >= beforeMax) return shapeFloor(fit, line) === null;
+  const peakTone = fit.ladder.findIndex((tone) => tone.midi === beforeMax);
+  if (peakTone < 0) return false;
+  const saved = line.slice();
+  for (let index = 1; index < line.length - 1; index++) {
+    if (index === questionIndex) continue;
+    if (fit.events[index]?.strong && !fit.ladder[peakTone]?.chordTone) continue;
+    line[index] = peakTone;
+    if (
+      degreeAt(fit.ladder, line[questionIndex] ?? -1) === degree &&
+      shapeFloor(fit, line) === null
+    )
+      return true;
+    restore(line, saved);
+  }
+  return false;
+}
+
+function openShapeIssues(
+  fit: ShapeFit,
+  line: number[],
+  questionIndex: number,
+  degree: number,
+): number[] | null {
+  let current = line.slice();
+  if (
+    shapeFloor(fit, current) === 'arch' &&
+    holdPeak(fit, current, questionIndex, degree)
+  )
+    return current.slice();
+  if (shapeFloor(fit, current) === 'loops') {
+    const opened = breakLoopsKeepArch(
+      current,
+      fit.ladder,
+      fit.events,
+      fit.plan,
+      new Set([questionIndex]),
+    );
+    if (
+      degreeAt(fit.ladder, opened[questionIndex] ?? -1) === degree &&
+      shapeFloor(fit, opened) === null
+    )
+      current = opened;
+  }
+  if (shapeFloor(fit, current) === 'circling') {
+    const opened = breakCircles(current, fit.ladder, fit.events, fit.plan);
+    if (
+      degreeAt(fit.ladder, opened[questionIndex] ?? -1) === degree &&
+      shapeFloor(fit, opened) === null
+    )
+      current = opened;
+  }
+  if (shapeFloor(fit, current) !== null) return null;
+  if (degreeAt(fit.ladder, current[questionIndex] ?? -1) !== degree)
+    return null;
+  return current;
+}
+
+function copyShape(
+  shape: PhraseShapePlan,
+  degree: number,
+  variations: BarVariation[],
+): PhraseShapePlan {
+  const question = asQuestionDegree(degree) ?? shape.question.degree;
+  return {
+    version: 1,
+    motif: { contour: shape.motif.contour, rhythm: shape.motif.rhythm },
+    variations,
+    question: { bar: shape.question.bar, degree: question },
+    ...(shape.peak ? { peak: shape.peak } : {}),
+    ...(shape.syncopation !== undefined
+      ? { syncopation: shape.syncopation }
+      : {}),
+  };
+}
+
+function asQuestionDegree(degree: number): QuestionDegree | null {
+  if (degree === 2 || degree === 4 || degree === 6)
+    return String(degree) as QuestionDegree;
+  return null;
+}
+
+function rollAlternates(
+  seed: number,
+  bars: 2 | 4,
+  rhythm: RhythmId,
+): PhraseShapePlan[] {
+  const random = mulberry32((seed + 0x51ed) >>> 0);
+  const shapes: PhraseShapePlan[] = [];
+  for (let index = 0; index < SHAPE_REDRAWS; index++)
+    shapes.push(rollShape(random, bars, rhythm));
+  return shapes;
+}
+
+function shapeAttempts(
+  plan: PhrasePlan,
+  seed: number,
+  bars: 2 | 4,
+  resample: readonly PhraseShapePlan[] | undefined,
+): PhraseShapePlan[] {
+  const shapes: PhraseShapePlan[] = [];
+  if (plan.shape) shapes.push(plan.shape);
+  const extras = resample ?? rollAlternates(seed, bars, plan.rhythm);
+  for (const shape of extras) {
+    if (shapes.length >= SHAPE_REDRAWS + 1) break;
+    shapes.push(shape);
+  }
+  return shapes;
+}
+
+function varietyWithinLimits(midis: readonly number[]): boolean {
+  return (
+    narrowSpan(midis).length <= PHRASE_VARIETY_RUN &&
+    periodSpan(midis, 4).length < 12
+  );
+}
+
+function questionNoteIndex(
+  notes: readonly { beat: number }[],
+  shape: PhraseShapePlan,
+): number {
+  const start = (shape.question.bar - 1) * 4;
+  const end = shape.question.bar * 4;
+  let found = -1;
+  notes.forEach((note, index) => {
+    if (note.beat >= start && note.beat < end) found = index;
+  });
+  return found;
+}
+
+/**
+ * Rewrite pitches on the existing grid. The question lands on the nearest
+ * reachable in-scale 2, 4, or 6, and that degree is what the plan stores.
+ * Later bars copy the motif's scale-degree shape when a variation can be
+ * played without breaking a floor.
+ */
+function applyPhraseShape(
+  indexes: readonly number[],
+  ladder: readonly LadderTone[],
+  events: readonly GridEvent[],
+  plan: PhrasePlan,
+): {
+  indexes: number[];
+  shape: PhraseShapePlan;
+  ladder: readonly LadderTone[];
+} | null {
+  const shape = plan.shape;
+  if (!shape) return null;
+  const cadenceIndex = indexes[indexes.length - 1];
+  if (cadenceIndex === undefined) {
+    shapeReject = 'other';
+    return null;
+  }
+  const beats = events.map((event) => event.beat);
+  const roles = motifRoleIndexes(beats, plan.rhythm, shape.motif.rhythm);
+  if (roles.length < 3) {
+    shapeReject = 'motif-window';
+    return null;
+  }
+  const playLadder = extendLadder(ladder);
+  const fit: ShapeFit = {
+    ladder: playLadder,
+    events,
+    cadenceIndex,
+    scalePcs: scalePcsOf(playLadder),
+    low: REGISTER_LOW[plan.register],
+    high: REGISTER_LOW[plan.register] + PHRASE_RANGE,
+    bare: indexes,
+    plan,
+  };
+  const questionEvents = events.flatMap((event, index) =>
+    event.beat >= (shape.question.bar - 1) * 4 &&
+    event.beat < shape.question.bar * 4
+      ? [index]
+      : [],
+  );
+  const questionIndex = questionEvents[questionEvents.length - 1];
+  if (
+    questionIndex === undefined ||
+    questionIndex <= 0 ||
+    questionIndex >= indexes.length - 1
+  ) {
+    shapeReject = 'question-unreachable';
+    return null;
+  }
+  const requested = Number(shape.question.degree);
+  const working = indexes.slice();
+  const placed = questionDegreesNear(fit, working, questionIndex, requested);
+  if (placed === null) {
+    shapeReject = 'question-unreachable';
+    return null;
+  }
+  const locked = new Set<number>([questionIndex, working.length - 1]);
+  const afterQuestion = working.slice();
+  applyContour(fit, working, roles, shape.motif.contour, locked);
+  for (const index of windowIndexes(beats, 0, motifBeatLimit(plan.rhythm)))
+    locked.add(index);
+  if (!lineIsLegal(working, events, playLadder, cadenceIndex))
+    restore(working, afterQuestion);
+  const variations = shape.variations.slice();
+  const bars = (variations.length + 1) as 2 | 4;
+  let mirrored = false;
+  for (let bar = 1; bar < bars; bar++) {
+    const planned = variations[bar - 1] ?? 'altered-ending';
+    const allowRepeat = !(bars === 4 && bar === 2);
+    let landed: BarVariation | null = null;
+    for (const variation of variationMenu(planned, allowRepeat)) {
+      if (
+        tryVariation(
+          fit,
+          working,
+          beats,
+          bar,
+          variation,
+          questionIndex,
+          placed,
+          locked,
+        )
+      ) {
+        landed = variation;
+        mirrored = true;
+        for (const index of windowIndexes(
+          beats,
+          bar,
+          motifBeatLimit(plan.rhythm),
+        ))
+          locked.add(index);
+        break;
+      }
+    }
+    if (landed) variations[bar - 1] = landed;
+  }
+  if (!mirrored) restore(working, afterQuestion);
+  else if (
+    degreeAt(playLadder, working[questionIndex] ?? -1) !== placed ||
+    !lineIsLegal(working, events, playLadder, cadenceIndex)
+  )
+    restore(working, afterQuestion);
+  const opened = openShapeIssues(fit, working, questionIndex, placed);
+  if (!opened) {
+    const reason = shapeFloor(fit, working);
+    shapeReject =
+      reason ??
+      (isQuestionDegree(
+        playLadder[working[questionIndex] ?? -1]?.note.degree ?? '',
+      )
+        ? 'other'
+        : 'question-degree');
+    return null;
+  }
+  const played = degreeAt(playLadder, opened[questionIndex] ?? -1);
+  if (played === null || !asQuestionDegree(played)) {
+    shapeReject = 'question-degree';
+    return null;
+  }
+  return {
+    indexes: opened,
+    shape: copyShape(shape, played, variations),
+    ladder: playLadder,
+  };
+}
+
+function holdReject(
+  notes: readonly {
+    beat: number;
+    degree: string;
+    strong: boolean;
+    chordTone: boolean;
+    midi: number;
+    fret?: number;
+    string?: number;
+  }[],
+  plan: PhrasePlan,
+  bareMidis: readonly number[],
+): ShapeReject {
+  const shape = plan.shape;
+  if (!shape || !questionHits(notes, shape)) return 'question-degree';
+  if (notes.some((note) => note.strong && !note.chordTone))
+    return 'strong-beat';
+  const last = notes[notes.length - 1];
+  if (!last?.chordTone) return 'strong-beat';
+  if (phraseCellLength(notes.map((note) => note.midi)) > PHRASE_CELL_LIMIT)
+    return 'loops';
+  if (plan.contour === 'arch') {
+    const midis = notes.map((note) => note.midi);
+    if (!contourHits(midis, 'arch')) return 'arch';
+    if (bareMidis.length && Math.max(...midis) < Math.max(...bareMidis))
+      return 'arch';
+  }
+  if (circleSpan(notes.map((note) => note.midi)) > circleSpan(bareMidis))
+    return 'circling';
+  if (
+    notes.some((note) => {
+      if (note.fret === undefined || note.string === undefined) return false;
+      if (note.fret < 0 || note.fret > 24) return true;
+      const open = TUNING[note.string];
+      return open === undefined || note.midi !== open + note.fret;
+    })
+  )
+    return 'hand';
+  return 'other';
+}
+
+function shapedNotesHold(
+  notes: readonly {
+    beat: number;
+    degree: string;
+    strong: boolean;
+    chordTone: boolean;
+    midi: number;
+  }[],
+  plan: PhrasePlan,
+  bareMidis: readonly number[],
+): boolean {
+  const shape = plan.shape;
+  if (!shape) return false;
+  if (!questionHits(notes, shape)) return false;
+  if (!notes.every((note) => !note.strong || note.chordTone)) return false;
+  const last = notes[notes.length - 1];
+  if (!last?.chordTone) return false;
+  if (phraseCellLength(notes.map((note) => note.midi)) > PHRASE_CELL_LIMIT)
+    return false;
+  if (plan.contour === 'arch') {
+    const midis = notes.map((note) => note.midi);
+    if (!contourHits(midis, 'arch')) return false;
+    if (bareMidis.length && Math.max(...midis) < Math.max(...bareMidis))
+      return false;
+  }
+  if (circleSpan(notes.map((note) => note.midi)) > circleSpan(bareMidis))
+    return false;
+  return true;
+}
+
 function assemble(
   input: {
     seed: number;
@@ -2932,6 +4188,7 @@ function assemble(
   },
   plan: PhrasePlan,
   source: PhraseSource,
+  resample?: readonly PhraseShapePlan[],
 ): PhraseResult {
   const chordPcs = landingPitchClasses(input.chordNotes, input.scaleNotes);
   if (!chordPcs.size) return { ok: false, reason: 'no-shared-tones' };
@@ -2945,31 +4202,94 @@ function assemble(
   if (!indexes || indexes.some((index) => index < 0))
     return { ok: false, reason: 'unplayable' };
   const shaped = shapeMelody(indexes, ladder, events, plan);
-  const notes = shaped.indexes.map((index, event) => {
-    const tone = ladder[index];
-    return {
-      name: tone.note.name,
-      pc: tone.note.pc,
-      degree: tone.note.degree,
-      midi: tone.midi,
-      beat: shaped.events[event].beat,
-      duration: shaped.events[event].duration,
-      strong: shaped.events[event].strong,
-      chordTone: tone.chordTone,
-    };
-  });
+  const toNotes = (
+    line: readonly number[],
+    grid: readonly GridEvent[],
+    tones: readonly LadderTone[],
+  ) =>
+    line.map((index, event) => {
+      const tone = tones[index];
+      const slot = grid[event];
+      return {
+        name: tone.note.name,
+        pc: tone.note.pc,
+        degree: tone.note.degree,
+        midi: tone.midi,
+        beat: slot.beat,
+        duration: slot.duration,
+        strong: slot.strong,
+        chordTone: tone.chordTone,
+      };
+    });
+  const bareNotes = toNotes(shaped.indexes, shaped.events, ladder);
   const forms = patterns([...input.scaleNotes]);
+  const bareMidis = bareNotes.map((note) => note.midi);
+  let planOut = plan.shape ? plan : withoutShape(plan);
+  let fingered: FingeredNote[] | null = null;
+  if (plan.shape) {
+    let last: ShapeReject = 'other';
+    for (const shape of shapeAttempts(plan, input.seed, input.bars, resample)) {
+      const overlaid = applyPhraseShape(shaped.indexes, ladder, shaped.events, {
+        ...plan,
+        shape,
+      });
+      if (!overlaid) {
+        last = shapeReject;
+        shapeRejectTrail.push(shapeReject);
+        continue;
+      }
+      const holdPlan = { ...plan, shape: overlaid.shape };
+      const shapedNotes = toNotes(
+        overlaid.indexes,
+        shaped.events,
+        overlaid.ladder,
+      );
+      const protect = questionNoteIndex(shapedNotes, overlaid.shape);
+      const variedNotes = spreadVariety(
+        shapedNotes,
+        input.scaleNotes,
+        chordPcs,
+        holdPlan,
+        forms,
+        protect,
+      );
+      const varied = fingerNotes(variedNotes, forms);
+      const plain = fingerNotes(shapedNotes, forms);
+      const played =
+        varietyWithinLimits(variedNotes.map((note) => note.midi)) &&
+        shapedNotesHold(varied, holdPlan, bareMidis)
+          ? varied
+          : varietyWithinLimits(shapedNotes.map((note) => note.midi)) &&
+              shapedNotesHold(plain, holdPlan, bareMidis)
+            ? plain
+            : null;
+      if (played) {
+        shapeReject = 'kept';
+        last = 'kept';
+        fingered = played;
+        planOut = holdPlan;
+        shapeRejectTrail.push('kept');
+        break;
+      }
+      last = holdReject(varied, holdPlan, bareMidis);
+      shapeReject = last;
+      shapeRejectTrail.push(last);
+    }
+    if (last !== 'kept') planOut = withoutShape(plan);
+  }
   return {
     ok: true,
     phrase: {
       seed: input.seed >>> 0,
       bars: input.bars,
-      plan,
+      plan: planOut,
       source,
-      notes: fingerNotes(
-        spreadVariety(notes, input.scaleNotes, chordPcs, plan, forms),
-        forms,
-      ),
+      notes:
+        fingered ??
+        fingerNotes(
+          spreadVariety(bareNotes, input.scaleNotes, chordPcs, planOut, forms),
+          forms,
+        ),
     },
   };
 }
@@ -2986,7 +4306,30 @@ function rulesResult(
   input: PhraseRequest,
   available: readonly CadenceTarget[],
 ): PhraseResult {
-  return assemble(input, rulePlan(input.seed, available, input.locks), 'rules');
+  return assemble(
+    input,
+    withoutShape(rulePlan(input.seed, available, input.locks, input.bars)),
+    'rules',
+  );
+}
+
+/** The shape path. A failed floor re-realizes the same seed with no shape. */
+export function generateShapedPhrase(input: PhraseRequest): PhraseResult {
+  shapeRejectTrail = [];
+  resetSearchCount();
+  if (
+    canonicalSeed(input.seed) === null ||
+    (input.bars !== 2 && input.bars !== 4)
+  ) {
+    return { ok: false, reason: 'bad-input' };
+  }
+  const available = availableCadences(input.chordNotes, input.scaleNotes);
+  if (!available.length) return { ok: false, reason: 'no-shared-tones' };
+  const plan = rulePlan(input.seed, available, input.locks, input.bars);
+  const shaped = assemble(input, plan, 'rules');
+  if (shaped.ok) return shaped;
+  nextSearchAttempt();
+  return retryUnplayable(input, available, rulesResult(input, available));
 }
 
 /** One fresh plan when the first comes back unplayable. Other failures stay. */
@@ -3013,6 +4356,23 @@ export function generatePhrase(input: PhraseRequest): PhraseResult {
   return retryUnplayable(input, available, rulesResult(input, available));
 }
 
+function plannerAlternates(
+  result: unknown,
+  bars: 2 | 4,
+  rhythm: RhythmId,
+): PhraseShapePlan[] | undefined {
+  if (!result || typeof result !== 'object' || !('alternates' in result))
+    return undefined;
+  const raw = (result as { alternates?: unknown }).alternates;
+  if (!Array.isArray(raw)) return undefined;
+  const shapes: PhraseShapePlan[] = [];
+  for (const item of raw) {
+    const shape = sanitizeShape(item, bars, rhythm);
+    if (shape) shapes.push(shape);
+  }
+  return shapes;
+}
+
 export async function generatePhraseWithPlanner(input: {
   seed: number;
   bars: 2 | 4;
@@ -3023,7 +4383,10 @@ export async function generatePhraseWithPlanner(input: {
   timeoutMs?: number;
   scaleLabel?: string;
   chordSymbol?: string;
+  scaleId?: string;
+  scaleRoot?: string;
 }): Promise<PhraseResult> {
+  shapeRejectTrail = [];
   resetSearchCount();
   if (
     canonicalSeed(input.seed) === null ||
@@ -3033,7 +4396,7 @@ export async function generatePhraseWithPlanner(input: {
   }
   const available = availableCadences(input.chordNotes, input.scaleNotes);
   if (!available.length) return { ok: false, reason: 'no-shared-tones' };
-  const rules = rulePlan(input.seed, available);
+  const rules = rulePlan(input.seed, available, undefined, input.bars);
   if (!input.planner)
     return retryUnplayable(input, available, rulesResult(input, available));
   const timeoutMs = input.timeoutMs ?? PHRASE_PLANNER_TIMEOUT_MS;
@@ -3041,6 +4404,7 @@ export async function generatePhraseWithPlanner(input: {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let accepted = false;
   let proposal: Partial<PhrasePlan> = {};
+  let alternates: readonly PhraseShapePlan[] | undefined;
   try {
     const result = await Promise.race([
       input.planner.propose({
@@ -3052,6 +4416,8 @@ export async function generatePhraseWithPlanner(input: {
         signal: controller.signal,
         scaleLabel: input.scaleLabel,
         chordSymbol: input.chordSymbol,
+        scaleId: input.scaleId,
+        scaleRoot: input.scaleRoot,
       }),
       new Promise<null>((resolve) => {
         controller.signal.addEventListener('abort', () => resolve(null), {
@@ -3060,6 +4426,11 @@ export async function generatePhraseWithPlanner(input: {
       }),
     ]);
     proposal = sanitizePlan(result, available);
+    alternates = plannerAlternates(
+      result,
+      input.bars,
+      input.locks?.rhythm ?? rules.rhythm,
+    );
     accepted = Object.keys(proposal).length > 0;
   } catch {
     proposal = {};
@@ -3068,17 +4439,40 @@ export async function generatePhraseWithPlanner(input: {
     clearTimeout(timer);
     if (!controller.signal.aborted) controller.abort();
   }
-  const plan = applyLocks({ ...rules, ...proposal }, input.locks, available);
-  const planned = assemble(input, plan, accepted ? 'planner' : 'rules');
-  if (planned.ok) return planned;
-  if (!accepted) return retryUnplayable(input, available, planned);
-  nextSearchAttempt();
-  const fallback = assemble(
+  const proposalHasShape = proposal.shape !== undefined;
+  const base = proposalHasShape ? rules : withoutShape(rules);
+  const plan = applyLocks(
+    { ...base, ...proposal },
+    input.locks,
+    available,
+    input.bars,
+  );
+  const planned = assemble(
     input,
-    applyLocks(rules, input.locks, available),
+    plan,
+    accepted ? 'planner' : 'rules',
+    proposalHasShape ? (alternates ?? []) : undefined,
+  );
+  if (planned.ok && (!proposalHasShape || planned.phrase.plan.shape))
+    return planned;
+  if (!proposalHasShape) return retryUnplayable(input, available, planned);
+  nextSearchAttempt();
+  const shapedRules = assemble(
+    input,
+    applyLocks(rules, input.locks, available, input.bars),
     'rules',
   );
-  return retryUnplayable(input, available, fallback);
+  if (shapedRules.ok) return shapedRules;
+  nextSearchAttempt();
+  return retryUnplayable(
+    input,
+    available,
+    assemble(
+      input,
+      applyLocks(withoutShape(rules), input.locks, available, input.bars),
+      'rules',
+    ),
+  );
 }
 
 export function phraseFretMarks(

@@ -1,0 +1,36 @@
+{
+  "recordedFromJev": false,
+  "note": "Hand-authored closed menu for CI. No call to api.typesafe.ai was made, and these weights are not a recording of jev-1.13.0.",
+  "model": "jev-1.13.0",
+  "distributions": {
+    "motifContour": {
+      "step-up-step-down": 0.4,
+      "step-down-step-up": 0.3,
+      "skip-up-step-down": 0.2,
+      "arpeggio-up": 0.1
+    },
+    "motifRhythm": {
+      "even": 0.7,
+      "long-short-short": 0.2,
+      "short-short-long": 0.05,
+      "pickup-into-downbeat": 0.05
+    },
+    "questionDegree": { "2": 0.5, "4": 0.3, "6": 0.2 },
+    "cadence": { "root": 0.5, "third": 0.3, "fifth": 0.2 },
+    "variations": [
+      {
+        "repeat": 0.4,
+        "sequence-up": 0.3,
+        "sequence-down": 0.2,
+        "altered-ending": 0.1
+      },
+      {
+        "repeat": 0.9,
+        "sequence-up": 0.05,
+        "sequence-down": 0.04,
+        "altered-ending": 0.01
+      },
+      { "altered-ending": 0.5, "sequence-down": 0.3, "sequence-up": 0.2 }
+    ]
+  }
+}
