@@ -12,7 +12,10 @@
   padding: 4px 0 0;
 }
 .under-neck .phrase-heading {
-  gap: 2px;
+  display: flex;
+  flex-flow: row wrap;
+  align-items: baseline;
+  gap: 8px;
 }
 .under-neck .phrase-heading h2 {
   font-size: 15px;
@@ -24,11 +27,7 @@
   line-height: 1.25;
 }
 .under-neck .phrase-heading p {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  /* Three lines keeps the landing visible when the rule wraps. */
-  -webkit-line-clamp: 3;
+  min-width: 0;
 }
 .under-neck .phrase-plan {
   white-space: normal;
