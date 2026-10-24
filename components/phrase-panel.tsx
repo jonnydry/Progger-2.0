@@ -80,16 +80,6 @@ import '@/app/phrase-deck.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
 
-type DeckMatch = {
-  phone: boolean;
-  stacked: boolean;
-  mid: boolean;
-};
-
-function sameDeckMatch(a: DeckMatch, b: DeckMatch): boolean {
-  return a.phone === b.phone && a.stacked === b.stacked && a.mid === b.mid;
-}
-
 function focusLostToDocument(): boolean {
   const active = document.activeElement;
   return (
@@ -117,23 +107,15 @@ function controlIsDisabled(node: HTMLElement): boolean {
  */
 function useDeckBreakpoints(): {
   phone: boolean;
-  stacked: boolean;
-  mid: boolean;
   deckRef: RefObject<HTMLDivElement | null>;
 } {
   const deckRef = useRef<HTMLDivElement>(null);
   const [phone, setPhone] = useState(false);
-  const [stacked, setStacked] = useState(false);
-  const [mid, setMid] = useState(false);
   const pendingFocus = useRef<HTMLElement | null>(null);
-  const layout = useRef<DeckMatch>({
-    phone: false,
-    stacked: false,
-    mid: false,
-  });
+  const layout = useRef(false);
 
   useLayoutEffect(() => {
-    layout.current = { phone, stacked, mid };
+    layout.current = phone;
     const node = pendingFocus.current;
     pendingFocus.current = null;
     if (!node) return;
@@ -148,42 +130,30 @@ function useDeckBreakpoints(): {
       frame = requestAnimationFrame(restore);
     }
     return () => cancelAnimationFrame(frame);
-  }, [phone, stacked, mid]);
+  }, [phone]);
 
   useLayoutEffect(() => {
     if (typeof matchMedia !== 'function') return;
     const phoneMedia = matchMedia(DECK_BREAKPOINT_QUERY.phone);
-    const stackedMedia = matchMedia(DECK_BREAKPOINT_QUERY.stacked);
-    const midMedia = matchMedia(DECK_BREAKPOINT_QUERY.mid);
     const sync = () => {
-      const next = {
-        phone: phoneMedia.matches,
-        stacked: stackedMedia.matches,
-        mid: midMedia.matches,
-      };
-      if (sameDeckMatch(layout.current, next)) return;
+      const next = phoneMedia.matches;
+      if (layout.current === next) return;
       const active = document.activeElement;
       const deck = deckRef.current;
       if (active instanceof HTMLElement && deck?.contains(active)) {
         pendingFocus.current = active;
       }
       layout.current = next;
-      setPhone(next.phone);
-      setStacked(next.stacked);
-      setMid(next.mid);
+      setPhone(next);
     };
     sync();
     phoneMedia.addEventListener('change', sync);
-    stackedMedia.addEventListener('change', sync);
-    midMedia.addEventListener('change', sync);
     return () => {
       phoneMedia.removeEventListener('change', sync);
-      stackedMedia.removeEventListener('change', sync);
-      midMedia.removeEventListener('change', sync);
     };
   }, []);
 
-  return { phone, stacked, mid, deckRef };
+  return { phone, deckRef };
 }
 
 const EMPTY_NOTES: readonly FingeredNote[] = [];
