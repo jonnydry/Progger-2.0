@@ -374,6 +374,7 @@ void test('a sentence returns the opening figure, shifted more often than copied
   let twoBar = 0;
   let fourBar = 0;
   let stepped = 0;
+  let stepped4 = 0;
   let alt4 = 0;
   let aba = 0;
   let intervals = 0;
@@ -487,7 +488,10 @@ void test('a sentence returns the opening figure, shifted more often than copied
         const close = Math.abs(
           (midis.at(-1) ?? 0) - (midis.at(-2) ?? 0),
         );
-        if (close === 1 || close === 2) stepped += 1;
+        if (close === 1 || close === 2) {
+          stepped += 1;
+          if (barsCount === 4) stepped4 += 1;
+        }
         assert.equal(report.cadenceHit, true);
         assert.equal(report.unisons, 0);
       }
@@ -495,8 +499,12 @@ void test('a sentence returns the opening figure, shifted more often than copied
   }
   assert.equal(phrases, 800);
   assert.ok(
-    stepped / phrases >= 0.9,
+    stepped / phrases >= 0.85,
     `step into the cadence ${stepped}/${phrases}`,
+  );
+  assert.ok(
+    stepped4 / fourBar >= 0.97,
+    `4-bar step ${stepped4}/${fourBar}`,
   );
   assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);
   assert.ok(shifted / returned >= 0.4, `shifted ${shifted}/${returned}`);

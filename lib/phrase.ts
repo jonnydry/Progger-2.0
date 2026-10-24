@@ -1222,57 +1222,41 @@ function pitchWeight(
   return weight > 1e-9 ? weight : 1e-9;
 }
 
-function pickWeighted(weights: readonly number[], random: () => number): number {
-  let total = 0;
-  for (const weight of weights) total += weight;
-  if (total <= 0) return 0;
-  let draw = random() * total;
-  for (let index = 0; index < weights.length; index++) {
-    draw -= weights[index];
-    if (draw < 0) return index;
-  }
-  return weights.length - 1;
-}
-
 /**
- * One draw against the full weights. Keep it when it already qualifies.
- * Otherwise the same draw picks from the tones that do.
+ * One draw against the full weights. Every weight is at least a trace,
+ * so the total is positive. When `keep` is set, a draw that already
+ * qualifies stays; the same draw otherwise picks from the ones that do.
  */
-function pickKeeping(
-  candidates: readonly number[],
+function pickWeighted(
   weights: readonly number[],
   random: () => number,
-  keep: (tone: number) => boolean,
+  keep?: (index: number) => boolean,
 ): number {
   let total = 0;
   for (const weight of weights) total += weight;
-  const draw = total > 0 ? random() * total : 0;
-  let chosen = Math.max(0, weights.length - 1);
-  if (total > 0) {
-    let left = draw;
-    for (let index = 0; index < weights.length; index++) {
-      left -= weights[index] ?? 0;
-      if (left < 0) {
-        chosen = index;
-        break;
-      }
+  const draw = random() * total;
+  let chosen = weights.length - 1;
+  let left = draw;
+  for (let index = 0; index < weights.length; index++) {
+    left -= weights[index] ?? 0;
+    if (left < 0) {
+      chosen = index;
+      break;
     }
   }
-  const tone = candidates[chosen] ?? candidates[0] ?? 0;
-  if (keep(tone)) return tone;
+  if (!keep || keep(chosen)) return chosen;
   let readyTotal = 0;
-  for (let index = 0; index < candidates.length; index++) {
-    if (keep(candidates[index] ?? -1)) readyTotal += weights[index] ?? 0;
+  for (let index = 0; index < weights.length; index++) {
+    if (keep(index)) readyTotal += weights[index] ?? 0;
   }
-  if (readyTotal <= 0) return tone;
-  let cursor = (total > 0 ? draw / total : 0) * readyTotal;
-  for (let index = 0; index < candidates.length; index++) {
-    const next = candidates[index];
-    if (next === undefined || !keep(next)) continue;
+  if (readyTotal <= 0) return chosen;
+  let cursor = (draw / total) * readyTotal;
+  for (let index = 0; index < weights.length; index++) {
+    if (!keep(index)) continue;
     cursor -= weights[index] ?? 0;
-    if (cursor < 0) return next;
+    if (cursor < 0) return index;
   }
-  return tone;
+  return chosen;
 }
 
 function legalIndexes(
@@ -1521,8 +1505,8 @@ function chooseFragment(
 /**
  * Scored pitches, then a sentence. Bar 2 opens on bar 1's first four
  * attacks, transposed by one or two scale steps. A 4-bar phrase sequences
- * a two-note fragment twice in bar 3. The free tail walks to the cadence,
- * and the last interval steps when a legal scale tone can.
+ * a two-note fragment twice in bar 3. The free tail walks to the cadence
+ * and prefers a last step of one or two semitones when one is still legal.
  * A second two-pitch return, a repeated three-pitch cell, and a fifth
  * scale step in the same direction are refused when another tone is legal.
  */
@@ -1647,12 +1631,21 @@ function walkScored(
         index === events.length - 2 ? cadenceMidi : null,
       ),
     );
-    // The returned figure is already placed. A weighted free note that
-    // already steps is left alone. One that leaps is redrawn from the
-    // legal scale tones that can still step into the cadence.
+    // The returned figure is already placed. The note before the approach
+    // stays when a step into the cadence is still reachable from it. The
+    // approach stays when it is already one or two semitones away.
+    // Otherwise the same draw picks a legal scale tone that keeps the step.
+    const chosenTone = (keep?: (tone: number) => boolean) => {
+      const at = pickWeighted(
+        weights,
+        random,
+        keep ? (slot) => keep(candidates[slot] ?? -1) : undefined,
+      );
+      return candidates[at] ?? candidates[0];
+    };
     const chosen =
       index === events.length - 3
-        ? pickKeeping(candidates, weights, random, (tone) =>
+        ? chosenTone((tone) =>
             cadenceApproach(
               ladder,
               alive,
@@ -1664,11 +1657,11 @@ function walkScored(
             ),
           )
         : index === events.length - 2
-          ? pickKeeping(candidates, weights, random, (tone) => {
+          ? chosenTone((tone) => {
               const gap = Math.abs((ladder[tone]?.midi ?? 0) - cadenceMidi);
               return gap > 0 && gap <= 2;
             })
-          : (candidates[pickWeighted(weights, random)] ?? candidates[0]);
+          : chosenTone();
     if (chosen === undefined) return null;
     notes.push(pitchedFromLadder(ladder, chosen));
   }
