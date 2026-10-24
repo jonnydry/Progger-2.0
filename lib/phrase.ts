@@ -850,6 +850,37 @@ function arrivalOk(gap: number, duration: number): boolean {
   return !(duration <= 0.5 && gap > 5);
 }
 
+/** The note before the cadence still has a scale tone a step away after the history guards. */
+function cadenceApproach(
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  approach: number,
+  penIndex: number,
+  cadenceMidi: number,
+): boolean {
+  const placed = notes.concat(pitchedFromLadder(ladder, approach));
+  const candidates = withoutMonotone(
+    ladder,
+    withoutCycle(
+      ladder,
+      withoutAlternation(
+        ladder,
+        legalIndexes(ladder, alive, events, placed, penIndex),
+        placed,
+      ),
+      placed,
+      3,
+    ),
+    placed,
+  );
+  return candidates.some((tone) => {
+    const gap = Math.abs((ladder[tone]?.midi ?? 0) - cadenceMidi);
+    return gap > 0 && gap <= 2;
+  });
+}
+
 function guideTone(degree: string): boolean {
   const match = /^([b#]*)(\d+)$/.exec(degree);
   if (!match) return false;
@@ -1203,6 +1234,47 @@ function pickWeighted(weights: readonly number[], random: () => number): number 
   return weights.length - 1;
 }
 
+/**
+ * One draw against the full weights. Keep it when it already qualifies.
+ * Otherwise the same draw picks from the tones that do.
+ */
+function pickKeeping(
+  candidates: readonly number[],
+  weights: readonly number[],
+  random: () => number,
+  keep: (tone: number) => boolean,
+): number {
+  let total = 0;
+  for (const weight of weights) total += weight;
+  const draw = total > 0 ? random() * total : 0;
+  let chosen = Math.max(0, weights.length - 1);
+  if (total > 0) {
+    let left = draw;
+    for (let index = 0; index < weights.length; index++) {
+      left -= weights[index] ?? 0;
+      if (left < 0) {
+        chosen = index;
+        break;
+      }
+    }
+  }
+  const tone = candidates[chosen] ?? candidates[0] ?? 0;
+  if (keep(tone)) return tone;
+  let readyTotal = 0;
+  for (let index = 0; index < candidates.length; index++) {
+    if (keep(candidates[index] ?? -1)) readyTotal += weights[index] ?? 0;
+  }
+  if (readyTotal <= 0) return tone;
+  let cursor = (total > 0 ? draw / total : 0) * readyTotal;
+  for (let index = 0; index < candidates.length; index++) {
+    const next = candidates[index];
+    if (next === undefined || !keep(next)) continue;
+    cursor -= weights[index] ?? 0;
+    if (cursor < 0) return next;
+  }
+  return tone;
+}
+
 function legalIndexes(
   ladder: readonly LadderTone[],
   alive: readonly (readonly boolean[])[],
@@ -1449,7 +1521,8 @@ function chooseFragment(
 /**
  * Scored pitches, then a sentence. Bar 2 opens on bar 1's first four
  * attacks, transposed by one or two scale steps. A 4-bar phrase sequences
- * a two-note fragment twice in bar 3. The tail walks freely to the cadence.
+ * a two-note fragment twice in bar 3. The free tail walks to the cadence,
+ * and the last interval steps when a legal scale tone can.
  * A second two-pitch return, a repeated three-pitch cell, and a fifth
  * scale step in the same direction are refused when another tone is legal.
  */
@@ -1574,7 +1647,28 @@ function walkScored(
         index === events.length - 2 ? cadenceMidi : null,
       ),
     );
-    const chosen = candidates[pickWeighted(weights, random)] ?? candidates[0];
+    // The returned figure is already placed. A weighted free note that
+    // already steps is left alone. One that leaps is redrawn from the
+    // legal scale tones that can still step into the cadence.
+    const chosen =
+      index === events.length - 3
+        ? pickKeeping(candidates, weights, random, (tone) =>
+            cadenceApproach(
+              ladder,
+              alive,
+              events,
+              notes,
+              tone,
+              index + 1,
+              cadenceMidi,
+            ),
+          )
+        : index === events.length - 2
+          ? pickKeeping(candidates, weights, random, (tone) => {
+              const gap = Math.abs((ladder[tone]?.midi ?? 0) - cadenceMidi);
+              return gap > 0 && gap <= 2;
+            })
+          : (candidates[pickWeighted(weights, random)] ?? candidates[0]);
     if (chosen === undefined) return null;
     notes.push(pitchedFromLadder(ladder, chosen));
   }
