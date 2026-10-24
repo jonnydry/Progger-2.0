@@ -232,3 +232,24 @@ void test('score order and the lane tie-break pick a fixed line', () => {
     [60, 62, 59, 60, 65, 67, 64, 65, 62, 64, 69, 64, 65, 67, 69, 67, 64, 65, 67, 65, 60, 62, 64],
   );
 });
+
+void test('these cadence tails stay on the weighted pitches', () => {
+  // C 7/2 is a first-candidate fallback, C 46/2 checks reachability on the
+  // wrong note, C 1/4 draws the fallback again, C 7/4 takes the first
+  // qualifying tone, and F#maj7 24/4 drops the history guards.
+  const lines: readonly (readonly [string, string, string, number, 2 | 4, readonly number[]])[] = [
+    ['C', 'major', 'C', 7, 2, [71, 72, 74, 76, 72, 74, 76, 77, 74, 67]],
+    ['C', 'major', 'C', 46, 2, [60, 59, 62, 64, 65, 67, 64, 62, 65, 67, 64, 57, 55]],
+    ['C', 'major', 'C', 1, 4, [71, 69, 72, 67, 71, 69, 72, 67, 62, 67, 65, 64, 62, 59, 60, 55, 57, 55]],
+    ['C', 'major', 'C', 7, 4, [72, 69, 71, 72, 76, 72, 74, 76, 77, 76, 72, 79, 76, 71, 72, 74, 69, 67]],
+    ['F#', 'major', 'F#maj7', 24, 4, [53, 54, 51, 56, 53, 54, 56, 53, 58, 56, 58, 51, 53, 49, 51, 54, 58, 59, 61, 66, 65, 66]],
+  ];
+  for (const [root, scaleId, symbol, seed, bars, midis] of lines) {
+    const line = phrase(root, scaleId, symbol, seed, bars);
+    assert.deepEqual(
+      line.notes.map((note) => note.midi),
+      [...midis],
+      `${symbol} seed ${seed} ${bars}`,
+    );
+  }
+});
