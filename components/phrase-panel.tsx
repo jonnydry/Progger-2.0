@@ -692,12 +692,7 @@ export function PhrasePanel({
   }
   const busy = status === 'playing' || status === 'starting';
   const plan = phrase.ok ? phrase.phrase.plan : null;
-  const {
-    phone: phoneKeys,
-    stacked: stackedPlate,
-    mid: midPlate,
-    deckRef,
-  } = useDeckBreakpoints();
+  const { phone: phoneKeys, deckRef } = useDeckBreakpoints();
   const playKey = (
     <button
       key="play"
@@ -717,6 +712,9 @@ export function PhrasePanel({
   const historyBank = (
     <fieldset key="bank" className="phrase-history-steps deck-key-bank">
       <legend className="sr-only">Phrase history</legend>
+      <p id="phrase-history-hint" className="sr-only">
+        Last 3 phrases.
+      </p>
       <button
         type="button"
         className="phrase-action phrase-history-step deck-key"
@@ -784,9 +782,7 @@ export function PhrasePanel({
   );
   const lengthControl = (
     <fieldset key="length" className="deck-switch">
-      <legend className="deck-legend">
-        <span className="sr-only">Phrase </span>Length
-      </legend>
+      <legend className="deck-legend">Bars</legend>
       <button
         type="button"
         aria-pressed={bars === 2}
@@ -877,30 +873,23 @@ export function PhrasePanel({
       />
     </label>
   );
+  const tempoGroup = (
+    <div key="tempo" className="deck-tempo">
+      {tempoControl}
+      {speedControl}
+    </div>
+  );
   const transport = phoneKeys
     ? [playKey, loopKey, saveKey, historyBank]
     : [playKey, historyBank, loopKey, saveKey];
-  const plate =
-    phoneKeys && !stackedPlate
-      ? [lengthControl, speedControl, tempoControl, swingControl, seedControl]
-      : !phoneKeys && midPlate
-        ? [lengthControl, tempoControl, speedControl, seedControl, swingControl]
-        : [
-            lengthControl,
-            tempoControl,
-            speedControl,
-            swingControl,
-            seedControl,
-          ];
+  const plate = [lengthControl, tempoGroup, swingControl, seedControl];
 
   return (
     <div className="phrase-panel" data-scale-id={scaleId}>
       <div className="phrase-heading">
         <h2>Phrase</h2>
         <p>
-          Over {pretty(chordSymbol)} in {pretty(scaleRoot)} {scaleName}. Rules
-          only: chord tones on beats 1 and 3, mostly steps, and a landing on the{' '}
-          {plan ? CADENCE_LABEL[plan.cadence] : 'chord'}.
+          Over {pretty(chordSymbol)} in {pretty(scaleRoot)} {scaleName}.
         </p>
       </div>
       <div
@@ -932,22 +921,15 @@ export function PhrasePanel({
             )}
             {plan && (
               <p className="phrase-plan">
-                {bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
-                {RHYTHM_LABEL[plan.rhythm]} · {REGISTER_LABEL[plan.register]}{' '}
-                register · ends on the {CADENCE_LABEL[plan.cadence]} · swing{' '}
-                {Math.round(swing * 100)}%
-                {trueHalf ? ` · half of ${tempo}` : ''}
+                {CONTOUR_LABEL[plan.contour]} · {RHYTHM_LABEL[plan.rhythm]} ·{' '}
+                {REGISTER_LABEL[plan.register]} · lands on the{' '}
+                {CADENCE_LABEL[plan.cadence]}
               </p>
             )}
           </div>
           <span className="deck-reel" aria-hidden="true" />
         </div>
-        <div className="deck-keys">
-          {transport}
-          <p id="phrase-history-hint" className="phrase-history-hint">
-            Last 3 phrases.
-          </p>
-        </div>
+        <div className="deck-keys">{transport}</div>
         <div className="deck-plate">{plate}</div>
       </div>
       <p

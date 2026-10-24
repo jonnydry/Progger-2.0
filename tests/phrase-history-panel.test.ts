@@ -102,7 +102,11 @@ async function historyEntries(page: Page) {
   }, PHRASE_HISTORY_KEY);
 }
 
-type PhraseChangeCall = { method: 'start' | 'queuePhrase'; bars: number; at: number };
+type PhraseChangeCall = {
+  method: 'start' | 'queuePhrase';
+  bars: number;
+  at: number;
+};
 
 async function armPhraseChanges(page: Page) {
   await page.evaluate(async () => {
@@ -167,8 +171,8 @@ async function settledChangeCount(page: Page) {
         requestAnimationFrame(() => {
           setTimeout(() => {
             resolve(
-              (window as Window & { __phraseChanges?: number }).__phraseChanges ??
-                -1,
+              (window as Window & { __phraseChanges?: number })
+                .__phraseChanges ?? -1,
             );
           }, 40);
         });
@@ -226,11 +230,16 @@ void test('back and forward restore the last phrases on a phone width', async (t
     await fit(page, 'New phrase');
     assert.equal(await previous.isDisabled(), true);
     assert.equal(await next.isDisabled(), true);
-    const hint = await page.locator('#phrase-history-hint').innerText();
-    assert.match(hint, /Last 3 phrases\./);
-    const hintBox = await page.locator('#phrase-history-hint').boundingBox();
-    assert.ok(hintBox && hintBox.width > 0 && hintBox.x >= -1);
-    assert.ok(hintBox.x + hintBox.width <= width + 1);
+    const hint = page.locator('#phrase-history-hint');
+    assert.match(await hint.innerText(), /Last 3 phrases\./);
+    assert.equal(
+      await hint.evaluate((node) => node.classList.contains('sr-only')),
+      true,
+    );
+    assert.equal(
+      await page.locator('[aria-describedby="phrase-history-hint"]').count(),
+      2,
+    );
 
     const first = await seedOf(page);
     await page.getByRole('button', { name: 'New phrase' }).click();
@@ -765,7 +774,9 @@ void test('a history step that changes bars queues the next downbeat', async (t)
       await freshPhrases(page, server.origin, 1280);
       await page.getByRole('button', { name: `${change.back} bars` }).click();
       await page.getByRole('button', { name: 'New phrase' }).click();
-      await page.getByRole('button', { name: `${change.playing} bars` }).click();
+      await page
+        .getByRole('button', { name: `${change.playing} bars` })
+        .click();
       await page
         .locator('button[aria-pressed="true"]', {
           hasText: `${change.playing} bars`,

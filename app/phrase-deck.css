@@ -66,9 +66,7 @@
   grid-template-columns:
     minmax(0, 1.3fr) minmax(0, 3fr) minmax(0, 1fr)
     minmax(0, 1.3fr);
-  grid-template-areas:
-    'play bank loop rec'
-    '. hint . .';
+  grid-template-areas: 'play bank loop rec';
   gap: var(--space-1) 6px;
   min-width: 0;
 }
@@ -90,14 +88,6 @@
 }
 .deck-key-rec {
   grid-area: rec;
-}
-.deck-keys .phrase-history-hint {
-  grid-area: hint;
-  margin: 2px 0 0;
-  color: var(--quiet);
-  font-size: var(--text-xs);
-  line-height: 1.2;
-  text-align: center;
 }
 
 .phrase-deck .deck-key {
@@ -215,9 +205,9 @@
 .deck-plate {
   display: grid;
   grid-template-columns:
-    auto minmax(150px, 1.4fr) auto minmax(130px, 1fr)
+    auto minmax(240px, 1.8fr) minmax(140px, 1fr)
     auto;
-  grid-template-areas: 'length tempo speed swing seed';
+  grid-template-areas: 'length tempo swing seed';
   align-items: end;
   gap: 10px 18px;
   min-width: 0;
@@ -225,6 +215,20 @@
   background: var(--surface-plate);
   border: 1px solid var(--edge);
   border-radius: var(--radius-key);
+}
+/* Half speed changes the tempo, so it sits in that cell. */
+.deck-tempo {
+  grid-area: tempo;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  column-gap: 10px;
+  min-width: 0;
+}
+.deck-tempo .deck-fader,
+.deck-tempo .deck-toggle {
+  grid-area: auto;
+  min-width: 0;
 }
 .deck-legend {
   display: block;
@@ -283,7 +287,6 @@
   border-color: var(--green);
 }
 .phrase-deck .deck-toggle {
-  grid-area: speed;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -390,10 +393,10 @@
 /* Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
 @media (max-width: 960px) {
   .deck-plate {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
-      'length tempo speed'
-      'seed swing swing';
+      'length tempo'
+      'swing seed';
   }
 }
 
@@ -416,20 +419,19 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
     grid-template-areas:
       'play loop rec'
-      'bank bank bank'
-      'hint hint hint';
+      'bank bank bank';
     row-gap: var(--space-2);
   }
   .phrase-deck .deck-key {
     min-height: 60px;
   }
   .deck-plate {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      'length speed'
-      'tempo tempo'
-      'swing swing'
-      'seed seed';
+      'length'
+      'tempo'
+      'swing'
+      'seed';
     padding: 10px;
   }
   .deck-counter input {
@@ -437,19 +439,18 @@
   }
 }
 
-/* Below this the two halves of Length cannot hold "2 bars" beside Half
-   speed. Length takes the row, and Half speed sits under the tempo it
-   halves. */
+/* Below this the tempo cell cannot hold the slider, the BPM, and Half
+   speed on one line. Half speed takes the width under the slider. */
 @media (max-width: 420px) {
   .deck-plate {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      'length'
-      'tempo'
-      'speed'
-      'swing'
-      'seed';
     row-gap: var(--space-2);
+  }
+  .deck-tempo {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--space-2);
+  }
+  .deck-tempo .deck-toggle {
+    width: 100%;
   }
   .deck-switch button {
     padding-inline: var(--space-2);
