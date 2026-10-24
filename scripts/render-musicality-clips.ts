@@ -17,7 +17,6 @@ import { schedulePhrase } from '../lib/phrase-audio.ts';
 import {
   generatePhrase,
   onsetSeconds,
-  phraseOnsets,
   swingRatioForAmount,
   type RhythmId,
   type SwingInput,
@@ -502,11 +501,8 @@ for (const pair of PAIRS) {
   ) {
     throw new Error(`${pair.id} A and B onsets or durations differ`);
   }
-  const planBeats = phraseOnsets(after.plan.rhythm, BARS);
-  if (beatsB.join(',') !== planBeats.join(',')) {
-    throw new Error(
-      `${pair.id} leaves the ${after.plan.rhythm} grid: ${beatsB.join(',')}`,
-    );
+  if (beatsB.some((beat) => Math.abs(beat * 2 - Math.round(beat * 2)) > 1e-6)) {
+    throw new Error(`${pair.id} leaves the eighth grid: ${beatsB.join(',')}`);
   }
   if (JSON.stringify(before.plan) !== JSON.stringify(after.plan)) {
     throw new Error(`${pair.id} plans differ`);

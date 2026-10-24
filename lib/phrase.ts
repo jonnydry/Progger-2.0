@@ -13,12 +13,9 @@ import type { PhraseFretMark } from './phrase-marks.ts';
 export const PHRASE_PLANNER_TIMEOUT_MS = 800;
 export const PHRASE_RANGE = 18;
 /**
- * Anchor search and gap search each count one step per call.
- * The memoized engine peaks at 1803 steps: major-blues, C, 4 bars,
- * quarters / fall / low / root. The cap stays under the old 975fe75
- * minor-blues and whole-tone peaks at 4 bars. A search that has used
- * the cap refuses another step, so the count never becomes 4001, and
- * keeps the best complete line found so far.
+ * Each placed note counts one step. A search that has used the cap
+ * refuses another step, so the count never becomes 4001, and the
+ * generator keeps the best complete line found so far.
  */
 export const PHRASE_SEARCH_STEP_CAP = 4000;
 
@@ -77,11 +74,17 @@ export type Feel = 'straight' | 'swing';
 export type PhraseSource = 'rules' | 'planner';
 export type PhraseDotVisibility = 'shown' | 'hidden';
 
+export type PhraseForm = 'answer' | 'sentence';
+
 export type PhrasePlan = {
   contour: Contour;
   rhythm: RhythmId;
   register: RegisterName;
   cadence: CadenceTarget;
+  /** Answer is two bars. Sentence is four. Absent on older plans. */
+  form?: PhraseForm;
+  /** One cell-id string per bar, in order. */
+  cells?: readonly string[];
 };
 
 /** Songwriting locks. A later step can pin any of these and save the rest. */
@@ -163,13 +166,6 @@ const REGISTER_LOW: Record<RegisterName, number> = {
   mid: 55,
   high: 64,
 };
-const RHYTHM_ONSETS: Record<RhythmId, readonly number[]> = {
-  quarters: [0, 1, 2, 3],
-  eighths: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5],
-  'long-short': [0, 1.5, 2, 3.5],
-  push: [0, 1, 1.5, 2, 3, 3.5],
-};
-const LEAP_SIZES = [2, 3, 4];
 const SHIFT_COST = 20;
 /** A hand move of this many frets or more is a shift. Three or fewer is a reach. */
 const SHIFT_FRETS = 4;
@@ -274,16 +270,6 @@ export function isStrongBeat(beat: number): boolean {
   const within = ((beat % 4) + 4) % 4;
   const half = Math.round(within * 2) / 2;
   return half === 0 || half === 2;
-}
-
-export function phraseOnsets(rhythm: RhythmId, bars: 2 | 4): number[] {
-  const pattern = RHYTHM_ONSETS[rhythm];
-  const beats: number[] = [];
-  for (let bar = 0; bar < bars; bar++) {
-    for (const onset of pattern) beats.push(bar * 4 + onset);
-  }
-  beats.push(bars * 4);
-  return beats;
 }
 
 /** The cadence holds for two beats, then a loop can restart on the next downbeat. */
@@ -659,1533 +645,1392 @@ function buildLadder(
   return ladder;
 }
 
-function closest(
-  indexes: readonly number[],
-  target: number,
-  limit?: number,
-): number[] {
-  return [...indexes]
-    .sort((a, b) => Math.abs(a - target) - Math.abs(b - target) || a - b)
-    .slice(0, limit ?? indexes.length);
-}
-
-function fillGap(
-  from: number,
-  to: number,
-  intervals: number,
-  leaps: number,
-  length: number,
-  cache: Map<string, number[] | null>,
-): number[] | null {
-  const key = `${from}|${to}|${intervals}|${leaps}|${length}`;
-  const cached = cache.get(key);
-  if (cached !== undefined) return cached;
-  const path = [from];
-  const missed = new Set<string>();
-  const search = (
-    pos: number,
-    left: number,
-    resolve: number,
-    leapsLeft: number,
-  ): boolean => {
-    if (countSearchStep()) return false;
-    const state = `${pos}|${left}|${resolve}|${leapsLeft}`;
-    if (missed.has(state)) return false;
-    const fail = () => {
-      if (phraseSearchRefused) return false;
-      missed.add(state);
-      return false;
-    };
-    if (left === 0) {
-      return pos === to && leapsLeft === 0 && resolve === 0 ? true : fail();
-    }
-    if (resolve !== 0) {
-      const next = pos + resolve;
-      if (next < 0 || next >= length) return fail();
-      path.push(next);
-      const ok = search(next, left - 1, 0, leapsLeft);
-      if (!ok) path.pop();
-      return ok || fail();
-    }
-    if (leapsLeft * 2 > left) return fail();
-    if (leapsLeft === 0) {
-      const distance = Math.abs(to - pos);
-      if (distance > left || (left - distance) % 2 !== 0) return fail();
-    }
-    const toward = Math.sign(to - pos) || 1;
-    const options: { next: number; leap: boolean; resolve: number }[] = [];
-    const step = (sign: number) => {
-      const next = pos + sign;
-      if (next >= 0 && next < length)
-        options.push({ next, leap: false, resolve: 0 });
-    };
-    const leap = (sign: number, size: number) => {
-      if (left < 2 || leapsLeft < 1) return;
-      const next = pos + sign * size;
-      if (next >= 0 && next < length)
-        options.push({ next, leap: true, resolve: -sign });
-    };
-    const tight = leapsLeft > 0 && left <= leapsLeft * 2 + 1;
-    if (tight) {
-      for (const size of LEAP_SIZES) {
-        leap(toward, size);
-        leap(-toward, size);
-      }
-      step(toward);
-      step(-toward);
-    } else {
-      step(toward);
-      step(-toward);
-      if (leapsLeft > 0) {
-        for (const size of LEAP_SIZES) {
-          leap(toward, size);
-          leap(-toward, size);
-        }
-      }
-    }
-    for (const option of options) {
-      path.push(option.next);
-      if (
-        search(
-          option.next,
-          left - 1,
-          option.resolve,
-          leapsLeft - (option.leap ? 1 : 0),
-        )
-      )
-        return true;
-      path.pop();
-      if (searchAtCap()) return false;
-    }
-    return fail();
-  };
-  const found =
-    intervals === 0 ? from === to : search(from, intervals, 0, leaps);
-  // Landing on the cap can still be a finished gap. Only a refused step
-  // is an abort, and that result is not cached as a real miss.
-  if (phraseSearchRefused) return null;
-  const result = found ? [...path] : null;
-  cache.set(key, result);
-  return result;
-}
-
-function minLeaps(
-  from: number,
-  to: number,
-  intervals: number,
-  length: number,
-  cache: Map<string, number[] | null>,
-): number | null {
-  const max = Math.floor(intervals / 2);
-  for (let leaps = 0; leaps <= max; leaps++) {
-    if (fillGap(from, to, intervals, leaps, length, cache)) return leaps;
-  }
-  return null;
-}
-
-function realize(
-  ladder: readonly LadderTone[],
-  events: readonly { beat: number; duration: number; strong: boolean }[],
-  plan: PhrasePlan,
-  cadencePcs: ReadonlySet<number>,
-): number[] | null {
-  const chordIndexes = ladder.flatMap((tone, index) =>
-    tone.chordTone ? [index] : [],
-  );
-  const cadenceIndexes = ladder.flatMap((tone, index) =>
-    cadencePcs.has(tone.note.pc) ? [index] : [],
-  );
-  if (!chordIndexes.length || !cadenceIndexes.length) return null;
-  const strongIndexes = events.flatMap((event, index) =>
-    event.strong ? [index] : [],
-  );
-  const endTarget =
-    contourHeight(plan.contour, 1) * Math.max(0, ladder.length - 1);
-  // A low ending wants the bottom octave of the cadence tone. Inset only a
-  // high ending, so a leap can still resolve into it without skipping the
-  // lower octave that arch, fall, and wave are aiming at.
-  const lowEnding = endTarget <= (ladder.length - 1) / 2;
-  const approachable = lowEnding
-    ? cadenceIndexes
-    : cadenceIndexes.filter(
-        (index) => index >= 2 && index <= ladder.length - 3,
-      );
-  const cadenceLadder = closest(
-    approachable.length ? approachable : cadenceIndexes,
-    endTarget,
-    1,
-  )[0];
-  const gaps = strongIndexes
-    .slice(0, -1)
-    .map((start, gap) => strongIndexes[gap + 1] - start);
-  const maxLeaps = gaps.map((intervals) => Math.floor(intervals / 2));
-  const targetLeaps = Math.round((events.length - 1) * 0.3);
-  const cache = new Map<string, number[] | null>();
-  const anchorCount = strongIndexes.length;
-  const failedVisits = new Set<string>();
-  let best: { anchors: number[]; leaps: number[] } | null = null;
-
-  const choose = (slack: number, limit: number) => {
-    const budget = targetLeaps + slack;
-    const anchors = Array<number>(anchorCount).fill(-1);
-    const leaps = Array<number>(Math.max(0, anchorCount - 1)).fill(0);
-    // A tighter candidate limit must not poison a later search at this budget.
-    failedVisits.clear();
-    const visit = (ordinal: number, spent: number): boolean => {
-      if (countSearchStep()) return false;
-      const previous = ordinal > 0 ? anchors[ordinal - 1] : -1;
-      const memo = `${ordinal}|${previous}|${spent}`;
-      if (failedVisits.has(memo)) return false;
-      const fail = () => {
-        if (phraseSearchRefused) return false;
-        failedVisits.add(memo);
-        return false;
-      };
-      if (ordinal === anchorCount - 1) {
-        anchors[ordinal] = cadenceLadder;
-        if (ordinal === 0) {
-          best = { anchors: anchors.slice(), leaps: leaps.slice() };
-          return true;
-        }
-        const need = minLeaps(
-          anchors[ordinal - 1],
-          cadenceLadder,
-          gaps[ordinal - 1],
-          ladder.length,
-          cache,
-        );
-        if (need === null || spent + need > budget) return fail();
-        leaps[ordinal - 1] = need;
-        best = { anchors: anchors.slice(), leaps: leaps.slice() };
-        return true;
-      }
-      const noteIndex = strongIndexes[ordinal];
-      const target =
-        contourHeight(
-          plan.contour,
-          noteIndex / Math.max(1, events.length - 1),
-        ) * Math.max(0, ladder.length - 1);
-      for (const option of closest(chordIndexes, target, limit)) {
-        let need = 0;
-        if (ordinal > 0) {
-          const found = minLeaps(
-            anchors[ordinal - 1],
-            option,
-            gaps[ordinal - 1],
-            ladder.length,
-            cache,
-          );
-          if (found === null || spent + found > budget) continue;
-          need = found;
-          leaps[ordinal - 1] = need;
-        }
-        anchors[ordinal] = option;
-        if (visit(ordinal + 1, spent + need)) {
-          best = {
-            anchors: anchors.slice(),
-            leaps: leaps.slice(),
-          };
-          return true;
-        }
-        if (searchAtCap()) return false;
-      }
-      return fail();
-    };
-    if (searchAtCap()) return best;
-    return visit(0, 0) ? best : null;
-  };
-
-  let chosen: { anchors: number[]; leaps: number[] } | null = null;
-  for (const slack of [0, 1, 2, 4, 8]) {
-    if (searchAtCap()) break;
-    chosen = choose(slack, Math.min(4, chordIndexes.length));
-    if (chosen) break;
-    if (slack === 8 && !searchAtCap()) {
-      chosen = choose(slack, chordIndexes.length);
-    }
-    if (chosen) break;
-  }
-  if (!chosen) chosen = best;
-  if (!chosen) return null;
-
-  let spare = targetLeaps - chosen.leaps.reduce((sum, count) => sum + count, 0);
-  const order = maxLeaps
-    .map((_, index) => index)
-    .sort(
-      (a, b) =>
-        maxLeaps[b] - chosen.leaps[b] - (maxLeaps[a] - chosen.leaps[a]) ||
-        a - b,
-    );
-  while (spare > 0) {
-    let added = false;
-    for (const gap of order) {
-      const next = chosen.leaps[gap] + 1;
-      if (next > maxLeaps[gap]) continue;
-      if (
-        !fillGap(
-          chosen.anchors[gap],
-          chosen.anchors[gap + 1],
-          gaps[gap],
-          next,
-          ladder.length,
-          cache,
-        )
-      )
-        continue;
-      chosen.leaps[gap] = next;
-      spare -= 1;
-      added = true;
-      if (spare <= 0) break;
-    }
-    if (!added) break;
-  }
-
-  const indexes = Array<number>(events.length).fill(-1);
-  indexes[strongIndexes[0]] = chosen.anchors[0];
-  for (let gap = 0; gap < gaps.length; gap++) {
-    const path = fillGap(
-      chosen.anchors[gap],
-      chosen.anchors[gap + 1],
-      gaps[gap],
-      chosen.leaps[gap],
-      ladder.length,
-      cache,
-    );
-    if (!path) return null;
-    for (let step = 0; step < path.length; step++)
-      indexes[strongIndexes[gap] + step] = path[step];
-  }
-  return indexes.every((index) => index >= 0) ? indexes : null;
-}
-
-function eventsFor(rhythm: RhythmId, bars: 2 | 4) {
-  const beats = phraseOnsets(rhythm, bars);
-  return beats.map((beat, index) => ({
-    beat,
-    duration: (beats[index + 1] ?? beat + 2) - beat,
-    strong: isStrongBeat(beat),
-  }));
-}
-
-/**
- * A neighbor figure may sound twice (four notes). The fifth note has to move.
- * Longer than this, the line is sitting on one cell.
- */
-export const PHRASE_CELL_LIMIT = 4;
-/** Longer than this on three pitches, the line is sitting in one pocket. */
-export const PHRASE_VARIETY_RUN = 6;
-/** Perfect fifth. Wider leaps are walked when the gap can hold the steps. */
-export const PHRASE_WIDE_LEAP = 7;
-/** A register that spans a fourth should not sing inside a smaller range. */
-export const PHRASE_MIN_RANGE = 5;
-
 type GridEvent = { beat: number; duration: number; strong: boolean };
 
-/** Longest alternation of two distinct MIDI pitches, in notes. G–A–G–A is 4. G–A–G–A–G is 5. */
-export function phraseCellLength(midis: readonly number[]): number {
-  let longest = midis.length > 0 ? 1 : 0;
-  for (let start = 0; start + 1 < midis.length; start++) {
-    if (midis[start] === midis[start + 1]) continue;
-    let end = start + 1;
-    while (end + 1 < midis.length && midis[end + 1] === midis[end - 1])
-      end += 1;
-    longest = Math.max(longest, end - start + 1);
-  }
-  return longest;
-}
+type CellDef = { span: number; hits: readonly (readonly [number, number])[] };
+
+/** Eighth-grid cells. `at` and `dur` are eighths inside the cell. No triplets. */
+const CELLS: Record<string, CellDef> = {
+  q: { span: 2, hits: [[0, 2]] },
+  ee: {
+    span: 2,
+    hits: [
+      [0, 1],
+      [1, 1],
+    ],
+  },
+  zr: { span: 2, hits: [[1, 1]] },
+  rz: { span: 2, hits: [[0, 1]] },
+  dq: {
+    span: 4,
+    hits: [
+      [0, 3],
+      [3, 1],
+    ],
+  },
+  qd: {
+    span: 4,
+    hits: [
+      [0, 1],
+      [1, 3],
+    ],
+  },
+  h: { span: 4, hits: [[0, 4]] },
+  ant: { span: 2, hits: [[1, 1]] },
+};
 
 /**
- * Scale walk from `from` to `to` in exactly `intervals` steps.
- * Spare steps bulge away from the target once, then come back, so a held
- * tone becomes a small arch instead of a two-note loop.
+ * Bars the rhythm lock may draw. Each fills eight eighths.
+ * A strong onset after the first of the bar is preceded by a weak one,
+ * and the bar ends on a weak onset so the next downbeat can be a step.
  */
-function stepWalk(
-  from: number,
-  to: number,
-  intervals: number,
-  length: number,
-): number[] | null {
-  const distance = Math.abs(to - from);
-  if (intervals < 0 || distance > intervals || (intervals - distance) % 2 !== 0)
-    return null;
-  if (intervals === 0) return from === to ? [from] : null;
-  const path = [from];
-  let pos = from;
-  let left = intervals;
-  while (left > 0) {
-    const dist = Math.abs(to - pos);
-    if (dist === left) {
-      const sign = Math.sign(to - pos);
-      if (sign === 0) return null;
-      pos += sign;
-      path.push(pos);
-      left -= 1;
-      continue;
-    }
-    const toward = Math.sign(to - pos);
-    const away = toward === 0 ? 1 : -toward;
-    const candidates = [pos + away, pos - away];
-    let moved = false;
-    for (const next of candidates) {
-      if (next < 0 || next >= length || next === pos) continue;
-      const nextDist = Math.abs(to - next);
-      const nextLeft = left - 1;
-      if (nextDist <= nextLeft && (nextLeft - nextDist) % 2 === 0) {
-        pos = next;
-        path.push(pos);
-        left -= 1;
-        moved = true;
-        break;
-      }
-    }
-    if (!moved) return null;
+const RAW_BARS: Record<RhythmId, readonly (readonly string[])[]> = {
+  quarters: [
+    ['q', 'q', 'q', 'q'],
+    ['q', 'q', 'zr', 'q'],
+    ['zr', 'q', 'zr', 'q'],
+    ['q', 'zr', 'zr', 'q'],
+    ['h', 'zr', 'q'],
+    ['q', 'h', 'zr'],
+    ['zr', 'zr', 'q', 'q'],
+    ['q', 'zr', 'q', 'zr'],
+    ['zr', 'zr', 'zr', 'q'],
+    ['zr', 'q', 'zr', 'zr'],
+  ],
+  eighths: [
+    ['ee', 'ee', 'ee', 'ee'],
+    ['ee', 'zr', 'ee', 'zr'],
+    ['q', 'ee', 'q', 'ee'],
+    ['zr', 'ee', 'zr', 'ee'],
+    ['ee', 'ee', 'zr', 'q'],
+    ['zr', 'zr', 'ee', 'ee'],
+    ['ee', 'zr', 'zr', 'ee'],
+    ['q', 'ee', 'zr', 'q'],
+    ['zr', 'zr', 'zr', 'zr'],
+    ['zr', 'ee', 'zr', 'zr'],
+  ],
+  'long-short': [
+    ['dq', 'qd'],
+    ['qd', 'dq'],
+    ['dq', 'q', 'q'],
+    ['q', 'q', 'dq'],
+    ['dq', 'zr', 'q'],
+    ['qd', 'ee', 'q'],
+    ['q', 'dq', 'zr'],
+    ['zr', 'qd', 'q'],
+  ],
+  push: [
+    ['q', 'ant', 'q', 'ant'],
+    ['ee', 'ant', 'q', 'ant'],
+    ['q', 'ant', 'ee', 'zr'],
+    ['ant', 'q', 'ant', 'q'],
+    ['q', 'ee', 'ant', 'zr'],
+    ['zr', 'ant', 'q', 'ant'],
+    ['ee', 'ant', 'ee', 'ant'],
+    ['q', 'ant', 'zr', 'q'],
+    ['zr', 'ant', 'zr', 'ant'],
+    ['ant', 'zr', 'ant', 'q'],
+  ],
+};
+
+type BarPattern = {
+  ids: string;
+  hits: { at: number; dur: number }[];
+  onset: string;
+  notes: number;
+};
+
+function expandBar(
+  ids: readonly string[],
+): { at: number; dur: number }[] | null {
+  let pos = 0;
+  const hits: { at: number; dur: number }[] = [];
+  for (const id of ids) {
+    const cell = CELLS[id];
+    if (!cell || pos + cell.span > 8) return null;
+    for (const [at, dur] of cell.hits) hits.push({ at: pos + at, dur });
+    pos += cell.span;
   }
-  if (path.length !== intervals + 1 || path[path.length - 1] !== to)
-    return null;
-  for (let index = 1; index < path.length; index++) {
-    if (path[index] === path[index - 1]) return null;
+  if (pos !== 8) return null;
+  return hits;
+}
+
+function strongEighth(at: number): boolean {
+  return at === 0 || at === 4;
+}
+
+function barIsPlayable(hits: readonly { at: number; dur: number }[]): boolean {
+  if (!hits.length) return false;
+  const last = hits[hits.length - 1].at;
+  if (strongEighth(last)) return false;
+  for (let index = 0; index < hits.length; index++) {
+    const hit = hits[index];
+    if (hit.dur <= 0) return false;
+    if (index > 0 && hit.at <= hits[index - 1].at) return false;
+    if (!strongEighth(hit.at) || index === 0) continue;
+    if (strongEighth(hits[index - 1].at)) return false;
   }
-  return path;
+  return true;
 }
 
-function lineMidis(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-): number[] {
-  return indexes.map((index) => ladder[index].midi);
-}
-
-function lineSpan(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-): number {
-  const midis = lineMidis(indexes, ladder);
-  return Math.max(...midis) - Math.min(...midis);
-}
-
-function scalePcsOf(ladder: readonly LadderTone[]): Set<number> {
-  return new Set(ladder.map((tone) => tone.note.pc));
-}
-
-/** Same checks the corpus pins: chord tones, no unison, leaps resolve. */
-function lineIsLegal(
-  indexes: readonly number[],
-  events: readonly GridEvent[],
-  ladder: readonly LadderTone[],
-  cadenceIndex: number,
-): boolean {
-  if (indexes.length !== events.length || indexes.length === 0) return false;
-  if (indexes[indexes.length - 1] !== cadenceIndex) return false;
-  const scalePcs = scalePcsOf(ladder);
-  for (let index = 0; index < indexes.length; index++) {
-    const tone = indexes[index];
-    if (tone < 0 || tone >= ladder.length) return false;
-    if (events[index].strong && !ladder[tone].chordTone) return false;
-    if (
-      events[index].strong &&
-      index > 0 &&
-      melodicMotion(
-        ladder[indexes[index - 1]].midi,
-        ladder[tone].midi,
-        scalePcs,
-      ) !== 'step'
-    )
-      return false;
-    if (index === 0) continue;
-    if (tone === indexes[index - 1]) return false;
-    const motion = melodicMotion(
-      ladder[indexes[index - 1]].midi,
-      ladder[tone].midi,
-      scalePcs,
-    );
-    if (motion !== 'leap') continue;
-    const next = indexes[index + 1];
-    if (next === undefined) return false;
-    const resolution = melodicMotion(
-      ladder[tone].midi,
-      ladder[next].midi,
-      scalePcs,
-    );
-    const opposite =
-      Math.sign(ladder[next].midi - ladder[tone].midi) ===
-      -Math.sign(ladder[tone].midi - ladder[indexes[index - 1]].midi);
-    if (resolution !== 'step' || !opposite) return false;
-  }
-  return events[events.length - 1].duration === 2;
-}
-
-function connectable(
-  from: number,
-  to: number,
-  intervals: number,
-  length: number,
-): boolean {
-  return stepWalk(from, to, intervals, length) !== null;
-}
-
-function strongEventIndexes(events: readonly GridEvent[]): number[] {
-  return events.flatMap((event, index) =>
-    isStrongBeat(event.beat) ? [index] : [],
-  );
-}
-
-function nearestChord(chord: readonly number[], target: number): number {
-  let best = chord[0] ?? 0;
-  for (const index of chord) {
-    const better = Math.abs(index - target) - Math.abs(best - target);
-    if (better < 0 || (better === 0 && index < best)) best = index;
-  }
-  return best;
-}
-
-function maxTravel(strong: readonly number[]): number {
-  let room = 0;
-  for (let ordinal = 0; ordinal < strong.length - 1; ordinal++) {
-    room += strong[ordinal + 1] - strong[ordinal];
-  }
-  return room;
-}
-
-/**
- * Chord tones along the contour, pinned to the cadence the search already
- * chose. Each pair has to be a step-walk on the notes already in the gap.
- * When the contour still lands on one chord tone, the peak anchor steps
- * out to the nearest chord tone a fourth away and the others ramp to it.
- */
-function chooseAnchors(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-  events: readonly GridEvent[],
-  plan: PhrasePlan,
-): number[] | null {
-  const strong = strongEventIndexes(events);
-  if (strong.length < 2) return null;
-  const chord = ladder.flatMap((tone, index) =>
-    tone.chordTone ? [index] : [],
-  );
-  if (!chord.length) return null;
-  const end = indexes[indexes.length - 1];
-  const last = ladder.length - 1;
-  const count = strong.length;
-  const heightAt = (ordinal: number) =>
-    contourHeight(
-      plan.contour,
-      strong[ordinal] / Math.max(1, events.length - 1),
-    );
-  const ideal = strong.map((eventIndex) =>
-    Math.round(
-      contourHeight(plan.contour, eventIndex / Math.max(1, events.length - 1)) *
-        last,
-    ),
-  );
-  let peak = 0;
-  for (let ordinal = 1; ordinal < count; ordinal++) {
-    if (ordinal === count - 1) continue;
-    if (heightAt(ordinal) >= heightAt(peak)) peak = ordinal;
-  }
-  const anchors = ideal.map((target, ordinal) =>
-    ordinal === count - 1 ? end : nearestChord(chord, target),
-  );
-  anchors[count - 1] = end;
-  if (lineSpan(anchors, ladder) < PHRASE_MIN_RANGE) {
-    const travel = maxTravel(strong);
-    const far = [...chord]
-      .filter(
-        (index) =>
-          Math.abs(index - end) <= travel &&
-          Math.abs(ladder[index].midi - ladder[end].midi) >= PHRASE_MIN_RANGE,
-      )
-      .sort(
-        (a, b) =>
-          Math.abs(a - ideal[peak]) - Math.abs(b - ideal[peak]) || a - b,
-      );
-    if (far[0] !== undefined) {
-      anchors[peak] = far[0];
-      for (let ordinal = 0; ordinal < count - 1; ordinal++) {
-        if (ordinal === peak) continue;
-        const along =
-          ordinal < peak
-            ? peak === 0
-              ? 0
-              : ordinal / peak
-            : (ordinal - peak) / (count - 1 - peak);
-        const from =
-          ordinal < peak ? nearestChord(chord, ideal[0]) : anchors[peak];
-        const dest = ordinal < peak ? anchors[peak] : end;
-        anchors[ordinal] = nearestChord(
-          chord,
-          Math.round(from + (dest - from) * along),
-        );
-      }
-      anchors[count - 1] = end;
-      anchors[peak] = far[0];
-    }
-  }
-  for (let pass = 0; pass < count; pass++) {
-    for (let ordinal = 0; ordinal < count - 1; ordinal++) {
-      const intervals = strong[ordinal + 1] - strong[ordinal];
-      if (
-        connectable(
-          anchors[ordinal],
-          anchors[ordinal + 1],
-          intervals,
-          ladder.length,
-        )
-      )
-        continue;
-      const moveRight = ordinal + 1 < count - 1;
-      const fixed = moveRight ? anchors[ordinal] : anchors[ordinal + 1];
-      const target = moveRight ? anchors[ordinal + 1] : anchors[ordinal];
-      const options = [...chord].sort(
-        (a, b) => Math.abs(a - target) - Math.abs(b - target) || a - b,
-      );
-      const pick = options.find((option) =>
-        connectable(
-          moveRight ? fixed : option,
-          moveRight ? option : fixed,
-          intervals,
-          ladder.length,
-        ),
-      );
-      if (pick === undefined) continue;
-      if (moveRight) anchors[ordinal + 1] = pick;
-      else anchors[ordinal] = pick;
-    }
-  }
-  anchors[count - 1] = end;
-  // A repeated chord tone walks out and back on the same neighbor.
-  // Move the second one so the next strong beat is a different chord tone.
-  for (let pass = 0; pass < count; pass++) {
-    let changed = false;
-    for (let ordinal = 1; ordinal < count - 1; ordinal++) {
-      if (anchors[ordinal] !== anchors[ordinal - 1]) continue;
-      const leftGap = strong[ordinal] - strong[ordinal - 1];
-      const rightGap = strong[ordinal + 1] - strong[ordinal];
-      const options = [...chord]
-        .filter((index) => index !== anchors[ordinal])
-        .sort(
-          (a, b) =>
-            Math.abs(a - anchors[ordinal]) - Math.abs(b - anchors[ordinal]) ||
-            a - b,
-        );
-      const pick = options.find((option) => {
-        if (
-          !connectable(anchors[ordinal - 1], option, leftGap, ladder.length) ||
-          !connectable(option, anchors[ordinal + 1], rightGap, ladder.length)
-        )
-          return false;
-        const trial = anchors.slice();
-        trial[ordinal] = option;
-        return (
-          lineSpan(trial, ladder) >= PHRASE_MIN_RANGE ||
-          lineSpan(anchors, ladder) < PHRASE_MIN_RANGE
-        );
+function compileBars(): Record<RhythmId, BarPattern[]> {
+  const compiled = {} as Record<RhythmId, BarPattern[]>;
+  for (const rhythm of RHYTHMS) {
+    compiled[rhythm] = [];
+    for (const ids of RAW_BARS[rhythm]) {
+      const hits = expandBar(ids);
+      if (!hits || !barIsPlayable(hits)) continue;
+      compiled[rhythm].push({
+        ids: ids.join(' '),
+        hits,
+        onset: hits.map((hit) => hit.at).join(','),
+        notes: hits.length,
       });
-      if (pick === undefined) continue;
-      anchors[ordinal] = pick;
-      changed = true;
     }
-    if (!changed) break;
   }
-  anchors[count - 1] = end;
-  return anchors;
+  return compiled;
 }
 
-/** How far a two-pitch alternation starting here extends, in notes. */
-function alternationLength(midis: readonly number[], start: number): number {
-  if (start + 1 >= midis.length || midis[start] === midis[start + 1]) return 1;
-  let end = start + 1;
-  while (end + 1 < midis.length && midis[end + 1] === midis[end - 1]) end += 1;
-  return end - start + 1;
-}
+const BAR_PATTERNS = compileBars();
+
+type Pitched = {
+  midi: number;
+  name: string;
+  pc: number;
+  degree: string;
+  chordTone: boolean;
+  /** Ladder index. */
+  index: number;
+};
 
 /**
- * How many places a two-pitch cell runs past four notes.
- * Every starting note is counted, so shortening one cell still registers
- * when another cell is the same length.
+ * Cadence pitch, length, and the arrival rule. A strong beat, and any
+ * note held for a beat or longer, prefers a chord tone in the weights.
+ * The same MIDI twice in a row stays illegal: arrival rejects a gap of 0.
  */
-function cellExcess(midis: readonly number[]): number {
-  let excess = 0;
-  for (let start = 0; start + 1 < midis.length; start++) {
-    if (alternationLength(midis, start) > PHRASE_CELL_LIMIT) excess += 1;
-  }
-  return excess;
-}
-
-/** Left edge of each two-pitch cell that has already sounded five notes. */
-function stuckSpans(
-  midis: readonly number[],
-): { start: number; end: number }[] {
-  const spans: { start: number; end: number }[] = [];
-  let coveredUntil = -1;
-  for (let start = 0; start + 1 < midis.length; start++) {
-    if (start <= coveredUntil) continue;
-    const length = alternationLength(midis, start);
-    if (length <= PHRASE_CELL_LIMIT) continue;
-    spans.push({ start, end: start + length - 1 });
-    coveredUntil = start + length - 1;
-  }
-  return spans;
-}
-
-function pitchChoices(current: number, length: number): number[] {
-  const options: number[] = [];
-  for (let distance = 1; distance < length; distance++) {
-    if (current + distance < length) options.push(current + distance);
-    if (current - distance >= 0) options.push(current - distance);
-  }
-  return options;
-}
-
-/**
- * Break a two-pitch loop by changing a pitch that is already on the grid.
- * The fifth note of the cell is tried first. Strong beats stay chord tones
- * approached by a scale step. The cadence pitch is left alone.
- */
-function acceptPitch(
-  trial: number[],
+function lineIsLegal(
+  notes: readonly { midi: number }[],
   events: readonly GridEvent[],
-  ladder: readonly LadderTone[],
-  cadence: number,
-  next: readonly number[],
-  excess: number,
+  cadenceMidi: number,
 ): boolean {
-  if (!lineIsLegal(next, events, ladder, cadence)) return false;
-  if (cellExcess(lineMidis(next, ladder)) >= excess) return false;
-  trial.splice(0, trial.length, ...next);
+  if (notes.length !== events.length || notes.length === 0) return false;
+  if (notes[notes.length - 1].midi !== cadenceMidi) return false;
+  if (events[events.length - 1].duration !== 2) return false;
+  for (let index = 0; index < notes.length; index++) {
+    if (!spotsFor(notes[index].midi).length) return false;
+    if (index === 0) continue;
+    const gap = Math.abs(notes[index].midi - notes[index - 1].midi);
+    if (!arrivalOk(gap, events[index].duration)) return false;
+  }
   return true;
 }
 
 /**
- * Move a strong note onto another chord tone, and the note before it onto
- * a scale step into that chord tone. One note cannot leave a loop whose
- * only legal approach is the neighbor it is stuck on.
+ * A new pitch has to sit in the current hand box, or within a 3-fret reach
+ * on an eighth. A longer note may slide up to one box (5 frets). A move of
+ * 4 frets or more is a shift and cannot land on an eighth.
  */
-function retargetStrong(
-  trial: number[],
-  index: number,
-  events: readonly GridEvent[],
-  ladder: readonly LadderTone[],
-  cadence: number,
-  excess: number,
+export function withinHand(
+  midi: number,
+  anchor: number,
+  slack: number,
 ): boolean {
-  if (index <= 0 || index >= trial.length - 1 || !events[index].strong)
-    return false;
-  const chord = ladder
-    .flatMap((tone, toneIndex) => (tone.chordTone ? [toneIndex] : []))
-    .sort(
-      (a, b) =>
-        Math.abs(a - trial[index]) - Math.abs(b - trial[index]) || a - b,
-    );
-  for (const option of chord) {
-    if (option === trial[index]) continue;
-    if (events[index + 1]?.strong && Math.abs(option - trial[index + 1]) !== 1)
-      continue;
-    for (const approach of [option - 1, option + 1]) {
-      if (approach < 0 || approach >= ladder.length) continue;
-      if (index >= 2 && approach === trial[index - 2]) continue;
-      const next = trial.slice();
-      next[index - 1] = approach;
-      next[index] = option;
-      if (acceptPitch(trial, events, ladder, cadence, next, excess))
-        return true;
-    }
-  }
-  return false;
-}
-
-function breakCell(
-  indexes: readonly number[],
-  events: readonly GridEvent[],
-  ladder: readonly LadderTone[],
-  cadence: number,
-): number[] | null {
-  const trial = indexes.slice();
-  const original = cellExcess(lineMidis(indexes, ladder));
-  for (let guard = 0; guard < 24; guard++) {
-    const midis = lineMidis(trial, ladder);
-    const excess = cellExcess(midis);
-    if (excess === 0) return trial;
-    const spans = stuckSpans(midis);
-    let changed = false;
-    for (const run of spans) {
-      const positions: number[] = [];
-      const fifth = run.start + PHRASE_CELL_LIMIT;
-      if (fifth < trial.length - 1) positions.push(fifth);
-      for (let index = run.end; index > run.start; index--) {
-        if (index < trial.length - 1 && !positions.includes(index))
-          positions.push(index);
-      }
-      for (const index of positions) {
-        for (const option of pitchChoices(trial[index], ladder.length)) {
-          if (option === trial[index - 1]) continue;
-          if (events[index].strong && !ladder[option].chordTone) continue;
-          if (events[index].strong && Math.abs(option - trial[index - 1]) !== 1)
-            continue;
-          const following = trial[index + 1];
-          if (
-            following !== undefined &&
-            events[index + 1]?.strong &&
-            Math.abs(option - following) !== 1
-          )
-            continue;
-          const next = trial.slice();
-          next[index] = option;
-          if (acceptPitch(trial, events, ladder, cadence, next, excess)) {
-            changed = true;
-            break;
-          }
-        }
-        if (!changed && events[index].strong)
-          changed = retargetStrong(
-            trial,
-            index,
-            events,
-            ladder,
-            cadence,
-            excess,
-          );
-        if (changed) break;
-      }
-      if (changed) break;
-    }
-    if (!changed) break;
-  }
-  return cellExcess(lineMidis(trial, ladder)) < original ? trial : null;
-}
-
-function writeWalk(
-  indexes: number[],
-  start: number,
-  walk: readonly number[],
-): void {
-  for (let step = 0; step < walk.length; step++)
-    indexes[start + step] = walk[step];
-}
-
-/**
- * Replace the parked line with chord tones that follow the contour, joined
- * by scale steps on the onsets already in the phrase. A gap that cannot
- * hold the walk is left alone.
- */
-function rebuildContour(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-  events: readonly GridEvent[],
-  plan: PhrasePlan,
-): number[] | null {
-  const anchors = chooseAnchors(indexes, ladder, events, plan);
-  if (!anchors) return null;
-  const idx = indexes.slice();
-  const strong = strongEventIndexes(events);
-  idx[strong[0]] = anchors[0];
-  for (let ordinal = 0; ordinal < anchors.length - 1; ordinal++) {
-    const gap = strong[ordinal + 1] - strong[ordinal];
-    const walk = stepWalk(
-      anchors[ordinal],
-      anchors[ordinal + 1],
-      gap,
-      ladder.length,
-    );
-    if (!walk) return null;
-    writeWalk(idx, strong[ordinal], walk);
-  }
-  const cadence = indexes[indexes.length - 1];
-  const broken = breakCell(idx, events, ladder, cadence);
-  const shaped = broken ?? idx;
-  if (!lineIsLegal(shaped, events, ladder, cadence)) return null;
-  if (phraseCellLength(lineMidis(shaped, ladder)) > PHRASE_CELL_LIMIT)
-    return null;
-  if (
-    lineSpan(shaped, ladder) < PHRASE_MIN_RANGE &&
-    lineSpan(
-      ladder.map((_, index) => index),
-      ladder,
-    ) >= PHRASE_MIN_RANGE
-  )
-    return null;
-  return shaped;
-}
-
-function widestLeap(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-  scalePcs: ReadonlySet<number>,
-): { at: number; size: number } | null {
-  let at = -1;
-  let size = PHRASE_WIDE_LEAP - 1;
-  for (let index = 1; index < indexes.length; index++) {
-    const semitones = Math.abs(
-      ladder[indexes[index]].midi - ladder[indexes[index - 1]].midi,
-    );
-    if (semitones <= size) continue;
-    if (
-      melodicMotion(
-        ladder[indexes[index - 1]].midi,
-        ladder[indexes[index]].midi,
-        scalePcs,
-      ) !== 'leap'
-    )
-      continue;
-    at = index;
-    size = semitones;
-  }
-  return at < 0 ? null : { at, size };
-}
-
-/**
- * Turn the widest leap of a fifth or more into a scale walk between the
- * same strong-beat chord tones. Returns null when the existing gap cannot
- * hold the steps, and the leap stays.
- */
-function softenWidestLeap(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-  events: readonly GridEvent[],
-): number[] | null {
-  const found = widestLeap(indexes, ladder, scalePcsOf(ladder));
-  if (!found) return null;
-  let start = found.at - 1;
-  while (start > 0 && !isStrongBeat(events[start].beat)) start -= 1;
-  let end = found.at;
-  while (end < events.length - 1 && !isStrongBeat(events[end].beat)) end += 1;
-  if (!isStrongBeat(events[start].beat) || !isStrongBeat(events[end].beat))
-    return null;
-  const walk = stepWalk(
-    indexes[start],
-    indexes[end],
-    end - start,
-    ladder.length,
+  return spotsFor(midi).some(
+    (spot) => Math.abs(spot.position - anchor) <= slack,
   );
-  if (!walk) return null;
-  const idx = indexes.slice();
-  writeWalk(idx, start, walk);
-  if (!lineIsLegal(idx, events, ladder, indexes[indexes.length - 1]))
-    return null;
-  return idx;
+}
+
+function handSlack(duration: number): number {
+  return duration <= 0.5 ? SHIFT_FRETS - 1 : 5;
+}
+
+/** An octave is allowed. Anything wider, or a leap past a fourth onto an eighth, is not. */
+function arrivalOk(gap: number, duration: number): boolean {
+  if (gap === 0 || gap > 12) return false;
+  return !(duration <= 0.5 && gap > 5);
+}
+
+function guideTone(degree: string): boolean {
+  const match = /^([b#]*)(\d+)$/.exec(degree);
+  if (!match) return false;
+  const simple = ((Number(match[2]) - 1) % 7) + 1;
+  return simple === 3 || simple === 7;
+}
+
+function contourMidi(plan: PhrasePlan, t: number): number {
+  let height = contourHeight(plan.contour, t);
+  // A cosine wave peaks too narrowly for one scale step per note.
+  // Hold the middle third down and the side thirds up so the line reads as a wave.
+  if (plan.contour === 'wave') {
+    const x = Math.min(1, Math.max(0, t));
+    const peak = 0.42;
+    if (x < 0.34) height = peak * Math.sin(Math.PI * (x / 0.34));
+    else if (x < 0.67) height = 0;
+    else if (x < 0.92) height = peak * Math.sin(Math.PI * ((x - 0.67) / 0.25));
+    else height = 0;
+  }
+  return REGISTER_LOW[plan.register] + height * PHRASE_RANGE;
+}
+
+function contourGoal(plan: PhrasePlan, beat: number, bars: 2 | 4): number {
+  return contourMidi(plan, beat / (bars * 4));
+}
+
+function eventsForCells(
+  patterns: readonly BarPattern[],
+  bars: 2 | 4,
+): GridEvent[] {
+  const raw: { beat: number; duration: number }[] = [];
+  for (let bar = 0; bar < bars; bar++) {
+    for (const hit of patterns[bar].hits) {
+      raw.push({
+        beat: bar * 4 + hit.at * 0.5,
+        duration: hit.dur * 0.5,
+      });
+    }
+  }
+  raw.push({ beat: bars * 4, duration: 2 });
+  return raw.map((event, index) => {
+    const next = raw[index + 1];
+    const room = next ? next.beat - event.beat : event.duration;
+    return {
+      beat: event.beat,
+      duration: Math.min(event.duration, room),
+      strong: isStrongBeat(event.beat),
+    };
+  });
+}
+
+function hasOnBeat(pattern: BarPattern): boolean {
+  return pattern.hits.some((hit) => hit.at % 2 === 0);
+}
+
+function asPattern(
+  hits: readonly { at: number; dur: number }[],
+  label: string,
+): BarPattern | null {
+  if (!barIsPlayable(hits)) return null;
+  const copy = hits.map((hit) => ({ at: hit.at, dur: hit.dur }));
+  return {
+    ids: label,
+    hits: copy,
+    onset: copy.map((hit) => hit.at).join(','),
+    notes: copy.length,
+  };
+}
+
+/** Tails that fill the eighths from `from` through the end of the bar. */
+function enumerateTails(from: number): { at: number; dur: number }[][] {
+  if (from >= 8) return [[]];
+  const found: { at: number; dur: number }[][] = [];
+  const walk = (pos: number, acc: { at: number; dur: number }[]) => {
+    if (pos === 8) {
+      found.push(acc);
+      return;
+    }
+    if (pos > 8) return;
+    walk(pos + 1, [...acc, { at: pos, dur: 1 }]);
+    if (pos + 2 <= 8) {
+      walk(pos + 2, [...acc, { at: pos, dur: 2 }]);
+      walk(pos + 2, [...acc, { at: pos + 1, dur: 1 }]);
+    }
+  };
+  walk(from, []);
+  found.sort((a, b) => {
+    const left = a.map((hit) => hit.at).join(',');
+    const right = b.map((hit) => hit.at).join(',');
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+  return found;
+}
+
+function withTail(
+  prefix: readonly { at: number; dur: number }[],
+  from: number,
+  avoidOnset: string,
+  random: () => number,
+): BarPattern | null {
+  if (from > 8) return null;
+  const options: BarPattern[] = [];
+  for (const tail of enumerateTails(from)) {
+    const built = asPattern(
+      [...prefix, ...tail],
+      `ans ${prefix.map((hit) => hit.at).join(',')}`,
+    );
+    if (!built || built.onset === avoidOnset) continue;
+    options.push(built);
+  }
+  if (!options.length) return null;
+  return options[Math.floor(random() * options.length)] ?? options[0];
 }
 
 /**
- * Put one small leap back: a third or fourth onto the neighbor of the next
- * note, then a step the other way. Replaces a leap of a fifth we just removed
- * so the line still has a leap, and the leap is a singable one.
+ * Bar 2 keeps bar 1's first four attacks and then a different tail,
+ * so the figure can return without every bar sharing one rhythm.
  */
-function addModestLeap(
-  indexes: readonly number[],
+function answerPattern(
+  head: BarPattern,
+  random: () => number,
+): BarPattern | null {
+  if (head.hits.length < 4) return null;
+  const prefix = head.hits.slice(0, 4).map((hit) => ({ ...hit }));
+  const fourth = prefix[3];
+  if (!fourth) return null;
+  const end = fourth.at + fourth.dur;
+  if (end < 8) {
+    const built = withTail(prefix, end, head.onset, random);
+    if (built) return built;
+  }
+  if (fourth.at >= 7) return null;
+  const shrunk = prefix
+    .slice(0, 3)
+    .concat([{ at: fourth.at, dur: 1 }]);
+  return withTail(shrunk, fourth.at + 1, head.onset, random);
+}
+
+/** Two statements of bar 1's opening two attacks. */
+function fragmentPattern(
+  head: BarPattern,
+  random: () => number,
+): BarPattern | null {
+  if (head.hits.length < 2) return null;
+  const first = head.hits[0];
+  const second = head.hits[1];
+  if (!first || !second) return null;
+  const span = second.at + second.dur - first.at;
+  if (span < 1) return null;
+  const prefix = [
+    { at: first.at, dur: first.dur },
+    { at: second.at, dur: second.dur },
+  ];
+  const copyAt = first.at + span;
+  const copyNext = second.at + span;
+  if (copyAt < 8 && copyNext < 8) {
+    const room = 8 - copyNext;
+    if (room >= 1) {
+      prefix.push(
+        { at: copyAt, dur: first.dur },
+        { at: copyNext, dur: Math.min(second.dur, room) },
+      );
+    }
+  }
+  const end = prefix[prefix.length - 1];
+  if (!end) return null;
+  const from = end.at + end.dur;
+  if (from > 8) return null;
+  if (from === 8) return asPattern(prefix, 'frag');
+  return withTail(prefix, from, head.onset, random);
+}
+
+function answerable(head: BarPattern): boolean {
+  return answerPattern(head, () => 0) !== null;
+}
+
+function pickPatterns(
+  rhythm: RhythmId,
+  bars: 2 | 4,
+  random: () => number,
+  density: number,
+  exact: boolean,
+): BarPattern[] {
+  const catalog = BAR_PATTERNS[rhythm];
+  const grounded = catalog.filter(hasOnBeat);
+  const source = grounded.length ? grounded : catalog;
+  const busy = source.filter((pattern) => pattern.notes >= 6);
+  const spare = source.filter((pattern) => pattern.notes <= 4);
+  const pool =
+    density === 2 && busy.length
+      ? busy
+      : density === 0 && spare.length
+        ? spare
+        : source;
+  const chosen: BarPattern[] = [];
+  let previous = '';
+  for (let bar = 0; bar < bars; bar++) {
+    if (exact && bar > 0 && previous) {
+      const same = catalog.filter((pattern) => pattern.onset === previous);
+      if (same.length) {
+        const copy = same[0];
+        if (copy) {
+          chosen.push(copy);
+          previous = copy.onset;
+          continue;
+        }
+      }
+    }
+    if (!exact && bar === 1 && chosen[0]) {
+      const answer = answerPattern(chosen[0], random);
+      if (answer) {
+        chosen.push(answer);
+        previous = answer.onset;
+        continue;
+      }
+    }
+    if (!exact && bars === 4 && bar === 2 && chosen[0]) {
+      const fragment = fragmentPattern(chosen[0], random);
+      if (fragment) {
+        chosen.push(fragment);
+        previous = fragment.onset;
+        continue;
+      }
+    }
+    let options = pool.filter((pattern) => pattern.onset !== previous);
+    if (!options.length)
+      options = source.filter((pattern) => pattern.onset !== previous);
+    if (!options.length) options = pool.length ? pool : source;
+    if (bar === 0) {
+      // The loop restarts on this downbeat. A rest here opens a gap.
+      let down = options.filter((pattern) =>
+        pattern.hits.some((hit) => hit.at === 0),
+      );
+      if (!down.length) {
+        down = source.filter((pattern) =>
+          pattern.hits.some((hit) => hit.at === 0),
+        );
+      }
+      if (down.length) options = down;
+      if (!exact) {
+        // The answer leaps back to this opening. A quarter or longer
+        // can take that leap; an eighth cannot pass a fourth.
+        const held = options.filter((pattern) => (pattern.hits[0]?.dur ?? 0) >= 2);
+        if (held.length) options = held;
+        const ready = options.filter(answerable);
+        if (ready.length) options = ready;
+      }
+      if (exact) {
+        const longs = options.filter((pattern) =>
+          pattern.hits.every((hit) => hit.dur >= 2),
+        );
+        if (longs.length) options = longs;
+      }
+    }
+    const pattern =
+      options[Math.floor(random() * options.length)] ?? options[0];
+    chosen.push(pattern);
+    previous = pattern.onset;
+  }
+  return chosen;
+}
+
+const PROXIMITY_VAR = 8;
+const RANGE_VAR = 29;
+const CONTOUR_VAR = 18;
+
+function pitchedFromLadder(ladder: readonly LadderTone[], tone: number): Pitched {
+  const row = ladder[tone];
+  return {
+    midi: row.midi,
+    name: row.note.name,
+    pc: row.note.pc,
+    degree: row.note.degree,
+    chordTone: row.chordTone,
+    index: tone,
+  };
+}
+
+/**
+ * Any ladder tone that can still reach the cadence under the arrival rule.
+ * A strong beat is not required to be a chord tone.
+ */
+function reachable(
   ladder: readonly LadderTone[],
   events: readonly GridEvent[],
+  cadenceAt: number,
+): boolean[][] {
+  const count = ladder.length;
+  const alive = events.map(() => Array<boolean>(count).fill(false));
+  if (cadenceAt >= 0 && cadenceAt < count)
+    alive[events.length - 1][cadenceAt] = true;
+  for (let event = events.length - 2; event >= 0; event--) {
+    const landing = events[event + 1];
+    for (let tone = 0; tone < count; tone++) {
+      const from = ladder[tone].midi;
+      for (let next = 0; next < count; next++) {
+        if (!alive[event + 1][next]) continue;
+        if (!arrivalOk(Math.abs(ladder[next].midi - from), landing.duration))
+          continue;
+        alive[event][tone] = true;
+        break;
+      }
+    }
+  }
+  return alive;
+}
+
+function gauss(delta: number, variance: number): number {
+  return Math.exp(-(delta * delta) / (2 * variance));
+}
+
+function pitchWeight(
+  ladder: readonly LadderTone[],
+  tone: number,
+  prevMidi: number | null,
+  prevPrevMidi: number | null,
+  goal: number,
+  centre: number,
+  event: GridEvent,
+  cadenceMidi: number | null,
+): number {
+  const midi = ladder[tone].midi;
+  let weight = gauss(midi - goal, CONTOUR_VAR) * gauss(midi - centre, RANGE_VAR);
+  if (prevMidi !== null) {
+    const gap = midi - prevMidi;
+    weight *= gauss(gap, PROXIMITY_VAR);
+    if (prevPrevMidi !== null && midi === prevPrevMidi) weight *= 0.18;
+  }
+  if (event.strong || event.duration >= 1) {
+    weight *= ladder[tone].chordTone ? 2.15 : 0.72;
+    if (ladder[tone].chordTone && guideTone(ladder[tone].note.degree))
+      weight *= 1.12;
+  }
+  if (cadenceMidi !== null) {
+    const fromCadence = Math.abs(midi - cadenceMidi);
+    if (fromCadence > 0 && fromCadence <= 2) weight *= 8;
+    else if (fromCadence >= 5) weight *= 0.35;
+  }
+  return weight > 1e-9 ? weight : 1e-9;
+}
+
+function pickWeighted(weights: readonly number[], random: () => number): number {
+  let total = 0;
+  for (const weight of weights) total += weight;
+  if (total <= 0) return 0;
+  let draw = random() * total;
+  for (let index = 0; index < weights.length; index++) {
+    draw -= weights[index];
+    if (draw < 0) return index;
+  }
+  return weights.length - 1;
+}
+
+function legalIndexes(
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  index: number,
+): number[] {
+  const prev = notes.length ? notes[notes.length - 1] : null;
+  const found: number[] = [];
+  for (let tone = 0; tone < ladder.length; tone++) {
+    if (!alive[index][tone]) continue;
+    if (prev) {
+      const gap = Math.abs(ladder[tone].midi - prev.midi);
+      if (!arrivalOk(gap, events[index].duration)) continue;
+    }
+    found.push(tone);
+  }
+  return found;
+}
+
+function withoutAlternation(
+  ladder: readonly LadderTone[],
+  candidates: readonly number[],
+  notes: readonly Pitched[],
+): number[] {
+  if (notes.length < 3) return [...candidates];
+  if (notes[notes.length - 1].midi !== notes[notes.length - 3].midi)
+    return [...candidates];
+  const earlier = notes[notes.length - 2].midi;
+  const others = candidates.filter((tone) => ladder[tone].midi !== earlier);
+  return others.length ? others : [...candidates];
+}
+
+function completesCycle(
+  notes: readonly { midi: number }[],
+  midi: number,
+  period: number,
+): boolean {
+  const count = notes.length;
+  if (period < 2 || count < period * 2 - 1) return false;
+  if (midi !== notes[count - period].midi) return false;
+  for (let back = 1; back < period; back++) {
+    if (notes[count - back].midi !== notes[count - period - back].midi)
+      return false;
+  }
+  return true;
+}
+
+function withoutCycle(
+  ladder: readonly LadderTone[],
+  candidates: readonly number[],
+  notes: readonly Pitched[],
+  period: number,
+): number[] {
+  if (notes.length < period * 2 - 1) return [...candidates];
+  const others = candidates.filter(
+    (tone) => !completesCycle(notes, ladder[tone].midi, period),
+  );
+  return others.length ? others : [...candidates];
+}
+
+function endingRun(indexes: readonly number[]): number {
+  let dir = 0;
+  let length = 1;
+  for (let index = indexes.length - 1; index > 0; index--) {
+    const delta = indexes[index] - indexes[index - 1];
+    if (Math.abs(delta) !== 1) break;
+    if (dir === 0) dir = delta;
+    else if (delta !== dir) break;
+    length += 1;
+  }
+  return length;
+}
+
+function withoutMonotone(
+  ladder: readonly LadderTone[],
+  candidates: readonly number[],
+  notes: readonly Pitched[],
+): number[] {
+  if (notes.length < 4) return [...candidates];
+  if (endingRun(notes.map((note) => note.index)) < 4) return [...candidates];
+  const last = notes[notes.length - 1]?.index ?? 0;
+  const dir =
+    last - (notes[notes.length - 2]?.index ?? last);
+  const others = candidates.filter((tone) => tone - last !== dir);
+  return others.length ? others : [...candidates];
+}
+
+function shiftOrder(seed: number): number[] {
+  const order = [1, -1, 2, -2];
+  const random = mulberry32(seed >>> 0);
+  for (let index = order.length - 1; index > 0; index--) {
+    const swap = Math.floor(random() * (index + 1));
+    const held = order[index];
+    order[index] = order[swap] ?? held;
+    order[swap] = held;
+  }
+  return order;
+}
+
+function eighthOf(events: readonly GridEvent[], index: number): number {
+  const beat = events[index]?.beat ?? 0;
+  const bar = Math.floor(beat / 4);
+  return Math.round((beat - bar * 4) * 2);
+}
+
+function sameOpening(
+  events: readonly GridEvent[],
+  left: readonly number[],
+  right: readonly number[],
+  count: number,
+): boolean {
+  if (left.length < count || right.length < count) return false;
+  for (let index = 0; index < count; index++) {
+    if (eighthOf(events, left[index] ?? 0) !== eighthOf(events, right[index] ?? 0))
+      return false;
+  }
+  return true;
+}
+
+function fragmentRhythm(
+  events: readonly GridEvent[],
+  head: readonly number[],
+  bar: readonly number[],
+): boolean {
+  if (head.length < 2 || bar.length < 4) return false;
+  const firstAt = head[0] ?? 0;
+  const secondAt = head[1] ?? 0;
+  const first = eighthOf(events, firstAt);
+  const second = eighthOf(events, secondAt);
+  const secondDur = Math.max(
+    1,
+    Math.round((events[secondAt]?.duration ?? 0.5) * 2),
+  );
+  // Same span fragmentPattern uses: end of the second attack, not the gap.
+  const span = second + secondDur - first;
+  if (span <= 0) return false;
+  return (
+    eighthOf(events, bar[0] ?? 0) === first &&
+    eighthOf(events, bar[1] ?? 0) === second &&
+    eighthOf(events, bar[2] ?? 0) === first + span &&
+    eighthOf(events, bar[3] ?? 0) === second + span
+  );
+}
+
+function blockAllowed(
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  slots: readonly number[],
+  tones: readonly number[],
+): boolean {
+  if (tones.length !== slots.length) return false;
+  const midis = notes.map((note) => note.midi);
+  const indexes = notes.map((note) => note.index);
+  let prev = notes.length ? notes[notes.length - 1].midi : null;
+  for (let step = 0; step < tones.length; step++) {
+    const tone = tones[step] ?? -1;
+    const at = slots[step] ?? 0;
+    if (tone < 0 || tone >= ladder.length || !alive[at]?.[tone]) return false;
+    const midi = ladder[tone].midi;
+    if (
+      prev !== null &&
+      !arrivalOk(Math.abs(midi - prev), events[at]?.duration ?? 1)
+    )
+      return false;
+    const soFar = midis.map((item) => ({ midi: item }));
+    // A one-step sequence of a scale overlaps into a 3-pitch cell.
+    // That return stays. The free walk still refuses a real cycle.
+    if (completesCycle(soFar, midi, 2)) return false;
+    midis.push(midi);
+    indexes.push(tone);
+    prev = midi;
+  }
+  return endingRun(indexes) < 5;
+}
+
+function chooseSequence(
+  order: readonly number[],
+  idea: readonly number[],
+  slots: readonly number[],
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  cadenceMidi: number,
 ): number[] | null {
-  const scalePcs = scalePcsOf(ladder);
-  for (let index = 1; index < indexes.length - 1; index++) {
-    if (events[index].strong) continue;
-    const previous = indexes[index - 1];
-    const current = indexes[index];
-    const next = indexes[index + 1];
-    if (Math.abs(current - previous) !== 1 || Math.abs(next - current) !== 1)
-      continue;
-    for (const approach of [next + 1, next - 1]) {
-      if (approach < 0 || approach >= ladder.length || approach === previous)
-        continue;
-      if (Math.abs(approach - previous) < 2) continue;
-      const leapSemis = Math.abs(ladder[approach].midi - ladder[previous].midi);
-      if (leapSemis < 3 || leapSemis > 5) continue;
-      const leapDir = Math.sign(ladder[approach].midi - ladder[previous].midi);
-      const resolveDir = Math.sign(ladder[next].midi - ladder[approach].midi);
-      if (leapDir === 0 || resolveDir !== -leapDir) continue;
-      if (
-        melodicMotion(
-          ladder[previous].midi,
-          ladder[approach].midi,
-          scalePcs,
-        ) !== 'leap'
-      )
-        continue;
-      const trial = indexes.slice();
-      trial[index] = approach;
-      if (
-        lineIsLegal(trial, events, ladder, indexes[indexes.length - 1]) &&
-        phraseCellLength(lineMidis(trial, ladder)) <= PHRASE_CELL_LIMIT
-      )
-        return trial;
+  const lastSlot = slots[slots.length - 1];
+  const rank = (shift: number) => {
+    let score = 0;
+    for (let index = 0; index < idea.length; index++) {
+      const tone = (idea[index] ?? 0) + shift;
+      const event = events[slots[index] ?? 0];
+      if (!event || tone < 0 || tone >= ladder.length) continue;
+      if ((event.strong || event.duration >= 1) && ladder[tone].chordTone)
+        score += 2;
+    }
+    if (lastSlot === events.length - 2) {
+      const tone = (idea[idea.length - 1] ?? 0) + shift;
+      const gap =
+        tone >= 0 && tone < ladder.length
+          ? Math.abs(ladder[tone].midi - cadenceMidi)
+          : 99;
+      if (gap > 0 && gap <= 2) score += 3;
+    }
+    return score;
+  };
+  const ranked = [...order].sort((a, b) => rank(b) - rank(a));
+  const tryShift = (shift: number) => {
+    const tones = idea.map((index) => index + shift);
+    if (!blockAllowed(ladder, alive, events, notes, slots, tones)) return null;
+    return tones;
+  };
+  for (const shift of ranked) {
+    const tones = tryShift(shift);
+    if (tones) return tones;
+  }
+  return tryShift(0);
+}
+
+function chooseFragment(
+  order: readonly number[],
+  idea: readonly number[],
+  slots: readonly number[],
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+): number[] | null {
+  const left = idea[0] ?? 0;
+  const right = idea[1] ?? 0;
+  for (const shift of order) {
+    const seconds = [shift * 2, shift + Math.sign(shift)];
+    for (const second of seconds) {
+      if (second === 0 || second === shift) continue;
+      const tones = [left + shift, right + shift, left + second, right + second];
+      if (blockAllowed(ladder, alive, events, notes, slots, tones)) return tones;
     }
   }
   return null;
 }
 
-function needsContour(
-  indexes: readonly number[],
+/**
+ * Scored pitches, then a sentence. Bar 2 opens on bar 1's first four
+ * attacks, transposed by one or two scale steps. A 4-bar phrase sequences
+ * a two-note fragment twice in bar 3. The tail walks freely to the cadence.
+ * A second two-pitch return, a repeated three-pitch cell, and a fifth
+ * scale step in the same direction are refused when another tone is legal.
+ */
+function walkScored(
   ladder: readonly LadderTone[],
-) {
-  const span = lineSpan(indexes, ladder);
-  const ladderSpan = lineSpan(
-    ladder.map((_, index) => index),
+  events: readonly GridEvent[],
+  plan: PhrasePlan,
+  bars: 2 | 4,
+  cadenceAt: number,
+  alive: readonly (readonly boolean[])[],
+  random: () => number,
+  seed: number,
+): Pitched[] | null {
+  const centre = REGISTER_LOW[plan.register] + PHRASE_RANGE / 2;
+  const cadenceMidi = ladder[cadenceAt]?.midi ?? 0;
+  const notes: Pitched[] = [];
+  const order = shiftOrder(seed);
+  const byBar: number[][] = Array.from({ length: bars }, () => []);
+  events.forEach((event, index) => {
+    const bar = Math.floor(event.beat / 4);
+    if (bar >= 0 && bar < bars) byBar[bar]?.push(index);
+  });
+  let pending: number[] = [];
+  for (let index = 0; index < events.length; index++) {
+    if (countSearchStep()) return null;
+    if (index === events.length - 1) {
+      notes.push(pitchedFromLadder(ladder, cadenceAt));
+      continue;
+    }
+    if (pending.length) {
+      const tone = pending.shift();
+      if (tone === undefined) return null;
+      notes.push(pitchedFromLadder(ladder, tone));
+      continue;
+    }
+    const event = events[index];
+    if (!event) return null;
+    const bar = Math.floor(event.beat / 4);
+    const head = byBar[0] ?? [];
+    const here = byBar[bar] ?? [];
+    if (bar === 1 && here[0] === index && sameOpening(events, head, here, 4)) {
+      const idea = head.slice(0, 4).map((at) => notes[at]?.index ?? -1);
+      const slots = here.slice(0, 4);
+      const tones = chooseSequence(
+        order,
+        idea,
+        slots,
+        ladder,
+        alive,
+        events,
+        notes,
+        cadenceMidi,
+      );
+      if (tones) {
+        pending = tones.slice(1);
+        notes.push(pitchedFromLadder(ladder, tones[0] ?? 0));
+        continue;
+      }
+    }
+    if (
+      bar === 2 &&
+      bars === 4 &&
+      here[0] === index &&
+      fragmentRhythm(events, head, here)
+    ) {
+      const idea = [notes[head[0] ?? 0]?.index ?? -1, notes[head[1] ?? 0]?.index ?? -1];
+      const tones = chooseFragment(
+        order,
+        idea,
+        here.slice(0, 4),
+        ladder,
+        alive,
+        events,
+        notes,
+      );
+      if (tones) {
+        pending = tones.slice(1);
+        notes.push(pitchedFromLadder(ladder, tones[0] ?? 0));
+        continue;
+      }
+    }
+    let candidates = withoutMonotone(
+      ladder,
+      withoutCycle(
+        ladder,
+        withoutAlternation(
+          ladder,
+          legalIndexes(ladder, alive, events, notes, index),
+          notes,
+        ),
+        notes,
+        3,
+      ),
+      notes,
+    );
+    if (!candidates.length) return null;
+    const answerFourth = byBar[1]?.[3];
+    if (
+      head[3] === index &&
+      answerFourth !== undefined &&
+      (events[answerFourth]?.duration ?? 1) <= 0.5 &&
+      notes.length
+    ) {
+      const prevMidi = notes[notes.length - 1]?.midi ?? 0;
+      const stepped = candidates.filter(
+        (tone) => Math.abs((ladder[tone]?.midi ?? 0) - prevMidi) <= 5,
+      );
+      if (stepped.length) candidates = stepped;
+    }
+    const along = index / Math.max(1, events.length - 1);
+    const goal = contourMidi(plan, along);
+    const prev = notes.length ? notes[notes.length - 1] : null;
+    const weights = candidates.map((tone) =>
+      pitchWeight(
+        ladder,
+        tone,
+        prev ? prev.midi : null,
+        notes.length > 1 ? notes[notes.length - 2].midi : null,
+        goal,
+        centre,
+        event,
+        index === events.length - 2 ? cadenceMidi : null,
+      ),
+    );
+    const chosen = candidates[pickWeighted(weights, random)] ?? candidates[0];
+    if (chosen === undefined) return null;
+    notes.push(pitchedFromLadder(ladder, chosen));
+  }
+  if (!lineIsLegal(notes, events, cadenceMidi)) return null;
+  return notes;
+}
+
+
+function walkPitches(
+  ladder: readonly LadderTone[],
+  events: readonly GridEvent[],
+  plan: PhrasePlan,
+  bars: 2 | 4,
+  cadenceAt: number,
+  random: () => number,
+  seed: number,
+): Pitched[] | null {
+  const alive = reachable(ladder, events, cadenceAt);
+  if (!alive[0].some(Boolean)) return null;
+  return walkScored(
     ladder,
-  );
-  return (
-    phraseCellLength(lineMidis(indexes, ladder)) > PHRASE_CELL_LIMIT ||
-    (span < PHRASE_MIN_RANGE && ladderSpan >= PHRASE_MIN_RANGE)
+    events,
+    plan,
+    bars,
+    cadenceAt,
+    alive,
+    random,
+    seed,
   );
 }
 
-function thirdMeans(midis: readonly number[]): [number, number, number] {
-  const third = Math.max(1, Math.floor(midis.length / 3));
-  const mean = (slice: readonly number[]) =>
-    slice.reduce((sum, midi) => sum + midi, 0) / slice.length;
-  return [
-    mean(midis.slice(0, third)),
-    mean(midis.slice(third, third * 2)),
-    mean(midis.slice(third * 2)),
-  ];
+function cadenceIndexOf(
+  ladder: readonly LadderTone[],
+  pcs: ReadonlySet<number>,
+  plan: PhrasePlan,
+  bars: 2 | 4,
+): number {
+  const goal = contourGoal(plan, bars * 4, bars);
+  let best = -1;
+  let bestDist = Infinity;
+  for (let index = 0; index < ladder.length; index++) {
+    if (!pcs.has(ladder[index].note.pc)) continue;
+    const dist = Math.abs(ladder[index].midi - goal);
+    if (dist < bestDist || (dist === bestDist && (best < 0 || index < best))) {
+      best = index;
+      bestDist = dist;
+    }
+  }
+  return best;
 }
 
-/** Same third-means test the corpus uses for arch, rise, fall, and wave. */
-function contourHits(midis: readonly number[], contour: Contour): boolean {
-  const [first, middle, last] = thirdMeans(midis);
+function handAccepts(notes: readonly FingeredNote[]): boolean {
+  let shifts = 0;
+  for (let index = 1; index < notes.length; index++) {
+    const prev = notes[index - 1];
+    const note = notes[index];
+    if (note.shift) {
+      shifts += 1;
+      if (note.duration <= 0.5) return false;
+    } else if (
+      note.duration <= 0.5 &&
+      !withinHand(note.midi, prev.position, handSlack(note.duration))
+    ) {
+      return false;
+    }
+    if (
+      prev.finger > 0 &&
+      note.finger === prev.finger &&
+      note.fret !== prev.fret &&
+      note.duration <= 0.5
+    ) {
+      return false;
+    }
+  }
+  return shifts <= 2;
+}
+
+function scaleStepCount(
+  from: number,
+  to: number,
+  scalePcs: ReadonlySet<number>,
+): number {
+  if (from === to) return 0;
+  const sign = Math.sign(to - from);
+  let midi = from;
+  let count = 0;
+  while (midi !== to && count < 24) {
+    midi += sign;
+    if (scalePcs.has(mod(midi))) count += 1;
+  }
+  return sign * count;
+}
+
+function longestMonotone(
+  midis: readonly number[],
+  scalePcs: ReadonlySet<number>,
+): number {
+  let best = 1;
+  let run = 1;
+  let dir = 0;
+  for (let index = 1; index < midis.length; index++) {
+    const step = scaleStepCount(midis[index - 1] ?? 0, midis[index] ?? 0, scalePcs);
+    if (Math.abs(step) === 1 && step === dir) run += 1;
+    else if (Math.abs(step) === 1) {
+      dir = step;
+      run = 2;
+    } else {
+      dir = 0;
+      run = 1;
+    }
+    if (run > best) best = run;
+  }
+  return best;
+}
+
+function repeatedPitchCell(
+  midis: readonly number[],
+  period: number,
+  cycles: number,
+  cover: readonly [number, number] | null,
+): boolean {
+  const length = period * cycles;
+  for (let start = 0; start + length <= midis.length; start++) {
+    if (cover && start >= cover[0] && start + length <= cover[1]) continue;
+    let match = true;
+    for (let index = period; index < length; index++) {
+      if (midis[start + index] !== midis[start + (index % period)]) {
+        match = false;
+        break;
+      }
+    }
+    if (!match) continue;
+    const pitches = new Set(midis.slice(start, start + period));
+    if (pitches.size < 2) continue;
+    return true;
+  }
+  return false;
+}
+
+/** Index span of a shifted 4-note return, so that overlap is not an ostinato. */
+function sentenceCover(
+  notes: readonly { midi: number; beat: number }[],
+  scalePcs: ReadonlySet<number>,
+): [number, number] | null {
+  const grouped = [0, 1].map((bar) =>
+    notes
+      .map((note, index) => ({ note, index }))
+      .filter(
+        (item) =>
+          Math.floor(item.note.beat / 4) === bar && item.note.beat < 8,
+      ),
+  );
+  const left = grouped[0] ?? [];
+  const right = grouped[1] ?? [];
+  if (left.length < 4 || right.length < 4) return null;
+  const opening = left.slice(0, 4);
+  const answer = right.slice(0, 4);
+  for (let index = 0; index < 4; index++) {
+    const a = opening[index]?.note;
+    const b = answer[index]?.note;
+    if (!a || !b) return null;
+    if (Math.round((a.beat % 4) * 2) !== Math.round((b.beat % 4) * 2))
+      return null;
+  }
+  for (let index = 1; index < 4; index++) {
+    const prev = opening[index - 1]?.note.midi ?? 0;
+    const next = opening[index]?.note.midi ?? 0;
+    const otherPrev = answer[index - 1]?.note.midi ?? 0;
+    const otherNext = answer[index]?.note.midi ?? 0;
+    if (
+      scaleStepCount(prev, next, scalePcs) !==
+      scaleStepCount(otherPrev, otherNext, scalePcs)
+    )
+      return null;
+  }
+  const from = opening[0]?.index ?? 0;
+  const to = (answer[3]?.index ?? 0) + 1;
+  return [from, to];
+}
+
+function criticScore(
+  notes: readonly PhraseNote[],
+  plan: PhrasePlan,
+  bars: 2 | 4,
+  scalePcs: ReadonlySet<number>,
+): number {
+  let strong = 0;
+  let strongChord = 0;
+  let rests = 0;
+  let sync = 0;
+  let fit = 0;
+  const signatures: string[] = [];
+  for (let bar = 0; bar < bars; bar++) {
+    const onsets = notes
+      .filter((note) => Math.floor(note.beat / 4) === bar)
+      .map((note) => Math.round((note.beat - bar * 4) * 2));
+    signatures.push(onsets.join(','));
+  }
+  for (let index = 0; index < notes.length; index++) {
+    const note = notes[index];
+    if (note.strong) {
+      strong += 1;
+      if (note.chordTone) strongChord += 1;
+    }
+    const next = notes[index + 1];
+    if (next && note.duration + 1e-6 < next.beat - note.beat) rests += 1;
+    const fraction = note.beat - Math.floor(note.beat + 1e-9);
+    if (Math.abs(fraction - 0.5) < 0.01) {
+      const following = Math.floor(note.beat) + 1;
+      const struck = notes.some(
+        (item) => Math.abs(item.beat - following) < 0.01,
+      );
+      if (!struck) sync += 1;
+    }
+    const goal = contourMidi(plan, index / Math.max(1, notes.length - 1));
+    fit += Math.max(0, PHRASE_RANGE - Math.abs(note.midi - goal));
+  }
+  const midis = notes.map((note) => note.midi);
+  const range = Math.max(...midis) - Math.min(...midis);
+  const distinct = new Set(signatures).size;
+  const same =
+    signatures.length > 1 && signatures.every((item) => item === signatures[0]);
+  const quarter =
+    notes.every((note) => Math.abs(note.beat - Math.round(note.beat)) < 0.01) &&
+    notes.slice(0, -1).every((note) => Math.abs(note.duration - 1) < 0.01);
+  const ratio = strong ? strongChord / strong : 0;
+  let score = Math.round(90 * (1 - Math.abs(ratio - 0.65)));
+  score += strong * 12;
+  score += distinct * 18;
+  score += Math.min(rests, 6) * 7;
+  score += Math.min(sync, 6) * 8;
+  score += Math.round(fit / notes.length);
+  score += Math.min(range, 12);
+  if (same) score -= 80;
+  if (quarter) score -= 24;
+  score -= pitchCriticPenalty(notes, midis, bars, scalePcs);
+  const cells = plan.cells ?? [];
+  for (let index = 1; index < cells.length; index++) {
+    if (cells[index] === cells[index - 1]) score -= 30;
+  }
+  return score;
+}
+
+const PHRASE_CANDIDATES = 4;
+
+function notesFromPitches(
+  pitches: readonly Pitched[],
+  events: readonly GridEvent[],
+): PhraseNote[] {
+  return pitches.map((tone, event) => ({
+    name: tone.name,
+    pc: tone.pc,
+    degree: tone.degree,
+    midi: tone.midi,
+    beat: events[event].beat,
+    duration: events[event].duration,
+    strong: events[event].strong,
+    chordTone: tone.chordTone,
+  }));
+}
+
+/**
+ * Target bands for step size, leaps, and the two-pitch wobble.
+ * A repeated 3-pitch cell and a 5-note scale run lose the lane.
+ * A shifted sentence is a different pitch level, so it is not a cell.
+ */
+function pitchCriticPenalty(
+  notes: readonly PhraseNote[],
+  midis: readonly number[],
+  bars: 2 | 4,
+  scalePcs: ReadonlySet<number>,
+): number {
+  let penalty = 0;
+  for (let bar = 0; bar < bars; bar++) {
+    const group = notes.filter(
+      (note) => Math.floor(note.beat / 4) === bar && note.beat < bars * 4,
+    );
+    if (group.length >= 4 && new Set(group.map((note) => note.midi)).size <= 2)
+      penalty += 160;
+  }
+  let run = 1;
+  let best = 1;
+  for (let index = 1; index < midis.length; index++) {
+    if (midis[index] === midis[index - 1]) run = 1;
+    else if (index >= 2 && midis[index] === midis[index - 2]) run += 1;
+    else run = 2;
+    if (run > best) best = run;
+  }
+  if (best >= 5) penalty += 180;
+  const cover = sentenceCover(notes, scalePcs);
+  if (longestMonotone(midis, scalePcs) >= 5) penalty += 240;
+  if (repeatedPitchCell(midis, 3, 2, cover)) penalty += 240;
+  if (repeatedPitchCell(midis, 3, 3, cover)) penalty += 200;
+  const counts = new Map<number, number>();
+  for (const midi of midis) counts.set(midi, (counts.get(midi) ?? 0) + 1);
+  const ranked = [...counts.values()].sort((a, b) => b - a);
+  const top2 = ((ranked[0] ?? 0) + (ranked[1] ?? 0)) / Math.max(1, midis.length);
+  if (top2 > 0.45) penalty += Math.round((top2 - 0.45) * 220);
+  let total = 0;
+  let small = 0;
+  let wide = 0;
+  for (let index = 1; index < midis.length; index++) {
+    const gap = Math.abs(midis[index] - midis[index - 1]);
+    total += 1;
+    if (gap <= 2) small += 1;
+    if (gap >= 5) wide += 1;
+  }
+  if (total) {
+    penalty += Math.round(36 * Math.abs(small / total - 0.65));
+    penalty += Math.round(28 * Math.abs(wide / total - 0.12));
+  }
+  return penalty;
+}
+
+function composePhrase(
+  input: {
+    seed: number;
+    bars: 2 | 4;
+    scaleNotes: readonly Note[];
+    chordNotes: readonly Note[];
+  },
+  plan: PhrasePlan,
+  ladder: readonly LadderTone[],
+  forms: readonly Pattern[],
+): { notes: FingeredNote[]; plan: PhrasePlan } | null {
+  const scalePcs = new Set(input.scaleNotes.map((note) => note.pc));
+  const cadencePcs = new Set(
+    cadencePitchClasses(input.chordNotes, plan.cadence, scalePcs),
+  );
+  const cadenceAt = cadenceIndexOf(ladder, cadencePcs, plan, input.bars);
+  if (cadenceAt < 0) return null;
+  const found: {
+    notes: PhraseNote[];
+    plan: PhrasePlan;
+    score: number;
+    exact: boolean;
+    lane: number;
+  }[] = [];
+  const lanes = PHRASE_CANDIDATES * 2;
+  for (let lane = 0; lane < lanes; lane++) {
+    if (searchAtCap() || phraseSearchRefused) break;
+    const exact = lane === 0;
+    const random = mulberry32((input.seed + (lane + 1) * 0x9e3779b9) >>> 0);
+    const patterns = pickPatterns(
+      plan.rhythm,
+      input.bars,
+      random,
+      exact ? 1 : lane % 3,
+      exact,
+    );
+    const events = eventsForCells(patterns, input.bars);
+    const pitches = walkPitches(
+      ladder,
+      events,
+      plan,
+      input.bars,
+      cadenceAt,
+      random,
+      input.seed,
+    );
+    if (!pitches) continue;
+    const notes = notesFromPitches(pitches, events);
+    const nextPlan: PhrasePlan = {
+      ...plan,
+      form: input.bars === 2 ? 'answer' : 'sentence',
+      cells: patterns.map((pattern) => pattern.ids),
+    };
+    found.push({
+      notes,
+      plan: nextPlan,
+      score: criticScore(notes, nextPlan, input.bars, scalePcs),
+      exact,
+      lane,
+    });
+  }
+  if (!found.length) {
+    // Every sampled lane missed the cadence. One more sentence, still
+    // marked exact so a varied lane would have won.
+    const random = mulberry32((input.seed + (lanes + 1) * 0x9e3779b9) >>> 0);
+    const patterns = pickPatterns(plan.rhythm, input.bars, random, 1, false);
+    if (patterns.length === input.bars) {
+      const events = eventsForCells(patterns, input.bars);
+      const pitches = walkPitches(
+        ladder,
+        events,
+        plan,
+        input.bars,
+        cadenceAt,
+        random,
+        input.seed,
+      );
+      if (pitches) {
+        const notes = notesFromPitches(pitches, events);
+        const nextPlan: PhrasePlan = {
+          ...plan,
+          form: input.bars === 2 ? 'answer' : 'sentence',
+          cells: patterns.map((pattern) => pattern.ids),
+        };
+        found.push({
+          notes,
+          plan: nextPlan,
+          score: criticScore(notes, nextPlan, input.bars, scalePcs),
+          exact: true,
+          lane: lanes,
+        });
+      }
+    }
+  }
+  if (!found.length) return null;
+  // The copied bar is a fallback for a ladder that cannot change rhythm.
+  // A varied line wins whenever one exists.
+  const varied = found.filter((item) => !item.exact);
+  const source = varied.length ? varied : found;
+  const fitting = source.filter((item) =>
+    contourFits(item.notes, item.plan.contour),
+  );
+  const pool = fitting.length ? fitting : source;
+  // A shift only lowers a score, so a weaker pitch line cannot catch up.
+  const ranked = pool
+    .slice()
+    .sort((a, b) => b.score - a.score || a.lane - b.lane);
+  let best: { notes: FingeredNote[]; plan: PhrasePlan; score: number } | null =
+    null;
+  for (const item of ranked) {
+    if (best && item.score <= best.score) break;
+    const fingered = fingerNotes(item.notes, forms);
+    if (!handAccepts(fingered)) continue;
+    let shifts = 0;
+    for (const note of fingered) if (note.shift) shifts += 1;
+    const score = item.score - shifts * 8;
+    if (!best || score > best.score)
+      best = { notes: fingered, plan: item.plan, score };
+  }
+  return best;
+}
+
+/** The coarse shape a locked contour has to produce: ends, or a middle arch or wave. */
+function contourFits(
+  notes: readonly { midi: number }[],
+  contour: PhrasePlan['contour'],
+): boolean {
+  const third = Math.max(1, Math.floor(notes.length / 3));
+  const mean = (from: number, to: number) => {
+    let sum = 0;
+    for (let index = from; index < to; index++) sum += notes[index].midi;
+    return sum / Math.max(1, to - from);
+  };
+  const first = mean(0, third);
+  const middle = mean(third, third * 2);
+  const last = mean(third * 2, notes.length);
   if (contour === 'rise') return last > first;
   if (contour === 'fall') return first > last;
   if (contour === 'arch') return middle > first && middle > last;
   return middle < first && middle < last;
 }
 
-/**
- * A later repair can keep the highest note and still flatten the arch:
- * the middle third's average falls, or an end rises. Refuse that edit.
- * The peak check stays as well, so the top note cannot drop either.
- */
-function harmsArch(
-  before: readonly number[],
-  after: readonly number[],
-  ladder: readonly LadderTone[],
-  plan: PhrasePlan,
-): boolean {
-  if (plan.contour !== 'arch') return false;
-  const beforeMidis = lineMidis(before, ladder);
-  const afterMidis = lineMidis(after, ladder);
-  if (Math.max(...afterMidis) < Math.max(...beforeMidis)) return true;
-  return contourHits(beforeMidis, 'arch') && !contourHits(afterMidis, 'arch');
-}
-
-function circleSpan(midis: readonly number[]): number {
-  const run = longestCircle(midis);
-  return run ? run.end - run.start : 0;
-}
-
-/**
- * A landing arch can be parked on two pitches. Move notes already on the
- * grid until that cell is back to four. The arch still hits, and a fifth
- * is not added. The peak and the circle length are not rechecked: on the
- * progression sweep they never change which repair is chosen.
- * One note is tried first. When the only step into the next chord tone
- * would tie the middle third, the strong note and its approach move together.
- */
-export function breakLoopsKeepArch(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-  events: readonly GridEvent[],
-  plan: PhrasePlan,
-): number[] {
-  const current = indexes.slice();
-  const cadence = current[current.length - 1];
-  const baseMidis = lineMidis(current, ladder);
-  const requireArch = plan.contour === 'arch' && contourHits(baseMidis, 'arch');
-  const baseWide = wideLeapCount(current, ladder);
-  for (let guard = 0; guard < 12; guard++) {
-    if (phraseCellLength(lineMidis(current, ladder)) <= PHRASE_CELL_LIMIT)
-      return current;
-    const excess = cellExcess(lineMidis(current, ladder));
-    type LoopCandidate = {
-      trial: number[];
-      cell: number;
-      excess: number;
-      dist: number;
-    };
-    let best: LoopCandidate | null = null;
-    const consider = (
-      previous: LoopCandidate | null,
-      trial: number[],
-      dist: number,
-    ): LoopCandidate | null => {
-      if (!lineIsLegal(trial, events, ladder, cadence)) return previous;
-      const nextMidis = lineMidis(trial, ladder);
-      const nextExcess = cellExcess(nextMidis);
-      if (nextExcess >= excess) return previous;
-      // A nearer step opens these cells first, so the measured lines do not
-      // move on this guard. It stays so the pair repair below cannot add a fifth.
-      if (wideLeapCount(trial, ladder) > baseWide) return previous;
-      if (requireArch && !contourHits(nextMidis, 'arch')) return previous;
-      const cell = phraseCellLength(nextMidis);
-      if (
-        !previous ||
-        cell < previous.cell ||
-        (cell === previous.cell && nextExcess < previous.excess) ||
-        (cell === previous.cell &&
-          nextExcess === previous.excess &&
-          dist < previous.dist)
-      )
-        return { trial, cell, excess: nextExcess, dist };
-      return previous;
-    };
-    for (let index = 0; index < current.length - 1; index++) {
-      for (const option of pitchChoices(current[index], ladder.length)) {
-        if (index > 0 && option === current[index - 1]) continue;
-        if (events[index].strong && !ladder[option].chordTone) continue;
-        if (
-          events[index].strong &&
-          index > 0 &&
-          Math.abs(option - current[index - 1]) !== 1
-        )
-          continue;
-        const following = current[index + 1];
-        if (
-          following !== undefined &&
-          events[index + 1]?.strong &&
-          Math.abs(option - following) !== 1
-        )
-          continue;
-        const trial = current.slice();
-        trial[index] = option;
-        best = consider(best, trial, Math.abs(option - current[index]));
-      }
-    }
-    if (!best) {
-      for (let index = 1; index < current.length - 1; index++) {
-        if (!events[index].strong) continue;
-        const chord = ladder.flatMap((tone, toneIndex) =>
-          tone.chordTone ? [toneIndex] : [],
-        );
-        for (const option of chord) {
-          if (option === current[index]) continue;
-          for (const approach of [option - 1, option + 1]) {
-            if (approach < 0 || approach >= ladder.length) continue;
-            if (approach === current[index - 2]) continue;
-            const trial = current.slice();
-            trial[index - 1] = approach;
-            trial[index] = option;
-            best = consider(best, trial, Math.abs(option - current[index]));
-          }
-        }
-      }
-    }
-    if (!best) return current;
-    current.splice(0, current.length, ...best.trial);
-  }
-  return current;
-}
-
-/**
- * Longest run of more than four notes that uses exactly three pitches,
- * stays inside a major third, and repeats every three notes.
- */
-function longestCircle(
-  midis: readonly number[],
-): { start: number; end: number } | null {
-  let best: { start: number; end: number } | null = null;
-  for (let start = 0; start < midis.length; start++) {
-    const seen = new Set<number>([midis[start]]);
-    for (let end = start + 1; end < midis.length; end++) {
-      if (end - start >= 3 && midis[end] !== midis[end - 3]) break;
-      seen.add(midis[end]);
-      if (seen.size > 3) break;
-      if (Math.max(...seen) - Math.min(...seen) > 4) break;
-      if (end - start + 1 > 4 && seen.size === 3) {
-        if (!best || end - start > best.end - best.start) best = { start, end };
-      }
-    }
-  }
-  return best;
-}
-
-/**
- * Break a three-pitch circle by moving one pitch that is already on the
- * grid. Weak beats first. The two-pitch cell limit still holds, a fifth
- * is not added, and an arch that already lands is left landing.
- */
-export function breakCircles(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-  events: readonly GridEvent[],
-  plan: PhrasePlan,
-): number[] {
-  let current = indexes.slice();
-  const cadence = current[current.length - 1];
-  for (let guard = 0; guard < 6; guard++) {
-    const midis = lineMidis(current, ladder);
-    const run = longestCircle(midis);
-    if (!run) return current;
-    const beforeLen = run.end - run.start;
-    const baseWide = wideLeapCount(current, ladder);
-    const baseMax = Math.max(...midis);
-    const baseHit = plan.contour === 'arch' && contourHits(midis, 'arch');
-    const positions: number[] = [];
-    for (
-      let index = run.start;
-      index <= run.end && index < current.length - 1;
-      index++
-    )
-      positions.push(index);
-    positions.sort(
-      (a, b) => Number(events[a].strong) - Number(events[b].strong) || a - b,
-    );
-    let changed = false;
-    for (const index of positions) {
-      for (let distance = 1; distance <= 3; distance++) {
-        for (const option of [
-          current[index] + distance,
-          current[index] - distance,
-        ]) {
-          if (option < 0 || option >= ladder.length) continue;
-          if (events[index].strong && !ladder[option].chordTone) continue;
-          const trial = current.slice();
-          trial[index] = option;
-          if (!lineIsLegal(trial, events, ladder, cadence)) continue;
-          const nextMidis = lineMidis(trial, ladder);
-          if (phraseCellLength(nextMidis) > PHRASE_CELL_LIMIT) continue;
-          if (wideLeapCount(trial, ladder) > baseWide) continue;
-          // A circle repair may not give up the arch's highest note. The
-          // branch is quiet on the progression sweep; the direct fixture
-          // still refuses a lower top.
-          if (plan.contour === 'arch' && Math.max(...nextMidis) < baseMax)
-            continue;
-          if (baseHit && !contourHits(nextMidis, 'arch')) continue;
-          const nextRun = longestCircle(nextMidis);
-          const nextLen = nextRun ? nextRun.end - nextRun.start : 0;
-          if (nextLen >= beforeLen) continue;
-          current = trial;
-          changed = true;
-          break;
-        }
-        if (changed) break;
-      }
-      if (changed) break;
-    }
-    if (!changed) return current;
-  }
-  return current;
-}
-
-export function directedChoices(
-  current: number,
-  length: number,
-  upFirst: boolean,
-): number[] {
-  const options: number[] = [];
-  // Every distance changes a real phrase, so none of these steps is dead.
-  // Dropping 1 and 4 moves Bb minor over F7, seed 4, 4 bars, off its wave.
-  for (let distance = 1; distance <= 4 && distance < length; distance++) {
-    const pair = upFirst
-      ? [current + distance, current - distance]
-      : [current - distance, current + distance];
-    for (const option of pair) {
-      if (option >= 0 && option < length) options.push(option);
-    }
-  }
-  return options;
-}
-
-/**
- * One existing pitch moves so the plan's third-means land. Weak beats
- * first, at most four scale steps. A stuck cell is already refused
- * inside the search, so the grid traps stay two pitches without a
- * separate early return.
- */
-function liftContour(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-  events: readonly GridEvent[],
-  plan: PhrasePlan,
-): number[] {
-  const current = indexes.slice();
-  const midis = lineMidis(current, ladder);
-  if (contourHits(midis, plan.contour)) return current;
-  const cadence = current[current.length - 1];
-  const third = Math.max(1, Math.floor(current.length / 3));
-  const regions: number[][] = [[], [], []];
-  for (let index = 0; index < current.length - 1; index++) {
-    const region = index < third ? 0 : index < third * 2 ? 1 : 2;
-    regions[region].push(index);
-  }
-  const preferUp = plan.contour !== 'wave';
-  const regionOrder =
-    plan.contour === 'rise'
-      ? [2, 1, 0]
-      : plan.contour === 'fall'
-        ? [0, 2, 1]
-        : [1, 0, 2];
-  const baseWide = wideLeapCount(current, ladder);
-  const ordered: number[] = [];
-  for (const region of regionOrder) {
-    const notes = regions[region].slice().sort((a, b) => {
-      const strong = Number(events[a].strong) - Number(events[b].strong);
-      return strong || a - b;
-    });
-    ordered.push(...notes);
-  }
-  for (const index of ordered) {
-    for (const option of directedChoices(
-      current[index],
-      ladder.length,
-      preferUp,
-    )) {
-      if (events[index].strong && !ladder[option].chordTone) continue;
-      const trial = current.slice();
-      trial[index] = option;
-      if (!lineIsLegal(trial, events, ladder, cadence)) continue;
-      if (phraseCellLength(lineMidis(trial, ladder)) > PHRASE_CELL_LIMIT)
-        continue;
-      if (wideLeapCount(trial, ladder) > baseWide) continue;
-      if (!contourHits(lineMidis(trial, ladder), plan.contour)) continue;
-      return trial;
-    }
-  }
-  return current;
-}
-
-/**
- * Search still picks the skeleton and the rhythm grid. This pass only
- * rewrites pitches on those onsets: a stuck cell moves to another scale
- * or chord tone, and a leap of a fifth or wider becomes a scale walk when
- * the gap can already hold the steps. An arch that already lands is not
- * a legal casualty of those repairs. A three-pitch circle is broken on
- * the same grid, then one pitch may still move toward the plan.
- * A two-pitch cell left under a landing arch is opened without giving
- * that arch back.
- */
-function shapeMelody(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-  events: readonly GridEvent[],
-  plan: PhrasePlan,
-): { indexes: number[]; events: GridEvent[] } {
-  const cadence = indexes[indexes.length - 1];
-  const grid = events.map((event) => ({ ...event }));
-  let current = indexes.slice();
-  if (needsContour(current, ladder)) {
-    const rebuilt = rebuildContour(current, ladder, grid, plan);
-    const keepsPeak =
-      plan.contour !== 'arch' ||
-      (!!rebuilt &&
-        Math.max(...lineMidis(rebuilt, ladder)) >=
-          Math.max(...lineMidis(current, ladder)));
-    if (rebuilt && keepsPeak && lineIsLegal(rebuilt, grid, ladder, cadence)) {
-      const leaped = addModestLeap(rebuilt, ladder, grid);
-      current =
-        leaped && !harmsArch(rebuilt, leaped, ladder, plan) ? leaped : rebuilt;
-    }
-  }
-  if (phraseCellLength(lineMidis(current, ladder)) > PHRASE_CELL_LIMIT) {
-    const opened = breakCell(current, grid, ladder, cadence);
-    if (
-      opened &&
-      lineIsLegal(opened, grid, ladder, cadence) &&
-      !harmsArch(current, opened, ladder, plan)
-    )
-      current = opened;
-  }
-  for (let repair = 0; repair < 3; repair++) {
-    const before = widestLeap(current, ladder, scalePcsOf(ladder));
-    if (!before) break;
-    const softened = softenWidestLeap(current, ladder, grid);
-    if (!softened) break;
-    const leaped = addModestLeap(softened, ladder, grid);
-    const candidate = leaped ?? softened;
-    const opened = breakCell(candidate, grid, ladder, cadence);
-    const next = opened ?? candidate;
-    if (!lineIsLegal(next, grid, ladder, cadence)) break;
-    if (phraseCellLength(lineMidis(next, ladder)) > PHRASE_CELL_LIMIT) break;
-    if (wideLeapCount(next, ladder) >= wideLeapCount(current, ladder)) break;
-    if (harmsArch(current, next, ladder, plan)) break;
-    current = next;
-  }
-  if (current.length > 8 && leapCount(current, ladder) < 4) {
-    const extra = addModestLeap(current, ladder, grid);
-    if (
-      extra &&
-      lineIsLegal(extra, grid, ladder, cadence) &&
-      phraseCellLength(lineMidis(extra, ladder)) <= PHRASE_CELL_LIMIT &&
-      !harmsArch(current, extra, ladder, plan)
-    )
-      current = extra;
-  }
-  current = breakCircles(current, ladder, grid, plan);
-  current = liftContour(current, ladder, grid, plan);
-  current = breakLoopsKeepArch(current, ladder, grid, plan);
-  return grid[grid.length - 1].duration === 2
-    ? { indexes: current, events: grid }
-    : {
-        indexes: indexes.slice(),
-        events: events.map((event) => ({ ...event })),
-      };
-}
-
-function wideLeapCount(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-): number {
-  const scalePcs = scalePcsOf(ladder);
-  let count = 0;
-  for (let index = 1; index < indexes.length; index++) {
-    const semitones = Math.abs(
-      ladder[indexes[index]].midi - ladder[indexes[index - 1]].midi,
-    );
-    if (semitones < PHRASE_WIDE_LEAP) continue;
-    if (
-      melodicMotion(
-        ladder[indexes[index - 1]].midi,
-        ladder[indexes[index]].midi,
-        scalePcs,
-      ) === 'leap'
-    )
-      count += 1;
-  }
-  return count;
-}
-
-function leapCount(
-  indexes: readonly number[],
-  ladder: readonly LadderTone[],
-): number {
-  const scalePcs = scalePcsOf(ladder);
-  let leaps = 0;
-  for (let index = 1; index < indexes.length; index++) {
-    if (
-      melodicMotion(
-        ladder[indexes[index - 1]].midi,
-        ladder[indexes[index]].midi,
-        scalePcs,
-      ) === 'leap'
-    )
-      leaps += 1;
-  }
-  return leaps;
-}
-
-/**
- * A run longer than six notes on three pitch classes stays in one pocket.
- * So does a 4-note figure that sounds more than twice in a row. Variety is
- * the note name: an octave of a name already in the pocket does not count.
- * A weak note can step, move by a third, or leap inside the register
- * window, and the next note can move with it. Jonny, 2026-10-16: an octave
- * jump (the same note an octave up or down) may leave the locked register.
- * Every other leap stays inside it. The shape only marks reach.
- * Two-pitch lines that remain are stuck by the strong-beat step rule at
- * the bottom of the register: the cadence is the lowest chord tone, and
- * the only scale step into it is one neighbor.
- */
-function spreadVariety(
-  notes: PhraseNote[],
-  scaleNotes: readonly Note[],
-  chordPcs: ReadonlySet<number>,
-  plan: PhrasePlan,
-  forms: readonly Pattern[],
-): PhraseNote[] {
-  const spelled = noteByPc(scaleNotes);
-  const scalePcs = new Set(scaleNotes.map((note) => note.pc));
-  const low = REGISTER_LOW[plan.register];
-  const high = low + PHRASE_RANGE;
-  const active = shapeCover(
-    forms,
-    notes.map((note) => note.midi),
-  );
-  const pool = varietyPool(forms, active, scaleNotes, plan.register);
-  let current = notes;
-  for (let pass = 0; pass < 12; pass++) {
-    const midis = current.map((note) => note.midi);
-    const run = narrowSpan(midis);
-    const figure = periodSpan(midis, 4);
-    if (run.length <= PHRASE_VARIETY_RUN && figure.length < 12) break;
-    const focus = run.length > PHRASE_VARIETY_RUN ? run : figure;
-    const placed = fingerNotes(current, forms);
-    const opened =
-      openNarrowRun(
-        current,
-        focus,
-        pool,
-        spelled,
-        scalePcs,
-        chordPcs,
-        plan,
-        low,
-        high,
-      ) ??
-      chainVariety(
-        current,
-        focus,
-        pool,
-        spelled,
-        scalePcs,
-        chordPcs,
-        plan,
-        placed,
-        low,
-        high,
-      );
-    if (!opened) break;
-    current = opened;
-  }
-  return current;
-}
-
-function narrowExcess(midis: readonly number[]): number {
-  let excess = 0;
-  for (let start = 0; start < midis.length; start++) {
-    const seen = new Set<number>();
-    let length = 0;
-    for (let end = start; end < midis.length; end++) {
-      seen.add(mod(midis[end]));
-      if (seen.size > 3) break;
-      length = end - start + 1;
-    }
-    if (length > PHRASE_VARIETY_RUN) excess += length - PHRASE_VARIETY_RUN;
-  }
-  return excess;
-}
-
-/** Longest run on three note names or fewer. Octave copies share a name. */
-function narrowSpan(midis: readonly number[]): {
-  start: number;
-  length: number;
-} {
-  let start = 0;
-  let length = midis.length > 0 ? 1 : 0;
-  for (let from = 0; from < midis.length; from++) {
-    const seen = new Set<number>();
-    for (let to = from; to < midis.length; to++) {
-      seen.add(mod(midis[to]));
-      if (seen.size > 3) break;
-      if (to - from + 1 > length) {
-        start = from;
-        length = to - from + 1;
-      }
-    }
-  }
-  return { start, length };
-}
-
-/**
- * Longest stretch whose note names repeat every `period` notes.
- * Two statements of a 4-note figure are 8 notes. A third statement is 12.
- */
-function periodSpan(
-  midis: readonly number[],
-  period: number,
-): { start: number; length: number } {
-  let start = 0;
-  let length = 0;
-  for (let from = 0; from < midis.length; from++) {
-    let end = from;
-    for (let index = from + period; index < midis.length; index++) {
-      if (mod(midis[index]) !== mod(midis[index - period])) break;
-      end = index;
-    }
-    if (end >= from + period && end - from + 1 > length) {
-      start = from;
-      length = end - from + 1;
-    }
-  }
-  return { start, length };
-}
-
-/** Shape whose dots already hold the most of these pitches. Ties sit nearest fret 7. */
 function shapeCover(
   forms: readonly Pattern[],
   midis: readonly number[],
@@ -2211,564 +2056,6 @@ function shapeCover(
     }
   });
   return best;
-}
-
-function varietyPool(
-  forms: readonly Pattern[],
-  active: number,
-  scaleNotes: readonly Note[],
-  register: RegisterName,
-): Set<number> {
-  const low = REGISTER_LOW[register];
-  const high = low + PHRASE_RANGE;
-  const pool = new Set<number>();
-  const allow = (midi: number) => {
-    if (midi < low || midi > high) return;
-    pool.add(midi);
-  };
-  if (active < 0) {
-    const pcs = new Set(scaleNotes.map((note) => note.pc));
-    for (let midi = low; midi <= high; midi++) {
-      if (pcs.has(mod(midi))) allow(midi);
-    }
-    return pool;
-  }
-  for (const index of [active - 1, active, active + 1]) {
-    if (index < 0 || index >= forms.length) continue;
-    for (const position of forms[index].positions) allow(position.midi);
-  }
-  return pool;
-}
-
-function adjacentScaleMidi(
-  midi: number,
-  direction: number,
-  scalePcs: ReadonlySet<number>,
-): number | null {
-  const sign = Math.sign(direction);
-  if (sign === 0) return null;
-  const lowest = TUNING[0];
-  const highest = TUNING[TUNING.length - 1] + 24;
-  for (let step = 1; step <= 12; step++) {
-    const candidate = midi + sign * step;
-    if (candidate < lowest || candidate > highest) return null;
-    if (scalePcs.has(mod(candidate))) return candidate;
-  }
-  return null;
-}
-
-function retone(
-  midi: number,
-  template: PhraseNote,
-  spelled: ReadonlyMap<number, Note>,
-  chordPcs: ReadonlySet<number>,
-): PhraseNote | null {
-  const note = spelled.get(mod(midi));
-  if (!note) return null;
-  return {
-    ...template,
-    name: note.name,
-    pc: note.pc,
-    degree: note.degree,
-    midi,
-    chordTone: chordPcs.has(note.pc),
-  };
-}
-
-function notesAreMusical(
-  notes: readonly PhraseNote[],
-  scalePcs: ReadonlySet<number>,
-): boolean {
-  if (!notes.length || notes[notes.length - 1].duration !== 2) return false;
-  for (let index = 0; index < notes.length; index++) {
-    const note = notes[index];
-    if (note.strong && !note.chordTone) return false;
-    if (index === 0) continue;
-    const previous = notes[index - 1];
-    if (note.midi === previous.midi) return false;
-    const motion = melodicMotion(previous.midi, note.midi, scalePcs);
-    if (note.strong && motion !== 'step') return false;
-    if (motion !== 'leap') continue;
-    const next = notes[index + 1];
-    if (!next) return false;
-    const resolution = melodicMotion(note.midi, next.midi, scalePcs);
-    const opposite =
-      Math.sign(next.midi - note.midi) ===
-      -Math.sign(note.midi - previous.midi);
-    if (resolution !== 'step' || !opposite) return false;
-  }
-  return true;
-}
-
-function harmsLine(
-  before: readonly number[],
-  after: readonly number[],
-  plan: PhrasePlan,
-): boolean {
-  if (plan.contour === 'arch' && Math.max(...after) < Math.max(...before))
-    return true;
-  return contourHits(before, plan.contour) && !contourHits(after, plan.contour);
-}
-
-/**
- * A new pitch has to sit in the current hand box, or within a 3-fret reach
- * on an eighth. A longer note may slide up to one box (5 frets). A move of
- * 4 frets or more is a shift and cannot land on an eighth.
- */
-export function withinHand(
-  midi: number,
-  anchor: number,
-  slack: number,
-): boolean {
-  return spotsFor(midi).some(
-    (spot) => Math.abs(spot.position - anchor) <= slack,
-  );
-}
-
-function handSlack(duration: number): number {
-  return duration <= 0.5 ? SHIFT_FRETS - 1 : 5;
-}
-
-/** Scale tones `steps` names away, kept inside the register window. */
-function degreesFrom(
-  midi: number,
-  steps: number,
-  scalePcs: ReadonlySet<number>,
-  low: number,
-  high: number,
-): number[] {
-  const found: number[] = [];
-  for (const sign of [1, -1]) {
-    let cursor = midi;
-    let left = steps;
-    while (left > 0) {
-      const next = adjacentScaleMidi(cursor, sign, scalePcs);
-      if (next === null || next < low || next > high) break;
-      cursor = next;
-      left -= 1;
-    }
-    if (left === 0) found.push(cursor);
-  }
-  return found;
-}
-
-/** An octave is allowed. Anything wider, or a leap past a fourth onto an eighth, is not. */
-function arrivalOk(gap: number, duration: number): boolean {
-  if (gap === 0 || gap > 12) return false;
-  return !(duration <= 0.5 && gap > 5);
-}
-
-/**
- * Jonny, 2026-10-16, 1:10am ET: octave jumps may leave the locked register.
- * An octave jump is the same note an octave up or down (±12 from the note
- * being rewritten). Every other leap stays inside the register window.
- */
-function pitchAllowed(
-  midi: number,
-  original: number,
-  low: number,
-  high: number,
-): boolean {
-  if (midi < TUNING[0] || midi > TUNING[TUNING.length - 1] + 24) return false;
-  if (midi >= low && midi <= high) return true;
-  return Math.abs(midi - original) === 12;
-}
-
-function openNarrowRun(
-  notes: readonly PhraseNote[],
-  run: { start: number; length: number },
-  targets: ReadonlySet<number>,
-  spelled: ReadonlyMap<number, Note>,
-  scalePcs: ReadonlySet<number>,
-  chordPcs: ReadonlySet<number>,
-  plan: PhrasePlan,
-  low: number,
-  high: number,
-): PhraseNote[] | null {
-  const midis = notes.map((note) => note.midi);
-  const baseCell = phraseCellLength(midis);
-  const baseCircle = circleSpan(midis);
-  const baseExcess = narrowExcess(midis);
-  const baseFigure = periodSpan(midis, 4).length;
-  let best: PhraseNote[] | null = null;
-  let bestNarrow = run.length;
-  let bestExcess = baseExcess;
-  let bestFigure = baseFigure;
-  let bestGap = Infinity;
-  let bestOutside = Infinity;
-
-  const consider = (trial: PhraseNote[], gap: number) => {
-    if (!notesAreMusical(trial, scalePcs)) return;
-    const nextMidis = trial.map((note) => note.midi);
-    const nextCell = phraseCellLength(nextMidis);
-    if (baseCell <= PHRASE_CELL_LIMIT) {
-      if (nextCell > PHRASE_CELL_LIMIT) return;
-    } else if (nextCell > baseCell) return;
-    if (baseCircle === 0 && circleSpan(nextMidis) > 0) return;
-    if (harmsLine(midis, nextMidis, plan)) return;
-    const nextNarrow = narrowSpan(nextMidis).length;
-    const nextExcess = narrowExcess(nextMidis);
-    const nextFigure = periodSpan(nextMidis, 4).length;
-    // A third statement is 12 notes. Opening a pocket must not write one,
-    // and a repair only counts when it shortens a figure that is already there.
-    if (nextFigure >= 12 && !(baseFigure >= 12 && nextFigure < baseFigure))
-      return;
-    const opensPocket = nextExcess < baseExcess;
-    const breaksFigure =
-      baseFigure >= 12 && nextFigure < baseFigure && nextExcess <= baseExcess;
-    if (!opensPocket && !breaksFigure) return;
-    const outside = trial.filter(
-      (note) => note.midi < low || note.midi > high,
-    ).length;
-    const clears = nextFigure < 12 ? 0 : 1;
-    const bestClears = bestFigure < 12 ? 0 : 1;
-    const better =
-      !best ||
-      clears < bestClears ||
-      (clears === bestClears && nextExcess < bestExcess) ||
-      (clears === bestClears &&
-        nextExcess === bestExcess &&
-        nextNarrow < bestNarrow) ||
-      (clears === bestClears &&
-        nextExcess === bestExcess &&
-        nextNarrow === bestNarrow &&
-        nextFigure < bestFigure) ||
-      (clears === bestClears &&
-        nextExcess === bestExcess &&
-        nextNarrow === bestNarrow &&
-        nextFigure === bestFigure &&
-        gap < bestGap) ||
-      (clears === bestClears &&
-        nextExcess === bestExcess &&
-        nextNarrow === bestNarrow &&
-        nextFigure === bestFigure &&
-        gap === bestGap &&
-        outside < bestOutside);
-    if (!better) return;
-    best = trial;
-    bestNarrow = nextNarrow;
-    bestExcess = nextExcess;
-    bestFigure = nextFigure;
-    bestGap = gap;
-    bestOutside = outside;
-  };
-
-  const land = (index: number, target: number): number | null => {
-    if (!pitchAllowed(target, notes[index].midi, low, high)) return null;
-    if (
-      !arrivalOk(
-        Math.abs(target - notes[index - 1].midi),
-        notes[index].duration,
-      )
-    )
-      return null;
-    return target;
-  };
-
-  for (
-    let index = Math.max(1, run.start);
-    index < run.start + run.length;
-    index++
-  ) {
-    if (index >= notes.length - 1 || notes[index].strong) continue;
-    const previous = notes[index - 1].midi;
-    const atEnd = index + 1 === notes.length - 1;
-    const options = new Set<number>([
-      ...degreesFrom(previous, 1, scalePcs, low, high),
-      ...degreesFrom(previous, 2, scalePcs, low, high),
-      ...targets,
-      notes[index].midi - 12,
-      notes[index].midi + 12,
-    ]);
-    for (const target of options) {
-      if (land(index, target) === null) continue;
-      const arrived = retone(target, notes[index], spelled, chordPcs);
-      if (!arrived) continue;
-      const gap = Math.abs(target - previous);
-      const following = notes[index + 1];
-      const direction = Math.sign(target - previous);
-      const stepped = adjacentScaleMidi(target, -direction, scalePcs);
-      const one = notes.slice();
-      one[index] = arrived;
-      // The cadence stays. A leap into the last weak note has to resolve on it.
-      if (
-        atEnd &&
-        melodicMotion(previous, target, scalePcs) === 'leap' &&
-        stepped !== following.midi
-      )
-        continue;
-      if (
-        atEnd ||
-        melodicMotion(previous, target, scalePcs) !== 'leap' ||
-        stepped === following.midi
-      ) {
-        const leaving = Math.abs(target - following.midi);
-        if (
-          pitchAllowed(target, notes[index].midi, low, high) &&
-          arrivalOk(leaving, following.duration)
-        )
-          consider(one, gap);
-      }
-      if (atEnd) continue;
-      const seconds = new Set<number>([
-        ...degreesFrom(target, 1, scalePcs, low, high),
-        ...degreesFrom(target, 2, scalePcs, low, high),
-        following.midi - 12,
-        following.midi + 12,
-      ]);
-      if (stepped !== null) seconds.add(stepped);
-      for (const second of seconds) {
-        if (!pitchAllowed(second, following.midi, low, high)) continue;
-        if (second === following.midi && target === notes[index].midi) continue;
-        if (!arrivalOk(Math.abs(second - target), following.duration)) continue;
-        const next = notes[index + 2];
-        if (next && !arrivalOk(Math.abs(second - next.midi), next.duration))
-          continue;
-        const rewritten = retone(second, following, spelled, chordPcs);
-        if (!rewritten) continue;
-        const trial = notes.slice();
-        trial[index] = arrived;
-        trial[index + 1] = rewritten;
-        consider(trial, Math.max(gap, Math.abs(second - target)));
-      }
-    }
-  }
-  return best;
-}
-
-/**
- * Two notes cannot always add a pitch class: the strong beat after a weak
- * one has to be a chord tone approached by step, so the new name needs a
- * short preparation. Rewrite up to six notes. Octave copies may leave the
- * window. Steps, thirds, and every other leap stay inside it.
- */
-function chainVariety(
-  notes: readonly PhraseNote[],
-  run: { start: number; length: number },
-  targets: ReadonlySet<number>,
-  spelled: ReadonlyMap<number, Note>,
-  scalePcs: ReadonlySet<number>,
-  chordPcs: ReadonlySet<number>,
-  plan: PhrasePlan,
-  placed: readonly FingeredNote[],
-  low: number,
-  high: number,
-): PhraseNote[] | null {
-  const midis = notes.map((note) => note.midi);
-  const baseCell = phraseCellLength(midis);
-  const baseCircle = circleSpan(midis);
-  const baseExcess = narrowExcess(midis);
-  const baseFigure = periodSpan(midis, 4).length;
-  const runPcs = new Set(
-    midis.slice(run.start, run.start + run.length).map((midi) => mod(midi)),
-  );
-  let best: PhraseNote[] | null = null;
-  let bestNarrow = run.length;
-  let bestExcess = baseExcess;
-  let bestFigure = baseFigure;
-  let bestOutside = Infinity;
-
-  const accept = (trial: PhraseNote[]) => {
-    if (!notesAreMusical(trial, scalePcs)) return;
-    for (let index = 1; index < trial.length; index++) {
-      if (
-        trial[index].midi === notes[index].midi &&
-        trial[index - 1].midi === notes[index - 1].midi
-      )
-        continue;
-      if (
-        !arrivalOk(
-          Math.abs(trial[index].midi - trial[index - 1].midi),
-          trial[index].duration,
-        )
-      )
-        return;
-    }
-    const nextMidis = trial.map((note) => note.midi);
-    const nextCell = phraseCellLength(nextMidis);
-    if (baseCell <= PHRASE_CELL_LIMIT) {
-      if (nextCell > PHRASE_CELL_LIMIT) return;
-    } else if (nextCell > baseCell) return;
-    if (baseCircle === 0 && circleSpan(nextMidis) > 0) return;
-    if (harmsLine(midis, nextMidis, plan)) return;
-    const nextNarrow = narrowSpan(nextMidis).length;
-    const nextExcess = narrowExcess(nextMidis);
-    const nextFigure = periodSpan(nextMidis, 4).length;
-    if (nextFigure >= 12 && !(baseFigure >= 12 && nextFigure < baseFigure))
-      return;
-    const opensPocket = nextExcess < baseExcess;
-    const breaksFigure =
-      baseFigure >= 12 && nextFigure < baseFigure && nextExcess <= baseExcess;
-    if (!opensPocket && !breaksFigure) return;
-    const outside = trial.filter(
-      (note) => note.midi < low || note.midi > high,
-    ).length;
-    const clears = nextFigure < 12 ? 0 : 1;
-    const bestClears = bestFigure < 12 ? 0 : 1;
-    const better =
-      !best ||
-      clears < bestClears ||
-      (clears === bestClears && nextExcess < bestExcess) ||
-      (clears === bestClears &&
-        nextExcess === bestExcess &&
-        nextNarrow < bestNarrow) ||
-      (clears === bestClears &&
-        nextExcess === bestExcess &&
-        nextNarrow === bestNarrow &&
-        nextFigure < bestFigure) ||
-      (clears === bestClears &&
-        nextExcess === bestExcess &&
-        nextNarrow === bestNarrow &&
-        nextFigure === bestFigure &&
-        outside < bestOutside);
-    if (!better) return;
-    best = trial.slice();
-    bestNarrow = nextNarrow;
-    bestExcess = nextExcess;
-    bestFigure = nextFigure;
-    bestOutside = outside;
-  };
-
-  const choices = (index: number, prev: number | null): number[] => {
-    const original = notes[index].midi;
-    const found = new Set<number>();
-    const allow = (midi: number) => {
-      if (!pitchAllowed(midi, original, low, high)) return;
-      if (prev !== null && (midi === prev || Math.abs(midi - prev) > 12))
-        return;
-      found.add(midi);
-    };
-    allow(original);
-    allow(original - 12);
-    allow(original + 12);
-    if (prev !== null) {
-      for (const step of [1, 2]) {
-        for (const midi of degreesFrom(prev, step, scalePcs, low, high))
-          allow(midi);
-      }
-      // Any scale tone within an octave, not only the active shape. Reach
-      // is checked separately. The shape pool stays as extra candidates.
-      for (let midi = low; midi <= high; midi++) {
-        if (!scalePcs.has(mod(midi)) || Math.abs(midi - prev) > 12) continue;
-        allow(midi);
-      }
-      for (const midi of targets) {
-        if (Math.abs(midi - prev) <= 12) allow(midi);
-      }
-    }
-    const list = [...found];
-    if (prev !== null && notes[index].strong) {
-      return list.filter(
-        (midi) =>
-          chordPcs.has(mod(midi)) &&
-          melodicMotion(prev, midi, scalePcs) === 'step',
-      );
-    }
-    list.sort((a, b) => {
-      const gapA = prev === null ? 0 : Math.abs(a - prev);
-      const gapB = prev === null ? 0 : Math.abs(b - prev);
-      const outA = a < low || a > high ? 1 : 0;
-      const outB = b < low || b > high ? 1 : 0;
-      const freshA = runPcs.has(mod(a)) ? 1 : 0;
-      const freshB = runPcs.has(mod(b)) ? 1 : 0;
-      return freshA - freshB || outA - outB || gapA - gapB || a - b;
-    });
-    return list;
-  };
-
-  const focusEnd = Math.min(notes.length - 1, run.start + run.length);
-  for (let start = Math.max(1, run.start); start < focusEnd; start++) {
-    if (notes[start].strong) continue;
-    const end = Math.min(focusEnd, start + 6);
-    let nodes = 0;
-    const walk = (
-      index: number,
-      trial: PhraseNote[],
-      anchor: readonly number[],
-      pending: { dir: number } | null,
-    ) => {
-      if (nodes > 8000) return;
-      if (index >= end) {
-        nodes += 1;
-        accept(trial);
-        return;
-      }
-      const prev = index === 0 ? null : trial[index - 1].midi;
-      let options = choices(index, prev);
-      if (pending && prev !== null) {
-        const step = adjacentScaleMidi(prev, -pending.dir, scalePcs);
-        options =
-          step !== null && pitchAllowed(step, notes[index].midi, low, high)
-            ? [step]
-            : [];
-      }
-      for (const midi of options) {
-        if (nodes > 8000) return;
-        nodes += 1;
-        if (
-          prev !== null &&
-          !arrivalOk(Math.abs(midi - prev), notes[index].duration)
-        )
-          continue;
-        const tone = retone(midi, notes[index], spelled, chordPcs);
-        if (!tone) continue;
-        const positions = positionsFrom(
-          midi,
-          anchor,
-          handSlack(notes[index].duration),
-        );
-        if (!positions.length) continue;
-        trial[index] = tone;
-        const dir = prev === null ? 0 : Math.sign(midi - prev);
-        const leap =
-          prev !== null && melodicMotion(prev, midi, scalePcs) === 'leap';
-        walk(index + 1, trial, positions, leap ? { dir } : null);
-        trial[index] = notes[index];
-      }
-    };
-    const prevIndex = start - 1;
-    const prevAnchor =
-      prevIndex <= 0
-        ? [placed[0]?.position ?? 7]
-        : positionsFrom(
-            notes[prevIndex].midi,
-            [placed[prevIndex - 1]?.position ?? placed[prevIndex].position],
-            handSlack(notes[prevIndex].duration),
-          );
-    walk(
-      start,
-      notes.slice(),
-      prevAnchor.length ? prevAnchor : [placed[prevIndex].position],
-      null,
-    );
-    // The search writes `best` from inside `walk`, which control-flow
-    // analysis does not see, so this read needs an explicit union.
-    const chosen = best as PhraseNote[] | null;
-    if (
-      chosen !== null &&
-      narrowSpan(chosen.map((note) => note.midi)).length <=
-        PHRASE_VARIETY_RUN &&
-      periodSpan(
-        chosen.map((note) => note.midi),
-        4,
-      ).length < 12
-    )
-      break;
-  }
-  return best;
-}
-
-function positionsFrom(
-  midi: number,
-  anchors: readonly number[],
-  slack: number,
-): number[] {
-  const found = new Set<number>();
-  for (const spot of spotsFor(midi)) {
-    if (anchors.some((anchor) => Math.abs(spot.position - anchor) <= slack))
-      found.add(spot.position);
-  }
-  return [...found];
 }
 
 function fingerNotes(
@@ -2840,7 +2127,11 @@ function fingerNotes(
   }));
 }
 
+const spotCache = new Map<number, Spot[]>();
+
 function spotsFor(midi: number): Spot[] {
+  const cached = spotCache.get(midi);
+  if (cached) return cached;
   const spots: Spot[] = [];
   for (let string = 0; string < TUNING.length; string++) {
     const fret = midi - TUNING[string];
@@ -2856,14 +2147,19 @@ function spotsFor(midi: number): Spot[] {
       spots.push({ string, fret, position, finger });
     }
   }
+  spotCache.set(midi, spots);
   return spots;
 }
 
-function formLookup(forms: readonly Pattern[]): Map<string, number[]> {
-  const map = new Map<string, number[]>();
+function shapeKey(string: number, fret: number): number {
+  return string * 32 + fret;
+}
+
+function formLookup(forms: readonly Pattern[]): Map<number, number[]> {
+  const map = new Map<number, number[]>();
   forms.forEach((form, index) => {
     for (const position of form.positions) {
-      const key = `${position.string}:${position.fret}`;
+      const key = shapeKey(position.string, position.fret);
       const list = map.get(key);
       if (list) list.push(index);
       else map.set(key, [index]);
@@ -2873,13 +2169,13 @@ function formLookup(forms: readonly Pattern[]): Map<string, number[]> {
 }
 
 function shapeCost(
-  shapes: ReadonlyMap<string, number[]>,
+  shapes: ReadonlyMap<number, number[]>,
   spot: Spot,
   shaped: boolean,
   active: number,
 ): number {
   if (!shaped || active < 0) return 0;
-  const hits = shapes.get(`${spot.string}:${spot.fret}`);
+  const hits = shapes.get(shapeKey(spot.string, spot.fret));
   if (!hits) return 8;
   if (hits.includes(active)) return 0;
   if (hits.some((index) => Math.abs(index - active) === 1)) return 0.5;
@@ -2890,7 +2186,7 @@ function moveCost(
   from: Spot,
   to: Spot,
   pitch: number,
-  shapes: ReadonlyMap<string, number[]>,
+  shapes: ReadonlyMap<number, number[]>,
   shaped: boolean,
   active: number,
   fast: boolean,
@@ -2898,8 +2194,8 @@ function moveCost(
   let cost = Math.abs(to.position - 7) * 0.02;
   cost += handShiftCost(to.position - from.position, fast);
   const jump = Math.abs(from.string - to.string);
-  const fromShapes = shapes.get(`${from.string}:${from.fret}`);
-  const toShapes = shapes.get(`${to.string}:${to.fret}`);
+  const fromShapes = shapes.get(shapeKey(from.string, from.fret));
+  const toShapes = shapes.get(shapeKey(to.string, to.fret));
   const sameShape =
     !!fromShapes &&
     !!toShapes &&
@@ -2936,40 +2232,18 @@ function assemble(
   const chordPcs = landingPitchClasses(input.chordNotes, input.scaleNotes);
   if (!chordPcs.size) return { ok: false, reason: 'no-shared-tones' };
   const ladder = buildLadder(input.scaleNotes, chordPcs, plan.register);
-  const events = eventsFor(plan.rhythm, input.bars);
-  const scalePcs = new Set(input.scaleNotes.map((note) => note.pc));
-  const cadencePcs = new Set(
-    cadencePitchClasses(input.chordNotes, plan.cadence, scalePcs),
-  );
-  const indexes = realize(ladder, events, plan, cadencePcs);
-  if (!indexes || indexes.some((index) => index < 0))
-    return { ok: false, reason: 'unplayable' };
-  const shaped = shapeMelody(indexes, ladder, events, plan);
-  const notes = shaped.indexes.map((index, event) => {
-    const tone = ladder[index];
-    return {
-      name: tone.note.name,
-      pc: tone.note.pc,
-      degree: tone.note.degree,
-      midi: tone.midi,
-      beat: shaped.events[event].beat,
-      duration: shaped.events[event].duration,
-      strong: shaped.events[event].strong,
-      chordTone: tone.chordTone,
-    };
-  });
+  if (ladder.length < 2) return { ok: false, reason: 'unplayable' };
   const forms = patterns([...input.scaleNotes]);
+  const composed = composePhrase(input, plan, ladder, forms);
+  if (!composed) return { ok: false, reason: 'unplayable' };
   return {
     ok: true,
     phrase: {
       seed: input.seed >>> 0,
       bars: input.bars,
-      plan,
+      plan: composed.plan,
       source,
-      notes: fingerNotes(
-        spreadVariety(notes, input.scaleNotes, chordPcs, plan, forms),
-        forms,
-      ),
+      notes: composed.notes,
     },
   };
 }

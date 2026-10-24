@@ -1,29 +1,14 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { test } from 'node:test';
-import { pathToFileURL } from 'node:url';
 import { parseChord } from '../lib/harmony.ts';
-import { SCALES, TUNING, spell, type Note } from '../lib/music.ts';
+import { phraseClosingIndex, phraseLoopBeats } from '../lib/phrase-audio.ts';
+import { SCALES, spell, type Note } from '../lib/music.ts';
 import {
-  PHRASE_CELL_LIMIT,
-  PHRASE_MIN_RANGE,
-  PHRASE_RANGE,
-  PHRASE_VARIETY_RUN,
-  PHRASE_WIDE_LEAP,
-  breakCircles,
-  breakLoopsKeepArch,
-  cadencePitchClasses,
   generatePhrase,
-  melodicMotion,
-  phraseCellLength,
-  phraseOnsets,
+  isStrongBeat,
+  phrasePeriodBeats,
   phraseRuleReport,
-  withinHand,
   type Phrase,
-  type RhythmId,
 } from '../lib/phrase.ts';
 
 const CONTEXTS: readonly (readonly [string, string, string])[] = [
@@ -31,72 +16,9 @@ const CONTEXTS: readonly (readonly [string, string, string])[] = [
   ['A', 'dorian', 'Am'],
   ['C', 'major', 'G7'],
   ['F#', 'major', 'F#maj7'],
-  ['A', 'harmonic-minor', 'E7'],
-  ['C', 'minor-pentatonic', 'Cm'],
-  ['C', 'minor-blues', 'C7'],
-  ['Bb', 'mixolydian', 'Bb7'],
+  ['D', 'dorian', 'Dm7'],
+  ['E', 'minor', 'Em'],
 ];
-const SEEDS = Array.from({ length: 24 }, (_, index) => index + 1);
-
-const REGISTER_LOW = { low: 48, mid: 55, high: 64 } as const;
-
-function pitchClass(midi: number): number {
-  return ((midi % 12) + 12) % 12;
-}
-
-/** Longest run on three note names or fewer. Octave copies share a name. */
-function pcSpan(midis: readonly number[]): { start: number; length: number } {
-  let start = 0;
-  let length = midis.length > 0 ? 1 : 0;
-  for (let from = 0; from < midis.length; from++) {
-    const seen = new Set<number>();
-    for (let end = from; end < midis.length; end++) {
-      seen.add(pitchClass(midis[end]));
-      if (seen.size > 3) break;
-      if (end - from + 1 > length) {
-        length = end - from + 1;
-        start = from;
-      }
-    }
-  }
-  return { start, length };
-}
-
-function pcRun(midis: readonly number[]): number {
-  return pcSpan(midis).length;
-}
-
-/** Longest stretch whose note names repeat every 4 notes. Twice is 8. */
-function figureRun(midis: readonly number[]): number {
-  let longest = 0;
-  for (let from = 0; from < midis.length; from++) {
-    let end = from;
-    for (let index = from + 4; index < midis.length; index++) {
-      if (pitchClass(midis[index]) !== pitchClass(midis[index - 4])) break;
-      end = index;
-    }
-    if (end >= from + 4) longest = Math.max(longest, end - from + 1);
-  }
-  return longest;
-}
-
-/**
- * Inside the register window, or an octave copy of a pitch that sits inside
- * it. A step, a third, or any other non-octave leap has to stay inside.
- */
-function assertRegister(phrase: Phrase): void {
-  const low = REGISTER_LOW[phrase.plan.register];
-  const high = low + PHRASE_RANGE;
-  for (const note of phrase.notes) {
-    if (note.midi >= low && note.midi <= high) continue;
-    assert.ok(
-      [note.midi - 12, note.midi + 12].some(
-        (partner) => partner >= low && partner <= high,
-      ),
-      `${note.name}${note.midi} leaves the ${phrase.plan.register} window by a non-octave`,
-    );
-  }
-}
 
 function scaleOf(root: string, id: string): Note[] {
   const scale = SCALES.find((item) => item.id === id);
@@ -104,1209 +26,489 @@ function scaleOf(root: string, id: string): Note[] {
   return spell(root, scale.formula);
 }
 
-function phraseFor(
+function generate(
   root: string,
   scaleId: string,
   symbol: string,
   seed: number,
   bars: 2 | 4,
-): { phrase: Phrase; scaleNotes: Note[]; chordNotes: Note[] } {
-  const scaleNotes = scaleOf(root, scaleId);
-  const chordNotes = parseChord(symbol).notes;
-  const result = generatePhrase({ seed, bars, scaleNotes, chordNotes });
-  assert.equal(result.ok, true, `${symbol} ${scaleId} seed ${seed}`);
-  if (!result.ok) throw new Error('unreachable');
-  return { phrase: result.phrase, scaleNotes, chordNotes };
-}
-
-void test('a two-pitch cell is stuck once it sounds a fifth time', () => {
-  assert.equal(PHRASE_CELL_LIMIT, 4);
-  assert.equal(PHRASE_MIN_RANGE, 5);
-  assert.equal(PHRASE_WIDE_LEAP, 7);
-  assert.equal(phraseCellLength([67, 69, 67, 69]), 4);
-  assert.equal(phraseCellLength([67, 69, 67, 69, 67]), 5);
-  assert.equal(phraseCellLength([60, 62, 64, 65, 67]), 2);
-});
-
-/**
- * Quarter notes, cadence on the lowest chord tone in the register.
- * The only scale step into that pitch is one neighbor, so every strong
- * beat is forced back onto it. Leaving would need a new onset or a leap
- * onto the strong beat. These eight phrases stay loops. Every other
- * corpus phrase has to move by the fifth note of a cell.
- */
-const GRID_TRAPS: readonly (readonly [string, string, string, number])[] = [
-  ['C', 'major', 'C', 1],
-  ['A', 'dorian', 'Am', 7],
-  ['C', 'minor-pentatonic', 'Cm', 22],
-  ['C', 'minor-blues', 'C7', 22],
-];
-
-function isGridTrap(
-  root: string,
-  scaleId: string,
-  symbol: string,
-  seed: number,
-): boolean {
-  return GRID_TRAPS.some(
-    ([trapRoot, trapScale, trapSymbol, trapSeed]) =>
-      trapRoot === root &&
-      trapScale === scaleId &&
-      trapSymbol === symbol &&
-      trapSeed === seed,
-  );
-}
-
-void test('a cadence on the bottom of the register can stay a two-note loop', () => {
-  for (const [root, scaleId, symbol, seed] of GRID_TRAPS) {
-    for (const bars of [2, 4] as const) {
-      const { phrase } = phraseFor(root, scaleId, symbol, seed, bars);
-      assert.equal(phrase.plan.rhythm, 'quarters');
-      assert.deepEqual(
-        phrase.notes.map((note) => note.beat),
-        phraseOnsets('quarters', bars),
-        `${symbol} ${scaleId} seed ${seed}`,
-      );
-      const cell = phraseCellLength(phrase.notes.map((note) => note.midi));
-      assert.ok(cell > PHRASE_CELL_LIMIT, `${symbol} seed ${seed} ${bars}`);
-      const pitches = new Set(phrase.notes.map((note) => note.midi));
-      assert.equal(pitches.size, 2);
-    }
-  }
-  const { phrase } = phraseFor('C', 'major', 'C', 1, 2);
-  assert.deepEqual(
-    phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
-    [
-      'G55@0',
-      'A57@1',
-      'G55@2',
-      'A57@3',
-      'G55@4',
-      'A57@5',
-      'G55@6',
-      'A57@7',
-      'G55@8',
-    ],
-  );
-});
-
-void test('A minor blues over E7 breaks the two-note cell on the existing grid', () => {
-  for (const seed of [1, 3, 6, 11, 17]) {
-    for (const bars of [2, 4] as const) {
-      const { phrase } = phraseFor('A', 'minor-blues', 'E7', seed, bars);
-      assert.deepEqual(
-        phrase.notes.map((note) => note.beat),
-        phraseOnsets(phrase.plan.rhythm, bars),
-        `seed ${seed} ${bars}`,
-      );
-      assert.ok(
-        phraseCellLength(phrase.notes.map((note) => note.midi)) <=
-          PHRASE_CELL_LIMIT,
-        `seed ${seed} bars ${bars} ${phrase.notes.map((note) => note.name).join('')}`,
-      );
-    }
-  }
-  const { phrase } = phraseFor('A', 'minor-blues', 'E7', 1, 4);
-  assert.equal(phrase.plan.rhythm, 'quarters');
-  const midis = phrase.notes.map((note) => note.midi);
-  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
-  assert.equal(new Set(midis).size > 2, true);
-  // The fall was under its plan. One weak beat steps Eb into D instead of
-  // leaping from E down to C, which lifts the first third.
-  assert.deepEqual(
-    phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
-    [
-      'E64@0',
-      'G67@1',
-      'E64@2',
-      'Eb63@3',
-      'D62@4',
-      'G67@5',
-      'E64@6',
-      'C60@7',
-      'D62@8',
-      'C60@9',
-      'D62@10',
-      'Eb63@11',
-      'E64@12',
-      'Eb63@13',
-      'D62@14',
-      'G67@15',
-      'E64@16',
-    ],
-  );
-});
-
-void test('an arch over the IV keeps its highest note', () => {
-  const cases = [
-    ['D', 'major', 'G', 7, 81, 'A'],
-    ['Bb', 'major', 'Eb', 8, 65, 'F'],
-  ] as const;
-  for (const [root, scaleId, symbol, seed, peak, name] of cases) {
-    const { phrase } = phraseFor(root, scaleId, symbol, seed, 4);
-    assert.equal(phrase.plan.contour, 'arch', `${symbol} seed ${seed}`);
-    assert.deepEqual(
-      phrase.notes.map((note) => note.beat),
-      phraseOnsets(phrase.plan.rhythm, 4),
-    );
-    const highest = Math.max(...phrase.notes.map((note) => note.midi));
-    assert.equal(highest, peak, `${symbol} seed ${seed}`);
-    assert.equal(
-      phrase.notes.some((note) => note.midi === peak && note.name === name),
-      true,
-    );
-  }
-});
-
-void test('the corpus keeps the musical checks on every seed', () => {
-  let wide = 0;
-  let moves = 0;
-  for (const [root, scaleId, symbol] of CONTEXTS) {
-    for (const bars of [2, 4] as const) {
-      for (const seed of SEEDS) {
-        const { phrase, scaleNotes, chordNotes } = phraseFor(
-          root,
-          scaleId,
-          symbol,
-          seed,
-          bars,
-        );
-        const again = generatePhrase({
-          seed,
-          bars,
-          scaleNotes,
-          chordNotes,
-        });
-        assert.equal(again.ok, true);
-        if (again.ok) assert.deepEqual(again.phrase.notes, phrase.notes);
-
-        const scalePcs = new Set(scaleNotes.map((note) => note.pc));
-        const report = phraseRuleReport(phrase, scaleNotes, chordNotes);
-        assert.equal(report.unresolved, 0, `${symbol} ${seed}`);
-        assert.equal(report.cadenceHit, true);
-        assert.equal(report.unisons, 0);
-        assertRegister(phrase);
-        const trapped = isGridTrap(root, scaleId, symbol, seed);
-        const cell = phraseCellLength(phrase.notes.map((note) => note.midi));
-        if (trapped) {
-          assert.ok(cell > PHRASE_CELL_LIMIT);
-          assert.ok(report.range < PHRASE_MIN_RANGE);
-        } else {
-          assert.ok(
-            report.range >= PHRASE_MIN_RANGE,
-            `${symbol} ${scaleId} seed ${seed} spans ${report.range}`,
-          );
-          assert.ok(
-            cell <= PHRASE_CELL_LIMIT,
-            `${symbol} ${scaleId} seed ${seed} ${bars} cell ${cell}`,
-          );
-        }
-        assert.deepEqual(
-          phrase.notes.map((note) => note.beat),
-          phraseOnsets(phrase.plan.rhythm, bars),
-        );
-
-        const roles = cadencePitchClasses(
-          chordNotes,
-          phrase.plan.cadence,
-          scalePcs,
-        );
-        const last = phrase.notes.at(-1);
-        assert.ok(last);
-        assert.equal(roles.includes(last.pc), true);
-        assert.equal(last.duration, 2);
-        const before = phrase.notes.at(-2);
-        assert.ok(before);
-        assert.equal(
-          melodicMotion(before.midi, last.midi, scalePcs),
-          'step',
-          `${symbol} seed ${seed} cadence approach`,
-        );
-
-        for (let index = 1; index < phrase.notes.length; index++) {
-          const previous = phrase.notes[index - 1];
-          const note = phrase.notes[index];
-          const motion = melodicMotion(previous.midi, note.midi, scalePcs);
-          moves += 1;
-          if (note.strong) {
-            assert.equal(note.chordTone, true);
-            assert.equal(
-              motion,
-              'step',
-              `${symbol} seed ${seed} beat ${note.beat}`,
-            );
-          }
-          if (motion !== 'leap') continue;
-          if (Math.abs(note.midi - previous.midi) >= PHRASE_WIDE_LEAP)
-            wide += 1;
-          const next = phrase.notes[index + 1];
-          assert.ok(next, `${symbol} seed ${seed} leap at ${note.beat}`);
-          const resolution = melodicMotion(note.midi, next.midi, scalePcs);
-          const opposite =
-            Math.sign(next.midi - note.midi) ===
-            -Math.sign(note.midi - previous.midi);
-          assert.equal(resolution, 'step');
-          assert.equal(opposite, true);
-        }
-        for (const note of phrase.notes) {
-          if (!note.strong) continue;
-          assert.equal(note.chordTone, true);
-        }
-      }
-    }
-  }
-  // Fifths still show up when a gap cannot hold the steps. They are
-  // the minority of the motion, not the habit.
-  assert.ok(wide / moves < 0.08, `wide leaps ${wide} of ${moves}`);
-});
-
-const MAIN_PHRASE = '00a5de376e061a16d6ae8a09076ea2e807cd31b3';
-const RHYTHMS: readonly RhythmId[] = [
-  'quarters',
-  'eighths',
-  'long-short',
-  'push',
-];
-const SWEEP_ROOTS = ['C', 'D', 'E', 'F', 'G', 'A', 'Bb', 'Eb'] as const;
-const SWEEP_SCALES = [
-  'major',
-  'dorian',
-  'mixolydian',
-  'minor',
-  'minor-blues',
-  'minor-pentatonic',
-  'harmonic-minor',
-] as const;
-const FIFTH: Record<string, string> = {
-  C: 'G',
-  D: 'A',
-  E: 'B',
-  F: 'C',
-  G: 'D',
-  A: 'E',
-  Bb: 'F',
-  Eb: 'Bb',
-};
-const FOURTH: Record<string, string> = {
-  C: 'F',
-  D: 'G',
-  E: 'A',
-  F: 'Bb',
-  G: 'C',
-  A: 'D',
-  Bb: 'Eb',
-  Eb: 'Ab',
-};
-
-function sweepSymbols(root: string, scaleId: string): string[] {
-  if (scaleId === 'major') return [root, FOURTH[root]];
-  if (scaleId === 'mixolydian') return [`${root}7`, FOURTH[root]];
-  if (scaleId === 'minor-blues') return [`${root}m7`, `${FIFTH[root]}7`];
-  return [`${root}m`, `${FIFTH[root]}7`];
-}
-
-function baselinePhraseSource(): string {
-  const spec = `${MAIN_PHRASE}:lib/phrase.ts`;
-  const show = () => execFileSync('git', ['show', spec], { encoding: 'utf8' });
-  try {
-    return show();
-  } catch {
-    // CI checks out the pull request with a shallow history, so main's
-    // commit is not in the local object store until it is fetched.
-    execFileSync('git', ['fetch', '--depth=1', 'origin', MAIN_PHRASE], {
-      timeout: 60_000,
-    });
-    return show();
-  }
-}
-
-async function mainGenerator(): Promise<{
-  generatePhrase: typeof generatePhrase;
-}> {
-  const source = baselinePhraseSource();
-  const music = pathToFileURL(join(process.cwd(), 'lib/music.ts')).href;
-  const marks = pathToFileURL(join(process.cwd(), 'lib/phrase-marks.ts')).href;
-  const rewritten = source
-    .replaceAll("from './music.ts'", `from '${music}'`)
-    .replaceAll("from './phrase-marks.ts'", `from '${marks}'`);
-  const dir = mkdtempSync(join(tmpdir(), 'phrase-main-rules-'));
-  const file = join(dir, 'phrase.ts');
-  writeFileSync(file, rewritten);
-  try {
-    return (await import(pathToFileURL(file).href)) as {
-      generatePhrase: typeof generatePhrase;
-    };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-void test('shaping keeps every rhythm grid, including locks and progressions', async () => {
-  const main = await mainGenerator();
-  const seeds = Array.from({ length: 12 }, (_, index) => index + 1);
-  let count = 0;
-  for (const root of SWEEP_ROOTS) {
-    for (const scaleId of SWEEP_SCALES) {
-      const scaleNotes = scaleOf(root, scaleId);
-      for (const symbol of sweepSymbols(root, scaleId)) {
-        const chordNotes = parseChord(symbol).notes;
-        for (const bars of [2, 4] as const) {
-          for (const seed of seeds) {
-            const locked: (RhythmId | undefined)[] = [undefined, ...RHYTHMS];
-            for (const rhythm of locked) {
-              const input = {
-                seed,
-                bars,
-                scaleNotes,
-                chordNotes,
-                locks: rhythm ? { rhythm } : undefined,
-              };
-              const ours = generatePhrase(input);
-              const theirs = main.generatePhrase(input);
-              assert.equal(
-                ours.ok,
-                theirs.ok,
-                `${root} ${scaleId} ${symbol} seed ${seed}`,
-              );
-              if (!ours.ok || !theirs.ok) continue;
-              if (rhythm) assert.equal(ours.phrase.plan.rhythm, rhythm);
-              const beats = ours.phrase.notes.map((note) => note.beat);
-              const durations = ours.phrase.notes.map((note) => note.duration);
-              assert.deepEqual(
-                beats,
-                theirs.phrase.notes.map((note) => note.beat),
-                `${symbol} ${scaleId} seed ${seed} ${rhythm ?? 'free'} beats`,
-              );
-              assert.deepEqual(
-                durations,
-                theirs.phrase.notes.map((note) => note.duration),
-              );
-              assert.deepEqual(
-                beats,
-                phraseOnsets(ours.phrase.plan.rhythm, bars),
-              );
-              count += 1;
-            }
-          }
-        }
-      }
-    }
-  }
-  console.log(
-    `grid sweep ${count} phrases, 0 off the plan onsets and durations`,
-  );
-  assert.ok(count >= 8000, `sweep covered ${count} phrases`);
-});
-
-function thirdMeans(midis: readonly number[]): [number, number, number] {
-  const third = Math.max(1, Math.floor(midis.length / 3));
-  const mean = (slice: readonly number[]) =>
-    slice.reduce((sum, midi) => sum + midi, 0) / slice.length;
-  return [
-    mean(midis.slice(0, third)),
-    mean(midis.slice(third, third * 2)),
-    mean(midis.slice(third * 2)),
-  ];
-}
-
-function phraseCircles(midis: readonly number[]): boolean {
-  for (let start = 0; start < midis.length; start++) {
-    const seen = new Set<number>([midis[start]]);
-    for (let end = start + 1; end < midis.length; end++) {
-      if (end - start >= 3 && midis[end] !== midis[end - 3]) break;
-      seen.add(midis[end]);
-      if (seen.size > 3) break;
-      if (Math.max(...seen) - Math.min(...seen) > 4) break;
-      if (end - start + 1 > 4 && seen.size === 3) return true;
-    }
-  }
-  return false;
-}
-
-void test('an arch repair keeps the middle third above both ends', () => {
-  const { phrase } = phraseFor('C', 'dorian', 'G7', 8, 4);
-  assert.equal(phrase.plan.contour, 'arch');
-  assert.equal(phrase.plan.rhythm, 'long-short');
-  assert.deepEqual(
-    phrase.notes.map((note) => note.beat),
-    phraseOnsets('long-short', 4),
-  );
-  const midis = phrase.notes.map((note) => note.midi);
-  const [first, middle, last] = thirdMeans(midis);
-  assert.ok(middle > first && middle > last);
-  assert.equal(Math.max(...midis), 57);
-  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
-  assert.deepEqual(
-    phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
-    [
-      'D50@0',
-      'A57@1.5',
-      'G55@2',
-      'F53@3.5',
-      'G55@4',
-      'A57@5.5',
-      'G55@6',
-      'Eb51@7.5',
-      'F53@8',
-      'A57@9.5',
-      'G55@10',
-      'F53@11.5',
-      'G55@12',
-      'Eb51@13.5',
-      'F53@14',
-      'C48@15.5',
-      'D50@16',
-    ],
-  );
-});
-
-void test('a landing arch that uses a third pitch has no two-pitch cell past four notes', () => {
-  let floorLoops = 0;
-  for (const root of SWEEP_ROOTS) {
-    for (const scaleId of SWEEP_SCALES) {
-      const scaleNotes = scaleOf(root, scaleId);
-      for (const symbol of sweepSymbols(root, scaleId)) {
-        const chordNotes = parseChord(symbol).notes;
-        for (const bars of [2, 4] as const) {
-          for (let seed = 1; seed <= 12; seed++) {
-            const phrase = generatePhrase({
-              seed,
-              bars,
-              scaleNotes,
-              chordNotes,
-            });
-            assert.equal(phrase.ok, true);
-            if (!phrase.ok || phrase.phrase.plan.contour !== 'arch') continue;
-            const midis = phrase.phrase.notes.map((note) => note.midi);
-            const [first, middle, last] = thirdMeans(midis);
-            if (!(middle > first && middle > last)) continue;
-            const cell = phraseCellLength(midis);
-            if (cell <= PHRASE_CELL_LIMIT) continue;
-            const id = `${root} ${scaleId} ${symbol} seed ${seed} bars ${bars}`;
-            assert.equal(
-              new Set(midis).size,
-              2,
-              `${id} lands with a cell of ${cell} and another pitch`,
-            );
-            const low = REGISTER_LOW[phrase.phrase.plan.register];
-            const high = low + PHRASE_RANGE;
-            const scalePcs = new Set(scaleNotes.map((note) => note.pc));
-            const cadence = phrase.phrase.notes.at(-1)?.midi;
-            assert.equal(
-              cadence,
-              lowestChordTone(scaleNotes, chordNotes, low, high),
-              `${id} cadence is not the lowest chord tone`,
-            );
-            assert.equal(
-              scaleStepsInWindow(cadence ?? -1, scalePcs, low, high).length,
-              1,
-              `${id} has more than one scale step into the cadence`,
-            );
-            floorLoops += 1;
-          }
-        }
-      }
-    }
-  }
-  // Each of these 44 asserts the reason above: two distinct MIDI pitches, the
-  // cadence is the lowest chord tone, and one scale step reaches it.
-  assert.equal(floorLoops, 44);
-
-  const { phrase } = phraseFor('C', 'minor-pentatonic', 'G7', 7, 4);
-  assert.equal(phrase.plan.contour, 'arch');
-  assert.equal(phrase.plan.rhythm, 'quarters');
-  assert.deepEqual(
-    phrase.notes.map((note) => note.beat),
-    phraseOnsets('quarters', 4),
-  );
-  const midis = phrase.notes.map((note) => note.midi);
-  const [first, middle, last] = thirdMeans(midis);
-  assert.ok(middle > first && middle > last);
-  assert.equal(Math.max(...midis), 82);
-  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
-  const names = new Set(phrase.notes.map((note) => note.name));
-  assert.ok(names.size > 3, `seed 7 names ${[...names].join(' ')}`);
-  assert.equal(names.has('Eb'), true);
-  for (let index = 1; index < midis.length; index++) {
-    const gap = Math.abs(midis[index] - midis[index - 1]);
-    assert.ok(gap !== 14 && gap !== 15, `seed 7 leaps ${gap}`);
-  }
-  assert.ok(pcRun(midis) <= PHRASE_VARIETY_RUN);
-  assert.ok(figureRun(midis) < 12);
-  assert.equal(phrase.notes.at(-1)?.midi, 67);
-  assert.equal(phrase.notes.at(-1)?.duration, 2);
-  const low = REGISTER_LOW.high;
-  for (const midi of midis) {
-    assert.ok(midi >= low && midi <= low + PHRASE_RANGE);
-  }
-  assert.deepEqual(
-    phrase.notes.map((note) => `${note.name}${note.midi}@${note.beat}`),
-    [
-      'F65@0',
-      'Bb70@1',
-      'G67@2',
-      'G79@3',
-      'F77@4',
-      'Eb75@5',
-      'F77@6',
-      'Bb82@7',
-      'G79@8',
-      'Eb75@9',
-      'F77@10',
-      'Bb82@11',
-      'G79@12',
-      'Eb75@13',
-      'F77@14',
-      'F65@15',
-      'G67@16',
-    ],
-  );
-});
-
-void test('an eighth-note circle gives up one pitch on the existing grid', () => {
-  const { phrase } = phraseFor('A', 'dorian', 'Am', 2, 4);
-  assert.equal(phrase.plan.rhythm, 'eighths');
-  assert.deepEqual(
-    phrase.notes.map((note) => note.beat),
-    phraseOnsets('eighths', 4),
-  );
-  const spelled = phrase.notes.map(
-    (note) => `${note.name}${note.midi}@${note.beat}`,
-  );
-  assert.equal(spelled[18], 'A57@9');
-  assert.equal(phraseCircles(phrase.notes.map((note) => note.midi)), false);
-  assert.ok(
-    phraseCellLength(phrase.notes.map((note) => note.midi)) <=
-      PHRASE_CELL_LIMIT,
-  );
-});
-
-void test('the arch guard and the circle break hold on the measured sets', async () => {
-  const main = await mainGenerator();
-  const tally = () => ({
-    archHit: 0,
-    arch: 0,
-    circling: 0,
-    loops: 0,
-    changed: 0,
-    eighthChanged: 0,
-    onset: 0,
+): Phrase {
+  const result = generatePhrase({
+    seed,
+    bars,
+    scaleNotes: scaleOf(root, scaleId),
+    chordNotes: parseChord(symbol).notes,
   });
-  const fold = (
-    bucket: ReturnType<typeof tally>,
-    ours: Phrase,
-    theirs: Phrase,
-  ) => {
-    if (ours.plan.contour === 'arch') {
-      bucket.arch += 1;
-      const [first, middle, last] = thirdMeans(
-        ours.notes.map((note) => note.midi),
-      );
-      if (middle > first && middle > last) bucket.archHit += 1;
+  assert.equal(result.ok, true, `${symbol} seed ${seed} ${bars}`);
+  if (!result.ok) throw new Error(symbol);
+  return result.phrase;
+}
+
+function barOnsets(phrase: Phrase, bar: number): string {
+  return phrase.notes
+    .filter(
+      (note) =>
+        Math.floor(note.beat / 4) === bar && note.beat < phrase.bars * 4,
+    )
+    .map((note) => note.beat - bar * 4)
+    .join(',');
+}
+
+function scaleSteps(
+  midis: readonly number[],
+  pcs: ReadonlySet<number>,
+): number[] {
+  const steps: number[] = [];
+  for (let index = 1; index < midis.length; index++) {
+    const from = midis[index - 1];
+    const to = midis[index];
+    if (from === to) {
+      steps.push(0);
+      continue;
     }
-    const midis = ours.notes.map((note) => note.midi);
-    if (phraseCircles(midis)) bucket.circling += 1;
-    if (phraseCellLength(midis) > PHRASE_CELL_LIMIT) bucket.loops += 1;
-    const samePitch =
-      midis.join(',') === theirs.notes.map((note) => note.midi).join(',');
-    if (!samePitch) bucket.changed += 1;
-    if (ours.plan.rhythm === 'eighths' && !samePitch) bucket.eighthChanged += 1;
-    const grid = (phrase: Phrase) =>
-      phrase.notes.map((note) => `${note.beat}:${note.duration}`).join(',');
-    if (grid(ours) !== grid(theirs)) bucket.onset += 1;
-  };
-  const corpus = tally();
+    const sign = Math.sign(to - from);
+    let midi = from;
+    let count = 0;
+    while (midi !== to && count < 24) {
+      midi += sign;
+      if (pcs.has(((midi % 12) + 12) % 12)) count += 1;
+    }
+    steps.push(sign * count);
+  }
+  return steps;
+}
+
+void test('the same seed replays the same line, including a locked plan', () => {
   for (const [root, scaleId, symbol] of CONTEXTS) {
     const scaleNotes = scaleOf(root, scaleId);
     const chordNotes = parseChord(symbol).notes;
     for (const bars of [2, 4] as const) {
-      for (const seed of SEEDS) {
-        const input = { seed, bars, scaleNotes, chordNotes };
-        const ours = generatePhrase(input);
-        const theirs = main.generatePhrase(input);
-        assert.equal(ours.ok, true);
-        assert.equal(theirs.ok, true);
-        if (ours.ok && theirs.ok) fold(corpus, ours.phrase, theirs.phrase);
+      for (let seed = 1; seed <= 40; seed++) {
+        const first = generatePhrase({ seed, bars, scaleNotes, chordNotes });
+        const second = generatePhrase({ seed, bars, scaleNotes, chordNotes });
+        assert.deepEqual(second, first);
+        const locked = generatePhrase({
+          seed,
+          bars,
+          scaleNotes,
+          chordNotes,
+          locks: {
+            contour: 'fall',
+            rhythm: 'push',
+            register: 'mid',
+            cadence: 'fifth',
+          },
+        });
+        assert.equal(locked.ok, true, `${symbol} lock ${seed}`);
+        if (!locked.ok) continue;
+        assert.equal(locked.phrase.plan.contour, 'fall');
+        assert.equal(locked.phrase.plan.rhythm, 'push');
+        assert.equal(locked.phrase.plan.register, 'mid');
+        const roles = new Set(
+          chordNotes
+            .filter(
+              (note) =>
+                note.degree === '5' ||
+                note.degree === '#5' ||
+                note.degree === 'b5',
+            )
+            .map((note) => note.pc),
+        );
+        if (roles.size)
+          assert.ok(roles.has(locked.phrase.notes.at(-1)?.pc ?? -1));
       }
     }
   }
-  assert.equal(corpus.onset, 0);
-  assert.ok(corpus.arch > 0);
-  assert.ok(
-    corpus.archHit / corpus.arch >= 640 / 672,
-    `corpus arches ${corpus.archHit}/${corpus.arch}`,
-  );
-  assert.ok(corpus.circling <= 30, `corpus circling ${corpus.circling}`);
-  assert.ok(corpus.loops <= 16, `corpus loops ${corpus.loops}`);
-  const progressions = tally();
-  for (const root of SWEEP_ROOTS) {
-    for (const scaleId of SWEEP_SCALES) {
-      const scaleNotes = scaleOf(root, scaleId);
-      for (const symbol of sweepSymbols(root, scaleId)) {
-        const chordNotes = parseChord(symbol).notes;
-        for (const bars of [2, 4] as const) {
-          for (let seed = 1; seed <= 12; seed++) {
-            const input = { seed, bars, scaleNotes, chordNotes };
-            const ours = generatePhrase(input);
-            const theirs = main.generatePhrase(input);
-            assert.equal(ours.ok, true);
-            assert.equal(theirs.ok, true);
-            if (ours.ok && theirs.ok)
-              fold(progressions, ours.phrase, theirs.phrase);
+});
+
+void test('the closing note sits on the bar after the phrase and the loop wraps there', () => {
+  for (const bars of [2, 4] as const) {
+    const phrase = generate('C', 'major', 'C', 4, bars);
+    const last = phrase.notes.at(-1);
+    assert.ok(last);
+    assert.equal(last.beat, bars * 4);
+    assert.equal(last.duration, 2);
+    assert.equal(phraseClosingIndex(phrase.notes), phrase.notes.length - 1);
+    assert.equal(phraseLoopBeats(phrase.notes), bars * 4);
+    assert.equal(phrasePeriodBeats(bars), bars * 4 + 2);
+    assert.ok(phrase.notes.slice(0, -1).every((note) => note.beat < bars * 4));
+    for (const note of phrase.notes) {
+      assert.equal(note.strong, isStrongBeat(note.beat));
+      assert.ok(Math.abs(note.beat * 2 - Math.round(note.beat * 2)) < 1e-6);
+      assert.ok(note.duration > 0);
+    }
+  }
+});
+
+void test('lines stay legal and a motif comes back on a varied rhythm', () => {
+  let phrases = 0;
+  let sameRhythm = 0;
+  let quarterWalks = 0;
+  let motif = 0;
+  let rests = 0;
+  let notes = 0;
+  let sync = 0;
+  let strong = 0;
+  let strongChord = 0;
+  for (const [root, scaleId, symbol] of CONTEXTS) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(symbol).notes;
+    const pcs = new Set(scaleNotes.map((note) => note.pc));
+    for (const bars of [2, 4] as const) {
+      for (let seed = 1; seed <= 24; seed++) {
+        const phrase = generate(root, scaleId, symbol, seed, bars);
+        const report = phraseRuleReport(phrase, scaleNotes, chordNotes);
+        assert.equal(report.unisons, 0);
+        assert.equal(report.cadenceHit, true);
+        assert.ok(report.strong > 0);
+        phrases += 1;
+        strong += report.strong;
+        strongChord += report.strongChord;
+        const signatures = Array.from({ length: bars }, (_, bar) =>
+          barOnsets(phrase, bar),
+        );
+        if (signatures.every((signature) => signature === signatures[0]))
+          sameRhythm += 1;
+        const body = phrase.notes.filter((note) => note.beat < bars * 4);
+        const quarter =
+          body.length > 0 &&
+          body.every(
+            (note) =>
+              Math.abs(note.beat - Math.round(note.beat)) < 1e-6 &&
+              Math.abs(note.duration - 1) < 1e-6,
+          );
+        if (quarter) quarterWalks += 1;
+        const groups: number[][] = Array.from({ length: bars }, () => []);
+        for (const note of body)
+          groups[Math.floor(note.beat / 4)].push(note.midi);
+        const deltas = groups.map((group) => scaleSteps(group, pcs));
+        const head = deltas[0]?.slice(0, 3) ?? [];
+        let returned = false;
+        if (head.length >= 2) {
+          for (let bar = 1; bar < deltas.length; bar++) {
+            const span = Math.min(3, head.length, deltas[bar].length);
+            if (span < 2) continue;
+            let match = true;
+            for (let index = 0; index < span; index++) {
+              if (deltas[bar][index] !== head[index]) match = false;
+            }
+            if (match && (span >= 3 || head.length === 2)) returned = true;
           }
         }
+        if (returned) motif += 1;
+        const onsets = new Set(phrase.notes.map((note) => note.beat));
+        let cursor = 0;
+        while (cursor < bars * 4 - 1e-9) {
+          if (!onsets.has(cursor)) rests += 1;
+          cursor += 0.5;
+        }
+        for (const note of phrase.notes) {
+          notes += 1;
+          if (note.strong) continue;
+          const beat = note.beat;
+          if (Math.abs(beat * 2 - Math.round(beat * 2)) > 1e-6) continue;
+          if (Math.abs(beat - Math.round(beat)) < 1e-6) continue;
+          const down = Math.ceil(beat);
+          if (!onsets.has(down)) sync += 1;
+        }
       }
     }
   }
-  assert.equal(progressions.onset, 0);
-  assert.equal(progressions.arch, 672);
+  assert.ok(strongChord / strong >= 0.5, `strong chord ${strongChord}/${strong}`);
+  assert.ok(strongChord / strong <= 0.88, `strong chord ${strongChord}/${strong}`);
   assert.ok(
-    progressions.archHit >= 640,
-    `arches ${progressions.archHit}/${progressions.arch}`,
+    sameRhythm / phrases < 0.15,
+    `same rhythm ${sameRhythm}/${phrases}`,
   );
-  assert.equal(progressions.circling, 329);
-  assert.ok(progressions.loops <= 92, `loops ${progressions.loops}`);
+  assert.ok(
+    quarterWalks / phrases < 0.15,
+    `quarter walks ${quarterWalks}/${phrases}`,
+  );
+  assert.ok(motif / phrases > 0.7, `motif ${motif}/${phrases}`);
+  assert.ok(rests / phrases > 1, `rests ${rests}/${phrases}`);
+  assert.ok(sync / notes > 0.05, `sync ${sync}/${notes}`);
 });
 
-function majorLadder(): {
-  midi: number;
-  note: Note;
-  chordTone: boolean;
-}[] {
-  const spelled = scaleOf('C', 'major');
-  const byPc = new Map(spelled.map((note) => [note.pc, note]));
-  const ladder: { midi: number; note: Note; chordTone: boolean }[] = [];
-  for (let midi = 60; midi <= 72; midi++) {
-    const note = byPc.get(((midi % 12) + 12) % 12);
-    if (!note) continue;
-    ladder.push({
-      midi,
-      note,
-      chordTone: note.name === 'C' || note.name === 'E' || note.name === 'G',
-    });
+const SWEEP: readonly (readonly [string, string, string])[] = [
+  ...CONTEXTS,
+  ['Bb', 'mixolydian', 'Bb7'],
+  ['A', 'harmonic-minor', 'E7'],
+];
+
+function alternationRun(midis: readonly number[]): number {
+  let best = 1;
+  let run = 1;
+  for (let index = 1; index < midis.length; index++) {
+    if (midis[index] === midis[index - 1]) run = 1;
+    else if (index >= 2 && midis[index] === midis[index - 2]) run += 1;
+    else run = 2;
+    if (run > best) best = run;
   }
-  return ladder;
+  return best;
 }
 
-function grid(
-  strong: readonly boolean[],
-): { beat: number; duration: number; strong: boolean }[] {
-  return strong.map((beatIsStrong, index) => ({
-    beat: index,
-    duration: index === strong.length - 1 ? 2 : 1,
-    strong: beatIsStrong,
-  }));
-}
-
-void test('a circle break moves a weak beat before the downbeat', () => {
-  const ladder = majorLadder();
-  // E and F are chord tones here so both the downbeat and a later weak
-  // beat can leave the circle legally. Index order would move the downbeat.
-  for (const tone of ladder) {
-    if (
-      tone.note.name === 'E' ||
-      tone.note.name === 'F' ||
-      tone.note.name === 'G'
-    )
-      tone.chordTone = true;
-  }
-  const at = (midi: number) => ladder.findIndex((tone) => tone.midi === midi);
-  const indexes = [
-    at(64),
-    at(65),
-    at(62),
-    at(64),
-    at(65),
-    at(62),
-    at(64),
-    at(65),
-  ];
-  const events = grid([true, false, false, false, true, false, false, true]);
-  const plan = {
-    contour: 'rise' as const,
-    rhythm: 'quarters' as const,
-    register: 'mid' as const,
-    cadence: 'root' as const,
-  };
-  const repaired = breakCircles(indexes, ladder, events, plan);
-  assert.equal(repaired[0], indexes[0], 'the downbeat stays put');
-  assert.notEqual(repaired[1], indexes[1]);
-});
-
-void test('a circle break keeps an arch and its highest note', () => {
-  const ladder = majorLadder();
-  const at = (midi: number) => ladder.findIndex((tone) => tone.midi === midi);
-  const indexes = [
-    at(60),
-    at(62),
-    at(64),
-    at(62),
-    at(64),
-    at(65),
-    at(62),
-    at(64),
-    at(65),
-    at(62),
-    at(64),
-  ];
-  const events = grid([
-    true,
-    false,
-    true,
-    false,
-    true,
-    false,
-    false,
-    true,
-    false,
-    false,
-    true,
-  ]);
-  const plan = {
-    contour: 'arch' as const,
-    rhythm: 'quarters' as const,
-    register: 'mid' as const,
-    cadence: 'root' as const,
-  };
-  const repaired = breakCircles(indexes, ladder, events, plan);
-  const midis = repaired.map((index) => ladder[index].midi);
-  const [first, middle, last] = thirdMeans(midis);
-  assert.ok(middle > first && middle > last);
-  assert.equal(Math.max(...midis), 65);
-  assert.ok(phraseCellLength(midis) <= PHRASE_CELL_LIMIT);
-});
-
-void test('opening a stuck cell does not add a fifth', () => {
-  const ladder = majorLadder();
-  const at = (midi: number) => ladder.findIndex((tone) => tone.midi === midi);
-  const indexes = [
-    at(67),
-    at(69),
-    at(67),
-    at(69),
-    at(67),
-    at(69),
-    at(67),
-    at(69),
-    at(67),
-  ];
-  const events = grid([
-    true,
-    false,
-    true,
-    false,
-    true,
-    false,
-    true,
-    false,
-    true,
-  ]);
-  const plan = {
-    contour: 'fall' as const,
-    rhythm: 'quarters' as const,
-    register: 'mid' as const,
-    cadence: 'root' as const,
-  };
-  const before = indexes.map((index) => ladder[index].midi);
-  const repaired = breakLoopsKeepArch(indexes, ladder, events, plan);
-  const after = repaired.map((index) => ladder[index].midi);
-  const wide = (midis: number[]) => {
-    let count = 0;
-    for (let index = 1; index < midis.length; index++) {
-      if (Math.abs(midis[index] - midis[index - 1]) >= PHRASE_WIDE_LEAP)
-        count += 1;
-    }
-    return count;
-  };
-  assert.ok(phraseCellLength(after) <= PHRASE_CELL_LIMIT);
-  assert.ok(wide(after) <= wide(before));
-});
-
-void test('seed 8 does not repeat a four-note figure a third time', () => {
-  const { phrase } = phraseFor('C', 'minor-pentatonic', 'G7', 8, 4);
-  assert.equal(phrase.plan.rhythm, 'long-short');
-  assert.equal(phrase.plan.contour, 'arch');
-  const midis = phrase.notes.map((note) => note.midi);
-  assert.ok(figureRun(midis) < 12, `figure ${figureRun(midis)}`);
-  assert.ok(pcRun(midis) <= PHRASE_VARIETY_RUN);
-  assert.deepEqual(phrase.notes.map((note) => note.name).slice(0, 8), [
-    'F',
-    'Eb',
-    'F',
-    'Bb',
-    'G',
-    'Bb',
-    'G',
-    'Eb',
-  ]);
-});
-
-void test('a pushed eighth steps down into the chord tone', () => {
-  const result = generatePhrase({
-    seed: 5,
-    bars: 2,
-    scaleNotes: scaleOf('C', 'major'),
-    chordNotes: parseChord('F').notes,
-    locks: { rhythm: 'push' },
-  });
-  assert.equal(result.ok, true);
-  if (!result.ok) return;
-  assert.equal(result.phrase.plan.rhythm, 'push');
-  const midis = result.phrase.notes.map((note) => note.midi);
-  assert.ok(midis.join(',').includes('57,55,52,53'));
-  for (let index = 1; index < result.phrase.notes.length; index++) {
-    const note = result.phrase.notes[index];
-    const gap = Math.abs(note.midi - result.phrase.notes[index - 1].midi);
-    if (note.duration <= 0.5) assert.ok(gap <= 5);
-  }
-});
-
-void test('a locked register keeps non-octave motion inside the window', () => {
-  const high = generatePhrase({
-    seed: 27,
-    bars: 2,
-    scaleNotes: scaleOf('Eb', 'dorian'),
-    chordNotes: parseChord('Bb7').notes,
-    locks: { register: 'high' },
-  });
-  const wide = generatePhrase({
-    seed: 16,
-    bars: 4,
-    scaleNotes: scaleOf('C', 'dorian'),
-    chordNotes: parseChord('Cm').notes,
-    locks: { register: 'high' },
-  });
-  for (const result of [high, wide]) {
-    assert.equal(result.ok, true);
-    if (!result.ok) continue;
-    assert.equal(result.phrase.plan.register, 'high');
-    const low = REGISTER_LOW.high;
-    for (const note of result.phrase.notes) {
-      assert.ok(note.midi >= low && note.midi <= low + PHRASE_RANGE);
-    }
-    const midis = result.phrase.notes.map((note) => note.midi);
-    for (let index = 1; index < midis.length; index++) {
-      assert.ok(Math.abs(midis[index] - midis[index - 1]) <= 12);
+void test('two-pitch wobble stays under three percent', () => {
+  let phrases = 0;
+  let narrow = 0;
+  let alternating = 0;
+  let intervals = 0;
+  let small = 0;
+  let wide = 0;
+  let strong = 0;
+  let strongChord = 0;
+  for (const [root, scaleId, symbol] of SWEEP) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(symbol).notes;
+    for (const bars of [2, 4] as const) {
+      for (let seed = 1; seed <= 24; seed++) {
+        const phrase = generate(root, scaleId, symbol, seed, bars);
+        phrases += 1;
+        for (const note of phrase.notes) {
+          if (note.shift) assert.ok(note.duration > 0.5);
+          assert.equal(note.degree === 'chr', false);
+        }
+        const report = phraseRuleReport(phrase, scaleNotes, chordNotes);
+        strong += report.strong;
+        strongChord += report.strongChord;
+        let tight = false;
+        for (let bar = 0; bar < bars; bar++) {
+          const group = phrase.notes.filter(
+            (note) =>
+              Math.floor(note.beat / 4) === bar && note.beat < bars * 4,
+          );
+          if (
+            group.length >= 4 &&
+            new Set(group.map((note) => note.midi)).size <= 2
+          )
+            tight = true;
+        }
+        if (tight) narrow += 1;
+        const midis = phrase.notes.map((note) => note.midi);
+        if (alternationRun(midis) >= 5) alternating += 1;
+        for (let index = 1; index < midis.length; index++) {
+          intervals += 1;
+          const gap = Math.abs(midis[index] - midis[index - 1]);
+          if (gap <= 2) small += 1;
+          if (gap >= 5) wide += 1;
+        }
+      }
     }
   }
+  assert.equal(phrases, 384);
+  assert.ok(narrow / phrases <= 0.03, `narrow bars ${narrow}/${phrases}`);
+  assert.ok(
+    alternating / phrases <= 0.03,
+    `alternation ${alternating}/${phrases}`,
+  );
+  assert.ok(small / intervals >= 0.5, `steps ${small}/${intervals}`);
+  assert.ok(small / intervals <= 0.8, `steps ${small}/${intervals}`);
+  assert.ok(wide / intervals >= 0.05, `leaps ${wide}/${intervals}`);
+  assert.ok(
+    strongChord / strong >= 0.5 && strongChord / strong <= 0.88,
+    `strong chord ${strongChord}/${strong}`,
+  );
 });
 
-void test('an octave copy may leave the window and a non-octave leap may not', () => {
-  const { phrase } = phraseFor('D', 'minor-pentatonic', 'A7', 1, 2);
-  assert.equal(phrase.plan.register, 'mid');
-  const low = REGISTER_LOW.mid;
-  const high = low + PHRASE_RANGE;
-  const outside = phrase.notes.filter(
-    (note) => note.midi < low || note.midi > high,
-  );
-  assert.deepEqual(
-    outside.map((note) => `${note.name}${note.midi}`),
-    ['F53'],
-  );
-  // The cadence guard is what keeps this landing. Without it the last note
-  // becomes A69 and the F53 octave copy disappears.
-  assert.equal(phrase.notes.at(-1)?.midi, 57);
-  assert.equal(phrase.notes.at(-1)?.duration, 2);
-  // F53 is a major third below the previous note. F65, the octave above,
-  // sits in the window's range and is not a note of this phrase.
-  const index = phrase.notes.findIndex((note) => note.midi === 53);
-  const gap = Math.abs(phrase.notes[index].midi - phrase.notes[index - 1].midi);
-  assert.equal(gap, 4);
-  assert.equal(
-    phrase.notes.some((note) => note.midi === 53 + 12),
-    false,
-  );
-  assert.ok(53 + 12 >= low && 53 + 12 <= high);
-  assertRegister(phrase);
-  const inside = phraseFor('Eb', 'dorian', 'Bb7', 27, 2);
-  // No lock here: the point is a non-octave leap still cannot be the way out.
-  for (let step = 1; step < inside.phrase.notes.length; step++) {
-    const landed = inside.phrase.notes[step];
-    const previous = inside.phrase.notes[step - 1].midi;
-    const leap = Math.abs(landed.midi - previous);
-    if (leap === 12) continue;
-    assert.ok(landed.midi >= REGISTER_LOW[inside.phrase.plan.register]);
-    assert.ok(
-      landed.midi <= REGISTER_LOW[inside.phrase.plan.register] + PHRASE_RANGE,
-    );
-  }
-});
-
-/** Lowest scale chord tone inside the register window. */
-function lowestChordTone(
-  scaleNotes: readonly Note[],
-  chordNotes: readonly Note[],
-  low: number,
-  high: number,
-): number {
-  const scalePcs = new Set(scaleNotes.map((note) => note.pc));
-  const chordPcs = new Set(chordNotes.map((note) => note.pc));
-  let lowest = Infinity;
-  for (let midi = low; midi <= high; midi++) {
-    if (scalePcs.has(pitchClass(midi)) && chordPcs.has(pitchClass(midi)))
-      lowest = Math.min(lowest, midi);
-  }
-  return lowest;
-}
-
-/** Scale steps from `midi` that stay inside the register window. */
-function scaleStepsInWindow(
-  midi: number,
-  scalePcs: ReadonlySet<number>,
-  low: number,
-  high: number,
-): number[] {
-  const found: number[] = [];
-  for (const sign of [-1, 1] as const) {
-    let cursor = midi + sign;
-    while (cursor >= low - 12 && cursor <= high + 12) {
-      if (scalePcs.has(pitchClass(cursor))) {
-        if (cursor >= low && cursor <= high) found.push(cursor);
+function pitchCycle(
+  midis: readonly number[],
+  period: number,
+  cycles: number,
+  cover: readonly [number, number] | null = null,
+): boolean {
+  const length = period * cycles;
+  for (let start = 0; start + length <= midis.length; start++) {
+    if (cover && start >= cover[0] && start + length <= cover[1]) continue;
+    let match = true;
+    for (let index = period; index < length; index++) {
+      if (midis[start + index] !== midis[start + (index % period)]) {
+        match = false;
         break;
       }
-      cursor += sign;
     }
-  }
-  return found;
-}
-
-function positionsOf(midi: number): number[] {
-  const found = new Set<number>();
-  for (const open of TUNING) {
-    const fret = midi - open;
-    if (fret < 0 || fret > 24) continue;
-    if (fret === 0) {
-      for (let position = 0; position <= 17; position++) found.add(position);
-      continue;
-    }
-    for (let finger = 1; finger <= 4; finger++) {
-      const position = fret - (finger - 1);
-      if (position >= 0 && position <= 21) found.add(position);
-    }
-  }
-  return [...found];
-}
-
-function scaleWalk(
-  midi: number,
-  sign: number,
-  steps: number,
-  scalePcs: ReadonlySet<number>,
-): number | null {
-  let cursor = midi;
-  for (let left = steps; left > 0; left--) {
-    let next = cursor + sign;
-    let guard = 0;
-    while (guard++ < 24 && !scalePcs.has(pitchClass(next))) next += sign;
-    if (!scalePcs.has(pitchClass(next))) return null;
-    cursor = next;
-  }
-  return cursor;
-}
-
-function contourHolds(
-  midis: readonly number[],
-  contour: Phrase['plan']['contour'],
-): boolean {
-  const third = Math.max(1, Math.floor(midis.length / 3));
-  const mean = (slice: readonly number[]) =>
-    slice.reduce((sum, midi) => sum + midi, 0) / slice.length;
-  const first = mean(midis.slice(0, third));
-  const middle = mean(midis.slice(third, third * 2));
-  const last = mean(midis.slice(third * 2));
-  if (contour === 'rise') return last > first;
-  if (contour === 'fall') return first > last;
-  if (contour === 'arch') return middle > first && middle > last;
-  return middle < first && middle < last;
-}
-
-/**
- * A scale step or third onto a pitch class outside the long run that would
- * bring that run to 6 or under, and that the hand, the eighth gap, leap
- * resolution, the strong-beat step, the contour, and a 12-note figure
- * would all still allow.
- */
-function clearingStep(
-  phrase: Phrase,
-  scalePcs: ReadonlySet<number>,
-  chordPcs: ReadonlySet<number>,
-): boolean {
-  const notes = phrase.notes;
-  const midis = notes.map((note) => note.midi);
-  const run = pcSpan(midis);
-  const low = REGISTER_LOW[phrase.plan.register];
-  const high = low + PHRASE_RANGE;
-  const windowPcs = new Set(
-    midis.slice(run.start, run.start + run.length).map(pitchClass),
-  );
-  const baseFigure = figureRun(midis);
-  for (
-    let index = Math.max(1, run.start);
-    index < Math.min(notes.length - 1, run.start + run.length);
-    index++
-  ) {
-    if (notes[index].strong) continue;
-    const previous = notes[index - 1];
-    const slack = notes[index].duration <= 0.5 ? 3 : 5;
-    for (const sign of [-1, 1]) {
-      for (const steps of [1, 2]) {
-        const target = scaleWalk(previous.midi, sign, steps, scalePcs);
-        if (target === null || target < low || target > high) continue;
-        if (windowPcs.has(pitchClass(target))) continue;
-        const gap = Math.abs(target - previous.midi);
-        if (gap === 0 || gap > 12) continue;
-        if (notes[index].duration <= 0.5 && gap > 5) continue;
-        const reached = positionsOf(target).filter(
-          (position) => Math.abs(position - previous.position) <= slack,
-        );
-        if (!reached.length) continue;
-        const next = notes[index + 1];
-        const nextSlack = next.duration <= 0.5 ? 3 : 5;
-        if (
-          !reached.some((position) =>
-            withinHand(next.midi, position, nextSlack),
-          )
-        )
-          continue;
-        const motion = melodicMotion(previous.midi, target, scalePcs);
-        if (motion === 'leap') {
-          const resolution = melodicMotion(target, next.midi, scalePcs);
-          const opposite =
-            Math.sign(next.midi - target) ===
-            -Math.sign(target - previous.midi);
-          if (resolution !== 'step' || !opposite) continue;
-        }
-        const leave = Math.abs(next.midi - target);
-        if (leave === 0 || leave > 12) continue;
-        if (next.duration <= 0.5 && leave > 5) continue;
-        const nextMotion = melodicMotion(target, next.midi, scalePcs);
-        if (next.strong && (nextMotion !== 'step' || !chordPcs.has(next.pc)))
-          continue;
-        if (nextMotion === 'leap') {
-          const after = notes[index + 2];
-          if (!after) continue;
-          const resolution = melodicMotion(next.midi, after.midi, scalePcs);
-          const opposite =
-            Math.sign(after.midi - next.midi) ===
-            -Math.sign(next.midi - target);
-          if (resolution !== 'step' || !opposite) continue;
-        }
-        const trial = midis.slice();
-        trial[index] = target;
-        if (pcRun(trial) > PHRASE_VARIETY_RUN) continue;
-        if (
-          contourHolds(midis, phrase.plan.contour) &&
-          !contourHolds(trial, phrase.plan.contour)
-        )
-          continue;
-        const nextFigure = figureRun(trial);
-        if (baseFigure >= 12 && nextFigure >= baseFigure) continue;
-        return true;
-      }
-    }
+    if (!match) continue;
+    if (new Set(midis.slice(start, start + period)).size < 2) continue;
+    return true;
   }
   return false;
 }
 
-void test('the pitch-class floor and the four-note figure have a reason each', () => {
-  let over = 0;
-  let twoPitch = 0;
-  let pentatonicSeventh = 0;
-  let eighthPocket = 0;
-  let multiFigures = 0;
-  for (const root of SWEEP_ROOTS) {
-    for (const scaleId of SWEEP_SCALES) {
-      const scaleNotes = scaleOf(root, scaleId);
-      const scalePcs = new Set(scaleNotes.map((note) => note.pc));
-      for (const symbol of sweepSymbols(root, scaleId)) {
-        const chordNotes = parseChord(symbol).notes;
-        const chordPcs = new Set(chordNotes.map((note) => note.pc));
-        for (const bars of [2, 4] as const) {
-          for (let seed = 1; seed <= 12; seed++) {
-            const phrase = generatePhrase({
-              seed,
-              bars,
-              scaleNotes,
-              chordNotes,
-            });
-            assert.equal(phrase.ok, true);
-            if (!phrase.ok) continue;
-            const notes = phrase.phrase.notes;
-            const midis = notes.map((note) => note.midi);
-            const run = pcRun(midis);
-            const figure = figureRun(midis);
-            const names = new Set(midis.map(pitchClass)).size;
-            const id = `${root} ${scaleId} ${symbol} seed ${seed} bars ${bars}`;
-            if (figure >= 12 && names > 2) {
-              multiFigures += 1;
-              const weakEighth = notes
-                .filter((note) => !note.strong)
-                .every((note) => note.duration <= 0.5);
-              assert.equal(
-                weakEighth,
-                true,
-                `${id} repeats a figure on a note longer than an eighth`,
-              );
-            }
-            if (run <= PHRASE_VARIETY_RUN) continue;
-            over += 1;
-            const low = REGISTER_LOW[phrase.phrase.plan.register];
-            const high = low + PHRASE_RANGE;
-            if (names === 2) {
-              const cadence = notes[notes.length - 1].midi;
-              assert.equal(
-                cadence,
-                lowestChordTone(scaleNotes, chordNotes, low, high),
-                `${id} cadence is not the lowest chord tone`,
-              );
-              assert.equal(
-                scaleStepsInWindow(cadence, scalePcs, low, high).length,
-                1,
-                `${id} has more than one scale step into the cadence`,
-              );
-              twoPitch += 1;
-              continue;
-            }
-            if (scaleId === 'minor-pentatonic' && bars === 2 && run === 7) {
-              assert.ok(names >= 4, `${id} has no fourth pitch class`);
-              for (let index = 1; index < notes.length; index++) {
-                if (!notes[index].strong) continue;
-                assert.equal(notes[index].chordTone, true, id);
-                assert.equal(
-                  melodicMotion(
-                    notes[index - 1].midi,
-                    notes[index].midi,
-                    scalePcs,
-                  ),
-                  'step',
-                  `${id} strong beat is not a scale step`,
-                );
-              }
-              pentatonicSeventh += 1;
-              continue;
-            }
-            const weakEighth = notes
-              .filter((note) => !note.strong)
-              .every((note) => note.duration <= 0.5);
-            assert.equal(
-              weakEighth,
-              true,
-              `${id} weak note is longer than an eighth`,
-            );
-            assert.equal(
-              clearingStep(phrase.phrase, scalePcs, chordPcs),
-              false,
-              `${id} has a step onto a new name that the hand could take`,
-            );
-            eighthPocket += 1;
+function monotoneRun(midis: readonly number[], pcs: ReadonlySet<number>): number {
+  let best = 1;
+  let run = 1;
+  let dir = 0;
+  for (let index = 1; index < midis.length; index++) {
+    const delta = scaleSteps(
+      [midis[index - 1] ?? 0, midis[index] ?? 0],
+      pcs,
+    )[0] ?? 0;
+    if (Math.abs(delta) === 1 && delta === dir) run += 1;
+    else if (Math.abs(delta) === 1) {
+      dir = delta;
+      run = 2;
+    } else {
+      dir = 0;
+      run = 1;
+    }
+    if (run > best) best = run;
+  }
+  return best;
+}
+
+void test('a sentence returns the opening figure, shifted more often than copied', () => {
+  let phrases = 0;
+  let returned = 0;
+  let shifted = 0;
+  let exact = 0;
+  let identical = 0;
+  let bars = 0;
+  let silent = 0;
+  let strong = 0;
+  let strongChord = 0;
+  let wide = 0;
+  let period3 = 0;
+  let period9 = 0;
+  let period2 = 0;
+  let period4 = 0;
+  let runs2 = 0;
+  let runs4 = 0;
+  let twoBar = 0;
+  let fourBar = 0;
+  let alt4 = 0;
+  let aba = 0;
+  let intervals = 0;
+  let topHeavy = 0;
+  const times: number[] = [];
+  for (const [root, scaleId, symbol] of SWEEP) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(symbol).notes;
+    const pcs = new Set(scaleNotes.map((note) => note.pc));
+    for (const barsCount of [2, 4] as const) {
+      for (let seed = 1; seed <= 50; seed++) {
+        const started = performance.now();
+        const phrase = generate(root, scaleId, symbol, seed, barsCount);
+        times.push(performance.now() - started);
+        const again = generate(root, scaleId, symbol, seed, barsCount);
+        assert.deepEqual(again.notes, phrase.notes);
+        phrases += 1;
+        if (barsCount === 2) twoBar += 1;
+        else fourBar += 1;
+        const body = phrase.notes.filter((note) => note.beat < barsCount * 4);
+        const groups = Array.from({ length: barsCount }, (_, bar) =>
+          body.filter((note) => Math.floor(note.beat / 4) === bar),
+        );
+        const signatures = groups.map((group) =>
+          group.map((note) => Math.round((note.beat % 4) * 2)).join(','),
+        );
+        if (signatures.every((signature) => signature === signatures[0]))
+          identical += 1;
+        for (const group of groups) {
+          bars += 1;
+          const struck = group.some(
+            (note) => Math.abs(note.beat - Math.round(note.beat)) < 1e-6,
+          );
+          if (!struck) silent += 1;
+          for (const note of group) {
+            assert.ok(note.fret >= 0 && note.fret <= 24);
+            if (note.shift) assert.ok(note.duration > 0.5);
           }
         }
+        const opening = groups[0] ?? [];
+        const answer = groups[1] ?? [];
+        let cover: [number, number] | null = null;
+        if (opening.length >= 4 && answer.length >= 4) {
+          const left = opening
+            .slice(0, 4)
+            .map((note) => Math.round((note.beat % 4) * 2))
+            .join(',');
+          const right = answer
+            .slice(0, 4)
+            .map((note) => Math.round((note.beat % 4) * 2))
+            .join(',');
+          const leftSteps = scaleSteps(
+            opening.slice(0, 4).map((note) => note.midi),
+            pcs,
+          ).join(',');
+          const rightSteps = scaleSteps(
+            answer.slice(0, 4).map((note) => note.midi),
+            pcs,
+          ).join(',');
+          if (left === right && leftSteps === rightSteps) {
+            returned += 1;
+            const samePitch =
+              opening
+                .slice(0, 4)
+                .map((note) => note.midi)
+                .join(',') ===
+              answer
+                .slice(0, 4)
+                .map((note) => note.midi)
+                .join(',');
+            if (samePitch) exact += 1;
+            else shifted += 1;
+            const from = phrase.notes.indexOf(opening[0] ?? phrase.notes[0]);
+            const last = answer[3];
+            const to = last ? phrase.notes.indexOf(last) + 1 : from;
+            if (from >= 0 && to > from) cover = [from, to];
+          }
+        }
+        const report = phraseRuleReport(phrase, scaleNotes, chordNotes);
+        strong += report.strong;
+        strongChord += report.strongChord;
+        const midis = phrase.notes.map((note) => note.midi);
+        for (let index = 1; index < midis.length; index++) {
+          const gap = Math.abs((midis[index] ?? 0) - (midis[index - 1] ?? 0));
+          assert.ok(gap > 0 && gap <= 12);
+          const duration = phrase.notes[index]?.duration ?? 1;
+          if (duration <= 0.5) assert.ok(gap <= 5);
+          if (gap > 12) wide += 1;
+        }
+        if (pitchCycle(midis, 3, 2, cover)) period3 += 1;
+        if (pitchCycle(midis, 3, 3, cover)) period9 += 1;
+        if (pitchCycle(midis, 2, 2)) period2 += 1;
+        if (pitchCycle(midis, 4, 2)) period4 += 1;
+        if (monotoneRun(midis, pcs) >= 5) {
+          if (barsCount === 2) runs2 += 1;
+          else runs4 += 1;
+        }
+        if (alternationRun(midis) >= 4) alt4 += 1;
+        const counts = new Map<number, number>();
+        for (const midi of midis) counts.set(midi, (counts.get(midi) ?? 0) + 1);
+        const ranked = [...counts.values()].sort((left, right) => right - left);
+        const top2 =
+          ((ranked[0] ?? 0) + (ranked[1] ?? 0)) / Math.max(1, midis.length);
+        if (top2 > 0.45) topHeavy += 1;
+        for (let index = 2; index < midis.length; index++) {
+          intervals += 1;
+          if (midis[index] === midis[index - 2]) aba += 1;
+        }
+        assert.equal(phrase.notes.at(-1)?.beat, barsCount * 4);
+        assert.equal(phrase.notes.at(-1)?.duration, 2);
+        assert.equal(report.cadenceHit, true);
+        assert.equal(report.unisons, 0);
       }
     }
   }
-  assert.equal(twoPitch, 92);
-  assert.equal(pentatonicSeventh, 15);
-  assert.equal(eighthPocket, 26);
-  assert.equal(over, 133);
-  assert.equal(multiFigures, 6);
+  assert.equal(phrases, 800);
+  assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);
+  assert.ok(shifted / returned >= 0.4, `shifted ${shifted}/${returned}`);
+  assert.ok(exact / returned <= 0.3, `exact ${exact}/${returned}`);
+  assert.equal(identical, 0);
+  assert.ok(silent / bars <= 0.05, `no on-beat ${silent}/${bars}`);
+  assert.ok(
+    strongChord / strong >= 0.64,
+    `strong chord ${strongChord}/${strong}`,
+  );
+  assert.ok(alt4 / phrases <= 0.03, `second return ${alt4}/${phrases}`);
+  assert.ok(aba / intervals <= 0.12, `pitch two back ${aba}/${intervals}`);
+  assert.ok(topHeavy / phrases <= 0.26, `top two pitches ${topHeavy}/${phrases}`);
+  assert.ok(period3 / phrases <= 0.02, `period-3 ${period3}/${phrases}`);
+  assert.equal(period9, 0);
+  assert.ok(period2 / phrases <= 0.05, `period-2 ${period2}/${phrases}`);
+  assert.ok(period4 / phrases <= 0.05, `period-4 ${period4}/${phrases}`);
+  assert.ok(runs2 / twoBar <= 0.05, `monotone 2-bar ${runs2}/${twoBar}`);
+  assert.ok(runs4 / fourBar <= 0.12, `monotone 4-bar ${runs4}/${fourBar}`);
+  assert.equal(wide, 0);
+  const ordered = [...times].sort((left, right) => left - right);
+  const p95 = ordered[Math.ceil(0.95 * ordered.length) - 1] ?? 0;
+  assert.ok(p95 < 20, `p95 ${p95.toFixed(2)} ms`);
 });
