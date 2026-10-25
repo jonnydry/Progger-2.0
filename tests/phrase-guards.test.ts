@@ -130,6 +130,11 @@ void test('sentence guards stay visible in the notes', () => {
   let returned = 0;
   let monotonePhrases = 0;
   let period3 = 0;
+  let strong = 0;
+  let strongChord = 0;
+  let sync = 0;
+  let syncNotes = 0;
+  let repeatedCells = 0;
   for (const [root, scaleId, symbol] of SWEEP) {
     const scaleNotes = scaleOf(root, scaleId);
     const pcs = new Set(scaleNotes.map((note) => note.pc));
@@ -196,6 +201,20 @@ void test('sentence guards stay visible in the notes', () => {
         }
         if (monotone(notes.map((note) => note.midi), pcs) >= 5) monotonePhrases += 1;
         if (period3Outside(notes, pcs)) period3 += 1;
+        for (const note of notes) {
+          syncNotes += 1;
+          if (note.strong && note.chordTone) strongChord += 1;
+          if (note.strong) strong += 1;
+          const fraction = note.beat - Math.floor(note.beat + 1e-9);
+          if (Math.abs(fraction - 0.5) >= 0.01) continue;
+          const following = Math.floor(note.beat) + 1;
+          const struck = notes.some((item) => Math.abs(item.beat - following) < 0.01);
+          if (!struck) sync += 1;
+        }
+        const cells = line.plan.cells ?? [];
+        for (let index = 1; index < cells.length; index++) {
+          if (cells[index] === cells[index - 1]) repeatedCells += 1;
+        }
       }
     }
   }
@@ -206,7 +225,21 @@ void test('sentence guards stay visible in the notes', () => {
   assert.ok(silent / bars <= 0.02, `no on-beat ${silent}/${bars}`);
   assert.ok(returned / phrases >= 0.8, `return ${returned}/${phrases}`);
   assert.ok(monotonePhrases / phrases <= 0.02, `monotone ${monotonePhrases}/${phrases}`);
-  assert.ok(period3 / phrases <= 0.008, `period-3 ${period3}/${phrases}`);
+  // The walk refuses a 3-cycle on its own. Two phrases appear when that
+  // refusal is off, which still sits under a 0.8% ceiling.
+  assert.equal(period3, 0, `period-3 ${period3}/${phrases}`);
+  // The critic's 0.65 chord target holds the share down. Dropping it
+  // rises from 69% to 75%, still inside the wider 64–88% band.
+  assert.ok(
+    strongChord / strong <= 0.73,
+    `strong chord ${strongChord}/${strong}`,
+  );
+  // An off-beat eighth with no following downbeat. Dropping the sync
+  // bonus falls from 15.0% to 11.6%, still above the 5% floor.
+  assert.ok(sync / syncNotes >= 0.13, `sync ${sync}/${syncNotes}`);
+  // Same cell id on two bars in a row. Dropping the -30 penalty goes
+  // from 7 to 21.
+  assert.ok(repeatedCells <= 12, `repeated cells ${repeatedCells}`);
 });
 
 void test('score order and the lane tie-break pick a fixed line', () => {
@@ -243,6 +276,21 @@ void test('these cadence tails stay on the weighted pitches', () => {
     ['C', 'major', 'C', 1, 4, [71, 69, 72, 67, 71, 69, 72, 67, 62, 67, 65, 64, 62, 59, 60, 55, 57, 55]],
     ['C', 'major', 'C', 7, 4, [72, 69, 71, 72, 76, 72, 74, 76, 77, 76, 72, 79, 76, 71, 72, 74, 69, 67]],
     ['F#', 'major', 'F#maj7', 24, 4, [53, 54, 51, 56, 53, 54, 56, 53, 58, 56, 58, 51, 53, 49, 51, 54, 58, 59, 61, 66, 65, 66]],
+    // The ×0.35 weight on a leap of 5 or more into the cadence. The
+    // leap-close rate stays near 10% without it.
+    ['C', 'major', 'C', 1, 2, [72, 69, 71, 67, 69, 65, 67, 64, 59, 55]],
+    // The ×8 weight among notes a step from the cadence. After the
+    // step-into-cadence filter, the 50% leap ceiling no longer sees it.
+    ['F#', 'major', 'F#maj7', 2, 2, [61, 65, 63, 58, 61, 59, 63, 61, 56, 58, 59, 58]],
+    // The wave holds its middle third down. Third-mean fit does not drop
+    // when that reshape is removed.
+    ['C', 'major', 'C', 4, 2, [48, 52, 55, 53, 48, 50, 52, 55, 59, 57, 52, 48]],
+    // A fifth scale step in one direction is refused inside the returned
+    // figure when another tone is legal.
+    ['C', 'major', 'C', 20, 4, [57, 59, 62, 60, 65, 60, 62, 65, 64, 59, 55, 57, 55, 59, 60, 62, 60, 59, 64, 62, 60]],
+    // Distinct bar rhythms are worth 18 points. The mean only moves from
+    // 2.89 to 2.83, inside every variety ceiling.
+    ['C', 'major', 'C', 5, 4, [60, 59, 62, 60, 59, 62, 60, 64, 62, 59, 62, 60, 64, 62, 60, 55, 52, 55, 53, 50, 52]],
   ];
   for (const [root, scaleId, symbol, seed, bars, midis] of lines) {
     const line = phrase(root, scaleId, symbol, seed, bars);
