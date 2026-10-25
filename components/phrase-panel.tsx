@@ -80,16 +80,6 @@ import '@/app/phrase-deck.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
 
-type DeckMatch = {
-  phone: boolean;
-  stacked: boolean;
-  mid: boolean;
-};
-
-function sameDeckMatch(a: DeckMatch, b: DeckMatch): boolean {
-  return a.phone === b.phone && a.stacked === b.stacked && a.mid === b.mid;
-}
-
 function focusLostToDocument(): boolean {
   const active = document.activeElement;
   return (
@@ -117,23 +107,15 @@ function controlIsDisabled(node: HTMLElement): boolean {
  */
 function useDeckBreakpoints(): {
   phone: boolean;
-  stacked: boolean;
-  mid: boolean;
   deckRef: RefObject<HTMLDivElement | null>;
 } {
   const deckRef = useRef<HTMLDivElement>(null);
   const [phone, setPhone] = useState(false);
-  const [stacked, setStacked] = useState(false);
-  const [mid, setMid] = useState(false);
   const pendingFocus = useRef<HTMLElement | null>(null);
-  const layout = useRef<DeckMatch>({
-    phone: false,
-    stacked: false,
-    mid: false,
-  });
+  const layout = useRef(false);
 
   useLayoutEffect(() => {
-    layout.current = { phone, stacked, mid };
+    layout.current = phone;
     const node = pendingFocus.current;
     pendingFocus.current = null;
     if (!node) return;
@@ -148,42 +130,30 @@ function useDeckBreakpoints(): {
       frame = requestAnimationFrame(restore);
     }
     return () => cancelAnimationFrame(frame);
-  }, [phone, stacked, mid]);
+  }, [phone]);
 
   useLayoutEffect(() => {
     if (typeof matchMedia !== 'function') return;
     const phoneMedia = matchMedia(DECK_BREAKPOINT_QUERY.phone);
-    const stackedMedia = matchMedia(DECK_BREAKPOINT_QUERY.stacked);
-    const midMedia = matchMedia(DECK_BREAKPOINT_QUERY.mid);
     const sync = () => {
-      const next = {
-        phone: phoneMedia.matches,
-        stacked: stackedMedia.matches,
-        mid: midMedia.matches,
-      };
-      if (sameDeckMatch(layout.current, next)) return;
+      const next = phoneMedia.matches;
+      if (layout.current === next) return;
       const active = document.activeElement;
       const deck = deckRef.current;
       if (active instanceof HTMLElement && deck?.contains(active)) {
         pendingFocus.current = active;
       }
       layout.current = next;
-      setPhone(next.phone);
-      setStacked(next.stacked);
-      setMid(next.mid);
+      setPhone(next);
     };
     sync();
     phoneMedia.addEventListener('change', sync);
-    stackedMedia.addEventListener('change', sync);
-    midMedia.addEventListener('change', sync);
     return () => {
       phoneMedia.removeEventListener('change', sync);
-      stackedMedia.removeEventListener('change', sync);
-      midMedia.removeEventListener('change', sync);
     };
   }, []);
 
-  return { phone, stacked, mid, deckRef };
+  return { phone, deckRef };
 }
 
 const EMPTY_NOTES: readonly FingeredNote[] = [];
@@ -692,12 +662,7 @@ export function PhrasePanel({
   }
   const busy = status === 'playing' || status === 'starting';
   const plan = phrase.ok ? phrase.phrase.plan : null;
-  const {
-    phone: phoneKeys,
-    stacked: stackedPlate,
-    mid: midPlate,
-    deckRef,
-  } = useDeckBreakpoints();
+  const { phone: phoneKeys, deckRef } = useDeckBreakpoints();
   const playKey = (
     <button
       key="play"
@@ -717,6 +682,9 @@ export function PhrasePanel({
   const historyBank = (
     <fieldset key="bank" className="phrase-history-steps deck-key-bank">
       <legend className="sr-only">Phrase history</legend>
+      <p id="phrase-history-hint" className="sr-only">
+        Last 3 phrases.
+      </p>
       <button
         type="button"
         className="phrase-action phrase-history-step deck-key"
@@ -784,9 +752,7 @@ export function PhrasePanel({
   );
   const lengthControl = (
     <fieldset key="length" className="deck-switch">
-      <legend className="deck-legend">
-        <span className="sr-only">Phrase </span>Length
-      </legend>
+      <legend className="deck-legend">Bars</legend>
       <button
         type="button"
         aria-pressed={bars === 2}
@@ -877,30 +843,23 @@ export function PhrasePanel({
       />
     </label>
   );
+  const tempoGroup = (
+    <div key="tempo" className="deck-tempo">
+      {tempoControl}
+      {speedControl}
+    </div>
+  );
   const transport = phoneKeys
     ? [playKey, loopKey, saveKey, historyBank]
     : [playKey, historyBank, loopKey, saveKey];
-  const plate =
-    phoneKeys && !stackedPlate
-      ? [lengthControl, speedControl, tempoControl, swingControl, seedControl]
-      : !phoneKeys && midPlate
-        ? [lengthControl, tempoControl, speedControl, seedControl, swingControl]
-        : [
-            lengthControl,
-            tempoControl,
-            speedControl,
-            swingControl,
-            seedControl,
-          ];
+  const plate = [lengthControl, tempoGroup, swingControl, seedControl];
 
   return (
     <div className="phrase-panel" data-scale-id={scaleId}>
       <div className="phrase-heading">
         <h2>Phrase</h2>
         <p>
-          Over {pretty(chordSymbol)} in {pretty(scaleRoot)} {scaleName}. Rules
-          only: chord tones on beats 1 and 3, mostly steps, and a landing on the{' '}
-          {plan ? CADENCE_LABEL[plan.cadence] : 'chord'}.
+          Over {pretty(chordSymbol)} in {pretty(scaleRoot)} {scaleName}.
         </p>
       </div>
       <div
@@ -932,22 +891,15 @@ export function PhrasePanel({
             )}
             {plan && (
               <p className="phrase-plan">
-                {bars} bars · {CONTOUR_LABEL[plan.contour]} ·{' '}
-                {RHYTHM_LABEL[plan.rhythm]} · {REGISTER_LABEL[plan.register]}{' '}
-                register · ends on the {CADENCE_LABEL[plan.cadence]} · swing{' '}
-                {Math.round(swing * 100)}%
-                {trueHalf ? ` · half of ${tempo}` : ''}
+                {CONTOUR_LABEL[plan.contour]} · {RHYTHM_LABEL[plan.rhythm]} ·{' '}
+                {REGISTER_LABEL[plan.register]} · lands on the{' '}
+                {CADENCE_LABEL[plan.cadence]}
               </p>
             )}
           </div>
           <span className="deck-reel" aria-hidden="true" />
         </div>
-        <div className="deck-keys">
-          {transport}
-          <p id="phrase-history-hint" className="phrase-history-hint">
-            Last 3 phrases.
-          </p>
-        </div>
+        <div className="deck-keys">{transport}</div>
         <div className="deck-plate">{plate}</div>
       </div>
       <p

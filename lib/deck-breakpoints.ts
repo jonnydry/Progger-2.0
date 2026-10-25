@@ -3,9 +3,9 @@
  * stylesheets cannot import TypeScript; `tests/phrase-deck-breakpoints.test.ts`
  * reads the stylesheet and fails if the two copies drift.
  *
- * mid: the plate wraps seed beside swing.
- * phone: the transport stacks and the plate becomes two columns.
- * stacked: each plate setting takes its own row.
+ * mid: seed sits beside swing, under bars and tempo.
+ * phone: the transport stacks, and every plate setting takes its own row.
+ * stacked: Half speed takes the full width under the tempo slider.
  */
 export const DECK_BREAKPOINT_PX = {
   mid: 960,
