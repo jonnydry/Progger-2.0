@@ -23,13 +23,29 @@ import {
 } from '../scripts/headroom-fixture-changed.ts';
 
 const fixtureUrl = new URL('./fixtures/headroom-worst.json', import.meta.url);
+/**
+ * Fixture on main when pull request 41 was measured. That replay has to
+ * stay here: the nightly refresh of headroom-worst.json moved reed C
+ * locrian's second note shift from -0.02 to 0.012, eight steps on the
+ * search grid, and replaying the old absolute shifts on the refreshed
+ * file is a real change.
+ */
+const pull41BaselineUrl = new URL(
+  './fixtures/headroom-pr41-baseline.json',
+  import.meta.url,
+);
 const scriptPath = fileURLToPath(
   new URL('../scripts/headroom-fixture-changed.ts', import.meta.url),
 );
 const committed = readFileSync(fixtureUrl, 'utf8');
+const pull41BaselineText = readFileSync(pull41BaselineUrl, 'utf8');
 
 function load(): HeadroomFixture {
   return parseHeadroomFixture(committed);
+}
+
+function loadPull41Baseline(): HeadroomFixture {
+  return parseHeadroomFixture(pull41BaselineText);
 }
 
 function nudgeWithin(value: number): number {
@@ -505,11 +521,7 @@ const pull41ChromiumDrift: ReadonlyArray<
     1.1920928955078125e-7,
   ],
   ['reed|F#|lydian|sound-switch|cello|F#|pair|1', 1.4901161193847656e-8, 0],
-  [
-    'reed|F#|lydian|sound-switch|bow|F#|pair|1',
-    0,
-    1.1920928955078125e-7,
-  ],
+  ['reed|F#|lydian|sound-switch|bow|F#|pair|1', 0, 1.1920928955078125e-7],
   [
     'reed|C|locrian|sound-switch|bow|C|pair|5',
     -7.450580596923828e-9,
@@ -537,35 +549,19 @@ const pull41ChromiumDrift: ReadonlyArray<
   ['bow|F#|lydian|sustain||F#|pair|1', -2.2351741790771484e-8, 0],
   ['cello|C|locrian|sustain||C|pair|11', -1.4901161193847656e-8, 0],
   ['cello|C|ionian|sustain||C|triple|10', 1.4901161193847656e-8, 0],
-  [
-    'cello|B|locrian|sustain||B|pair|1',
-    -(2 ** -25),
-    1.1920928955078125e-7,
-  ],
+  ['cello|B|locrian|sustain||B|pair|1', -(2 ** -25), 1.1920928955078125e-7],
   ['cello|C#|ionian|sustain||C#|pair|12', 1.4901161193847656e-8, 0],
   [
     'cello|Ab|mixolydian|sound-switch|reed|Ab|triple|14',
     7.450580596923828e-9,
     0,
   ],
-  [
-    'cello|D|dorian|key-change|cello|Eb|triple|11',
-    -7.450580596923828e-9,
-    0,
-  ],
-  [
-    'cello|D|dorian|sound-switch|bow|D|triple|11',
-    7.450580596923828e-9,
-    0,
-  ],
-  [
-    'cello|D|dorian|sound-switch|reed|D|triple|11',
-    2.2351741790771484e-8,
-    0,
-  ],
+  ['cello|D|dorian|key-change|cello|Eb|triple|11', -7.450580596923828e-9, 0],
+  ['cello|D|dorian|sound-switch|bow|D|triple|11', 7.450580596923828e-9, 0],
+  ['cello|D|dorian|sound-switch|reed|D|triple|11', 2.2351741790771484e-8, 0],
 ];
 
-/** Rebuild the fixture pull request 41 would have committed, on top of main. */
+/** Rebuild the fixture pull request 41 would have committed, on top of the frozen baseline. */
 function applyPullRequest41(fixture: HeadroomFixture): void {
   fixture.chromium.seconds = 1040.7233;
   fixture.firefox.seconds = 536.982;
@@ -583,10 +579,12 @@ function applyPullRequest41(fixture: HeadroomFixture): void {
   }
   const cases = fixture.chromium.cases;
   const from = cases.findIndex(
-    (item) => pull41Key(item) === 'cello|D|dorian|key-change|cello|Eb|triple|11',
+    (item) =>
+      pull41Key(item) === 'cello|D|dorian|key-change|cello|Eb|triple|11',
   );
   const to = cases.findIndex(
-    (item) => pull41Key(item) === 'cello|D|dorian|sound-switch|reed|D|triple|11',
+    (item) =>
+      pull41Key(item) === 'cello|D|dorian|sound-switch|reed|D|triple|11',
   );
   const left = cases[from];
   const right = cases[to];
@@ -610,8 +608,14 @@ function matchedPeakDrift(
     for (const item of baseline[name].cases) {
       const other = byKey.get(pull41Key(item));
       if (!other) throw new Error(`missing ${name} ${pull41Key(item)}`);
-      prediction = Math.max(prediction, Math.abs(item.prediction - other.prediction));
-      confirmed = Math.max(confirmed, Math.abs(item.confirmed - other.confirmed));
+      prediction = Math.max(
+        prediction,
+        Math.abs(item.prediction - other.prediction),
+      );
+      confirmed = Math.max(
+        confirmed,
+        Math.abs(item.confirmed - other.confirmed),
+      );
     }
   }
   return { prediction, confirmed };
@@ -619,18 +623,22 @@ function matchedPeakDrift(
 
 function reedLocrianBow(fixture: HeadroomFixture): WorstCase {
   const item = fixture.chromium.cases.find(
-    (candidate) => pull41Key(candidate) === 'reed|C|locrian|sound-switch|bow|C|pair|5',
+    (candidate) =>
+      pull41Key(candidate) === 'reed|C|locrian|sound-switch|bow|C|pair|5',
   );
   if (!item) throw new Error('missing reed C locrian');
   return item;
 }
 
-function withFixtureRepo(body: (directory: string, relative: string) => void): void {
+function withFixtureRepo(
+  baselineText: string,
+  body: (directory: string, relative: string) => void,
+): void {
   const directory = mkdtempSync(join(tmpdir(), 'headroom-fixture-'));
   const relative = 'tests/fixtures/headroom-worst.json';
   try {
     mkdirSync(join(directory, 'tests/fixtures'), { recursive: true });
-    writeFileSync(join(directory, relative), committed);
+    writeFileSync(join(directory, relative), baselineText);
     execFileSync('git', ['init', '-b', 'main'], {
       cwd: directory,
       stdio: 'ignore',
@@ -672,7 +680,9 @@ void test('pull request 41 seconds, float drift, and a timing-grid note shift ar
     throw new Error('timing grid is missing its first step');
   }
   assert.equal(HEADROOM_TIMING_STEP, step - origin);
-  const baseline = load();
+  const baseline = loadPull41Baseline();
+  assert.deepEqual(reedLocrianBow(baseline).noteShifts, [-0.02, -0.02]);
+  assert.deepEqual(reedLocrianBow(load()).noteShifts, [-0.02, 0.012]);
   const next = structuredClone(baseline);
   applyPullRequest41(next);
   const drift = matchedPeakDrift(baseline, next);
@@ -686,8 +696,13 @@ void test('pull request 41 seconds, float drift, and a timing-grid note shift ar
   const fromReed = 'cello|D|dorian|sound-switch|reed|D|triple|11';
   const at = (cases: readonly WorstCase[], key: string) =>
     cases.findIndex((item) => pull41Key(item) === key);
-  assert.ok(at(baseline.chromium.cases, keyChange) < at(baseline.chromium.cases, fromReed));
-  assert.ok(at(next.chromium.cases, keyChange) > at(next.chromium.cases, fromReed));
+  assert.ok(
+    at(baseline.chromium.cases, keyChange) <
+      at(baseline.chromium.cases, fromReed),
+  );
+  assert.ok(
+    at(next.chromium.cases, keyChange) > at(next.chromium.cases, fromReed),
+  );
   assert.equal(drift.prediction, 5.960464477539063e-8);
   assert.equal(drift.confirmed, 1.1920928955078125e-7);
   assert.ok(drift.prediction < HEADROOM_FLOAT_TOLERANCE);
@@ -697,7 +712,7 @@ void test('pull request 41 seconds, float drift, and a timing-grid note shift ar
   );
   assert.equal(headroomFixtureChanged(baseline, next), false);
 
-  withFixtureRepo((directory, relative) => {
+  withFixtureRepo(pull41BaselineText, (directory, relative) => {
     writeFileSync(
       join(directory, relative),
       `${JSON.stringify(next, null, 2)}\n`,
@@ -705,12 +720,15 @@ void test('pull request 41 seconds, float drift, and a timing-grid note shift ar
     const output = runFixtureScript(directory, relative);
     console.log(`script pull request 41: ${output}`);
     assert.equal(output, 'changed=false');
-    assert.equal(readFileSync(join(directory, relative), 'utf8'), committed);
+    assert.equal(
+      readFileSync(join(directory, relative), 'utf8'),
+      pull41BaselineText,
+    );
   });
 });
 
 void test('a confirmed value moving past 1e-6 is still a change when the same drift is present', () => {
-  const baseline = load();
+  const baseline = loadPull41Baseline();
   const drifted = structuredClone(baseline);
   applyPullRequest41(drifted);
   assert.equal(headroomFixtureChanged(baseline, drifted), false);
@@ -726,7 +744,7 @@ void test('a confirmed value moving past 1e-6 is still a change when the same dr
   assert.ok(delta > HEADROOM_FLOAT_TOLERANCE);
   assert.equal(headroomFixtureChanged(baseline, next), true);
 
-  withFixtureRepo((directory, relative) => {
+  withFixtureRepo(pull41BaselineText, (directory, relative) => {
     writeFileSync(
       join(directory, relative),
       `${JSON.stringify(next, null, 2)}\n`,
@@ -738,7 +756,7 @@ void test('a confirmed value moving past 1e-6 is still a change when the same dr
     assert.equal(written, formatHeadroomFixture(next));
     assert.match(written, /"noteShifts": \[-0\.02, -0\.012\]/);
     assert.match(written, /"seconds": 1040\.7233/);
-    assert.notEqual(written, committed);
+    assert.notEqual(written, pull41BaselineText);
   });
 });
 
@@ -749,13 +767,15 @@ void test('one timing-grid step stays quiet at a 1e-6 peak delta and is a change
   const beforeConfirmed = original.confirmed;
   const beforeChord = original.chordShift;
   if (beforeShift === undefined) throw new Error('missing note shift');
+  assert.equal(beforeShift, 0.012);
+  assert.equal(beforeChord, -0.004);
 
   const atBoundary = structuredClone(baseline);
   const atItem = reedLocrianBow(atBoundary);
   atItem.noteShifts[1] = beforeShift + HEADROOM_TIMING_STEP;
   atItem.confirmed = nudgeWithin(beforeConfirmed);
   const atDelta = Math.abs(atItem.confirmed - beforeConfirmed);
-  assert.equal(atItem.noteShifts[1], -0.016);
+  assert.equal(atItem.noteShifts[1], 0.016);
   assert.ok(atDelta <= HEADROOM_FLOAT_TOLERANCE && atDelta > 0.99e-6);
   console.log(
     `grid step ${beforeShift} -> ${atItem.noteShifts[1]} with confirmed delta ${atDelta}`,
@@ -799,7 +819,10 @@ void test('a four-step grid move is quiet and a longer alignment change is not',
   for (const sweep of [baseline.chromium, baseline.firefox]) {
     for (const item of sweep.cases) {
       for (const shift of item.noteShifts) {
-        assert.ok(TIMING_OFFSETS.includes(shift), `${shift} is off the timing grid`);
+        assert.ok(
+          TIMING_OFFSETS.includes(shift),
+          `${shift} is off the timing grid`,
+        );
       }
       assert.ok(
         TIMING_OFFSETS.includes(item.chordShift),
@@ -809,11 +832,26 @@ void test('a four-step grid move is quiet and a longer alignment change is not',
   }
   const original = reedLocrianBow(baseline);
   const beforeShift = original.noteShifts[1];
-  const fromIndex = beforeShift === undefined ? -1 : TIMING_OFFSETS.indexOf(beforeShift);
-  const withinOffset = TIMING_OFFSETS[fromIndex + HEADROOM_OFFSET_STEP_LIMIT];
-  const beyondOffset = TIMING_OFFSETS[fromIndex + HEADROOM_OFFSET_STEP_LIMIT + 1];
-  const farOffset = TIMING_OFFSETS[TIMING_OFFSETS.length - 1];
-  if (fromIndex < 0 || withinOffset === undefined || beyondOffset === undefined || farOffset === undefined) {
+  assert.equal(beforeShift, 0.012);
+  const fromIndex =
+    beforeShift === undefined ? -1 : TIMING_OFFSETS.indexOf(beforeShift);
+  // 0.012 sits at index 8. Five steps toward +0.02 leave the 11-point
+  // grid, so the boundary walk steps toward -0.02.
+  const direction =
+    fromIndex + HEADROOM_OFFSET_STEP_LIMIT + 1 < TIMING_OFFSETS.length ? 1 : -1;
+  const withinOffset =
+    TIMING_OFFSETS[fromIndex + direction * HEADROOM_OFFSET_STEP_LIMIT];
+  const beyondOffset =
+    TIMING_OFFSETS[fromIndex + direction * (HEADROOM_OFFSET_STEP_LIMIT + 1)];
+  const farIndex = direction > 0 ? TIMING_OFFSETS.length - 1 : 0;
+  const farOffset = TIMING_OFFSETS[farIndex];
+  if (
+    fromIndex < 0 ||
+    withinOffset === undefined ||
+    beyondOffset === undefined ||
+    farOffset === undefined ||
+    Math.abs(farIndex - fromIndex) <= HEADROOM_OFFSET_STEP_LIMIT
+  ) {
     throw new Error('timing grid does not cover the step limit');
   }
 
@@ -836,12 +874,15 @@ void test('a four-step grid move is quiet and a longer alignment change is not',
   const zeroChord = later.chromium.cases.find((item) => item.chordShift === 0);
   if (!zeroChord) throw new Error('missing a chord shift of 0');
   zeroChord.chordShift = 1;
-  console.log(`chord shift 0 -> 1 on ${zeroChord.sound} ${zeroChord.root} ${zeroChord.mode}`);
+  console.log(
+    `chord shift 0 -> 1 on ${zeroChord.sound} ${zeroChord.root} ${zeroChord.mode}`,
+  );
   assert.equal(headroomFixtureChanged(baseline, later), true);
 
   const swapped = structuredClone(baseline);
   const triple = swapped.chromium.cases.find(
-    (item) => pull41Key(item) === 'bow|Ab|mixolydian|sound-switch|cello|Ab|triple|14',
+    (item) =>
+      pull41Key(item) === 'bow|Ab|mixolydian|sound-switch|cello|Ab|triple|14',
   );
   if (!triple) throw new Error('missing the bow Ab mixolydian triple');
   assert.deepEqual(triple.noteShifts, [-0.016, 0.016, -0.02]);
@@ -851,7 +892,7 @@ void test('a four-step grid move is quiet and a longer alignment change is not',
 
   const prediction = structuredClone(baseline);
   const predItem = reedLocrianBow(prediction);
-  const oneStep = TIMING_OFFSETS[fromIndex + 1];
+  const oneStep = TIMING_OFFSETS[fromIndex + direction];
   if (oneStep === undefined) throw new Error('missing the next grid point');
   predItem.noteShifts[1] = oneStep;
   const beforePrediction = predItem.prediction;
