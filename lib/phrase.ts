@@ -1756,8 +1756,8 @@ function walkScored(
     if (chosen === undefined) return null;
     const openingSlot = byBar[0]?.indexOf(index) ?? -1;
     if (event.duration >= 1 && bar === 0 && openingSlot >= 0 && openingSlot < 4) {
-      const pool = openShifts ?? order;
-      const fits = pool.filter((shift) => {
+      const pool: readonly number[] = openShifts ?? order;
+      const fits: number[] = pool.filter((shift) => {
         const next = chosen + shift;
         return next >= 0 && next < ladder.length && ladder[next].chordTone;
       });
