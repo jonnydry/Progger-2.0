@@ -1558,11 +1558,13 @@ function chooseFragment(
 /**
  * Scored pitches, then a sentence. On most seeds bar 2 opens on bar 1's
  * first four attacks, transposed by one or two scale steps. A 4-bar phrase
- * sequences a two-note fragment twice in bar 3. A held note is a chord
- * tone when one is still legal. The approach is not: it stays a step from
- * the cadence. The free tail walks to that step when one is still legal.
- * A second two-pitch return, a repeated three-pitch cell, and a fifth
- * scale step in the same direction are refused when another tone is legal.
+ * that answers the opening sequences a two-note fragment twice in bar 3.
+ * A free line, every eighth seed, skips that sequence and stays on the
+ * scored walk. A held note is a chord tone when one is still legal. The
+ * approach is not: it stays a step from the cadence. The free tail walks
+ * to that step when one is still legal. A second two-pitch return, a
+ * repeated three-pitch cell, and a fifth scale step in the same direction
+ * are refused when another tone is legal.
  */
 function walkScored(
   ladder: readonly LadderTone[],
@@ -1623,6 +1625,7 @@ function walkScored(
       }
     }
     if (
+      answersOpening(seed) &&
       bar === 2 &&
       bars === 4 &&
       here[0] === index &&
