@@ -1063,6 +1063,7 @@ function pickPatterns(
   random: () => number,
   density: number,
   exact: boolean,
+  answer: boolean,
 ): BarPattern[] {
   const catalog = BAR_PATTERNS[rhythm];
   const grounded = catalog.filter(hasOnBeat);
@@ -1089,11 +1090,11 @@ function pickPatterns(
         }
       }
     }
-    if (!exact && bar === 1 && chosen[0]) {
-      const answer = answerPattern(chosen[0], random);
-      if (answer) {
-        chosen.push(answer);
-        previous = answer.onset;
+    if (!exact && answer && bar === 1 && chosen[0]) {
+      const answerBar = answerPattern(chosen[0], random);
+      if (answerBar) {
+        chosen.push(answerBar);
+        previous = answerBar.onset;
         continue;
       }
     }
@@ -1145,7 +1146,19 @@ function pickPatterns(
 
 const PROXIMITY_VAR = 8;
 const RANGE_VAR = 29;
-const CONTOUR_VAR = 18;
+/**
+ * Wide enough that a note can leave the contour curve. The third-mean
+ * check still keeps a locked rise, fall, arch, or wave.
+ */
+const CONTOUR_VAR = 36;
+
+/**
+ * Most phrases answer bar 1. Every eighth seed is a free line, so the
+ * sentence is not the only skeleton.
+ */
+function answersOpening(seed: number): boolean {
+  return seed % 8 !== 0;
+}
 
 function pitchedFromLadder(ladder: readonly LadderTone[], tone: number): Pitched {
   const row = ladder[tone];
@@ -1428,8 +1441,10 @@ function blockAllowed(
       return false;
     const soFar = midis.map((item) => ({ midi: item }));
     // A one-step sequence of a scale overlaps into a 3-pitch cell.
-    // That return stays. The free walk still refuses a real cycle.
-    if (completesCycle(soFar, midi, 2)) return false;
+    // That return stays when it sits inside the figure. A cycle that
+    // runs past the figure is the ostinato the free walk already refuses.
+    if (completesCycle(soFar, midi, 2) || completesCycle(soFar, midi, 3))
+      return false;
     midis.push(midi);
     indexes.push(tone);
     prev = midi;
@@ -1448,36 +1463,60 @@ function chooseSequence(
   cadenceMidi: number,
 ): number[] | null {
   const lastSlot = slots[slots.length - 1];
-  const rank = (shift: number) => {
-    let score = 0;
-    for (let index = 0; index < idea.length; index++) {
-      const tone = (idea[index] ?? 0) + shift;
-      const event = events[slots[index] ?? 0];
-      if (!event || tone < 0 || tone >= ladder.length) continue;
-      if ((event.strong || event.duration >= 1) && ladder[tone].chordTone)
-        score += 2;
+  const ending = lastSlot === events.length - 2;
+  let octave = 0;
+  for (let index = 1; index < ladder.length; index++) {
+    if (ladder[index].midi - ladder[0].midi === 12) {
+      octave = index;
+      break;
     }
-    if (lastSlot === events.length - 2) {
-      const tone = (idea[idea.length - 1] ?? 0) + shift;
+  }
+  const shifts = octave > 0 ? [...order, octave, -octave, 0] : [...order, 0];
+  const options: {
+    tones: number[];
+    miss: number;
+    strongMiss: number;
+    shift: number;
+    step: boolean;
+  }[] = [];
+  for (const shift of shifts) {
+    const tones = idea.map((index) => index + shift);
+    if (!blockAllowed(ladder, alive, events, notes, slots, tones)) continue;
+    let miss = 0;
+    let strongMiss = 0;
+    for (let index = 0; index < tones.length; index++) {
+      const event = events[slots[index] ?? 0];
+      const tone = tones[index] ?? -1;
+      const chord =
+        tone >= 0 && tone < ladder.length && ladder[tone].chordTone;
+      if (!event) continue;
+      if (event.duration >= 1 && !chord) miss += 1;
+      if (event.strong && !chord) strongMiss += 1;
+    }
+    let step = false;
+    if (ending) {
+      const tone = tones[tones.length - 1] ?? -1;
       const gap =
         tone >= 0 && tone < ladder.length
           ? Math.abs(ladder[tone].midi - cadenceMidi)
           : 99;
-      if (gap > 0 && gap <= 2) score += 3;
+      step = gap > 0 && gap <= 2;
     }
-    return score;
-  };
-  const ranked = [...order].sort((a, b) => rank(b) - rank(a));
-  const tryShift = (shift: number) => {
-    const tones = idea.map((index) => index + shift);
-    if (!blockAllowed(ladder, alive, events, notes, slots, tones)) return null;
-    return tones;
-  };
-  for (const shift of ranked) {
-    const tones = tryShift(shift);
-    if (tones) return tones;
+    options.push({ tones, miss, strongMiss, shift, step });
   }
-  return tryShift(0);
+  // A step into the cadence wins, then held chord tones, then strong
+  // beats on the chord. A smaller shift wins a tie, so an octave stands
+  // in for an exact copy only when the seconds leave the chord.
+  const stepping = options.filter((item) => item.step);
+  const pool = ending && stepping.length ? stepping : options;
+  pool.sort(
+    (a, b) =>
+      a.miss - b.miss ||
+      a.strongMiss - b.strongMiss ||
+      Number(a.shift === 0) - Number(b.shift === 0) ||
+      Math.abs(a.shift) - Math.abs(b.shift),
+  );
+  return pool[0]?.tones ?? null;
 }
 
 function chooseFragment(
@@ -1491,22 +1530,37 @@ function chooseFragment(
 ): number[] | null {
   const left = idea[0] ?? 0;
   const right = idea[1] ?? 0;
+  let best: number[] | null = null;
+  let bestScore = -1;
   for (const shift of order) {
     const seconds = [shift * 2, shift + Math.sign(shift)];
     for (const second of seconds) {
       if (second === 0 || second === shift) continue;
       const tones = [left + shift, right + shift, left + second, right + second];
-      if (blockAllowed(ladder, alive, events, notes, slots, tones)) return tones;
+      if (!blockAllowed(ladder, alive, events, notes, slots, tones)) continue;
+      let score = 0;
+      for (let index = 0; index < tones.length; index++) {
+        const tone = tones[index] ?? -1;
+        const event = events[slots[index] ?? 0];
+        if (!event || event.duration < 1) continue;
+        if (tone >= 0 && tone < ladder.length && ladder[tone].chordTone)
+          score += 1;
+      }
+      if (!best || score > bestScore) {
+        best = tones;
+        bestScore = score;
+      }
     }
   }
-  return null;
+  return best;
 }
 
 /**
- * Scored pitches, then a sentence. Bar 2 opens on bar 1's first four
- * attacks, transposed by one or two scale steps. A 4-bar phrase sequences
- * a two-note fragment twice in bar 3. The free tail walks to the cadence
- * and prefers a last step of one or two semitones when one is still legal.
+ * Scored pitches, then a sentence. On most seeds bar 2 opens on bar 1's
+ * first four attacks, transposed by one or two scale steps. A 4-bar phrase
+ * sequences a two-note fragment twice in bar 3. A held note is a chord
+ * tone when one is still legal. The approach is not: it stays a step from
+ * the cadence. The free tail walks to that step when one is still legal.
  * A second two-pitch return, a repeated three-pitch cell, and a fifth
  * scale step in the same direction are refused when another tone is legal.
  */
@@ -1524,6 +1578,8 @@ function walkScored(
   const cadenceMidi = ladder[cadenceAt]?.midi ?? 0;
   const notes: Pitched[] = [];
   const order = shiftOrder(seed);
+  // Shifts that keep an opening held note on a chord tone, so the answer can too.
+  let openShifts: readonly number[] | null = null;
   const byBar: number[][] = Array.from({ length: bars }, () => []);
   events.forEach((event, index) => {
     const bar = Math.floor(event.beat / 4);
@@ -1616,6 +1672,41 @@ function walkScored(
       );
       if (stepped.length) candidates = stepped;
     }
+    // A held note is a chord tone when one can still be reached. The
+    // approach is exempt: it has to be a step into the cadence. Opening
+    // held notes also keep a shift that lands on a chord tone.
+    if (event.duration >= 1 && index < events.length - 2) {
+      let chordTones = candidates.filter((tone) => ladder[tone].chordTone);
+      const openingSlot = byBar[0]?.indexOf(index) ?? -1;
+      if (bar === 0 && openingSlot >= 0 && openingSlot < 4 && chordTones.length) {
+        const pool = openShifts ?? order;
+        const anchored = chordTones.filter((tone) =>
+          pool.some((shift) => {
+            const next = tone + shift;
+            return (
+              next >= 0 && next < ladder.length && ladder[next].chordTone
+            );
+          }),
+        );
+        if (anchored.length) chordTones = anchored;
+      }
+      if (index === events.length - 3) {
+        const ready = chordTones.filter((tone) =>
+          cadenceApproach(
+            ladder,
+            alive,
+            events,
+            notes,
+            tone,
+            index + 1,
+            cadenceMidi,
+          ),
+        );
+        if (ready.length) candidates = ready;
+      } else if (chordTones.length) {
+        candidates = chordTones;
+      }
+    }
     const along = index / Math.max(1, events.length - 1);
     const goal = contourMidi(plan, along);
     const prev = notes.length ? notes[notes.length - 1] : null;
@@ -1663,6 +1754,15 @@ function walkScored(
             })
           : chosenTone();
     if (chosen === undefined) return null;
+    const openingSlot = byBar[0]?.indexOf(index) ?? -1;
+    if (event.duration >= 1 && bar === 0 && openingSlot >= 0 && openingSlot < 4) {
+      const pool = openShifts ?? order;
+      const fits = pool.filter((shift) => {
+        const next = chosen + shift;
+        return next >= 0 && next < ladder.length && ladder[next].chordTone;
+      });
+      if (fits.length) openShifts = fits;
+    }
     notes.push(pitchedFromLadder(ladder, chosen));
   }
   if (!lineIsLegal(notes, events, cadenceMidi)) return null;
@@ -1893,7 +1993,8 @@ function criticScore(
   score += distinct * 18;
   score += Math.min(rests, 6) * 7;
   score += Math.min(sync, 6) * 8;
-  score += Math.round(fit / notes.length);
+  // A light nudge. The third-mean gate already enforces the lock.
+  score += Math.round(fit / notes.length / 4);
   score += Math.min(range, 12);
   if (same) score -= 80;
   if (quarter) score -= 24;
@@ -2011,6 +2112,7 @@ function composePhrase(
       random,
       exact ? 1 : lane % 3,
       exact,
+      answersOpening(input.seed),
     );
     const events = eventsForCells(patterns, input.bars);
     const pitches = walkPitches(
@@ -2041,7 +2143,14 @@ function composePhrase(
     // Every sampled lane missed the cadence. One more sentence, still
     // marked exact so a varied lane would have won.
     const random = mulberry32((input.seed + (lanes + 1) * 0x9e3779b9) >>> 0);
-    const patterns = pickPatterns(plan.rhythm, input.bars, random, 1, false);
+    const patterns = pickPatterns(
+      plan.rhythm,
+      input.bars,
+      random,
+      1,
+      false,
+      answersOpening(input.seed),
+    );
     if (patterns.length === input.bars) {
       const events = eventsForCells(patterns, input.bars);
       const pitches = walkPitches(

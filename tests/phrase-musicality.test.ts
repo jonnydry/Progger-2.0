@@ -375,6 +375,8 @@ void test('a sentence returns the opening figure, shifted more often than copied
   let fourBar = 0;
   let stepped = 0;
   let stepped4 = 0;
+  let heldNotes = 0;
+  let heldNonChord = 0;
   let alt4 = 0;
   let aba = 0;
   let intervals = 0;
@@ -485,6 +487,11 @@ void test('a sentence returns the opening figure, shifted more often than copied
         }
         assert.equal(phrase.notes.at(-1)?.beat, barsCount * 4);
         assert.equal(phrase.notes.at(-1)?.duration, 2);
+        for (const note of phrase.notes) {
+          if (note.duration + 1e-9 < 1) continue;
+          heldNotes += 1;
+          if (!note.chordTone) heldNonChord += 1;
+        }
         const close = Math.abs(
           (midis.at(-1) ?? 0) - (midis.at(-2) ?? 0),
         );
@@ -507,6 +514,18 @@ void test('a sentence returns the opening figure, shifted more often than copied
     `4-bar step ${stepped4}/${fourBar}`,
   );
   assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);
+  // #63's same skeleton: 98.85% of phrases opened bar 2 on bar 1's figure.
+  // Every eighth seed is a free line, so the return stays and is not universal.
+  assert.ok(
+    returned / phrases <= 0.92,
+    `same skeleton ${returned}/${phrases}`,
+  );
+  // Held notes of a beat or longer, including the closing chord tone.
+  // Tip was 32%. The approach stays a step, so it is often not a chord tone.
+  assert.ok(
+    heldNonChord / heldNotes <= 0.12,
+    `held non-chord ${heldNonChord}/${heldNotes}`,
+  );
   assert.ok(shifted / returned >= 0.4, `shifted ${shifted}/${returned}`);
   assert.ok(exact / returned <= 0.3, `exact ${exact}/${returned}`);
   assert.equal(identical, 0);
@@ -517,7 +536,9 @@ void test('a sentence returns the opening figure, shifted more often than copied
   );
   assert.ok(alt4 / phrases <= 0.03, `second return ${alt4}/${phrases}`);
   assert.ok(aba / intervals <= 0.12, `pitch two back ${aba}/${intervals}`);
-  assert.ok(topHeavy / phrases <= 0.26, `top two pitches ${topHeavy}/${phrases}`);
+  // Chord-tone holds bunch pitches. 32.8% of phrases put two pitches over
+  // 45% of the line. Turning the penalty off rises to 44.6%.
+  assert.ok(topHeavy / phrases <= 0.38, `top two pitches ${topHeavy}/${phrases}`);
   assert.ok(period3 / phrases <= 0.02, `period-3 ${period3}/${phrases}`);
   assert.equal(period9, 0);
   assert.ok(period2 / phrases <= 0.05, `period-2 ${period2}/${phrases}`);
