@@ -516,12 +516,15 @@ void test('a sentence returns the opening figure, shifted more often than copied
   assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);
   // #63's same skeleton: 98.85% of phrases opened bar 2 on bar 1's figure.
   // Every eighth seed is a free line, so the return stays and is not universal.
+  // Skipping the free bar-3 fragment left this at 85.25% (682/800).
   assert.ok(
     returned / phrases <= 0.92,
     `same skeleton ${returned}/${phrases}`,
   );
   // Held notes of a beat or longer, including the closing chord tone.
-  // Tip was 32%. The approach stays a step, so it is often not a chord tone.
+  // Tip was 32% before chord-tone holds. The approach stays a step, so it
+  // is often not a chord tone. The free bar-3 skip moved this sweep from
+  // 11.05% (464/4199) to 10.47% (438/4185).
   assert.ok(
     heldNonChord / heldNotes <= 0.12,
     `held non-chord ${heldNonChord}/${heldNotes}`,

@@ -124,6 +124,8 @@ void test('sentence guards stay visible in the notes', () => {
   let four = 0;
   let leap = 0;
   let sequenced = 0;
+  let freeFour = 0;
+  let freeSequenced = 0;
   let heldOpen = 0;
   let bars = 0;
   let silent = 0;
@@ -175,6 +177,8 @@ void test('sentence guards stay visible in the notes', () => {
         }
         if (barsCount === 4) {
           four += 1;
+          const free = seed % 8 === 0;
+          if (free) freeFour += 1;
           const head = groups[0] ?? [];
           const fragment = groups[2] ?? [];
           if (head.length >= 2 && fragment.length >= 4) {
@@ -195,8 +199,10 @@ void test('sentence guards stay visible in the notes', () => {
               idea === left &&
               left === right &&
               fragment[0]?.midi !== fragment[2]?.midi
-            )
+            ) {
               sequenced += 1;
+              if (free) freeSequenced += 1;
+            }
           }
         }
         if (monotone(notes.map((note) => note.midi), pcs) >= 5) monotonePhrases += 1;
@@ -219,8 +225,21 @@ void test('sentence guards stay visible in the notes', () => {
     }
   }
   assert.equal(phrases, 400);
+  assert.equal(freeFour, 24);
   assert.ok(leap / phrases <= 0.5, `leap close ${leap}/${phrases}`);
-  assert.ok(sequenced / four >= 0.6, `fragment ${sequenced}/${four}`);
+  // Answering seeds still sequence bar 3. This sweep is 167/176, the
+  // same count as tip 79f060c. Free seeds are counted apart, below.
+  assert.ok(
+    (sequenced - freeSequenced) / (four - freeFour) >= 0.6,
+    `answering fragment ${sequenced - freeSequenced}/${four - freeFour}`,
+  );
+  // Free seeds skip the bar-3 fragment chooser. Tip sequenced 23/24 of
+  // these lines. One scored walk still lands on the same two intervals:
+  // F# major, F#maj7, seed 8.
+  assert.ok(
+    freeSequenced <= 1,
+    `free fragment ${freeSequenced}/${freeFour}`,
+  );
   assert.ok(heldOpen / phrases >= 0.7, `held opening ${heldOpen}/${phrases}`);
   assert.ok(silent / bars <= 0.02, `no on-beat ${silent}/${bars}`);
   assert.ok(returned / phrases >= 0.8, `return ${returned}/${phrases}`);
@@ -229,7 +248,8 @@ void test('sentence guards stay visible in the notes', () => {
   // refusal is off, which still sits under a 0.8% ceiling.
   assert.equal(period3, 0, `period-3 ${period3}/${phrases}`);
   // Held notes are chord tones, so strong beats sit on the chord more
-  // often. This sweep is about 85%. The wider band stops at 88%.
+  // often. Before the free bar-3 skip this sweep was 85.46% (1846/2160).
+  // After it, 86.33% (1870/2166). The wider band stops at 88%.
   assert.ok(
     strongChord / strong <= 0.88,
     `strong chord ${strongChord}/${strong}`,
@@ -275,7 +295,10 @@ void test('these cadence tails stay on the weighted pitches', () => {
     ['C', 'major', 'C', 46, 2, [60, 57, 59, 60, 64, 67, 64, 60, 62, 64, 65, 57, 55]],
     ['C', 'major', 'C', 1, 4, [60, 64, 62, 60, 64, 67, 65, 64, 62, 57, 60, 55, 59, 60, 64, 67, 57, 55]],
     ['C', 'major', 'C', 7, 4, [72, 69, 67, 64, 76, 72, 71, 67, 71, 76, 72, 79, 76, 72, 74, 76, 69, 67]],
-    ['F#', 'major', 'F#maj7', 24, 4, [53, 54, 51, 56, 54, 53, 56, 58, 61, 51, 53, 49, 51, 53, 56, 54, 53, 56, 58, 66]],
+    // Free 4-bar seed (24 % 8 === 0). Bar 3 is the scored walk, not the
+    // two-note fragment. Tip 79f060c was
+    // 53,54,51,56,54,53,56,58,61,51,53,49,51,53,56,54,53,56,58,66.
+    ['F#', 'major', 'F#maj7', 24, 4, [53, 54, 51, 56, 54, 53, 56, 58, 61, 58, 56, 53, 54, 56, 58, 61, 65, 63, 65, 66]],
     ['C', 'major', 'C', 1, 2, [67, 69, 71, 67, 64, 65, 67, 64, 59, 55]],
     ['F#', 'major', 'F#maj7', 2, 2, [61, 59, 56, 61, 63, 65, 58, 56, 53, 58, 59, 58]],
     ['C', 'major', 'C', 4, 2, [48, 52, 55, 52, 48, 50, 52, 55, 59, 55, 50, 48]],
