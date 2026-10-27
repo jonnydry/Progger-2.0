@@ -281,6 +281,7 @@ export function PhrasePanel({
   const [slow, setSlow] = useState(false);
   const [loop, setLoop] = useState(false);
   const loopRef = useRef(loop);
+  const slowRef = useRef(slow);
   const [seed, setSeed] = useState(opening.seed);
   const [seedText, setSeedText] = useState(() => String(opening.seed));
   const [status, setStatus] = useState<PhrasePlayback>('idle');
@@ -406,7 +407,10 @@ export function PhrasePanel({
   }, [held, contextKey, onReleaseHeld]);
   useEffect(() => {
     const turnedOff = loopRef.current && !loop;
+    const turnedOn = !loopRef.current && loop;
+    const slowChanged = slowRef.current !== slow;
     loopRef.current = loop;
+    slowRef.current = slow;
     const phraseChanged =
       phraseRef.current !== phrase || barsRef.current !== bars;
     phraseRef.current = phrase;
@@ -423,9 +427,11 @@ export function PhrasePanel({
       return;
     }
     // Loop off mid-pass keeps this pass and lands on the closing note.
-    // A new start would cut that note and begin again at beat 1.
-    if (turnedOff && player.current?.isLooping) {
-      player.current.finishPass();
+    // A new start would cut that note and begin again at beat 1. A Loop
+    // that has not reached its bar line yet simply stops waiting.
+    if (turnedOff) {
+      if (player.current?.loopArmed) player.current.cancelLoopArm();
+      else if (player.current?.isLooping) player.current.finishPass();
     }
     const tempoNow = clampPhraseTempo(
       slow ? tempoRef.current / 2 : tempoRef.current,
@@ -437,14 +443,28 @@ export function PhrasePanel({
       swing: swingRef.current,
       loop,
     };
+    // Loop on changes the repeat, not the phrase, and it lands on the next
+    // bar line: the bar being heard plays out and the repeat begins on that
+    // downbeat. Starting here would fade this pass and begin again at bar 1
+    // under the player's ear.
+    if (turnedOn) {
+      player.current?.armAtNextBar(next);
+      return;
+    }
     // Context, regenerate, key, scale, and bar count wait while a pass
-    // is sounding. Looping switches on the next bar line. A finishing
-    // pass keeps its closing note. Only the latest request is kept.
-    // Stop still cuts immediately. Tempo and swing are the ones above.
+    // is sounding. A finishing pass keeps its closing note. Only the latest
+    // request is kept. Stop still cuts immediately.
     if (phraseChanged && player.current?.phraseChangeWaits()) {
       soundingTempo.current = tempoNow;
       soundingSwing.current = swingRef.current;
       player.current.queuePhrase(next);
+      return;
+    }
+    // Half speed retimes the pass that is sounding, so it also waits for
+    // the next bar line rather than cutting the bar and replaying it from
+    // beat 1. The bar in progress keeps the tempo it started with.
+    if (!phraseChanged && slowChanged && player.current?.isSounding) {
+      player.current.armAtNextBar(next);
       return;
     }
     if (turnedOff) return;
@@ -471,6 +491,7 @@ export function PhrasePanel({
     onReleaseHeld?.();
     setSeed(parsed);
     setSeedText(String(parsed));
+    setNotice('');
   }
   function historyEntry(nextSeed: number, entryLocks: PhraseLocks) {
     return phraseHistoryEntry({
@@ -562,6 +583,10 @@ export function PhrasePanel({
     setAnnouncedFor(phraseKey);
     setSaveAnnounce('');
     setSavedFor(null);
+    // A save notice belongs to the phrase that was saved. Once the deck
+    // shows a different phrase it is stale, and it would sit on the only
+    // status line the transport has.
+    setNotice('');
   }
   const savedMark = savedFor === phraseKey;
   useEffect(
@@ -634,6 +659,7 @@ export function PhrasePanel({
     soundingTempo.current = tempoNow;
     soundingSwing.current = swing;
     live.current = true;
+    setNotice('');
     void player.current?.start({
       notes: phrase.phrase.notes,
       bars,
@@ -644,6 +670,10 @@ export function PhrasePanel({
   }
   function togglePlay() {
     if (!phrase.ok) return;
+    // The save notice is the only status line this deck has, so any
+    // transport action takes it back. Otherwise "Saved to stash." would
+    // outlast the phrase it was about, and hide a later audio error.
+    setNotice('');
     if (live.current || status === 'playing' || status === 'starting') {
       live.current = false;
       player.current?.stop();
@@ -657,8 +687,27 @@ export function PhrasePanel({
     tempoRef.current = written;
     setTempo(written);
   }
+  /**
+   * A tempo or swing release retimes the pass that is sounding on its next
+   * bar line instead of cutting the bar under the player's ear. The bar in
+   * progress keeps the tempo it began with, and the new tempo is heard from
+   * the downbeat. The panel effect is not involved, because neither value
+   * is one of its dependencies: dragging stays silent until release.
+   */
   function commitTempo() {
-    if (live.current) startPlayback();
+    if (!live.current || !phrase.ok) return;
+    const tempoNow = clampPhraseTempo(
+      slow ? tempoRef.current / 2 : tempoRef.current,
+    );
+    if (Math.abs(tempoNow - soundingTempo.current) < 1e-9) return;
+    dispatchPhraseStop(window, 'panel');
+    player.current?.armAtNextBar({
+      notes: phrase.phrase.notes,
+      bars,
+      tempo: tempoNow,
+      swing: swingRef.current,
+      loop,
+    });
   }
   const busy = status === 'playing' || status === 'starting';
   const plan = phrase.ok ? phrase.phrase.plan : null;
@@ -870,17 +919,15 @@ export function PhrasePanel({
           <span className="deck-reel" aria-hidden="true" />
           <div className="deck-window-text">
             <p id="phrase-seed-help" className="phrase-status">
-              {notice
-                ? notice
-                : status === 'error'
-                  ? 'Audio couldn’t start. Tap Play to try again.'
-                  : status === 'starting'
-                    ? 'Starting…'
-                    : busy
-                      ? loop
-                        ? 'Looping this phrase.'
-                        : 'Playing this phrase.'
-                      : 'Same seed replays this phrase.'}
+              {status === 'error'
+                ? 'Audio couldn’t start. Tap Play to try again.'
+                : status === 'starting'
+                  ? 'Starting…'
+                  : busy
+                    ? loop
+                      ? 'Looping this phrase.'
+                      : 'Playing this phrase.'
+                    : notice || 'Same seed replays this phrase.'}
             </p>
             {!phrase.ok && (
               <p className="phrase-status">
@@ -1041,8 +1088,13 @@ function PhraseStaff({
     let frame = 0;
     const tick = () => {
       const elapsed = player.current?.elapsed() ?? 0;
-      const tempo = tempoRef.current ?? PHRASE_TEMPO_DEFAULT;
-      const swingNow = swing.current ?? SWING_AMOUNT_DEFAULT;
+      // Read the clock the audio is actually running on. A retime armed
+      // for the next bar line has not landed yet, so the requested value
+      // would run the playhead ahead of what is sounding.
+      const tempo =
+        player.current?.passTempo ?? tempoRef.current ?? PHRASE_TEMPO_DEFAULT;
+      const swingNow =
+        player.current?.passSwing ?? swing.current ?? SWING_AMOUNT_DEFAULT;
       let index = -1;
       for (let note = 0; note < notes.length; note++) {
         if (onsetSeconds(notes[note].beat, tempo, swingNow) <= elapsed + 0.03)

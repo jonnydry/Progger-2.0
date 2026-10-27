@@ -2,6 +2,7 @@ import { pageAudio } from './audio-output.ts';
 import {
   onsetSeconds,
   phrasePeriodBeats,
+  SWING_AMOUNT_DEFAULT,
   type FingeredNote,
   type SwingInput,
 } from './phrase.ts';
@@ -706,6 +707,8 @@ export class PhrasePlayer {
   private period = 0;
   /** Quarter-note tempo of the pass that is sounding. Bar lines use it. */
   private soundingTempo = PHRASE_TEMPO_DEFAULT;
+  /** Swing of the pass that is sounding. A retime may differ from it. */
+  private soundingSwing: SwingInput = SWING_AMOUNT_DEFAULT;
   /** Loop-off length, including the two-beat cadence hold. */
   private holdPeriod = 0;
   private landingIndex = -1;
@@ -714,6 +717,15 @@ export class PhrasePlayer {
   private finishing = false;
   /** Latest phrase waiting for the current pass to end. Earlier ones are dropped. */
   private pending: PhrasePass | null = null;
+  /**
+   * `pending` is a Loop-on armed for a bar line, so turning Loop back off
+   * before that bar line drops it and leaves the pass untouched.
+   */
+  private loopArmedNow = false;
+  /** `pending` came from `armAtNextBar` rather than a phrase change. */
+  private pendingFromArm = false;
+  /** Bar line an armed request is waiting on. Zero when nothing is armed. */
+  private armedAt = 0;
   /** Sounding graph kept until the queued phrase's downbeat. */
   private preserved: HeldGraph | null = null;
   /**
@@ -760,12 +772,50 @@ export class PhrasePlayer {
     return this.looping;
   }
 
+  /** A pass is scheduled and has not run out its closing cadence. */
+  get isSounding(): boolean {
+    return this.scheduler != null && !this.finishing;
+  }
+
+  /** A Loop-on is armed for a bar line and has not landed yet. */
+  get loopArmed(): boolean {
+    return this.loopArmedNow;
+  }
+
+  /**
+   * Quarter-note tempo of the pass in the graph. A retime armed for a bar
+   * line is not in it until that bar line, so the playhead follows the
+   * audio rather than the request.
+   */
+  get passTempo(): number {
+    return this.soundingTempo;
+  }
+
+  /** Swing of the pass in the graph. Same rule as `passTempo`. */
+  get passSwing(): SwingInput {
+    return this.soundingSwing;
+  }
+
+  /**
+   * Whether the pass that is sounding still has a bar line before it runs
+   * out. A pass whose closing cadence is already playing has none, so a
+   * change armed then would wait for a boundary that never comes.
+   */
+  private hasBarLineLeft(): boolean {
+    if (!this.scheduler || !(this.period > 1e-4)) return false;
+    const now = this.clock?.now() ?? this.context?.currentTime;
+    if (now === undefined) return false;
+    const boundary = nextPhraseBarLine(this.startedAt, now, this.soundingTempo);
+    return boundary < this.startedAt + this.period - 1e-4;
+  }
+
   /**
    * A looping pass, or the cadence after Loop was turned off, is still
-   * sounding. A new phrase waits for that boundary instead of cutting it.
+   * sounding, or a change is already waiting for a bar line. A later
+   * request joins that window instead of cutting the pass now.
    */
   phraseChangeWaits(): boolean {
-    return this.looping || this.finishing;
+    return this.looping || this.finishing || this.armedAt > 0;
   }
 
   /**
@@ -775,7 +825,8 @@ export class PhrasePlayer {
    * seam. A bar line inside the start lead waits for the following bar.
    * A finishing pass plays its closing note through the hold, then starts.
    * Nothing is waiting when this is called outside those passes, so the
-   * phrase starts now. A later call replaces one that has not started.
+   * phrase starts now. A later call replaces one that has not started, and
+   * a bar line already armed stays where it is.
    */
   queuePhrase(input: PhrasePass): void {
     if (this.disposed || !input.notes.length) return;
@@ -785,7 +836,60 @@ export class PhrasePlayer {
       return;
     }
     this.pending = input;
-    if (this.looping) this.suppressNextPass();
+    this.loopArmedNow = false;
+    if (this.looping && this.armedAt === 0) this.suppressNextPass();
+  }
+
+  /**
+   * Start `input` on the next bar line of the pass that is sounding
+   * instead of cutting that pass now. Its beat 1 is that downbeat, so Loop
+   * switched on mid-bar repeats from there rather than jumping back to
+   * bar 1 under the player's ear, and the notes the old pass still had
+   * left from that downbeat are silenced and dropped. A bar line inside
+   * the start lead waits for the following bar. When this pass has no bar
+   * line left, the request starts where the pass runs out, which is the
+   * downbeat a repeat would have restarted on. A finishing pass keeps its
+   * closing note and starts after it, as any queued phrase does. Nothing
+   * sounding starts at once.
+   */
+  armAtNextBar(input: PhrasePass): void {
+    if (this.disposed || !input.notes.length) return;
+    if (input.bars !== 2 && input.bars !== 4) return;
+    if (!this.scheduler || this.finishing) {
+      this.queuePhrase(input);
+      return;
+    }
+    // A bar line is already armed. Replace what will start there rather
+    // than moving the boundary.
+    if (this.armedAt === 0 && this.hasBarLineLeft()) this.suppressNextPass();
+    this.pending = input;
+    this.pendingFromArm = true;
+    this.loopArmedNow = Boolean(input.loop) && !this.looping;
+  }
+
+  /**
+   * Loop went back off before its bar line landed. Nothing restarts: the
+   * pass that is sounding plays on and lands on its closing note. A phrase
+   * change waiting on the same bar line still happens, without looping.
+   */
+  cancelLoopArm(): void {
+    if (!this.loopArmedNow) return;
+    this.loopArmedNow = false;
+    if (this.pending && !this.pendingFromArm) {
+      this.pending = { ...this.pending, loop: false };
+      return;
+    }
+    this.releaseArm();
+  }
+
+  private releaseArm(): void {
+    this.loopArmedNow = false;
+    this.pendingFromArm = false;
+    this.pending = null;
+    this.armedAt = 0;
+    this.cancelQueueTimer();
+    this.scheduler?.clearSuppress();
+    this.releaseSwitchMutes();
   }
 
   elapsed(): number {
@@ -837,6 +941,9 @@ export class PhrasePlayer {
     this.serial += 1;
     this.looping = false;
     this.finishing = false;
+    this.loopArmedNow = false;
+    this.pendingFromArm = false;
+    this.armedAt = 0;
     this.pending = null;
     this.preserved = null;
     this.cancelQueueTimer();
@@ -862,6 +969,9 @@ export class PhrasePlayer {
     const run = this.serial;
     this.pending = null;
     this.finishing = false;
+    this.loopArmedNow = false;
+    this.pendingFromArm = false;
+    this.armedAt = 0;
     this.cancelQueueTimer();
     this.discardSwitchMutes();
     let preserved = this.preserved;
@@ -928,6 +1038,7 @@ export class PhrasePlayer {
       this.pending = null;
       const tempo = clampPhraseTempo(phrase.tempo);
       this.soundingTempo = tempo;
+      this.soundingSwing = phrase.swing;
       const offline =
         typeof (context as unknown as OfflineAudioContext).startRendering ===
         'function';
@@ -1119,6 +1230,7 @@ export class PhrasePlayer {
     if (!this.scheduler || !this.clock || !(this.period > 1e-4)) return;
     const now = this.clock.now();
     const boundary = nextPhraseBarLine(this.startedAt, now, this.soundingTempo);
+    this.armedAt = boundary;
     // Silence notes at or after the bar on the audio clock. Turning Loop
     // off before the bar releases that mute, so they still play. The
     // handoff drops them when the switch commits.
@@ -1244,6 +1356,9 @@ export class PhrasePlayer {
     if (this.disposed) return;
     const input = this.pending;
     this.pending = null;
+    this.loopArmedNow = false;
+    this.pendingFromArm = false;
+    this.armedAt = 0;
     if (!input) return;
     // A note from the old phrase at or after the bar would land on the
     // new downbeat, including when this handoff woke up late. Drop it.
