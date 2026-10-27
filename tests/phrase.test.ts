@@ -39,7 +39,6 @@ import {
   SWING_FULL_RATIO_STEP_EPSILON,
   SWING_RATIO_STRAIGHT,
   SWING_SHORT_EIGHTH_MIN_SEC,
-  type CadenceTarget,
   type Contour,
   type Phrase,
   type PhraseSnapshot,
