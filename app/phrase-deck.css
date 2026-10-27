@@ -390,9 +390,6 @@
       'length tempo'
       'swing seed';
   }
-  .phrase-pins-rows {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 640px) {
@@ -434,27 +431,6 @@
   }
 }
 
-/* Below this the tempo cell cannot hold the slider, the BPM, and Half
-   speed on one line. Half speed takes the width under the slider. */
-@media (max-width: 420px) {
-  .deck-plate {
-    row-gap: var(--space-2);
-  }
-  .phrase-pins {
-    padding-inline: 10px;
-  }
-  .deck-tempo {
-    grid-template-columns: minmax(0, 1fr);
-    row-gap: var(--space-2);
-  }
-  .deck-tempo .deck-toggle {
-    width: 100%;
-  }
-  .deck-switch button {
-    padding-inline: var(--space-2);
-  }
-}
-
 /* Build row: pin one field of the plan and re-roll the rest. Rows, not
    selects, so every option is one tap and the current value is visible. */
 .phrase-pins {
@@ -486,24 +462,33 @@
   text-decoration: underline;
   cursor: pointer;
 }
+/* Build row: pin one field of the plan and re-roll the rest. Each field is
+   its own full-width row, so DOM order, reading order, and tab order all name
+   the same sequence at every width. A multi-column arrangement read the pins
+   down the columns while tabbing across the rows, which is why the deck's
+   tab-order check failed at 1440px. */
 .phrase-pins-rows {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-1) var(--space-2);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
   min-width: 0;
 }
 .phrase-pin-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-1);
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
+  /* The first column is the field name; the rest are its options, however
+     many this field has. */
+  grid-template-columns: 5.5rem;
 }
 .phrase-pin-row .deck-legend {
-  grid-column: 1 / -1;
-  margin-bottom: 2px;
+  margin: 0;
 }
 .phrase-pin {
   box-sizing: border-box;
@@ -536,4 +521,33 @@
 .phrase-pin:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
+}
+
+/* Below this the tempo cell cannot hold the slider, the BPM, and Half
+   speed on one line. Half speed takes the width under the slider. */
+@media (max-width: 420px) {
+  .deck-plate {
+    row-gap: var(--space-2);
+  }
+  .deck-tempo {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--space-2);
+  }
+  .deck-tempo .deck-toggle {
+    width: 100%;
+  }
+  .deck-switch button {
+    padding-inline: var(--space-2);
+  }
+  /* The field name moves above its options once a row cannot hold both. */
+  .phrase-pins {
+    padding-inline: 10px;
+  }
+  .phrase-pin-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 2px;
+  }
+  .phrase-pin-row .deck-legend {
+    grid-column: 1 / -1;
+  }
 }

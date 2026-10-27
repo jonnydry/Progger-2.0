@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -387,50 +388,88 @@ export function PhrasePanel({
   /**
    * What the listener is actually hearing. A change made during a looping
    * pass waits for the bar line, so the selection can run ahead of the audio.
-   * `soundingPhrase` follows the player's own handoff callback instead of
-   * predicting it, and the notation, fret marks, and playhead all read it, so
-   * the screen never describes a line the speakers are not playing.
+   * The heading, notation, fret marks, and playhead all read this frame, so
+   * the screen never describes a line, key, or scale the speakers are not
+   * playing. It is released when the player reports the handoff, when the
+   * pass simply starts, or when playback stops.
    */
-  const [soundingPhrase, setSoundingPhrase] = useState(phrase);
-  /** A phrase waiting for the bar line; adopted by the player's handoff. */
-  const queuedFor = useRef<typeof phrase | null>(null);
+  const liveFrame = useMemo(
+    () => ({ phrase, bars, scaleRoot, scaleName, chordSymbol }),
+    [phrase, bars, scaleRoot, scaleName, chordSymbol],
+  );
+  /** True while a pass is actually sounding, so a change has to wait. */
+  const soundingNow = status === 'playing' || status === 'starting';
   /**
-   * While a change waits for the bar line the selection has already moved on,
-   * so keep showing the phrase that is sounding. At every other moment —
-   * including stopped and freshly regenerated — the selection is what sounds,
-   * so the plan follows it directly. The player writes `queuedFor` and clears
-   * it on the handoff, and that timing is the whole point of the read.
+   * The frame on screen. While a looping pass runs, a change to the phrase,
+   * bars, key, scale, or chord waits for the bar line, so the panel keeps
+   * showing `heldFrame` — the frame that is sounding — until the player
+   * reports the handoff. Heading, notation, fret marks, and playhead all read
+   * this one value, so they can never disagree with each other or with the
+   * audio.
    */
-  // oxlint-disable-next-line react/react-compiler -- mirrors the player's handoff
-  const sounding = queuedFor.current === null ? phrase : soundingPhrase;
+  const [heldFrame, setHeldFrame] = useState(liveFrame);
+  const [awaitingHandoff, setAwaitingHandoff] = useState(false);
+  const [seenFrame, setSeenFrame] = useState(liveFrame);
+  if (liveFrame !== seenFrame) {
+    // A new selection arrived. While a looping pass is sounding, the player
+    // will defer it to the bar line, so keep showing the frame that is
+    // sounding — the one the panel had until this render. Every other change
+    // starts at once, so the panel follows it immediately.
+    const deferred = soundingNow && loop;
+    const outgoing = seenFrame;
+    setSeenFrame(liveFrame);
+    if (deferred) {
+      setHeldFrame(outgoing);
+      setAwaitingHandoff(true);
+    } else {
+      setAwaitingHandoff(false);
+    }
+  }
+  const frame = awaitingHandoff && soundingNow ? heldFrame : liveFrame;
+  const sounding = frame.phrase;
   const notes = useMemo(
     () => (sounding.ok ? sounding.phrase.notes : EMPTY_NOTES),
     [sounding],
   );
   const phraseRef = useRef(phrase);
   const barsRef = useRef(bars);
+  /**
+   * Hand the screen the frame the player is starting. Called from the
+   * player's own state callback — an external notification — so React sees
+   * one update per handoff and never a synchronous setState in an effect.
+   */
+  const adoptQueued = useCallback(() => {
+    setAwaitingHandoff(false);
+  }, []);
+  /**
+   * Drop a held change without waiting for a bar line. Stop, a context
+   * change, and teardown all land here, so a stopped panel can never stay on
+   * a phrase whose handoff was cancelled with the pass.
+   */
+  const dropQueued = useCallback(() => {
+    setAwaitingHandoff(false);
+  }, []);
   useEffect(() => {
     const current = new PhrasePlayer((next) => {
       if (next === 'idle' || next === 'error') live.current = false;
-      // The player reports 'starting' on the bar-line handoff, which is the
-      // moment the queued phrase begins to sound. Adopting it here keeps the
-      // notation and the neck step together with the audio.
-      if (next === 'starting' && queuedFor.current) {
-        setSoundingPhrase(queuedFor.current);
-        queuedFor.current = null;
-      }
+      // 'starting' is the bar-line handoff: the queued frame begins to sound
+      // on that downbeat. 'playing' covers a handoff whose starting state was
+      // coalesced away, so the screen still catches up.
+      if (next === 'starting' || next === 'playing') adoptQueued();
       setStatus(next);
     });
     player.current = current;
-    const pause = () => {
+    // Every stop path drops the queued frame as well as the audio. Without
+    // this the display could stick on a phrase whose handoff will never come,
+    // because Stop cancels the handoff that would have adopted it.
+    const stop = () => {
       live.current = false;
+      dropQueued();
       current.stop();
     };
+    const pause = stop;
     const unbind = bindPhraseLifecycle(document, window, pause);
-    const unbindStop = bindPhraseStop(window, 'panel', () => {
-      live.current = false;
-      current.stop();
-    });
+    const unbindStop = bindPhraseStop(window, 'panel', stop);
     return () => {
       unbindStop();
       unbind();
@@ -438,7 +477,7 @@ export function PhrasePanel({
       player.current = null;
       publishPhrasePlayhead(null);
     };
-  }, []);
+  }, [dropQueued, adoptQueued]);
   useEffect(() => {
     if (!held) {
       seenHeld.current = null;
@@ -458,6 +497,8 @@ export function PhrasePanel({
       phraseRef.current !== phrase || barsRef.current !== bars;
     phraseRef.current = phrase;
     barsRef.current = bars;
+    // A stopped player leaves 'playing', which already lifts the hold, so
+    // these paths only need to stop the audio.
     if (!active) {
       live.current = false;
       player.current?.stop();
@@ -499,18 +540,18 @@ export function PhrasePanel({
       soundingTempo.current = tempoNow;
       soundingSwing.current = swingRef.current;
       player.current.queuePhrase(next);
-      // The selection moved but the speakers did not. Hold the old phrase on
-      // screen until the player reports the handoff, so the staff, the fret
-      // marks, and the playhead all describe the line that is sounding.
-      queuedFor.current = phrase;
+      // The selection moved but the speakers did not. Freeze the whole frame
+      // — phrase, bars, key, scale, and chord — until the player reports the
+      // handoff. The hold is already set where the change was detected, so
+      // nothing here has to touch state.
       return;
     }
     if (turnedOff) return;
     soundingTempo.current = tempoNow;
     soundingSwing.current = swingRef.current;
-    setSoundingPhrase(phrase);
+    setAwaitingHandoff(false);
     void player.current?.start(next);
-  }, [active, phrase, bars, slow, loop]);
+  }, [active, phrase, bars, slow, loop, liveFrame, seenFrame, dropQueued]);
   const marks = useMemo(
     () => (sounding.ok ? phraseFretMarks(notes, dots) : null),
     [sounding.ok, notes, dots],
@@ -710,6 +751,9 @@ export function PhrasePanel({
     setNotice('');
     if (live.current || status === 'playing' || status === 'starting') {
       live.current = false;
+      // Stop cancels the handoff, so drop the frame waiting for it. A
+      // lingering queued frame would freeze the panel on the old phrase.
+      dropQueued();
       player.current?.stop();
       return;
     }
@@ -722,26 +766,13 @@ export function PhrasePanel({
     setTempo(written);
   }
   /**
-   * Retiming a sounding phrase waits for the next bar line instead of cutting
-   * the bar under the player's ear. The pass is re-issued with the new tempo
-   * through the player's bar-line handoff, which silences and drops the notes
-   * that have not started yet and starts the new tempo exactly on the
-   * downbeat. A half-speed toggle and a slider release both land here.
+   * Tempo is immediate, per Jonny's Loop rule. Nudging the tempo re-issues the
+   * pass as soon as the slider is released; it never waits for a bar line,
+   * because a practice tempo you have to wait a whole pass for is not a tempo
+   * control. Loop, half speed, and phrase changes keep their bar-line handoff.
    */
   function commitTempo() {
-    if (!live.current || !phrase.ok) return;
-    const tempoNow = clampPhraseTempo(slow ? tempoRef.current / 2 : tempoRef.current);
-    if (Math.abs(tempoNow - soundingTempo.current) < 1e-9) return;
-    dispatchPhraseStop(window, 'panel');
-    soundingTempo.current = tempoNow;
-    soundingSwing.current = swingRef.current;
-    player.current?.replaceAfterPass({
-      notes: phrase.phrase.notes,
-      bars,
-      tempo: tempoNow,
-      swing: swingRef.current,
-      loop,
-    });
+    if (live.current) startPlayback();
   }
   const busy = status === 'playing' || status === 'starting';
   const plan = sounding.ok ? sounding.phrase.plan : null;
@@ -921,6 +952,10 @@ export function PhrasePanel({
     <label key="seed" className="phrase-seed deck-counter">
       <span className="deck-legend">Seed</span>
       <input
+        // The seed is an editable control, like the bars toggle: it shows the
+        // phrase you are editing, which can be queued behind the bar line.
+        // The heading, staff, and frets show what is sounding, so those wait
+        // for the handoff and this does not.
         value={seedText}
         inputMode="numeric"
         aria-describedby="phrase-seed-help"
@@ -950,7 +985,8 @@ export function PhrasePanel({
       <div className="phrase-heading">
         <h2>Phrase</h2>
         <p>
-          Over {pretty(chordSymbol)} in {pretty(scaleRoot)} {scaleName}.
+          Over {pretty(frame.chordSymbol)} in {pretty(frame.scaleRoot)}{' '}
+          {frame.scaleName}.
         </p>
       </div>
       <div
