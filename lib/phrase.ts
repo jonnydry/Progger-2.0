@@ -1,4 +1,4 @@
-import { mod, patterns, TUNING, type Note, type Pattern } from './music.ts';
+import { mod, patterns, pretty, TUNING, type Note, type Pattern } from './music.ts';
 import type { PhraseFretMark } from './phrase-marks.ts';
 
 /**
@@ -211,19 +211,73 @@ export const CADENCE_LABEL: Record<CadenceTarget, string> = {
 type LadderTone = { midi: number; note: Note; chordTone: boolean };
 type Spot = { string: number; fret: number; position: number; finger: number };
 
+/**
+ * The cadence category a spelled degree can claim. The third is `3` or `b3`;
+ * the fifth is `5`, `b5`, or `#5`. A 9th, 11th, or 13th is a colour tone and
+ * never a cadence, whatever its number reduces to.
+ */
 export function cadenceRole(degree: string): CadenceTarget | null {
-  const match = /^([b#]*)(\d+)$/.exec(degree);
-  if (!match) return null;
-  const simple = ((Number(match[2]) - 1) % 7) + 1;
-  if (simple === 1) return 'root';
-  if (simple === 3) return 'third';
-  if (simple === 5) return 'fifth';
+  if (degree === '1' || degree === '8') return 'root';
+  if (degree === '3' || degree === 'b3') return 'third';
+  if (degree === '5' || degree === 'b5' || degree === '#5') return 'fifth';
   return null;
 }
 
-/** Tonic chord tones already spelled in the scale, used when no chord is selected. */
+function isPlainDegree(degree: string): boolean {
+  return degree === '1' || degree === '3' || degree === '5';
+}
+
+/**
+ * The degree each cadence category takes in this chord. A chord that holds
+ * both spellings keeps the plain one: a minor blues has a `b5` passing note
+ * *and* a `5`, so its cadence is the fifth, never the tritone. A scale with
+ * no plain member keeps the altered one, so a diminished tonic lands on `b5`
+ * and an augmented tonic on `#5`.
+ */
+export function cadenceDegrees(
+  chordNotes: readonly Note[],
+): Partial<Record<CadenceTarget, string>> {
+  const found: Partial<Record<CadenceTarget, string>> = {};
+  for (const note of chordNotes) {
+    const role = cadenceRole(note.degree);
+    if (!role) continue;
+    const current = found[role];
+    if (!current) {
+      found[role] = note.degree;
+      continue;
+    }
+    if (isPlainDegree(note.degree) && !isPlainDegree(current)) {
+      found[role] = note.degree;
+    }
+  }
+  return found;
+}
+
+/** Display name for the degree a cadence actually lands on. */
+export function cadenceDegreeLabel(degree: string): string {
+  if (degree === '1') return 'root';
+  if (degree === '3') return '3rd';
+  if (degree === '5') return '5th';
+  return pretty(degree);
+}
+
+/** The cadence label for this chord, e.g. `♭3`, `5th`, `♯5`. */
+export function cadenceLabel(
+  role: CadenceTarget,
+  chordNotes: readonly Note[],
+): string {
+  const degree = cadenceDegrees(chordNotes)[role];
+  return degree ? cadenceDegreeLabel(degree) : CADENCE_LABEL[role];
+}
+
+/**
+ * Tonic chord tones already spelled in the scale, used when no chord is
+ * selected. Only the cadence degree of each category is kept, so a blues
+ * scale contributes one third and one fifth rather than every near miss.
+ */
 export function defaultChordNotes(scaleNotes: readonly Note[]): Note[] {
-  return scaleNotes.filter((note) => cadenceRole(note.degree) !== null);
+  const degrees = new Set(Object.values(cadenceDegrees(scaleNotes)));
+  return scaleNotes.filter((note) => degrees.has(note.degree));
 }
 
 export function landingPitchClasses(
@@ -241,26 +295,29 @@ export function availableCadences(
   scaleNotes: readonly Note[],
 ): CadenceTarget[] {
   const scale = new Set(scaleNotes.map((note) => note.pc));
-  const found = new Set<CadenceTarget>();
-  for (const note of chordNotes) {
-    const role = cadenceRole(note.degree);
-    if (role && scale.has(note.pc)) found.add(role);
-  }
-  return CADENCES.filter((role) => found.has(role));
+  const degrees = cadenceDegrees(chordNotes);
+  return CADENCES.filter((role) => {
+    const degree = degrees[role];
+    return chordNotes.some(
+      (note) => note.degree === degree && scale.has(note.pc),
+    );
+  });
 }
 
+/**
+ * The pitch classes a cadence may land on. Only the degree this chord uses
+ * for the category counts, so a blues fifth is the perfect fifth and never
+ * the flat fifth sitting beside it.
+ */
 export function cadencePitchClasses(
   chordNotes: readonly Note[],
   role: CadenceTarget,
   scalePcs: ReadonlySet<number>,
 ): number[] {
+  const degree = cadenceDegrees(chordNotes)[role];
   const pcs: number[] = [];
   for (const note of chordNotes) {
-    if (
-      cadenceRole(note.degree) === role &&
-      scalePcs.has(note.pc) &&
-      !pcs.includes(note.pc)
-    )
+    if (note.degree === degree && scalePcs.has(note.pc) && !pcs.includes(note.pc))
       pcs.push(note.pc);
   }
   return pcs;
@@ -890,14 +947,17 @@ function guideTone(degree: string): boolean {
 
 function contourMidi(plan: PhrasePlan, t: number): number {
   let height = contourHeight(plan.contour, t);
-  // A cosine wave peaks too narrowly for one scale step per note.
-  // Hold the middle third down and the side thirds up so the line reads as a wave.
+  // A cosine wave peaks too narrowly for one scale step per note. Hold the
+  // middle third down and put a full-height hump inside each side third, then
+  // return to the bottom for the last few notes so the cadence lands low.
+  // The middle third averages below both side thirds, which is the shape
+  // `contourFits` scores on the body.
   if (plan.contour === 'wave') {
     const x = Math.min(1, Math.max(0, t));
-    const peak = 0.42;
-    if (x < 0.34) height = peak * Math.sin(Math.PI * (x / 0.34));
+    const peak = 0.9;
+    if (x < 0.34) height = peak * Math.sin(Math.PI * ((x + 0.03) / 0.4));
     else if (x < 0.67) height = 0;
-    else if (x < 0.92) height = peak * Math.sin(Math.PI * ((x - 0.67) / 0.25));
+    else if (x < 0.9) height = peak * Math.sin(Math.PI * ((x - 0.64) / 0.4));
     else height = 0;
   }
   return REGISTER_LOW[plan.register] + height * PHRASE_RANGE;
@@ -2002,11 +2062,50 @@ function criticScore(
   if (same) score -= 80;
   if (quarter) score -= 24;
   score -= pitchCriticPenalty(notes, midis, bars, scalePcs);
+  score -= loopSeamPenalty(notes, bars);
   const cells = plan.cells ?? [];
   for (let index = 1; index < cells.length; index++) {
     if (cells[index] === cells[index - 1]) score -= 30;
   }
   return score;
+}
+
+/**
+ * Cost of the wrap a looping pass makes: the last note before the bar line
+ * runs straight into the opening note of the next pass. Looping skips the
+ * cadence, so this wrap is the only resolution a loop ever hears, and it is
+ * heard on every pass. The weight is deliberately below the strong-beat
+ * chord-tone terms: a smooth wrap is worth having, but not by filling the
+ * line with repeats and wrong notes on the beat.
+ */
+function loopSeamGap(
+  notes: readonly PhraseNote[],
+  bars: 2 | 4,
+): { gap: number; fast: boolean } | null {
+  const first = notes.find((note) => note.beat === 0);
+  let last: PhraseNote | undefined;
+  for (const note of notes) if (note.beat < bars * 4) last = note;
+  if (!first || !last) return null;
+  return { gap: Math.abs(first.midi - last.midi), fast: last.duration <= 0.5 };
+}
+
+function loopSeamPenalty(notes: readonly PhraseNote[], bars: 2 | 4): number {
+  const seam = loopSeamGap(notes, bars);
+  if (!seam) return 0;
+  if (seam.gap > 12) return 60;
+  if (seam.gap === 0) return 50;
+  if (seam.fast && seam.gap > 5) return 45;
+  if (seam.gap > 7) return 20;
+  if (seam.gap > 4) return 8;
+  return 0;
+}
+
+/** A wrap the engine's own arrival rule would refuse. */
+function seamIsIllegal(notes: readonly PhraseNote[], bars: 2 | 4): boolean {
+  const seam = loopSeamGap(notes, bars);
+  if (!seam) return false;
+  if (seam.gap > 12 || seam.gap === 0) return true;
+  return seam.fast && seam.gap > 5;
 }
 
 const PHRASE_CANDIDATES = 4;
@@ -2080,7 +2179,20 @@ function pitchCriticPenalty(
   return penalty;
 }
 
-function composePhrase(
+type LaneResult = {
+  notes: PhraseNote[];
+  plan: PhrasePlan;
+  score: number;
+  exact: boolean;
+  lane: number;
+};
+
+/**
+ * Try every lane once. Lane 0 is the copied bar; the rest vary the rhythm.
+ * `attempt` seeds a fresh roll of the lanes for the same phrase, so a locked
+ * contour that no lane satisfied can be tried again instead of ignored.
+ */
+function sampleLanes(
   input: {
     seed: number;
     bars: 2 | 4;
@@ -2089,26 +2201,65 @@ function composePhrase(
   },
   plan: PhrasePlan,
   ladder: readonly LadderTone[],
-  forms: readonly Pattern[],
-): { notes: FingeredNote[]; plan: PhrasePlan } | null {
-  const scalePcs = new Set(input.scaleNotes.map((note) => note.pc));
-  const cadencePcs = new Set(
-    cadencePitchClasses(input.chordNotes, plan.cadence, scalePcs),
-  );
-  const cadenceAt = cadenceIndexOf(ladder, cadencePcs, plan, input.bars);
-  if (cadenceAt < 0) return null;
-  const found: {
-    notes: PhraseNote[];
-    plan: PhrasePlan;
-    score: number;
-    exact: boolean;
-    lane: number;
-  }[] = [];
-  const lanes = PHRASE_CANDIDATES * 2;
+  cadenceAt: number,
+  scalePcs: ReadonlySet<number>,
+  lanes: number,
+  attempt: number,
+): LaneResult[] {
+  const found: LaneResult[] = [];
   for (let lane = 0; lane < lanes; lane++) {
     if (searchAtCap() || phraseSearchRefused) break;
-    const exact = lane === 0;
-    const random = mulberry32((input.seed + (lane + 1) * 0x9e3779b9) >>> 0);
+    const exact = lane === 0 && attempt === 0;
+    const sampled = sampleLane(
+      input,
+      plan,
+      ladder,
+      cadenceAt,
+      scalePcs,
+      lane,
+      attempt,
+      exact,
+      lanes,
+    );
+    if (sampled) found.push(sampled);
+  }
+  return found;
+}
+
+/**
+ * One lane, re-rolled while its loop wrap would break the arrival rule. The
+ * wrap is a real interval between two sounding notes, so it is held to the
+ * same standard as any other move inside the phrase. Re-rolling the lane
+ * rather than preferring the smoothest lane keeps every candidate's own
+ * character, so a legal seam cannot quietly rewrite the whole line.
+ */
+function sampleLane(
+  input: {
+    seed: number;
+    bars: 2 | 4;
+    scaleNotes: readonly Note[];
+    chordNotes: readonly Note[];
+  },
+  plan: PhrasePlan,
+  ladder: readonly LadderTone[],
+  cadenceAt: number,
+  scalePcs: ReadonlySet<number>,
+  lane: number,
+  attempt: number,
+  exact: boolean,
+  lanes: number,
+): LaneResult | null {
+  const tries = 3;
+  let fallback: LaneResult | null = null;
+  for (let roll = 0; roll < tries; roll++) {
+    if (searchAtCap() || phraseSearchRefused) break;
+    const random = mulberry32(
+      (input.seed +
+        (lane + 1) * 0x9e3779b9 +
+        attempt * 0x85ebca6b +
+        roll * 0xc2b2ae35) >>>
+        0,
+    );
     const patterns = pickPatterns(
       plan.rhythm,
       input.bars,
@@ -2117,6 +2268,7 @@ function composePhrase(
       exact,
       answersOpening(input.seed),
     );
+    if (patterns.length !== input.bars) continue;
     const events = eventsForCells(patterns, input.bars);
     const pitches = walkPitches(
       ladder,
@@ -2134,72 +2286,80 @@ function composePhrase(
       form: input.bars === 2 ? 'answer' : 'sentence',
       cells: patterns.map((pattern) => pattern.ids),
     };
-    found.push({
+    const result: LaneResult = {
       notes,
       plan: nextPlan,
       score: criticScore(notes, nextPlan, input.bars, scalePcs),
       exact,
-      lane,
-    });
+      lane: lane + attempt * lanes,
+    };
+    if (!seamIsIllegal(notes, input.bars)) return result;
+    fallback = result;
   }
-  if (!found.length) {
-    // Every sampled lane missed the cadence. One more sentence, still
-    // marked exact so a varied lane would have won.
-    const random = mulberry32((input.seed + (lanes + 1) * 0x9e3779b9) >>> 0);
-    const patterns = pickPatterns(
-      plan.rhythm,
-      input.bars,
-      random,
-      1,
-      false,
-      answersOpening(input.seed),
-    );
-    if (patterns.length === input.bars) {
-      const events = eventsForCells(patterns, input.bars);
-      const pitches = walkPitches(
-        ladder,
-        events,
-        plan,
-        input.bars,
-        cadenceAt,
-        random,
-        input.seed,
-      );
-      if (pitches) {
-        const notes = notesFromPitches(pitches, events);
-        const nextPlan: PhrasePlan = {
-          ...plan,
-          form: input.bars === 2 ? 'answer' : 'sentence',
-          cells: patterns.map((pattern) => pattern.ids),
-        };
-        found.push({
-          notes,
-          plan: nextPlan,
-          score: criticScore(notes, nextPlan, input.bars, scalePcs),
-          exact: true,
-          lane: lanes,
-        });
-      }
-    }
-  }
-  if (!found.length) return null;
-  // The copied bar is a fallback for a ladder that cannot change rhythm.
-  // A varied line wins whenever one exists.
-  const varied = found.filter((item) => !item.exact);
-  const source = varied.length ? varied : found;
-  const fitting = source.filter((item) =>
-    contourFits(item.notes, item.plan.contour),
+  return fallback;
+}
+
+function composePhrase(
+  input: {
+    seed: number;
+    bars: 2 | 4;
+    scaleNotes: readonly Note[];
+    chordNotes: readonly Note[];
+  },
+  plan: PhrasePlan,
+  ladder: readonly LadderTone[],
+  forms: readonly Pattern[],
+): { notes: FingeredNote[]; plan: PhrasePlan } | null {
+  const scalePcs = new Set(input.scaleNotes.map((note) => note.pc));
+  const cadencePcs = new Set(
+    cadencePitchClasses(input.chordNotes, plan.cadence, scalePcs),
   );
-  const pool = fitting.length ? fitting : source;
+  const cadenceAt = cadenceIndexOf(ladder, cadencePcs, plan, input.bars);
+  if (cadenceAt < 0) return null;
+  const lanes = PHRASE_CANDIDATES * 2;
+  /**
+   * A locked contour is judged on the finished line, so one pass of lanes can
+   * miss it. Each retry re-rolls all of them. Eight passes clear every arch
+   * and wave in the sweep while staying inside the search-step budget.
+   */
+  const attempts = 8;
+  let fitting: LaneResult[] = [];
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (searchAtCap() || phraseSearchRefused) break;
+    const found = sampleLanes(
+      input,
+      plan,
+      ladder,
+      cadenceAt,
+      scalePcs,
+      lanes,
+      attempt,
+    );
+    if (!found.length) continue;
+    // The copied bar is a fallback for a ladder that cannot change rhythm.
+    // A varied line wins whenever one exists, unless one is breaking a lock.
+    const varied = found.filter((item) => !item.exact);
+    const source = varied.length ? varied : found;
+    // A locked contour is a promise, not a preference. When no lane fits,
+    // roll the lanes again rather than ship a line that contradicts its label.
+    fitting = source.filter((item) =>
+      contourFits(item.notes, item.plan.contour, input.bars),
+    );
+    if (fitting.length) break;
+  }
+  if (!fitting.length) return null;
+  // A loop repeats the wrap forever, so a seam that breaks the arrival rule
+  // is a real musical cost. It is charged as a score instead of a hard veto:
+  // both goals matter, and a veto would let the wrap choose the whole line.
   // A shift only lowers a score, so a weaker pitch line cannot catch up.
-  const ranked = pool
+  const ranked = fitting
     .slice()
     .sort((a, b) => b.score - a.score || a.lane - b.lane);
   let best: { notes: FingeredNote[]; plan: PhrasePlan; score: number } | null =
     null;
   for (const item of ranked) {
     if (best && item.score <= best.score) break;
-    const fingered = fingerNotes(item.notes, forms);
+    const fingered = fingerNotes(item.notes, forms, REGISTER_ANCHOR[plan.register]);
     if (!handAccepts(fingered)) continue;
     let shifts = 0;
     for (const note of fingered) if (note.shift) shifts += 1;
@@ -2210,29 +2370,60 @@ function composePhrase(
   return best;
 }
 
-/** The coarse shape a locked contour has to produce: ends, or a middle arch or wave. */
+/**
+ * The coarse shape a locked contour has to produce. Rise and fall compare
+ * the ends; arch and wave put the middle third on one side of both ends.
+ *
+ * The closing cadence is excluded. It is a structural arrival chosen by the
+ * cadence lock, not part of the melodic shape: including a low landing note
+ * in the last third makes every low-register arch or wave look inverted.
+ */
 function contourFits(
-  notes: readonly { midi: number }[],
+  notes: readonly { midi: number; beat: number }[],
   contour: PhrasePlan['contour'],
+  bars: 2 | 4,
 ): boolean {
-  const third = Math.max(1, Math.floor(notes.length / 3));
+  const body = notes.filter((note) => note.beat < bars * 4);
+  if (body.length < 3) return true;
+  const third = Math.max(1, Math.floor(body.length / 3));
   const mean = (from: number, to: number) => {
     let sum = 0;
-    for (let index = from; index < to; index++) sum += notes[index].midi;
+    for (let index = from; index < to; index++) sum += body[index].midi;
     return sum / Math.max(1, to - from);
   };
   const first = mean(0, third);
   const middle = mean(third, third * 2);
-  const last = mean(third * 2, notes.length);
+  const last = mean(third * 2, body.length);
   if (contour === 'rise') return last > first;
   if (contour === 'fall') return first > last;
   if (contour === 'arch') return middle > first && middle > last;
   return middle < first && middle < last;
 }
 
+/**
+ * Where on the neck the hand should live. The three registers are three
+ * hand positions, not three pitch bands played in the same box: low sits at
+ * the open end with open strings and the second position, middle around the
+ * fifth, high around the ninth. The contour then draws the line inside that
+ * anchor, so choosing Low gives you open-position playing and choosing High
+ * gives you the upper neck.
+ */
+export const REGISTER_ANCHOR: Record<RegisterName, number> = {
+  low: 2,
+  mid: 5,
+  high: 9,
+};
+
+/**
+ * The form whose centre is nearest the register's anchor. A form is a
+ * three-notes-per-string shape that spans roughly five frets, so centring it
+ * on the anchor is what puts the hand there. Scale sizes that produce no
+ * forms (pentatonic, blues, whole tone, diminished) keep the old fallback.
+ */
 function shapeCover(
   forms: readonly Pattern[],
   midis: readonly number[],
+  anchor: number,
 ): number {
   if (!forms.length) return -1;
   const distinct = new Set(midis);
@@ -2243,7 +2434,8 @@ function shapeCover(
     const have = new Set(form.positions.map((position) => position.midi));
     let hit = 0;
     for (const midi of distinct) if (have.has(midi)) hit += 1;
-    const dist = Math.abs((form.min + form.max) / 2 - 7);
+    // Coverage first, then the form nearest the register's hand position.
+    const dist = Math.abs((form.min + form.max) / 2 - anchor);
     if (
       hit > bestHit ||
       (hit === bestHit &&
@@ -2260,11 +2452,13 @@ function shapeCover(
 function fingerNotes(
   notes: PhraseNote[],
   forms: readonly Pattern[],
+  anchor: number,
 ): FingeredNote[] {
   const shapes = formLookup(forms);
   const active = shapeCover(
     forms,
     notes.map((note) => note.midi),
+    anchor,
   );
   const shaped = forms.length > 0;
   const choices = notes.map((note) => spotsFor(note.midi));
@@ -2274,7 +2468,7 @@ function fingerNotes(
   const back = choices.map((spots) => spots.map(() => -1));
   for (let spot = 0; spot < choices[0].length; spot++) {
     cost[0][spot] =
-      Math.abs(choices[0][spot].position - 7) * 0.05 +
+      Math.abs(choices[0][spot].position - anchor) * 0.05 +
       shapeCost(shapes, choices[0][spot], shaped, active);
   }
   for (let index = 1; index < notes.length; index++) {
@@ -2294,6 +2488,7 @@ function fingerNotes(
             shaped,
             active,
             notes[index].duration <= 0.5,
+            anchor,
           );
         if (next < best) {
           best = next;
@@ -2389,8 +2584,9 @@ function moveCost(
   shaped: boolean,
   active: number,
   fast: boolean,
+  anchor: number,
 ): number {
-  let cost = Math.abs(to.position - 7) * 0.02;
+  let cost = Math.abs(to.position - anchor) * 0.02;
   cost += handShiftCost(to.position - from.position, fast);
   const jump = Math.abs(from.string - to.string);
   const fromShapes = shapes.get(shapeKey(from.string, from.fret));
