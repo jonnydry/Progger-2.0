@@ -2058,6 +2058,23 @@ function seamIsIllegal(notes: readonly PhraseNote[], bars: 2 | 4): boolean {
   return seam.fast && seam.gap > 5;
 }
 
+/**
+ * Is the wrap from the last body note to the next pass's first note a move
+ * the phrase itself would be allowed to make? A looping pass skips the
+ * closing cadence, so this interval is a real sounding move and gets the same
+ * limits `arrivalOk` puts on any other one: no unison, no more than an
+ * octave, and no more than a fourth onto an eighth.
+ */
+export function loopSeamLegal(
+  lastMidi: number,
+  lastDuration: number,
+  firstMidi: number,
+): boolean {
+  const gap = Math.abs(firstMidi - lastMidi);
+  if (gap === 0 || gap > 12) return false;
+  return !(lastDuration <= 0.5 && gap > 5);
+}
+
 const PHRASE_CANDIDATES = 4;
 
 function notesFromPitches(
@@ -2182,6 +2199,10 @@ function sampleLanes(
  * same standard as any other move inside the phrase. Re-rolling the lane
  * rather than preferring the smoothest lane keeps every candidate's own
  * character, so a legal seam cannot quietly rewrite the whole line.
+ *
+ * Returns null rather than a line with an illegal wrap: `composePhrase`
+ * samples more lanes and more attempts before it accepts one, so dropping a
+ * lane here costs a candidate, not a phrase.
  */
 function sampleLane(
   input: {
@@ -2200,7 +2221,6 @@ function sampleLane(
   lanes: number,
 ): LaneResult | null {
   const tries = 3;
-  let fallback: LaneResult | null = null;
   for (let roll = 0; roll < tries; roll++) {
     if (searchAtCap() || phraseSearchRefused) break;
     const random = mulberry32(
@@ -2231,22 +2251,21 @@ function sampleLane(
     );
     if (!pitches) continue;
     const notes = notesFromPitches(pitches, events);
+    if (seamIsIllegal(notes, input.bars)) continue;
     const nextPlan: PhrasePlan = {
       ...plan,
       form: input.bars === 2 ? 'answer' : 'sentence',
       cells: patterns.map((pattern) => pattern.ids),
     };
-    const result: LaneResult = {
+    return {
       notes,
       plan: nextPlan,
       score: criticScore(notes, nextPlan, input.bars, scalePcs),
       exact,
       lane: lane + attempt * lanes,
     };
-    if (!seamIsIllegal(notes, input.bars)) return result;
-    fallback = result;
   }
-  return fallback;
+  return null;
 }
 
 function composePhrase(
@@ -2274,6 +2293,7 @@ function composePhrase(
    */
   const attempts = 8;
   let fitting: LaneResult[] = [];
+  let seamless: LaneResult[] = [];
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (searchAtCap() || phraseSearchRefused) break;
     const found = sampleLanes(
@@ -2296,13 +2316,18 @@ function composePhrase(
       contourFits(item.notes, item.plan.contour, input.bars),
     );
     if (fitting.length) break;
+    if (!seamless.length) seamless = found;
   }
   if (!fitting.length) return null;
-  // A loop repeats the wrap forever, so a seam that breaks the arrival rule
-  // is a real musical cost. It is charged as a score instead of a hard veto:
-  // both goals matter, and a veto would let the wrap choose the whole line.
+  // Every lane here already re-rolled its wrap, so this is belt and braces
+  // for a ladder too narrow to offer a legal one. A phrase still beats no
+  // phrase: when nothing legal exists, the best illegal wrap is used.
+  const legal = fitting.filter(
+    (item) => !seamIsIllegal(item.notes, input.bars),
+  );
+  const pool = legal.length ? legal : fitting.length ? fitting : seamless;
   // A shift only lowers a score, so a weaker pitch line cannot catch up.
-  const ranked = fitting
+  const ranked = pool
     .slice()
     .sort((a, b) => b.score - a.score || a.lane - b.lane);
   let best: { notes: FingeredNote[]; plan: PhrasePlan; score: number } | null =

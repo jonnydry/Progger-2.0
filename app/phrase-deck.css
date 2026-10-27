@@ -390,6 +390,9 @@
       'length tempo'
       'swing seed';
   }
+  .phrase-pins-rows {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
@@ -436,6 +439,9 @@
 @media (max-width: 420px) {
   .deck-plate {
     row-gap: var(--space-2);
+  }
+  .phrase-pins {
+    padding-inline: 10px;
   }
   .deck-tempo {
     grid-template-columns: minmax(0, 1fr);
@@ -530,17 +536,4 @@
 .phrase-pin:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
-}
-@media (max-width: 960px) {
-  .phrase-pins-rows {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (max-width: 420px) {
-  .phrase-pins {
-    padding-inline: 10px;
-  }
-  .phrase-pin-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }

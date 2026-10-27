@@ -392,9 +392,17 @@ export function PhrasePanel({
    * the screen never describes a line the speakers are not playing.
    */
   const [soundingPhrase, setSoundingPhrase] = useState(phrase);
-  /** A phrase waiting for the bar line, adopted when the player hands off. */
+  /** A phrase waiting for the bar line; adopted by the player's handoff. */
   const queuedFor = useRef<typeof phrase | null>(null);
-  const sounding = soundingPhrase;
+  /**
+   * While a change waits for the bar line the selection has already moved on,
+   * so keep showing the phrase that is sounding. At every other moment —
+   * including stopped and freshly regenerated — the selection is what sounds,
+   * so the plan follows it directly. The player writes `queuedFor` and clears
+   * it on the handoff, and that timing is the whole point of the read.
+   */
+  // oxlint-disable-next-line react/react-compiler -- mirrors the player's handoff
+  const sounding = queuedFor.current === null ? phrase : soundingPhrase;
   const notes = useMemo(
     () => (sounding.ok ? sounding.phrase.notes : EMPTY_NOTES),
     [sounding],
