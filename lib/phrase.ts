@@ -4,13 +4,13 @@ import type { PhraseFretMark } from './phrase-marks.ts';
 /**
  * Rule-based phrase generator.
  *
- * Later steps can lock a plan (`PhraseLocks`), store a `PhraseSnapshot`,
- * hide fret dots (`PhraseDotVisibility`), or replace the plan with one
- * server planner call. The planner is optional: one attempt, a short
- * timeout, then the seeded rules. This module never calls the network.
+ * A plan names a contour, rhythm, register, and cadence. Any of them can be
+ * locked, and the rest are seeded from the phrase's seed, so the same seed
+ * with the same locks replays the same line. Fret dots can be hidden
+ * (`PhraseDotVisibility`) without changing the phrase. This module is pure
+ * and deterministic: it never calls the network or the audio layer.
  */
 
-export const PHRASE_PLANNER_TIMEOUT_MS = 800;
 export const PHRASE_RANGE = 18;
 /**
  * Each placed note counts one step. A search that has used the cap
@@ -71,7 +71,6 @@ export type RhythmId = 'quarters' | 'eighths' | 'long-short' | 'push';
 export type RegisterName = 'low' | 'mid' | 'high';
 export type CadenceTarget = 'root' | 'third' | 'fifth';
 export type Feel = 'straight' | 'swing';
-export type PhraseSource = 'rules' | 'planner';
 export type PhraseDotVisibility = 'shown' | 'hidden';
 
 export type PhraseForm = 'answer' | 'sentence';
@@ -87,28 +86,12 @@ export type PhrasePlan = {
   cells?: readonly string[];
 };
 
-/** Songwriting locks. A later step can pin any of these and save the rest. */
+/** Songwriting locks: pin any of these and the rest is still seeded. */
 export type PhraseLocks = {
   contour?: Contour;
   rhythm?: RhythmId;
   register?: RegisterName;
   cadence?: CadenceTarget;
-};
-
-export type PhrasePlannerInput = {
-  seed: number;
-  bars: 2 | 4;
-  scaleNotes: readonly Note[];
-  chordNotes: readonly Note[];
-  locks?: PhraseLocks;
-  signal: AbortSignal;
-  scaleLabel?: string;
-  chordSymbol?: string;
-};
-
-/** One proposal per phrase. Invalid fields are ignored; a failure falls back. */
-export type PhrasePlanner = {
-  propose(input: PhrasePlannerInput): Promise<Partial<PhrasePlan> | null>;
 };
 
 export type PhraseNote = {
@@ -134,7 +117,6 @@ export type Phrase = {
   seed: number;
   bars: 2 | 4;
   plan: PhrasePlan;
-  source: PhraseSource;
   notes: FingeredNote[];
 };
 
@@ -185,11 +167,26 @@ export function handShiftCost(frets: number, fast: boolean): number {
   return cost;
 }
 
+/**
+ * What each rhythm lane actually plays. The `quarters` lane is not a wall of
+ * quarter notes: nine of its ten bar patterns include a rest-then-eighth
+ * cell, and bars after the first are generated answers rather than pool
+ * draws. The label says so instead of promising a beginner exercise it does
+ * not deliver. `push` is the same offbeat attack as `quarters` with the rest
+ * moved, so the two are named for their feel rather than their note values.
+ */
 export const RHYTHM_LABEL: Record<RhythmId, string> = {
-  quarters: 'quarter notes',
-  eighths: 'eighth notes',
+  quarters: 'quarters with eighths',
+  eighths: 'eighth-note runs',
+  'long-short': 'long–short pairs',
+  push: 'offbeat attacks',
+};
+/** Lane name for a control that needs the short form. */
+export const RHYTHM_SHORT: Record<RhythmId, string> = {
+  quarters: 'quarters',
+  eighths: 'eighths',
   'long-short': 'long–short',
-  push: 'pushed eighths',
+  push: 'offbeat',
 };
 export const CONTOUR_LABEL: Record<Contour, string> = {
   arch: 'arch',
@@ -527,26 +524,6 @@ export function rulePlan(
   return applyLocks(rolled, locks, choices);
 }
 
-function sanitizePlan(
-  partial: Partial<PhrasePlan> | null | undefined,
-  available: readonly CadenceTarget[],
-): Partial<PhrasePlan> {
-  if (!partial || typeof partial !== 'object') return {};
-  const plan: Partial<PhrasePlan> = {};
-  if (CONTOURS.includes(partial.contour as Contour))
-    plan.contour = partial.contour;
-  if (RHYTHMS.includes(partial.rhythm as RhythmId))
-    plan.rhythm = partial.rhythm;
-  if (REGISTERS.includes(partial.register as RegisterName))
-    plan.register = partial.register;
-  if (
-    CADENCES.includes(partial.cadence as CadenceTarget) &&
-    available.includes(partial.cadence as CadenceTarget)
-  )
-    plan.cadence = partial.cadence;
-  return plan;
-}
-
 function applyLocks(
   plan: PhrasePlan,
   locks: PhraseLocks | undefined,
@@ -563,33 +540,6 @@ function applyLocks(
     rhythm: locks?.rhythm ?? plan.rhythm,
     register: locks?.register ?? plan.register,
     cadence,
-  };
-}
-
-export function phraseSnapshot(input: {
-  seed: number;
-  bars: 2 | 4;
-  feel: Feel;
-  tempo: number;
-  slow: boolean;
-  scaleRoot: string;
-  scaleId: string;
-  chordSymbol: string;
-  plan: PhrasePlan;
-  locks?: PhraseLocks;
-}): PhraseSnapshot {
-  return {
-    version: 1,
-    seed: input.seed,
-    bars: input.bars,
-    feel: input.feel,
-    tempo: input.tempo,
-    slow: input.slow,
-    scaleRoot: input.scaleRoot,
-    scaleId: input.scaleId,
-    chordSymbol: input.chordSymbol,
-    plan: input.plan,
-    locks: input.locks ?? {},
   };
 }
 
@@ -2385,6 +2335,11 @@ function contourFits(
 ): boolean {
   const body = notes.filter((note) => note.beat < bars * 4);
   if (body.length < 3) return true;
+  // A line with no vertical room cannot depict a shape. Refusing it would
+  // turn an honest lock into a failure on a ladder that holds one pitch, or
+  // a register window too narrow to move in.
+  const midis = body.map((note) => note.midi);
+  if (Math.max(...midis) - Math.min(...midis) < 2) return true;
   const third = Math.max(1, Math.floor(body.length / 3));
   const mean = (from: number, to: number) => {
     let sum = 0;
@@ -2622,7 +2577,6 @@ function assemble(
     chordNotes: readonly Note[];
   },
   plan: PhrasePlan,
-  source: PhraseSource,
 ): PhraseResult {
   const chordPcs = landingPitchClasses(input.chordNotes, input.scaleNotes);
   if (!chordPcs.size) return { ok: false, reason: 'no-shared-tones' };
@@ -2637,7 +2591,6 @@ function assemble(
       seed: input.seed >>> 0,
       bars: input.bars,
       plan: composed.plan,
-      source,
       notes: composed.notes,
     },
   };
@@ -2655,7 +2608,7 @@ function rulesResult(
   input: PhraseRequest,
   available: readonly CadenceTarget[],
 ): PhraseResult {
-  return assemble(input, rulePlan(input.seed, available, input.locks), 'rules');
+  return assemble(input, rulePlan(input.seed, available, input.locks));
 }
 
 /** One fresh plan when the first comes back unplayable. Other failures stay. */
@@ -2680,74 +2633,6 @@ export function generatePhrase(input: PhraseRequest): PhraseResult {
   const available = availableCadences(input.chordNotes, input.scaleNotes);
   if (!available.length) return { ok: false, reason: 'no-shared-tones' };
   return retryUnplayable(input, available, rulesResult(input, available));
-}
-
-export async function generatePhraseWithPlanner(input: {
-  seed: number;
-  bars: 2 | 4;
-  scaleNotes: readonly Note[];
-  chordNotes: readonly Note[];
-  locks?: PhraseLocks;
-  planner?: PhrasePlanner;
-  timeoutMs?: number;
-  scaleLabel?: string;
-  chordSymbol?: string;
-}): Promise<PhraseResult> {
-  resetSearchCount();
-  if (
-    canonicalSeed(input.seed) === null ||
-    (input.bars !== 2 && input.bars !== 4)
-  ) {
-    return { ok: false, reason: 'bad-input' };
-  }
-  const available = availableCadences(input.chordNotes, input.scaleNotes);
-  if (!available.length) return { ok: false, reason: 'no-shared-tones' };
-  const rules = rulePlan(input.seed, available);
-  if (!input.planner)
-    return retryUnplayable(input, available, rulesResult(input, available));
-  const timeoutMs = input.timeoutMs ?? PHRASE_PLANNER_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let accepted = false;
-  let proposal: Partial<PhrasePlan> = {};
-  try {
-    const result = await Promise.race([
-      input.planner.propose({
-        seed: input.seed,
-        bars: input.bars,
-        scaleNotes: input.scaleNotes,
-        chordNotes: input.chordNotes,
-        locks: input.locks,
-        signal: controller.signal,
-        scaleLabel: input.scaleLabel,
-        chordSymbol: input.chordSymbol,
-      }),
-      new Promise<null>((resolve) => {
-        controller.signal.addEventListener('abort', () => resolve(null), {
-          once: true,
-        });
-      }),
-    ]);
-    proposal = sanitizePlan(result, available);
-    accepted = Object.keys(proposal).length > 0;
-  } catch {
-    proposal = {};
-    accepted = false;
-  } finally {
-    clearTimeout(timer);
-    if (!controller.signal.aborted) controller.abort();
-  }
-  const plan = applyLocks({ ...rules, ...proposal }, input.locks, available);
-  const planned = assemble(input, plan, accepted ? 'planner' : 'rules');
-  if (planned.ok) return planned;
-  if (!accepted) return retryUnplayable(input, available, planned);
-  nextSearchAttempt();
-  const fallback = assemble(
-    input,
-    applyLocks(rules, input.locks, available),
-    'rules',
-  );
-  return retryUnplayable(input, available, fallback);
 }
 
 export function phraseFretMarks(

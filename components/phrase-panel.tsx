@@ -344,7 +344,6 @@ export function PhrasePanel({
           seed: held.seed,
           bars: held.bars,
           plan: held.plan,
-          source: 'rules' as const,
           notes: held.notes,
         },
       };

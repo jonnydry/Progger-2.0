@@ -5,7 +5,6 @@ import { PHRASE_TEMPO_MIN } from '../lib/phrase-audio.ts';
 import { parseChord } from '../lib/harmony.ts';
 import { SCALES, spell, TUNING, type Note } from '../lib/music.ts';
 import {
-  PHRASE_PLANNER_TIMEOUT_MS,
   PHRASE_RANGE,
   availableCadences,
   cadenceRole,
@@ -14,7 +13,6 @@ import {
   generatePhrase,
   handShiftCost,
   landingPitchClasses,
-  generatePhraseWithPlanner,
   isStrongBeat,
   melodicMotion,
   beatAtSeconds,
@@ -24,7 +22,6 @@ import {
   phraseFretMarks,
   phrasePeriodBeats,
   phraseRuleReport,
-  phraseSnapshot,
   rulePlan,
   withinHand,
   swingRatioForAmount,
@@ -45,7 +42,7 @@ import {
   type CadenceTarget,
   type Contour,
   type Phrase,
-  type PhrasePlanner,
+  type PhraseSnapshot,
 } from '../lib/phrase.ts';
 
 const CONTEXTS: readonly (readonly [string, string, string])[] = [
@@ -109,7 +106,6 @@ function thirdMeans(midis: readonly number[]): [number, number, number] {
 
 void test('timing, cadence roles, and seeds are deterministic tables', () => {
   assert.equal(PHRASE_RANGE, 18);
-  assert.equal(PHRASE_PLANNER_TIMEOUT_MS, 800);
   assert.equal(cadenceRole('1'), 'root');
   assert.equal(cadenceRole('8'), 'root');
   assert.equal(cadenceRole('b3'), 'third');
@@ -527,7 +523,6 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
       phrase.notes.slice(0, -1).every((note) => note.beat < phrase.bars * 4),
     );
     assert.equal(phrasePeriodBeats(phrase.bars), phrase.bars * 4 + 2);
-    assert.equal(phrase.source, 'rules');
 
     const [first, middle, last] = thirdMeans(
       phrase.notes.map((note) => note.midi),
@@ -633,7 +628,8 @@ void test('hidden dots, snapshots, and a chord outside the scale', () => {
     true,
   );
 
-  const snapshot = phraseSnapshot({
+  const snapshot: PhraseSnapshot = {
+    version: 1,
     seed: 9,
     bars: 2,
     feel: 'swing',
@@ -644,7 +640,7 @@ void test('hidden dots, snapshots, and a chord outside the scale', () => {
     chordSymbol: 'C',
     plan: result.phrase.plan,
     locks: { rhythm: 'quarters' },
-  });
+  };
   assert.equal(snapshot.version, 1);
   assert.equal(snapshot.locks.rhythm, 'quarters');
 
@@ -657,79 +653,7 @@ void test('hidden dots, snapshots, and a chord outside the scale', () => {
   assert.deepEqual(outside, { ok: false, reason: 'no-shared-tones' });
 });
 
-void test('the planner makes one call, times out, and loses to locks', async () => {
-  const input = contextInput('C', 'major', 'C');
-  const rules = generatePhrase({ seed: 5, bars: 2, ...input });
-  assert.equal(rules.ok, true);
-  const bare = await generatePhraseWithPlanner({ seed: 5, bars: 2, ...input });
-  assert.deepEqual(bare, rules);
-
-  let calls = 0;
-  const hanging: PhrasePlanner = {
-    propose() {
-      calls += 1;
-      return new Promise(() => undefined);
-    },
-  };
-  const started = Date.now();
-  const timed = await generatePhraseWithPlanner({
-    seed: 5,
-    bars: 2,
-    ...input,
-    planner: hanging,
-    timeoutMs: 30,
-  });
-  assert.equal(calls, 1);
-  assert.ok(Date.now() - started < 500);
-  assert.deepEqual(timed, rules);
-
-  const failing: PhrasePlanner = {
-    propose() {
-      calls += 1;
-      throw new Error('planner down');
-    },
-  };
-  const failed = await generatePhraseWithPlanner({
-    seed: 5,
-    bars: 2,
-    ...input,
-    planner: failing,
-    timeoutMs: 30,
-  });
-  assert.deepEqual(failed, rules);
-
-  const proposing: PhrasePlanner = {
-    propose(request) {
-      calls += 1;
-      assert.equal(request.signal.aborted, false);
-      assert.equal(request.seed, 5);
-      return Promise.resolve({
-        contour: 'rise',
-        rhythm: 'eighths',
-        register: 'high',
-        cadence: 'ninth' as CadenceTarget,
-      });
-    },
-  };
-  const planned = await generatePhraseWithPlanner({
-    seed: 5,
-    bars: 2,
-    ...input,
-    planner: proposing,
-    locks: { rhythm: 'quarters' },
-    chordSymbol: 'C',
-    scaleLabel: 'C major',
-  });
-  assert.equal(planned.ok, true);
-  if (planned.ok) {
-    assert.equal(planned.phrase.source, 'planner');
-    assert.equal(planned.phrase.plan.contour, 'rise');
-    assert.equal(planned.phrase.plan.rhythm, 'quarters');
-    assert.equal(planned.phrase.plan.register, 'high');
-    assert.ok(['root', 'third', 'fifth'].includes(planned.phrase.plan.cadence));
-  }
-  assert.equal(calls, 3);
-
+void test('the generator stays pure: no network, audio, or drone imports', () => {
   const source = readFileSync(
     new URL('../lib/phrase.ts', import.meta.url),
     'utf8',
@@ -738,6 +662,9 @@ void test('the planner makes one call, times out, and loses to locks', async () 
   assert.equal(source.includes('XMLHttpRequest'), false);
   assert.equal(source.includes('voicing-audio'), false);
   assert.equal(source.includes('drone'), false);
+  // The planner seam was removed rather than left as an unused promise.
+  assert.equal(source.includes('Planner'), false);
+  assert.equal(source.includes('phraseSnapshot'), false);
 });
 
 void test('a reach of three frets costs a shift, and an eighth costs ten more', () => {
