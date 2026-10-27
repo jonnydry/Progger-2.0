@@ -33,12 +33,14 @@ import {
 import {
   beatAtSeconds,
   CADENCE_LABEL,
+  cadenceLabel,
   CONTOUR_LABEL,
   defaultChordNotes,
   generatePhrase,
   onsetSeconds,
   parseSeed,
   phraseFocusFret,
+  RHYTHM_SHORT,
   phraseFretMarks,
   randomSeed,
   REGISTER_LABEL,
@@ -50,6 +52,7 @@ import {
   type FingeredNote,
   type PhraseDotVisibility,
   type PhraseLocks,
+  type PhrasePlan,
 } from '@/lib/phrase';
 import { publishPhrasePlayhead, type PhraseFretMark } from '@/lib/phrase-marks';
 import { DECK_BREAKPOINT_QUERY } from '@/lib/deck-breakpoints';
@@ -285,6 +288,21 @@ export function PhrasePanel({
   const [seedText, setSeedText] = useState(() => String(opening.seed));
   const [status, setStatus] = useState<PhrasePlayback>('idle');
   const [notice, setNotice] = useState('');
+  /**
+   * Songwriting pins. Each one fixes that part of the plan and re-seeds the
+   * rest, which is what turns the generator from a re-roll into a tool you can
+   * steer. A pin the current chord cannot honour (a cadence its scale has no
+   * third for) is dropped by the generator rather than shown as a lie.
+   */
+  const [pins, setPins] = useState<PhraseLocks>(EMPTY_LOCKS);
+  const pin = <K extends keyof PhraseLocks>(key: K, value: PhraseLocks[K]) => {
+    setPins((current) => {
+      const next = { ...current };
+      if (next[key] === value) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+  };
   const player = useRef<PhrasePlayer | null>(null);
   const seenHeld = useRef<{ id: string; key: string } | null>(null);
   const [heldCursor, setHeldCursor] = useState<string | null>(null);
@@ -329,9 +347,12 @@ export function PhrasePanel({
         chordNotes,
       })
     : false;
-  // Saved locks stay with that phrase. A cadence the chord cannot land is
-  // ignored by generatePhrase. The page has no lock control to change.
-  const generationLocks = phraseHistoryActiveLocks(cursor, onHistory, locks);
+  // Saved locks stay with that phrase; local pins are added on top. A cadence
+  // the chord cannot land is ignored by generatePhrase.
+  const generationLocks = {
+    ...phraseHistoryActiveLocks(cursor, onHistory, locks),
+    ...pins,
+  };
   // A cross-tab read builds new lock objects for the same phrase. Keep
   // the previous object so playback does not see a new phrase.
   const [stableLocks, setStableLocks] = useState(generationLocks);
@@ -363,15 +384,33 @@ export function PhrasePanel({
   const playbackTempo = clampPhraseTempo(slow ? tempo / 2 : tempo);
   const tempoMax = slow ? PHRASE_TEMPO_MAX / 2 : PHRASE_TEMPO_MAX;
   const trueHalf = slow && playbackTempo * 2 === tempo;
+  /**
+   * What the listener is actually hearing. A change made during a looping
+   * pass waits for the bar line, so the selection can run ahead of the audio.
+   * `soundingPhrase` follows the player's own handoff callback instead of
+   * predicting it, and the notation, fret marks, and playhead all read it, so
+   * the screen never describes a line the speakers are not playing.
+   */
+  const [soundingPhrase, setSoundingPhrase] = useState(phrase);
+  /** A phrase waiting for the bar line, adopted when the player hands off. */
+  const queuedFor = useRef<typeof phrase | null>(null);
+  const sounding = soundingPhrase;
   const notes = useMemo(
-    () => (phrase.ok ? phrase.phrase.notes : EMPTY_NOTES),
-    [phrase],
+    () => (sounding.ok ? sounding.phrase.notes : EMPTY_NOTES),
+    [sounding],
   );
   const phraseRef = useRef(phrase);
   const barsRef = useRef(bars);
   useEffect(() => {
     const current = new PhrasePlayer((next) => {
       if (next === 'idle' || next === 'error') live.current = false;
+      // The player reports 'starting' on the bar-line handoff, which is the
+      // moment the queued phrase begins to sound. Adopting it here keeps the
+      // notation and the neck step together with the audio.
+      if (next === 'starting' && queuedFor.current) {
+        setSoundingPhrase(queuedFor.current);
+        queuedFor.current = null;
+      }
       setStatus(next);
     });
     player.current = current;
@@ -405,6 +444,7 @@ export function PhrasePanel({
   }, [held, contextKey, onReleaseHeld]);
   useEffect(() => {
     const turnedOff = loopRef.current && !loop;
+    const turnedOn = !loopRef.current && loop;
     loopRef.current = loop;
     const phraseChanged =
       phraseRef.current !== phrase || barsRef.current !== bars;
@@ -436,26 +476,38 @@ export function PhrasePanel({
       swing: swingRef.current,
       loop,
     };
+    // Loop on is armed for the end of the pass that is sounding, and that
+    // replacement loops. The bar being heard plays out and its closing
+    // cadence sounds; starting a fresh pass here would jump back to bar 1
+    // under the player's ear, which is what this used to do.
+    if (turnedOn) {
+      player.current?.replaceAfterPass({ ...next, loop: true });
+      return;
+    }
     // Context, regenerate, key, scale, and bar count wait while a pass
-    // is sounding. Looping switches on the next bar line. A finishing
-    // pass keeps its closing note. Only the latest request is kept.
-    // Stop still cuts immediately. Tempo and swing are the ones above.
+    // is sounding. A finishing pass keeps its closing note. Only the latest
+    // request is kept. Stop still cuts immediately.
     if (phraseChanged && player.current?.phraseChangeWaits()) {
       soundingTempo.current = tempoNow;
       soundingSwing.current = swingRef.current;
       player.current.queuePhrase(next);
+      // The selection moved but the speakers did not. Hold the old phrase on
+      // screen until the player reports the handoff, so the staff, the fret
+      // marks, and the playhead all describe the line that is sounding.
+      queuedFor.current = phrase;
       return;
     }
     if (turnedOff) return;
     soundingTempo.current = tempoNow;
     soundingSwing.current = swingRef.current;
+    setSoundingPhrase(phrase);
     void player.current?.start(next);
   }, [active, phrase, bars, slow, loop]);
   const marks = useMemo(
-    () => (phrase.ok ? phraseFretMarks(notes, dots) : null),
-    [phrase.ok, notes, dots],
+    () => (sounding.ok ? phraseFretMarks(notes, dots) : null),
+    [sounding.ok, notes, dots],
   );
-  const focus = phrase.ok ? phraseFocusFret(notes) : null;
+  const focus = sounding.ok ? phraseFocusFret(notes) : null;
   useEffect(() => {
     onMarks(marks, focus);
   }, [marks, focus, onMarks]);
@@ -570,9 +622,10 @@ export function PhrasePanel({
     [],
   );
   function saveToTray() {
-    if (!phrase.ok) return;
+    // Save the phrase that is sounding, not one still waiting for a bar line.
+    if (!sounding.ok) return;
     const saved = savePhrase({
-      notes: phrase.phrase.notes.map((note) => ({
+      notes: sounding.phrase.notes.map((note) => ({
         name: note.name,
         pc: note.pc,
         degree: note.degree,
@@ -604,12 +657,12 @@ export function PhrasePanel({
             fromContext: chord.fromContext,
           }
         : null,
-      bars: phrase.phrase.bars,
+      bars: sounding.phrase.bars,
       tempo,
       slow,
       swing,
-      plan: phrase.phrase.plan,
-      seed: phrase.phrase.seed,
+      plan: sounding.phrase.plan,
+      seed: sounding.phrase.seed,
       ...capture,
     });
     const message = traySaveMessage(saved.status, 'phrase', saved.removed);
@@ -624,6 +677,9 @@ export function PhrasePanel({
     savedTimer.current = window.setTimeout(() => {
       savedTimer.current = null;
       setSavedFor(null);
+      // The tape window is the transport's only status line. Clear the save
+      // notice with the button flash so it cannot mask what happens next.
+      setNotice('');
     }, 1500);
   }
   function startPlayback() {
@@ -643,6 +699,7 @@ export function PhrasePanel({
   }
   function togglePlay() {
     if (!phrase.ok) return;
+    setNotice('');
     if (live.current || status === 'playing' || status === 'starting') {
       live.current = false;
       player.current?.stop();
@@ -656,11 +713,38 @@ export function PhrasePanel({
     tempoRef.current = written;
     setTempo(written);
   }
+  /**
+   * Retiming a sounding phrase waits for the next bar line instead of cutting
+   * the bar under the player's ear. The pass is re-issued with the new tempo
+   * through the player's bar-line handoff, which silences and drops the notes
+   * that have not started yet and starts the new tempo exactly on the
+   * downbeat. A half-speed toggle and a slider release both land here.
+   */
   function commitTempo() {
-    if (live.current) startPlayback();
+    if (!live.current || !phrase.ok) return;
+    const tempoNow = clampPhraseTempo(slow ? tempoRef.current / 2 : tempoRef.current);
+    if (Math.abs(tempoNow - soundingTempo.current) < 1e-9) return;
+    dispatchPhraseStop(window, 'panel');
+    soundingTempo.current = tempoNow;
+    soundingSwing.current = swingRef.current;
+    player.current?.replaceAfterPass({
+      notes: phrase.phrase.notes,
+      bars,
+      tempo: tempoNow,
+      swing: swingRef.current,
+      loop,
+    });
   }
   const busy = status === 'playing' || status === 'starting';
-  const plan = phrase.ok ? phrase.phrase.plan : null;
+  const plan = sounding.ok ? sounding.phrase.plan : null;
+  // The label names the degree the phrase actually lands on. A minor-blues
+  // tonic has both a flat fifth and a fifth in its default chord, and the
+  // cadence is the fifth, so the readout must not say "5th" when it means
+  // "the tritone" (or the reverse).
+  const cadenceText = plan ? cadenceLabel(plan.cadence, chordNotes) : '';
+  const planSentence = plan
+    ? `${CONTOUR_LABEL[plan.contour]} contour, ${RHYTHM_LABEL[plan.rhythm]}, ${REGISTER_LABEL[plan.register]} register, landing on the ${cadenceText}.`
+    : '';
   const { phone: phoneKeys, deckRef } = useDeckBreakpoints();
   const playKey = (
     <button
@@ -869,10 +953,10 @@ export function PhrasePanel({
           <span className="deck-reel" aria-hidden="true" />
           <div className="deck-window-text">
             <p id="phrase-seed-help" className="phrase-status">
-              {notice
-                ? notice
-                : status === 'error'
-                  ? 'Audio couldn’t start. Tap Play to try again.'
+              {status === 'error'
+                ? 'Audio couldn’t start. Tap Play to try again.'
+                : notice
+                  ? notice
                   : status === 'starting'
                     ? 'Starting…'
                     : busy
@@ -892,14 +976,28 @@ export function PhrasePanel({
               <p className="phrase-plan">
                 {CONTOUR_LABEL[plan.contour]} · {RHYTHM_LABEL[plan.rhythm]} ·{' '}
                 {REGISTER_LABEL[plan.register]} · lands on the{' '}
-                {CADENCE_LABEL[plan.cadence]}
+                {cadenceText}
               </p>
             )}
           </div>
           <span className="deck-reel" aria-hidden="true" />
         </div>
+        {/*
+          The plan line is visual shorthand. A screen reader gets one sentence
+          that says the same thing, and it is a live region so a regenerated
+          phrase is announced instead of changing silently.
+        */}
+        <p className="sr-only" aria-live="polite" aria-atomic="true">
+          {plan ? `Phrase ${planSentence}` : ''}
+        </p>
         <div className="deck-keys">{transport}</div>
         <div className="deck-plate">{plate}</div>
+        <PhrasePins
+          plan={plan}
+          locks={generationLocks}
+          onPin={pin}
+          onClear={() => setPins(EMPTY_LOCKS)}
+        />
       </div>
       <p
         id="phrase-save-announce"
@@ -909,7 +1007,7 @@ export function PhrasePanel({
       >
         {saveAnnounce}
       </p>
-      {phrase.ok && dots === 'shown' && (
+      {sounding.ok && dots === 'shown' && (
         <PhraseStaff
           notes={notes}
           bars={bars}
@@ -919,7 +1017,7 @@ export function PhrasePanel({
           tempoRef={soundingTempo}
         />
       )}
-      {phrase.ok && (
+      {sounding.ok && (
         <ol className="sr-only">
           {notes.map((note, index) => (
             <li key={`spoken-${index}`}>
@@ -949,6 +1047,124 @@ type StaffRow = {
   lines: string[];
   beats: { label: string; x: string }[];
 };
+
+type PinOption<K extends keyof PhraseLocks> = {
+  key: K;
+  label: string;
+  legend: string;
+  values: readonly {
+    value: NonNullable<PhraseLocks[K]>;
+    label: string;
+  }[];
+};
+
+/**
+ * Pin one part of the plan and re-seed the rest. Pressing a lit pin releases
+ * it, so the same button both fixes and frees that field. Everything is a
+ * button rather than a select: a four-value plan field is cheaper to scan as
+ * a row, and the deck's mobile layout already stacks rows.
+ */
+function PhrasePins({
+  plan,
+  locks,
+  onPin,
+  onClear,
+}: {
+  plan: PhrasePlan | null;
+  locks: PhraseLocks;
+  onPin: <K extends keyof PhraseLocks>(
+    key: K,
+    value: NonNullable<PhraseLocks[K]>,
+  ) => void;
+  onClear: () => void;
+}) {
+  const rows: PinOption<keyof PhraseLocks>[] = [
+    {
+      key: 'contour',
+      label: 'Contour',
+      legend: 'Pin the shape',
+      values: [
+        { value: 'arch', label: 'arch' },
+        { value: 'rise', label: 'rise' },
+        { value: 'fall', label: 'fall' },
+        { value: 'wave', label: 'wave' },
+      ],
+    },
+    {
+      key: 'rhythm',
+      label: 'Rhythm',
+      legend: 'Pin the rhythm',
+      values: [
+        { value: 'quarters', label: RHYTHM_SHORT.quarters },
+        { value: 'eighths', label: RHYTHM_SHORT.eighths },
+        { value: 'long-short', label: RHYTHM_SHORT['long-short'] },
+        { value: 'push', label: RHYTHM_SHORT.push },
+      ],
+    },
+    {
+      key: 'register',
+      label: 'Register',
+      legend: 'Pin the hand position',
+      values: [
+        { value: 'low', label: REGISTER_LABEL.low },
+        { value: 'mid', label: REGISTER_LABEL.mid },
+        { value: 'high', label: REGISTER_LABEL.high },
+      ],
+    },
+    {
+      key: 'cadence',
+      label: 'Lands on',
+      legend: 'Pin the landing note',
+      values: [
+        { value: 'root', label: CADENCE_LABEL.root },
+        { value: 'third', label: CADENCE_LABEL.third },
+        { value: 'fifth', label: CADENCE_LABEL.fifth },
+      ],
+    },
+  ];
+  const pinned = Object.keys(locks).length > 0;
+  return (
+    <div className="phrase-pins">
+      <p className="deck-legend phrase-pins-title">
+        Build
+        {pinned ? (
+          <button type="button" className="phrase-pins-clear" onClick={onClear}>
+            Clear pins
+          </button>
+        ) : (
+          <span className="phrase-pins-hint">
+            Pick one to keep it while the rest re-rolls
+          </span>
+        )}
+      </p>
+      <div className="phrase-pins-rows">
+        {rows.map((row) => (
+          <fieldset key={row.key} className="phrase-pin-row">
+            <legend className="deck-legend">{row.legend}</legend>
+            {row.values.map((option) => {
+              const active = locks[row.key] === option.value;
+              const current = plan?.[row.key] === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={active}
+                  className={`phrase-pin${current && !active ? ' is-current' : ''}`}
+                  onClick={() => onPin(row.key, option.value)}
+                >
+                  {option.label}
+                  {current && !active ? (
+                    <span className="sr-only"> (playing now)</span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </fieldset>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function staffRows(notes: readonly FingeredNote[], bars: 2 | 4): StaffRow[] {
   const rows: StaffRow[] = [];

@@ -501,9 +501,13 @@ export function Fretboard({
     (fret: number) => {
       const el = viewport.current;
       if (el) {
-        programmaticScroll.current = null;
+        const next = scrollToCenter(fret, el.clientWidth, columnWidth, left);
+        // Mark it the way the other programmatic moves do. Clearing the mark
+        // let the scroll reach `updateRange(true)`, which re-derives the
+        // scale form from the viewport and changes the player's active form.
+        programmaticScroll.current = next;
         el.scrollTo({
-          left: scrollToCenter(fret, el.clientWidth, columnWidth, left),
+          left: next,
           behavior: 'instant',
         });
       }
@@ -633,8 +637,21 @@ export function Fretboard({
     const token = `${focusFret}:${left}`;
     if (appliedPhraseFocus.current === token) return;
     appliedPhraseFocus.current = token;
+    // The player may have panned the neck themselves. Recentring on the
+    // phrase then would yank the view away from what they were looking at,
+    // and the scroll would feed back through `onPatternFollow`, silently
+    // changing the active scale form. Only bring the phrase into view when
+    // it is off screen; otherwise leave the hand where it is.
+    const el = viewport.current;
+    if (el) {
+      const centre = scrollToCenter(focusFret, el.clientWidth, columnWidth, left);
+      const visible =
+        el.scrollLeft - columnWidth <= centre &&
+        centre <= el.scrollLeft + el.clientWidth + columnWidth;
+      if (visible) return;
+    }
     jump(focusFret);
-  }, [focusFret, left, viewportWidth, jump]);
+  }, [focusFret, left, viewportWidth, jump, columnWidth]);
   useEffect(() => {
     const root = viewport.current;
     if (!root) return;

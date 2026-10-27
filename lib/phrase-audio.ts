@@ -788,6 +788,25 @@ export class PhrasePlayer {
     if (this.looping) this.suppressNextPass();
   }
 
+  /**
+   * Change something about the pass that is sounding — Loop just turned on, a
+   * new tempo, half speed — without cutting the bar under the player's ear.
+   * A plain pass is replaced on the downbeat after its closing cadence, so the
+   * cadence still sounds. A looping pass has no ending to wait for, so the
+   * replacement is armed for the next bar line instead. Either way nothing
+   * jumps back to bar 1 mid-listen, which is what a plain restart did.
+   */
+  replaceAfterPass(input: PhrasePass): void {
+    if (this.disposed || !input.notes.length) return;
+    if (input.bars !== 2 && input.bars !== 4) return;
+    if (!this.scheduler || !this.context || !this.trim) {
+      void this.start(input);
+      return;
+    }
+    this.pending = input;
+    if (this.looping) this.suppressNextPass();
+  }
+
   elapsed(): number {
     const now = this.clock?.now() ?? this.context?.currentTime;
     if (now === undefined || this.startedAt === 0) return 0;
