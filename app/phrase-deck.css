@@ -564,10 +564,14 @@
 }
 
 /* Below this the four settings cannot hold their sliders, their readouts and
-   Half speed on one line, so they pair up, and the Build pins drop to one
-   column because a half-width column leaves "long–short" 75px and the label
-   needs 76px. Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
-@media (max-width: 1080px) {
+   Half speed on one line. Half speed must not wrap onto a line of its own while
+   the other settings stay on the row above: that put the toggle below Swing and
+   Seed in reading order while the tab order still reached it before them. The
+   threshold is where Half speed starts wrapping, not where the row merely looks
+   tight. Build pins drop to one column here too, because a half-width column
+   leaves "long–short" 75px and the label needs 76px. Widths are
+   DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
+@media (max-width: 1210px) {
   .deck-plate {
     grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:

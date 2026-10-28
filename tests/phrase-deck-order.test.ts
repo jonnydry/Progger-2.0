@@ -342,8 +342,8 @@ void test(
        and Half speed held the line and only the slider could give. */
     const heights = new Map<number, number>();
     for (const width of [
-      1600, 1440, 1250, 1200, 1100, 1081, 1080, 960, 900, 860, 800, 760, 700,
-      650, 641, 640, 500, 480, 420, 390, 360, 320,
+      1600, 1440, 1250, 1211, 1210, 1200, 1150, 1100, 1081, 1080, 960, 900, 860,
+      800, 760, 700, 650, 641, 640, 500, 480, 471, 470, 420, 390, 360, 320,
     ]) {
       await page.setViewportSize({
         width,
@@ -372,9 +372,37 @@ void test(
       `desktop deck ${heights.get(1440)}px is not half the phone deck ${heights.get(320)}px`,
     );
 
+    /* Half speed is a tempo control, so it must never land below Swing or Seed
+       in reading order: a wrapped toggle sat under the row beneath it while the
+       tab order still reached it first, which broke keyboard order at
+       1081-1200px. Sweep every 20px rather than only the band edges. */
+    for (let width = 320; width <= 1600; width += 20) {
+      await page.setViewportSize({ width, height: width >= 800 ? 900 : 844 });
+      const order = await page.evaluate(() => {
+        const box = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!node) throw new Error(selector);
+          const rect = node.getBoundingClientRect();
+          return { top: Math.round(rect.top), left: Math.round(rect.left) };
+        };
+        return {
+          speed: box('.deck-speed'),
+          swing: box('.phrase-swing .deck-legend'),
+          seed: box('.deck-counter .deck-legend'),
+        };
+      });
+      for (const next of [order.swing, order.seed]) {
+        assert.ok(
+          order.speed.top <= next.top + 2,
+          `${width}px Half speed at ${order.speed.top} sits below a control at ${next.top}`,
+        );
+      }
+    }
+
     /* One line per pin row on a phone: the whole pin block is at most two
        rows tall for the two four-option fields and one each for the rest,
        so the panel never spends four full lines on pins again. */
+    await page.setViewportSize({ width: 320, height: 844 });
     const pins = await page.evaluate(() => {
       const block = document.querySelector('.phrase-pins');
       const rows = [...document.querySelectorAll('.phrase-pin-row')];
