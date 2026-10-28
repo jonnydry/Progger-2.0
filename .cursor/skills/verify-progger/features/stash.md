@@ -23,10 +23,10 @@ Preconditions:
 
 Run `node .cursor/skills/verify-progger/bin/drive.mjs --feature stash`. The command does the following.
 
-- **Empty.** Choose `Stash`. The dialog `Stash` shows the heading `Nothing saved yet`.
+- **Empty.** The neck image name includes `starts on low E at fret 5`. Choose `Stash`. The dialog `Stash` shows the heading `Nothing saved yet`.
 - **Bookmark.** Choose `Bookmark this scale`. The dialog says `Saved to stash.` and includes `A Dorian · form 4`.
 - **Leave the view.** Close the dialog and set `Root note` to `C`. The heading is `C Dorian guitar reference`.
-- **Reopen.** Open `Stash` and choose `Open` on the saved scale. The dialog closes and the heading is `A Dorian guitar reference`.
+- **Reopen.** Open `Stash` and choose `Open` on the saved scale. The dialog closes, the heading is `A Dorian guitar reference`, and the neck image name again includes `starts on low E at fret 5`.
 - **Reload.** Reload, then open `Stash`. The row `A Dorian · form 4` remains. The banner `Saved to stash.` does not. `localStorage` key `progger.tray.v1` contains `A Dorian`.
 - **Proof.** `evidence/stash/01-empty.png` shows the empty tray. `03-reopened.png` shows A Dorian after Open. `04-after-reload.png` and `04-after-reload.aria.txt` show the row still there.
 

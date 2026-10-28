@@ -96,24 +96,36 @@ async function withPage(origin, dir, run) {
 }
 
 async function driveExplore(page, origin, dir) {
-  await openApp(page, origin);
+  await openApp(page, origin, '#explore');
   const explore = page.getByRole('link', { name: 'Explore' });
   check(
     (await explore.getAttribute('aria-current')) === 'page',
-    'Explore is not the current page',
+    '#explore did not open Explore',
   );
   await page.getByRole('heading', { name: 'A Dorian guitar reference' }).waitFor();
   const root = page.getByRole('combobox', { name: 'Root note' });
   check(flat(await root.innerText()) === 'A', 'root did not start at A');
   const aName = await page.getByRole('img', { name: /A Dorian notes/ }).getAttribute('aria-label');
-  check(aName.includes('A degree 1') && aName.includes('F♯ degree 6'), aName);
+  check(
+    aName.includes('A degree 1') &&
+      aName.includes('C degree ♭3') &&
+      aName.includes('F♯ degree 6') &&
+      aName.includes('G degree ♭7'),
+    aName,
+  );
   await shot(page, dir, '01-a-dorian.png');
 
-  await openApp(page, origin, '#explore');
+  await page.goto(`${origin}/#match`, { waitUntil: 'networkidle' });
+  await page.getByRole('heading', { name: 'Match your chords' }).waitFor();
+  await explore.click();
+  await page.getByRole('heading', { name: 'A Dorian guitar reference' }).waitFor();
   check(
     (await explore.getAttribute('aria-current')) === 'page',
-    '#explore did not open Explore',
+    'Explore link did not return from Match',
   );
+
+  await page.goto(`${origin}/`, { waitUntil: 'networkidle' });
+  await page.getByRole('heading', { name: 'A Dorian guitar reference' }).waitFor();
 
   await chooseRoot(page, 'F♯');
   await page.getByRole('heading', { name: 'F♯ Dorian guitar reference' }).waitFor();
@@ -124,8 +136,15 @@ async function driveExplore(page, origin, dir) {
     sharp.startsWith('F♯ Dorian notes:') &&
       sharp.includes('F♯ degree 1') &&
       sharp.includes('G♯ degree 2') &&
-      sharp.includes('C♯ degree 5'),
+      sharp.includes('A degree ♭3') &&
+      sharp.includes('C♯ degree 5') &&
+      sharp.includes('D♯ degree 6') &&
+      sharp.includes('E degree ♭7'),
     sharp,
+  );
+  check(
+    (await page.getByRole('button', { name: 'Drone, off, Reed' }).count()) === 1,
+    'drone toggle missing on the scale page',
   );
   await shot(page, dir, '02-f-sharp-dorian.png');
   await writeFile(
@@ -252,7 +271,7 @@ async function driveMatch(page, origin, dir) {
   const home = flat(
     await page.locator('summary').filter({ hasText: 'Home note' }).innerText(),
   );
-  check(home.includes('Home note') && home.includes('A'), home);
+  check(home === 'Home note · A', home);
   await shot(page, dir, '01-starter.png');
   await writeFile(
     resolve(dir, '01-starter.aria.txt'),
@@ -311,6 +330,8 @@ async function driveMatch(page, origin, dir) {
 
 async function driveStash(page, origin, dir) {
   await openApp(page, origin);
+  const neck = await page.getByRole('img', { name: /A Dorian notes/ }).getAttribute('aria-label');
+  check(neck.includes('starts on low E at fret 5'), neck);
   await page.getByRole('button', { name: 'Stash', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Stash' });
   await dialog.waitFor();
@@ -330,6 +351,10 @@ async function driveStash(page, origin, dir) {
   await dialog.getByRole('button', { name: 'Open' }).click();
   await dialog.waitFor({ state: 'hidden' });
   await page.getByRole('heading', { name: 'A Dorian guitar reference' }).waitFor();
+  const restored = await page
+    .getByRole('img', { name: /A Dorian notes/ })
+    .getAttribute('aria-label');
+  check(restored.includes('starts on low E at fret 5'), restored);
   await shot(page, dir, '03-reopened.png');
 
   await page.reload({ waitUntil: 'networkidle' });

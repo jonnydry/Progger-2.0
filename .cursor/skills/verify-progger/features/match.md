@@ -25,7 +25,7 @@ Run `node .cursor/skills/verify-progger/bin/drive.mjs --feature match`. The comm
 
 - **Hash entry.** Load `/#match`. The link `Match chords` has `aria-current="page"` and the heading is `Match your chords`.
 - **Nav entry.** Load `/`, then choose `Match chords`. The heading `No need to know the key.` is visible.
-- **Starter.** Choose `A brighter minor sound`. Recognized chords read `Am D`. The result count is `3 different collections contain all your chord tones · Am → D`. The cards are `A Dorian`, `A Jazz melodic minor`, and `A Dorian ♭2`. The home summary includes `Home note` and `A`.
+- **Starter.** Choose `A brighter minor sound`. Recognized chords read `Am D`. The result count is `3 different collections contain all your chord tones · Am → D`. The cards are `A Dorian`, `A Jazz melodic minor`, and `A Dorian ♭2`. The home summary text is `Home note · A`.
 - **Fretboard.** On the `A Jazz melodic minor` card, choose `Try on the fretboard`. The heading is `A Jazz melodic minor guitar reference`. The banner includes `Back to your chords` and `Am → D`. The neck image name includes `A degree 1`, `C degree ♭3`, `F♯ degree 6`, `G♯ degree 7`, and `All note locations through fret 24`.
 - **Return.** Choose `Back to your chords`. The textbox `What are you playing?` is still `Am D`.
 - **Invalid name.** Choose `Clear`, then type `Cwat`. The error is `“Cwat” has an unsupported chord quality. Use the chord builder to see supported choices.` The heading `Let’s get your chords in place.` is visible and no scale cards remain.
