@@ -156,6 +156,80 @@ async function assertDeckTabOrder(page: Page, width: number) {
   return keyboard;
 }
 
+type DeckDensity = {
+  height: number;
+  rows: { key: string; top: number; height: number; left: number }[];
+  clipped: string[];
+  shortTargets: string[];
+  legendGutters: number[];
+};
+
+/**
+ * The deck is dense by design, so it has to stay legible while it shrinks:
+ * no label may clip, every control keeps a --tap target, and each pin legend
+ * shares a line with its own options (never overlapping them or another row).
+ */
+async function deckDensity(page: Page): Promise<DeckDensity> {
+  return page.evaluate(() => {
+    const deck = document.querySelector('.phrase-deck');
+    if (!deck) throw new Error('deck is missing');
+    const name = (node: Element) =>
+      (node.getAttribute('aria-label') || node.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const controls = [
+      ...deck.querySelectorAll<HTMLElement>(
+        'button, input[type="range"], input:not([type])',
+      ),
+    ].filter((node) => {
+      const box = node.getBoundingClientRect();
+      return box.width > 0 && box.height > 0;
+    });
+    const clipped = controls
+      .filter(
+        (node) =>
+          node.scrollWidth > node.clientWidth + 1 ||
+          node.scrollHeight > node.clientHeight + 1,
+      )
+      .map(name);
+    const shortTargets = controls
+      .filter((node) => node.getBoundingClientRect().height < 43)
+      .map(name);
+    const rows = [
+      ...deck.querySelectorAll<HTMLElement>(
+        '.deck-key, .deck-switch button, .deck-toggle, .deck-setting, .phrase-pin-row, .phrase-tempo, .deck-counter',
+      ),
+    ].map((node) => {
+      const box = node.getBoundingClientRect();
+      return {
+        key: node.className,
+        top: Math.round(box.top),
+        height: Math.round(box.height),
+        left: Math.round(box.left),
+      };
+    });
+    /* A pin legend must sit inside its own row's box, not on the row above or
+       under the neighbouring column. */
+    const legendGutters = [
+      ...deck.querySelectorAll<HTMLElement>('.phrase-pin-row'),
+    ].map((row) => {
+      const legend = row.querySelector('.deck-legend');
+      if (!legend) return -1;
+      const label = legend.getBoundingClientRect();
+      const options = row.querySelector('.phrase-pin-line');
+      if (!options) return -1;
+      return Math.round(options.getBoundingClientRect().left - label.right);
+    });
+    return {
+      height: Math.round(deck.getBoundingClientRect().height),
+      rows,
+      clipped,
+      shortTargets,
+      legendGutters,
+    };
+  });
+}
+
 async function seedValue(page: Page) {
   return page.locator('.phrase-seed input').inputValue();
 }
@@ -231,6 +305,73 @@ void test(
         `${width}px history keyboard ${keyboard.join(', ')}`,
       );
     }
+    await page.close();
+  },
+);
+
+void test(
+  'the compact deck keeps every label whole and every target tappable',
+  { timeout: 180_000 },
+  async (t) => {
+    const browser = await launchNamed('chromium', t);
+    const server = await acquireDevServer();
+    t.after(async () => {
+      await browser.close();
+      await server.release();
+    });
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 1,
+    });
+    await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.phrase-open');
+    await openPhrases(page);
+
+    /* Phone first, so the tallest reading is the one measured. Desktop must be
+       clearly shorter: the compact plate should never grow with width. */
+    const heights = new Map<number, number>();
+    for (const width of [1440, 1080, 960, 800, 640, 500, 390, 360, 320]) {
+      await page.setViewportSize({
+        width,
+        height: width >= 800 ? 900 : 844,
+      });
+      await page.locator('.deck-key-play').scrollIntoViewIfNeeded();
+      const deck = await deckDensity(page);
+      assert.deepEqual(deck.clipped, [], `${width}px clipped labels`);
+      assert.deepEqual(deck.shortTargets, [], `${width}px short targets`);
+      for (const gap of deck.legendGutters) {
+        assert.ok(
+          gap >= 2 && gap <= 24,
+          `${width}px pin legend sits ${gap}px from its options`,
+        );
+      }
+      heights.set(width, deck.height);
+    }
+    assert.ok(
+      heights.get(1440)! * 2 <= heights.get(320)!,
+      `desktop deck ${heights.get(1440)}px is not half the phone deck ${heights.get(320)}px`,
+    );
+
+    /* One line per pin row on a phone: the whole pin block is at most two
+       rows tall for the two four-option fields and one each for the rest,
+       so the panel never spends four full lines on pins again. */
+    const pins = await page.evaluate(() => {
+      const block = document.querySelector('.phrase-pins');
+      const rows = [...document.querySelectorAll('.phrase-pin-row')];
+      if (!block) throw new Error('pins are missing');
+      return {
+        height: Math.round(block.getBoundingClientRect().height),
+        lines: rows.map((row) => {
+          const tops = new Set(
+            [...row.querySelectorAll('.phrase-pin')].map((button) =>
+              Math.round(button.getBoundingClientRect().top),
+            ),
+          );
+          return tops.size;
+        }),
+      };
+    });
+    assert.deepEqual(pins.lines, [1, 2, 1, 1], 'pin rows at 320px');
     await page.close();
   },
 );

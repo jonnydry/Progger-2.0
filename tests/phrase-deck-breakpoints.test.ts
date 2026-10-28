@@ -99,3 +99,53 @@ void test('deck stylesheets use the shared breakpoint widths', () => {
   assert.match(panel, /DECK_BREAKPOINT_QUERY\.phone/);
   assert.equal(panel.includes('(max-width:'), false);
 });
+
+/**
+ * The compact deck is one plate: the settings and the four Build pins share a
+ * single grid, and each pin is one `legend | options` line of it. These rules
+ * are what keep the deck short without breaking tab order, so they are locked
+ * here rather than left to a screenshot.
+ */
+void test('the deck keeps the pins inside the plate as one-line rows', () => {
+  const deck = readFileSync(
+    new URL('../app/phrase-deck.css', import.meta.url),
+    'utf8',
+  );
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  const plate = /\.deck-plate \{([\s\S]*?)\n\}/.exec(deck)?.[1] ?? '';
+  assert.match(plate, /grid-template-areas:[^;]*'pins pins pins pins'/);
+  assert.match(deck, /\.phrase-pins \{[^}]*grid-area: pins/);
+  /* A fieldset legend cannot take a layout track, so it is positioned over the
+     row's own gutter. If it ever goes back into the grid the options collapse
+     to one column and every pin clips. */
+  assert.match(
+    deck,
+    /\.phrase-pin-row > \.deck-legend \{[^}]*position: absolute/,
+  );
+  /* One transport line on desktop, not a stacked 68px key. */
+  assert.match(
+    deck,
+    /\.phrase-deck \.deck-key \{[^}]*min-height: var\(--deck-row\)/,
+  );
+  assert.equal(
+    (panel.match(/<PhrasePins/g) ?? []).length,
+    1,
+    'the pins render once, inside the plate',
+  );
+  assert.match(
+    panel,
+    /<div className="deck-plate">[\s\S]*<PhrasePins[\s\S]*<\/div>/,
+  );
+  /* Short row names that already existed in code, now used. */
+  for (const label of ['Contour', 'Rhythm', 'Register', 'Lands on']) {
+    assert.match(panel, new RegExp(`label: '${label}'`), label);
+  }
+  assert.equal(
+    panel.includes('Pin the shape'),
+    false,
+    'pin rows use short names',
+  );
+});

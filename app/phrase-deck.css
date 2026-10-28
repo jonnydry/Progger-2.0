@@ -1,12 +1,22 @@
-/* Cassette deck: a tape window, one row of transport keys, and a plate of
-   labelled settings. Surfaces, edges, type and spacing come from
-   deck-tokens.css, so every scene and both themes share the same housing. */
+/* Cassette deck: a tape window, one row of transport keys, and one plate of
+   labelled controls. Surfaces, edges, type and spacing come from
+   deck-tokens.css, so every scene and both themes share the same housing.
+
+   Density comes from one shared rhythm rather than smaller type. Every label
+   in the plate opens a `legend | control` line of the same --deck-row height,
+   and the four Build pins are rows of that same plate instead of a separate
+   block below it. */
 .phrase-deck {
   --deck-led-off: color-mix(in srgb, var(--quiet) 30%, transparent);
+  /* The label column and the control height shared by Bars, Tempo, Swing,
+     Seed and every Build pin, so the plate reads as one column of controls.
+     4.5rem holds the longest legend, "REGISTER". */
+  --deck-gutter: 4.5rem;
+  --deck-row: 44px;
   display: grid;
-  gap: var(--space-3);
+  gap: 8px;
   min-width: 0;
-  padding: var(--space-3);
+  padding: 10px;
   color: var(--foreground);
   background: var(--surface-panel);
   border: 2px solid var(--edge);
@@ -16,11 +26,10 @@
 
 .deck-window {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  grid-template-columns: 20px minmax(0, 1fr) 20px;
   align-items: center;
-  gap: var(--space-3);
-  min-height: 64px;
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+  padding: 4px var(--space-2);
   background: var(--surface-sunken);
   border: 2px solid var(--edge);
   border-radius: var(--radius-key);
@@ -28,7 +37,7 @@
 }
 .deck-window-text {
   display: grid;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
   text-align: center;
 }
@@ -36,18 +45,21 @@
   color: var(--green);
   font-weight: 600;
 }
+.phrase-deck .deck-window-text p {
+  line-height: 1.25;
+}
 .deck-reel {
   box-sizing: border-box;
-  width: 36px;
-  height: 36px;
+  width: 20px;
+  height: 20px;
   background: radial-gradient(
     circle,
-    var(--quiet) 0 3px,
-    transparent 4px 7px,
-    color-mix(in srgb, var(--quiet) 45%, transparent) 8px 10px,
-    transparent 11px
+    var(--quiet) 0 2px,
+    transparent 3px 5px,
+    color-mix(in srgb, var(--quiet) 45%, transparent) 6px 7px,
+    transparent 8px
   );
-  border: 4px dotted var(--quiet);
+  border: 2px dotted var(--quiet);
   border-radius: 50%;
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -61,13 +73,15 @@
   }
 }
 
+/* Transport: six keys in one row, each one line of icon and label, so a key
+   is --deck-row tall instead of the old stacked 68px. */
 .deck-keys {
   display: grid;
   grid-template-columns:
-    minmax(0, 1.3fr) minmax(0, 3fr) minmax(0, 1fr)
-    minmax(0, 1.3fr);
+    minmax(0, 1.1fr) minmax(0, 3fr) minmax(0, 1fr)
+    minmax(0, 1.2fr);
   grid-template-areas: 'play bank loop rec';
-  gap: var(--space-1) 6px;
+  gap: 4px;
   min-width: 0;
 }
 .deck-key-play {
@@ -77,7 +91,7 @@
   grid-area: bank;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -93,15 +107,16 @@
 .phrase-deck .deck-key {
   position: relative;
   box-sizing: border-box;
-  display: grid;
-  justify-items: center;
-  align-content: center;
-  gap: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0 6px;
   width: 100%;
   min-width: 0;
-  min-height: 68px;
+  min-height: var(--deck-row);
   margin: 0;
-  padding: 14px 6px var(--space-2);
+  padding: 7px 6px 3px;
   color: var(--foreground);
   background: var(--surface-key);
   border: 2px solid var(--edge);
@@ -116,16 +131,17 @@
   cursor: pointer;
 }
 .phrase-deck .deck-key svg {
+  flex: 0 0 auto;
   color: var(--green);
 }
 /* The indicator lamp above each legend. */
 .phrase-deck .deck-key::before {
   content: '';
   position: absolute;
-  top: 5px;
+  top: 3px;
   left: 50%;
   width: 18px;
-  height: 4px;
+  height: 3px;
   background: var(--deck-led-off);
   transform: translateX(-50%);
 }
@@ -133,13 +149,15 @@
   overflow-wrap: anywhere;
 }
 .phrase-deck .deck-key-play {
+  padding-inline: var(--space-2);
   background: var(--surface-key-lit);
   border-color: var(--edge-lit);
   font-size: var(--text-sm);
 }
 .deck-rec-dot {
-  width: 14px;
-  height: 14px;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
   background: var(--amber);
   border-radius: 50%;
 }
@@ -194,34 +212,64 @@
   }
 }
 
+/* The plate: one band of `legend | control` lines. The four settings share the
+   first lines and the Build pins fill the rest of the same grid. */
 .deck-plate {
   display: grid;
   grid-template-columns:
-    auto minmax(240px, 1.8fr) minmax(140px, 1fr)
+    auto minmax(15rem, 1.4fr) minmax(10rem, 1fr)
     auto;
-  grid-template-areas: 'length tempo swing seed';
-  align-items: end;
-  gap: 10px 18px;
+  grid-template-areas:
+    'bars tempo swing seed'
+    'pins pins pins pins';
+  align-items: start;
+  gap: 4px 16px;
   min-width: 0;
-  padding: 10px var(--space-3) var(--space-3);
+  padding: 8px 10px;
   background: var(--surface-plate);
   border: 1px solid var(--edge);
   border-radius: var(--radius-key);
 }
-/* Half speed changes the tempo, so it sits in that cell. */
-.deck-tempo {
+.deck-plate .deck-legend {
+  margin: 0;
+}
+.deck-setting {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+/* A fieldset's legend cannot take a layout track, so Bars positions it over
+   the label gutter and its switch keeps the rest of the line. The faders and
+   the seed are labels, so their own legend is already an item on the line. */
+.deck-setting-bars {
+  grid-area: bars;
+  position: relative;
+  min-height: var(--deck-row);
+}
+.deck-setting-bars > .deck-legend {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: var(--deck-gutter);
+  margin: 0;
+  padding: 0;
+  transform: translateY(-50%);
+}
+.deck-setting-bars > .deck-switch {
+  flex: 1 1 auto;
+  margin-left: calc(var(--deck-gutter) + var(--space-2));
+}
+.deck-setting-tempo {
   grid-area: tempo;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  column-gap: 10px;
-  min-width: 0;
 }
-.deck-tempo .deck-fader,
-.deck-tempo .deck-toggle {
-  grid-area: auto;
-  min-width: 0;
+.deck-setting-swing {
+  grid-area: swing;
 }
+.deck-setting-seed {
+  grid-area: seed;
+}
+
 .deck-legend {
   display: block;
   margin: 0 0 var(--space-1);
@@ -235,21 +283,18 @@
 }
 
 .deck-switch {
-  grid-area: length;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 1 1 auto;
   min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
 }
 .deck-switch button,
 .phrase-deck .deck-toggle {
   box-sizing: border-box;
   min-width: 0;
-  min-height: var(--tap);
+  min-height: var(--deck-row);
   margin: 0;
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-2);
   color: var(--quiet);
   background: var(--surface-sunken);
   border: 2px solid var(--edge);
@@ -282,44 +327,44 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
+  gap: 6px;
   border-radius: var(--radius-key);
+}
+/* Half speed changes the tempo, so it ends the tempo line. It keeps the word
+   wherever the word fits; the ½ mark is the fallback at phone width. */
+.deck-speed {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.deck-speed-short {
+  display: none;
+  font-size: var(--text-sm);
 }
 
 .deck-fader {
-  grid-area: tempo;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    'legend legend'
-    'input output';
+  display: flex;
+  flex: 1 1 8rem;
   align-items: center;
-  column-gap: 10px;
+  gap: var(--space-2);
   min-width: 0;
 }
-.deck-fader.phrase-swing {
-  grid-area: swing;
-}
-.deck-fader .deck-legend {
-  grid-area: legend;
+.deck-fader > .deck-legend {
+  flex: 0 0 var(--deck-gutter);
 }
 .deck-fader output {
-  grid-area: output;
-  min-width: 4.6em;
+  flex: 0 0 auto;
+  min-width: 3.2em;
   color: var(--green);
   font-family: var(--font-arcade), var(--font-ui);
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
-.deck-fader.phrase-swing output {
-  min-width: 2.6em;
-}
 .deck-fader input[type='range'] {
-  grid-area: input;
+  flex: 1 1 4rem;
   width: 100%;
   min-width: 0;
-  height: var(--tap);
+  height: var(--deck-row);
   margin: 0;
   background: transparent;
   cursor: pointer;
@@ -361,16 +406,18 @@
 }
 
 .deck-counter {
-  grid-area: seed;
-  display: grid;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
   min-width: 0;
 }
 .deck-counter input {
   box-sizing: border-box;
   /* Ten digits, their tracking, the padding and the border. */
+  flex: 1 1 10ch;
   width: calc(10ch + 10px + 2 * 10px + 4px + 4px);
   max-width: 100%;
-  min-height: var(--tap);
+  min-height: var(--deck-row);
   padding: 6px 10px;
   color: var(--green);
   background: var(--surface-sunken);
@@ -378,71 +425,29 @@
   border-radius: var(--radius-key);
   box-shadow: var(--shadow-sunken);
   font-family: var(--font-arcade), var(--font-ui);
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
   letter-spacing: 1px;
 }
 
-/* Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
-@media (max-width: 960px) {
-  .deck-plate {
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas:
-      'length tempo'
-      'swing seed';
-  }
-}
-
-@media (max-width: 640px) {
-  .phrase-deck {
-    gap: 10px;
-    padding: 10px;
-  }
-  .deck-window {
-    grid-template-columns: 28px minmax(0, 1fr) 28px;
-    gap: var(--space-2);
-    padding: var(--space-2);
-  }
-  .deck-reel {
-    width: 28px;
-    height: 28px;
-    border-width: 3px;
-  }
-  .deck-keys {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-template-areas:
-      'play loop rec'
-      'bank bank bank';
-    row-gap: var(--space-2);
-  }
-  .phrase-deck .deck-key {
-    min-height: 60px;
-  }
-  .deck-plate {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      'length'
-      'tempo'
-      'swing'
-      'seed';
-    padding: 10px;
-  }
-  .deck-counter input {
-    width: 100%;
-  }
-}
-
-/* Build row: pin one field of the plan and re-roll the rest. Rows, not
-   selects, so every option is one tap and the current value is visible. */
+/* Build: pin one field of the plan and re-roll the rest. Each pin is one
+   `legend | options` row of the plate's own grid, so DOM order, reading order
+   and tab order name the same sequence at every width. A second column only
+   appears when it can hold four options on one line; the deck's tab-order
+   check fails if a row is ever split across two visual lines. */
 .phrase-pins {
+  grid-area: pins;
   display: grid;
-  gap: var(--space-1);
-  padding: 0 var(--space-3) var(--space-2);
+  gap: 4px;
+  min-width: 0;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--edge);
 }
 .phrase-pins-title {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-2);
+  gap: 0 var(--space-2);
   margin: 0;
 }
 .phrase-pins-hint {
@@ -462,38 +467,46 @@
   text-decoration: underline;
   cursor: pointer;
 }
-/* Build row: pin one field of the plan and re-roll the rest. Each field is
-   its own full-width row, so DOM order, reading order, and tab order all name
-   the same sequence at every width. A multi-column arrangement read the pins
-   down the columns while tabbing across the rows, which is why the deck's
-   tab-order check failed at 1440px. */
-.phrase-pins-rows {
+.phrase-pin-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-1);
+  /* Two columns of `legend | options`, so the four Build rows take two lines
+     instead of four. Every column holds four options beside the legend at this
+     width, so no label clips. Below the plate breakpoint it is one column. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px;
   min-width: 0;
 }
 .phrase-pin-row {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
+  position: relative;
+  display: flex;
   align-items: center;
-  gap: var(--space-1);
   min-width: 0;
+  min-height: var(--deck-row);
+}
+/* A fieldset legend does not join a grid or flex track, so it is positioned
+   over the row's own label gutter. The options keep the whole rest of the
+   row, which is what lets four of them share one line at 320px. */
+.phrase-pin-row > .deck-legend {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: var(--deck-gutter);
   margin: 0;
   padding: 0;
-  border: 0;
-  /* The first column is the field name; the rest are its options, however
-     many this field has. */
-  grid-template-columns: 5.5rem;
+  transform: translateY(-50%);
 }
-.phrase-pin-row .deck-legend {
-  margin: 0;
+.phrase-pin-line {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-width: 0;
+  margin-left: calc(var(--deck-gutter) + var(--space-2));
 }
 .phrase-pin {
   box-sizing: border-box;
+  flex: 1 1 0;
   min-width: 0;
-  min-height: var(--tap);
+  min-height: var(--deck-row);
   padding: 0 var(--space-1);
   color: var(--quiet);
   background: var(--surface-sunken);
@@ -505,14 +518,19 @@
   white-space: nowrap;
   cursor: pointer;
 }
+/* The value the phrase is sounding right now, when it is not the pinned one:
+   a keyline along the bottom edge, so it never competes with a pinned key's
+   filled border. The tape window still spells the plan out in words. */
 .phrase-pin.is-current {
   color: var(--foreground);
   border-color: color-mix(in srgb, var(--green) 45%, var(--edge));
+  box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--green) 55%, transparent);
 }
 .phrase-pin[aria-pressed='true'] {
   color: var(--ink);
   background: var(--green);
   border-color: var(--green);
+  box-shadow: none;
 }
 .phrase-pin:hover:not([aria-pressed='true']) {
   color: var(--foreground);
@@ -523,31 +541,94 @@
   outline-offset: var(--focus-offset);
 }
 
-/* Below this the tempo cell cannot hold the slider, the BPM, and Half
-   speed on one line. Half speed takes the width under the slider. */
-@media (max-width: 420px) {
+/* Below this the four settings cannot hold their sliders, their readouts and
+   Half speed on one line, so they pair up, and the Build pins drop to one
+   column because a half-width column leaves "long–short" 75px and the label
+   needs 76px. Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
+@media (max-width: 1080px) {
   .deck-plate {
-    row-gap: var(--space-2);
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'bars tempo'
+      'swing seed'
+      'pins pins';
   }
-  .deck-tempo {
+  .phrase-pin-grid {
     grid-template-columns: minmax(0, 1fr);
-    row-gap: var(--space-2);
   }
-  .deck-tempo .deck-toggle {
-    width: 100%;
+}
+
+@media (max-width: 640px) {
+  .phrase-deck {
+    gap: 6px;
+    padding: 8px;
   }
-  .deck-switch button {
+  .deck-window {
+    grid-template-columns: 16px minmax(0, 1fr) 16px;
+    gap: 6px;
+    padding: 4px 6px;
+  }
+  .deck-reel {
+    width: 16px;
+    height: 16px;
+  }
+  .deck-keys {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-areas:
+      'play loop rec'
+      'bank bank bank';
+    row-gap: 4px;
+  }
+  /* Three keys across is too narrow for an icon beside a word, so the phone
+     key stacks them and keeps the same --deck-row target. */
+  .phrase-deck .deck-key {
+    flex-direction: column;
+    gap: 1px;
+    padding: 6px 4px 3px;
+  }
+  .deck-plate {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'bars'
+      'tempo'
+      'swing'
+      'seed'
+      'pins';
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  /* The legend stays beside its options: stacking it above them adds a line to
+     every pin, which is the cost this layout removes. A smaller legend keeps
+     the label column from crowding the options. */
+  .phrase-pin-row > .deck-legend {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+  }
+  .deck-speed {
     padding-inline: var(--space-2);
   }
-  /* The field name moves above its options once a row cannot hold both. */
-  .phrase-pins {
-    padding-inline: 10px;
+  .deck-speed-text {
+    display: none;
   }
-  .phrase-pin-row {
-    grid-template-columns: minmax(0, 1fr);
-    row-gap: 2px;
+  .deck-speed-short {
+    display: inline;
   }
-  .phrase-pin-row .deck-legend {
-    grid-column: 1 / -1;
+  .deck-counter input {
+    width: 100%;
+  }
+}
+
+/* Four options still share one line until one of them is a long word. A pin
+   row marked `data-stack` becomes a 2x2 block here instead of letting
+   "long–short" clip or wrap the line into a ragged 3+1. The three-option rows
+   and the short contour labels stay on one line down to 320px. */
+@media (max-width: 480px) {
+  .phrase-pin-row[data-stack] .phrase-pin-line {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 4px;
+  }
+  .deck-speed {
+    padding-inline: 6px;
   }
 }
