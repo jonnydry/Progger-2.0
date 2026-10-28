@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Page } from 'playwright';
 import { PHRASE_HISTORY_KEY } from '../lib/phrase-history.ts';
+import { RHYTHM_LABEL, type RhythmId } from '../lib/phrase.ts';
 import { TRAY_KEY } from '../lib/tray.ts';
 import { launchNamed } from './browser-launch.ts';
 import { acquireDevServer } from './dev-server.ts';
@@ -958,11 +959,11 @@ void test('the lock guard ignores a cross-tab write for a different key or phras
     );
 
     await resetChanges();
-    const rhythms = [
-      { id: 'eighths', label: 'eighth notes' },
-      { id: 'quarters', label: 'quarter notes' },
-      { id: 'push', label: 'pushed eighths' },
-      { id: 'long-short', label: 'long–short' },
+    const rhythms: readonly { id: RhythmId; label: string }[] = [
+      { id: 'eighths', label: RHYTHM_LABEL.eighths },
+      { id: 'quarters', label: RHYTHM_LABEL.quarters },
+      { id: 'push', label: RHYTHM_LABEL.push },
+      { id: 'long-short', label: RHYTHM_LABEL['long-short'] },
     ];
     const rhythm = rhythms.find((item) => !plan.includes(item.label));
     assert.ok(rhythm, plan);

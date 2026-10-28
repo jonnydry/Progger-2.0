@@ -24,11 +24,10 @@ import {
 
 const fixtureUrl = new URL('./fixtures/headroom-worst.json', import.meta.url);
 /**
- * Fixture on main when pull request 41 was measured. That replay has to
- * stay here: the nightly refresh of headroom-worst.json moved reed C
- * locrian's second note shift from -0.02 to 0.012, eight steps on the
- * search grid, and replaying the old absolute shifts on the refreshed
- * file is a real change.
+ * Fixture on main when pull request 41 was measured. Later nightlies moved
+ * reed C locrian's second note shift to 0.012 and then back to -0.02.
+ * The replay stays on this frozen copy so those refreshes are not mixed
+ * into the seconds, case order, and float drift from that measurement.
  */
 const pull41BaselineUrl = new URL(
   './fixtures/headroom-pr41-baseline.json',
@@ -682,7 +681,7 @@ void test('pull request 41 seconds, float drift, and a timing-grid note shift ar
   assert.equal(HEADROOM_TIMING_STEP, step - origin);
   const baseline = loadPull41Baseline();
   assert.deepEqual(reedLocrianBow(baseline).noteShifts, [-0.02, -0.02]);
-  assert.deepEqual(reedLocrianBow(load()).noteShifts, [-0.02, 0.012]);
+  assert.deepEqual(reedLocrianBow(load()).noteShifts, [-0.02, -0.02]);
   const next = structuredClone(baseline);
   applyPullRequest41(next);
   const drift = matchedPeakDrift(baseline, next);
@@ -767,7 +766,7 @@ void test('one timing-grid step stays quiet at a 1e-6 peak delta and is a change
   const beforeConfirmed = original.confirmed;
   const beforeChord = original.chordShift;
   if (beforeShift === undefined) throw new Error('missing note shift');
-  assert.equal(beforeShift, 0.012);
+  assert.equal(beforeShift, -0.02);
   assert.equal(beforeChord, -0.004);
 
   const atBoundary = structuredClone(baseline);
@@ -775,7 +774,7 @@ void test('one timing-grid step stays quiet at a 1e-6 peak delta and is a change
   atItem.noteShifts[1] = beforeShift + HEADROOM_TIMING_STEP;
   atItem.confirmed = nudgeWithin(beforeConfirmed);
   const atDelta = Math.abs(atItem.confirmed - beforeConfirmed);
-  assert.equal(atItem.noteShifts[1], 0.016);
+  assert.equal(atItem.noteShifts[1], -0.016);
   assert.ok(atDelta <= HEADROOM_FLOAT_TOLERANCE && atDelta > 0.99e-6);
   console.log(
     `grid step ${beforeShift} -> ${atItem.noteShifts[1]} with confirmed delta ${atDelta}`,
@@ -832,11 +831,11 @@ void test('a four-step grid move is quiet and a longer alignment change is not',
   }
   const original = reedLocrianBow(baseline);
   const beforeShift = original.noteShifts[1];
-  assert.equal(beforeShift, 0.012);
+  assert.equal(beforeShift, -0.02);
   const fromIndex =
     beforeShift === undefined ? -1 : TIMING_OFFSETS.indexOf(beforeShift);
-  // 0.012 sits at index 8. Five steps toward +0.02 leave the 11-point
-  // grid, so the boundary walk steps toward -0.02.
+  // -0.02 sits at index 0. Five steps toward +0.02 stay on the 11-point
+  // grid, so the boundary walk steps that way.
   const direction =
     fromIndex + HEADROOM_OFFSET_STEP_LIMIT + 1 < TIMING_OFFSETS.length ? 1 : -1;
   const withinOffset =
