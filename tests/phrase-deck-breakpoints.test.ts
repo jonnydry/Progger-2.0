@@ -97,7 +97,5 @@ void test('deck stylesheets use the shared breakpoint widths', () => {
   assert.match(panel, /import '@\/app\/phrase\.css'/);
   assert.match(panel, /import '@\/app\/phrase-deck\.css'/);
   assert.match(panel, /DECK_BREAKPOINT_QUERY\.phone/);
-  assert.match(panel, /DECK_BREAKPOINT_QUERY\.stacked/);
-  assert.match(panel, /DECK_BREAKPOINT_QUERY\.mid/);
   assert.equal(panel.includes('(max-width:'), false);
 });

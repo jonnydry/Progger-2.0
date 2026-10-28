@@ -3153,9 +3153,12 @@ void test('turning Loop off after a queued phrase plays that phrase once', async
     clock,
   });
   player.finishPass();
-  await rollClock(clock, holdEnd - 0.05);
+  // The note after the bar is a quarter. Check it while that quarter is
+  // still sounding; a later check only sees the release cleanup.
+  const noteAt = lead + 3;
+  await rollClock(clock, noteAt + 0.1);
   const through = starts.filter(
-    (item) => nearPitch(item, 3) && Math.abs(item.when - (lead + 3)) < 1e-6,
+    (item) => nearPitch(item, 3) && Math.abs(item.when - noteAt) < 1e-6,
   );
   assert.equal(through.length, 1);
   assert.equal(
@@ -3163,6 +3166,7 @@ void test('turning Loop off after a queued phrase plays that phrase once', async
     false,
     'turning Loop off dropped the note that follows the next bar line',
   );
+  await rollClock(clock, holdEnd - 0.05);
   const landing = starts.filter(
     (item) => nearPitch(item, 8) && Math.abs(item.when - boundary) < 1e-6,
   );

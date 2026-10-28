@@ -66,9 +66,7 @@
   grid-template-columns:
     minmax(0, 1.3fr) minmax(0, 3fr) minmax(0, 1fr)
     minmax(0, 1.3fr);
-  grid-template-areas:
-    'play bank loop rec'
-    '. hint . .';
+  grid-template-areas: 'play bank loop rec';
   gap: var(--space-1) 6px;
   min-width: 0;
 }
@@ -91,14 +89,6 @@
 .deck-key-rec {
   grid-area: rec;
 }
-.deck-keys .phrase-history-hint {
-  grid-area: hint;
-  margin: 2px 0 0;
-  color: var(--quiet);
-  font-size: var(--text-xs);
-  line-height: 1.2;
-  text-align: center;
-}
 
 .phrase-deck .deck-key {
   position: relative;
@@ -116,7 +106,8 @@
   background: var(--surface-key);
   border: 2px solid var(--edge);
   border-radius: var(--radius-key);
-  box-shadow: var(--shadow-key);
+  /* One hard edge. The old key shadow stacked an inset bevel on a 4px drop. */
+  box-shadow: 0 1px 0 var(--edge-drop);
   font: inherit;
   font-size: var(--text-xs);
   font-weight: 600;
@@ -151,7 +142,6 @@
   height: 14px;
   background: var(--amber);
   border-radius: 50%;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 35%, transparent);
 }
 .phrase-deck .deck-key:hover:not(:disabled) {
   border-color: var(--green);
@@ -160,8 +150,8 @@
 .phrase-deck .deck-key[aria-pressed='true'],
 .phrase-deck .deck-key.is-latched,
 .phrase-deck .deck-key.is-saved {
-  transform: translateY(3px);
-  box-shadow: var(--shadow-key-down);
+  transform: translateY(1px);
+  box-shadow: none;
 }
 .phrase-deck .deck-key[aria-pressed='true'],
 .phrase-deck .deck-key.is-latched {
@@ -171,7 +161,6 @@
 .phrase-deck .deck-key[aria-pressed='true']::before,
 .phrase-deck .deck-key.is-latched::before {
   background: var(--green);
-  box-shadow: 0 0 6px var(--green);
 }
 .phrase-deck .deck-key.is-saved {
   background: var(--surface-key-saved);
@@ -179,13 +168,6 @@
 }
 .phrase-deck .deck-key.is-saved::before {
   background: var(--amber);
-  box-shadow: 0 0 6px var(--amber);
-}
-/* The record lamp glows while "Saved ✓" shows; the label carries the tick. */
-.phrase-deck .deck-key.is-saved .deck-rec-dot {
-  box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--amber) 45%, transparent),
-    0 0 10px var(--amber);
 }
 /* Dimmed, but Previous and Next stay readable as labels. */
 .phrase-deck .deck-key:disabled {
@@ -215,9 +197,9 @@
 .deck-plate {
   display: grid;
   grid-template-columns:
-    auto minmax(150px, 1.4fr) auto minmax(130px, 1fr)
+    auto minmax(240px, 1.8fr) minmax(140px, 1fr)
     auto;
-  grid-template-areas: 'length tempo speed swing seed';
+  grid-template-areas: 'length tempo swing seed';
   align-items: end;
   gap: 10px 18px;
   min-width: 0;
@@ -225,6 +207,20 @@
   background: var(--surface-plate);
   border: 1px solid var(--edge);
   border-radius: var(--radius-key);
+}
+/* Half speed changes the tempo, so it sits in that cell. */
+.deck-tempo {
+  grid-area: tempo;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  column-gap: 10px;
+  min-width: 0;
+}
+.deck-tempo .deck-fader,
+.deck-tempo .deck-toggle {
+  grid-area: auto;
+  min-width: 0;
 }
 .deck-legend {
   display: block;
@@ -283,7 +279,6 @@
   border-color: var(--green);
 }
 .phrase-deck .deck-toggle {
-  grid-area: speed;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -390,10 +385,10 @@
 /* Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
 @media (max-width: 960px) {
   .deck-plate {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
-      'length tempo speed'
-      'seed swing swing';
+      'length tempo'
+      'swing seed';
   }
 }
 
@@ -416,20 +411,19 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
     grid-template-areas:
       'play loop rec'
-      'bank bank bank'
-      'hint hint hint';
+      'bank bank bank';
     row-gap: var(--space-2);
   }
   .phrase-deck .deck-key {
     min-height: 60px;
   }
   .deck-plate {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      'length speed'
-      'tempo tempo'
-      'swing swing'
-      'seed seed';
+      'length'
+      'tempo'
+      'swing'
+      'seed';
     padding: 10px;
   }
   .deck-counter input {
@@ -437,21 +431,123 @@
   }
 }
 
-/* Below this the two halves of Length cannot hold "2 bars" beside Half
-   speed. Length takes the row, and Half speed sits under the tempo it
-   halves. */
+/* Build row: pin one field of the plan and re-roll the rest. Rows, not
+   selects, so every option is one tap and the current value is visible. */
+.phrase-pins {
+  display: grid;
+  gap: var(--space-1);
+  padding: 0 var(--space-3) var(--space-2);
+}
+.phrase-pins-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+}
+.phrase-pins-hint {
+  color: var(--quiet);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.phrase-pins-clear {
+  padding: 0;
+  color: var(--green);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  cursor: pointer;
+}
+/* Build row: pin one field of the plan and re-roll the rest. Each field is
+   its own full-width row, so DOM order, reading order, and tab order all name
+   the same sequence at every width. A multi-column arrangement read the pins
+   down the columns while tabbing across the rows, which is why the deck's
+   tab-order check failed at 1440px. */
+.phrase-pins-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  min-width: 0;
+}
+.phrase-pin-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  /* The first column is the field name; the rest are its options, however
+     many this field has. */
+  grid-template-columns: 5.5rem;
+}
+.phrase-pin-row .deck-legend {
+  margin: 0;
+}
+.phrase-pin {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--tap);
+  padding: 0 var(--space-1);
+  color: var(--quiet);
+  background: var(--surface-sunken);
+  border: 2px solid var(--edge);
+  border-radius: var(--radius-key);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.phrase-pin.is-current {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--green) 45%, var(--edge));
+}
+.phrase-pin[aria-pressed='true'] {
+  color: var(--ink);
+  background: var(--green);
+  border-color: var(--green);
+}
+.phrase-pin:hover:not([aria-pressed='true']) {
+  color: var(--foreground);
+  border-color: var(--green);
+}
+.phrase-pin:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Below this the tempo cell cannot hold the slider, the BPM, and Half
+   speed on one line. Half speed takes the width under the slider. */
 @media (max-width: 420px) {
   .deck-plate {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      'length'
-      'tempo'
-      'speed'
-      'swing'
-      'seed';
     row-gap: var(--space-2);
+  }
+  .deck-tempo {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--space-2);
+  }
+  .deck-tempo .deck-toggle {
+    width: 100%;
   }
   .deck-switch button {
     padding-inline: var(--space-2);
+  }
+  /* The field name moves above its options once a row cannot hold both. */
+  .phrase-pins {
+    padding-inline: 10px;
+  }
+  .phrase-pin-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 2px;
+  }
+  .phrase-pin-row .deck-legend {
+    grid-column: 1 / -1;
   }
 }
