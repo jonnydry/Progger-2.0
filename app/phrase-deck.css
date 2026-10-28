@@ -1,20 +1,18 @@
-/* Cassette deck: a tape window, one row of transport keys, and one plate of
-   labelled controls. Surfaces, edges, type and spacing come from
-   deck-tokens.css, so every scene and both themes share the same housing.
+/* Cassette deck, read in three beats: the tape window (what the phrase is),
+   Play (what to do next), and Build (shape the next roll). Build starts
+   closed. Tempo, swing, and seed stay behind a second fold so they never
+   sit in a row of equal keys with the pins.
 
-   Density comes from one shared rhythm rather than smaller type. Every label
-   in the plate opens a `legend | control` line of the same --deck-row height,
-   and the four Build pins are rows of that same plate instead of a separate
-   block below it. */
+   Surfaces, edges, type and spacing come from deck-tokens.css. The housing
+   keeps the hard key edge; new rows use a 1px plate line and no extra shadow. */
 .phrase-deck {
   --deck-led-off: color-mix(in srgb, var(--quiet) 30%, transparent);
   /* The label column and the control height shared by Bars, Tempo, Swing,
-     Seed and every Build pin, so the plate reads as one column of controls.
-     4.5rem holds the longest legend, "REGISTER". */
+     Seed and every Build pin. 4.5rem holds the longest legend, "REGISTER". */
   --deck-gutter: 4.5rem;
   --deck-row: 44px;
   display: grid;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
   padding: 10px;
   color: var(--foreground);
@@ -41,12 +39,23 @@
   min-width: 0;
   text-align: center;
 }
+.phrase-deck .deck-window .phrase-plan {
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-wrap: balance;
+}
 .phrase-deck .deck-window .phrase-status {
   color: var(--green);
+  font-size: var(--text-xs);
   font-weight: 600;
+  text-wrap: balance;
+}
+.phrase-deck .deck-window .phrase-status.is-alert {
+  color: var(--amber);
 }
 .phrase-deck .deck-window-text p {
-  line-height: 1.25;
+  line-height: 1.3;
 }
 .deck-reel {
   box-sizing: border-box;
@@ -73,35 +82,54 @@
   }
 }
 
-/* Transport: six keys in one row, each one line of icon and label, so a key
-   is --deck-row tall instead of the old stacked 68px. */
-.deck-keys {
+/* Play: two primary keys, then a quieter pad for history, loop, and save.
+   Above the wide breakpoint the pad sits beside the primary keys. Below it
+   the pad wraps under them. DOM order matches both pictures, so the phone
+   layout does not reorder the buttons. */
+.deck-zone {
   display: grid;
-  grid-template-columns:
-    minmax(0, 1.1fr) minmax(0, 3fr) minmax(0, 1fr)
-    minmax(0, 1.2fr);
-  grid-template-areas: 'play bank loop rec';
   gap: 4px;
   min-width: 0;
 }
-.deck-key-play {
-  grid-area: play;
+.deck-zone > .deck-legend {
+  margin: 0;
+  white-space: nowrap;
+}
+.deck-play-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+  min-width: 0;
+}
+.deck-play-primary {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+}
+.deck-play-primary .deck-key {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 52px;
+  font-size: var(--text-sm);
+}
+.deck-play-secondary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  align-content: start;
+  min-width: 0;
 }
 .deck-key-bank {
-  grid-area: bank;
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: 1fr 1fr;
   gap: 4px;
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
-}
-.deck-key-loop {
-  grid-area: loop;
-}
-.deck-key-rec {
-  grid-area: rec;
 }
 
 .phrase-deck .deck-key {
@@ -152,7 +180,21 @@
   padding-inline: var(--space-2);
   background: var(--surface-key-lit);
   border-color: var(--edge-lit);
-  font-size: var(--text-sm);
+}
+.phrase-deck .deck-key-new {
+  border-color: var(--edge-lit);
+}
+/* History, loop, and save stay tappable but they are not the next action.
+   No lamp, sunken face, smaller icon. Pressed and saved states below still win. */
+.phrase-deck .deck-key-quiet {
+  padding: 0 8px;
+  background: var(--surface-sunken);
+}
+.phrase-deck .deck-key-quiet::before {
+  content: none;
+}
+.phrase-deck .deck-key-quiet svg {
+  color: var(--quiet);
 }
 .deck-rec-dot {
   flex: 0 0 auto;
@@ -180,6 +222,9 @@
 .phrase-deck .deck-key.is-latched::before {
   background: var(--green);
 }
+.phrase-deck .deck-key-quiet[aria-pressed='true'] svg {
+  color: var(--ink);
+}
 .phrase-deck .deck-key.is-saved {
   background: var(--surface-key-saved);
   border-color: var(--amber);
@@ -197,7 +242,8 @@
   color: var(--quiet);
 }
 .phrase-deck button:focus-visible,
-.phrase-deck input:focus-visible {
+.phrase-deck input:focus-visible,
+.phrase-deck summary:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
 }
@@ -212,23 +258,20 @@
   }
 }
 
-/* The plate: one band of `legend | control` lines. The four settings share the
-   first lines and the Build pins fill the rest of the same grid. */
+/* Tempo fold: Bars, Tempo, Swing, and Seed. One `legend | control` line each.
+   The grid only changes how those four share the width. */
 .deck-plate {
   display: grid;
   grid-template-columns:
     auto minmax(15rem, 1.4fr) minmax(10rem, 1fr)
     auto;
-  grid-template-areas:
-    'bars tempo swing seed'
-    'pins pins pins pins';
+  grid-template-areas: 'bars tempo swing seed';
   align-items: start;
   gap: 4px 16px;
   min-width: 0;
-  padding: 8px 10px;
-  background: var(--surface-plate);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-key);
+  padding: 4px 0 0;
+  background: transparent;
+  border: 0;
 }
 .deck-plate .deck-legend {
   margin: 0;
@@ -438,24 +481,124 @@
   letter-spacing: 1px;
 }
 
-/* Build: pin one field of the plan and re-roll the rest. Each pin is one
-   `legend | options` row of the plate's own grid, so DOM order, reading order
-   and tab order name the same sequence at every width. A second column only
-   appears when it can hold four options on one line; the deck's tab-order
-   check fails if a row is ever split across two visual lines. */
+/* Build fold. Closed, it is one summary row. Open, the pins are the work and
+   Tempo is a second summary, so the faders do not compete with the pins. */
+.deck-fold {
+  min-width: 0;
+}
+.deck-fold-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--deck-row);
+  margin: 0;
+  padding: 6px 10px;
+  color: var(--foreground);
+  background: var(--surface-plate);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-key);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  list-style: none;
+}
+.deck-fold-summary::-webkit-details-marker {
+  display: none;
+}
+.deck-fold-summary .deck-legend {
+  margin: 0;
+  white-space: nowrap;
+  /* Trailing letter-spacing was wider than the legend box and tripped the
+     summary's overflow check. */
+  padding-inline-end: var(--tracking-legend);
+}
+.deck-fold-readout {
+  min-width: 0;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-transform: none;
+}
+/* The dot stays with the word before it, so a narrow summary breaks after
+   "2-bar ·" and never as "2-" / "bar". */
+.deck-fold-chip {
+  white-space: nowrap;
+}
+.deck-chevron {
+  display: block;
+  width: 18px;
+  height: 18px;
+  justify-self: end;
+  overflow: hidden;
+  color: var(--quiet);
+}
+.deck-fold-summary:hover .deck-legend,
+.deck-fold-summary:hover .deck-chevron {
+  color: var(--green);
+}
+.deck-fold[open] > .deck-fold-summary {
+  border-radius: var(--radius-key) var(--radius-key) 0 0;
+}
+.deck-fold[open] > .deck-fold-summary .deck-legend {
+  color: var(--green);
+}
+.deck-fold-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 8px 10px;
+  background: var(--surface-plate);
+  border: 1px solid var(--edge);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-key) var(--radius-key);
+}
+/* Author `display` on the body beats the browser's details rule, which left
+   the pins painted while the summary still said they were closed. */
+.deck-fold:not([open]) > :not(summary) {
+  display: none;
+}
+.deck-feel {
+  padding-top: 4px;
+  border-top: 1px solid var(--edge);
+}
+.deck-feel > .deck-fold-summary {
+  /* The build summary's side padding hides the chevron's overflow. This row
+     sits flush with the pins, so it keeps a few pixels on the end only —
+     without them the summary's scroll width sticks past the plate at 1600. */
+  padding-inline: 0 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.deck-feel[open] > .deck-fold-summary {
+  border-radius: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .deck-chevron {
+    transition: transform 120ms ease;
+  }
+}
+.deck-fold[open] > .deck-fold-summary .deck-chevron {
+  transform: rotate(180deg);
+}
+
+/* Pin one field of the plan and re-roll the rest. Each pin is one
+   `legend | options` line, so DOM order, reading order and tab order name
+   the same sequence at every width. A second column only appears when it
+   can hold four options on one line. */
 .phrase-pins {
-  grid-area: pins;
   display: grid;
   gap: 4px;
   min-width: 0;
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--edge);
 }
 .phrase-pins-title {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 0 var(--space-2);
   margin: 0;
 }
@@ -464,15 +607,14 @@
   font-size: var(--text-xs);
   font-weight: 400;
   letter-spacing: 0;
-  text-transform: none;
+  line-height: 1.3;
 }
 .phrase-pins-clear {
-  /* The title only appears once a pin is set, so this link has to be tappable
-     in its own right: a 14px-tall text link was the smallest target in the
-     deck. Negative inline margin keeps the visual rhythm of the title. */
+  /* Shown only once a pin is set, and it has to be a real target: a 14px text
+     link was the smallest control in the deck. */
   min-height: var(--deck-row);
-  margin: -14px 0;
-  padding: 0;
+  margin: 0;
+  padding: 0 2px;
   color: var(--green);
   background: none;
   border: 0;
@@ -563,43 +705,35 @@
   outline-offset: var(--focus-offset);
 }
 
-/* Below this the four settings cannot hold their sliders, their readouts and
-   Half speed on one line. Half speed must not wrap onto a line of its own while
-   the other settings stay on the row above: that put the toggle below Swing and
-   Seed in reading order while the tab order still reached it before them. The
-   threshold is where Half speed starts wrapping, not where the row merely looks
-   tight. Build pins drop to one column here too, because a half-width column
-   leaves "long–short" 75px and the label needs 76px. Widths are
-   DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
+/* Below this the four tempo controls cannot hold their sliders, readouts and
+   Half speed on one line. They pair up, and Half speed stays inside the Tempo
+   cell, which is the row above Swing. Pins drop to one column because a
+   half-width column leaves "long–short" 75px and the label needs 76px.
+   Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
 @media (max-width: 1210px) {
   .deck-plate {
     grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
       'bars tempo'
-      'swing seed'
-      'pins pins';
+      'swing seed';
   }
   .phrase-pin-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-/* Between here and the phone layout the six keys still share one line, but the
-   shorter keys would keep icon and label inline while "New phrase" and "Save to
-   stash" wrapped onto a second line, so the row was ragged. One stacked key
-   shape for the band costs 3px and reads evenly. Widths are
-   DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
+/* The quiet pad sits beside Play and New phrase above this. Below it, the pad
+   would squeeze "Save to stash", so the two primary keys take the row and the
+   pad wraps underneath. Widths are DECK_BREAKPOINT_PX. */
 @media (max-width: 860px) {
-  .phrase-deck .deck-key {
-    flex-direction: column;
-    gap: 1px;
-    padding: 6px 4px 3px;
+  .deck-play-main {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
   }
 }
 
-/* Four options still share one line at phone width; below this they become a
-   2x2 block so nothing clips. Half speed keeps its ½ mark on phones so the
-   tempo slider keeps a usable length. */
+/* Four options still share one line above this. Below it they become an even
+   2x2 so nothing clips and a wrap cannot leave a single orphan. */
 @media (max-width: 470px) {
   .phrase-pin-row[data-options='4'] .phrase-pin-line {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -608,31 +742,17 @@
 
 @media (max-width: 640px) {
   .phrase-deck {
-    gap: 6px;
+    gap: 10px;
     padding: 8px;
   }
   .deck-window {
     grid-template-columns: 16px minmax(0, 1fr) 16px;
     gap: 6px;
-    padding: 4px 6px;
+    padding: 6px;
   }
   .deck-reel {
     width: 16px;
     height: 16px;
-  }
-  .deck-keys {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-template-areas:
-      'play loop rec'
-      'bank bank bank';
-    row-gap: 4px;
-  }
-  /* Three keys across is too narrow for an icon beside a word, so the phone
-     key keeps the stacked shape from the band above. Tighter inline padding
-     keeps "Save to stash" on one line, which is what made the top row taller
-     than the history row. */
-  .phrase-deck .deck-key {
-    padding-inline: 2px;
   }
   .deck-plate {
     grid-template-columns: minmax(0, 1fr);
@@ -640,14 +760,10 @@
       'bars'
       'tempo'
       'swing'
-      'seed'
-      'pins';
+      'seed';
     gap: 4px;
-    padding: 6px 8px;
+    padding: 4px 0 0;
   }
-  /* The legend stays beside its options at the same size as every other
-     legend: stacking it above them, or shrinking it, is not what buys the
-     height here. */
   .deck-speed {
     padding-inline: var(--space-2);
   }

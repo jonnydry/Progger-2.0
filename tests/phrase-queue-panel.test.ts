@@ -8,6 +8,12 @@ async function openPhrases(page: Page) {
   await page.locator('.phrase-open').click();
   await page.locator('.phrase-panel').waitFor({ state: 'visible' });
   await page.locator('.phrase-action', { hasText: 'Play' }).waitFor();
+  for (const selector of ['.deck-build', '.deck-feel']) {
+    const fold = page.locator(selector);
+    if ((await fold.getAttribute('open')) === null) {
+      await fold.locator('> summary').click();
+    }
+  }
 }
 
 async function watchRestart(page: Page) {

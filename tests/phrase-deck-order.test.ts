@@ -33,7 +33,9 @@ async function deckControls(page: Page): Promise<Control[]> {
     const root = document.querySelector('.phrase-deck');
     if (!root) return [];
     const nodes = [
-      ...root.querySelectorAll<HTMLElement>('button, input, select, textarea'),
+      ...root.querySelectorAll<HTMLElement>(
+        'button, input, select, textarea, summary',
+      ),
     ];
     return nodes
       .filter((node) => {
@@ -109,7 +111,7 @@ async function assertDeckTabOrder(page: Page, width: number) {
   }
   await page.locator('.deck-key-play').scrollIntoViewIfNeeded();
   const controls = await deckControls(page);
-  assert.ok(controls.length >= 10, `${width}px found ${controls.length}`);
+  assert.ok(controls.length >= 7, `${width}px found ${controls.length}`);
   for (const control of controls) {
     assert.ok(
       control.tabIndex <= 0,
@@ -180,7 +182,7 @@ async function deckDensity(page: Page): Promise<DeckDensity> {
         .trim();
     const controls = [
       ...deck.querySelectorAll<HTMLElement>(
-        'button, input[type="range"], input:not([type])',
+        'button, summary, input[type="range"], input:not([type])',
       ),
     ].filter((node) => {
       const box = node.getBoundingClientRect();
@@ -240,6 +242,17 @@ async function deckDensity(page: Page): Promise<DeckDensity> {
   });
 }
 
+async function openDeckFolds(page: Page) {
+  for (const selector of ['.deck-build', '.deck-feel']) {
+    const fold = page.locator(selector);
+    if ((await fold.getAttribute('open')) === null) {
+      await fold.locator('> summary').click();
+    }
+  }
+  await page.locator('.phrase-pin').first().waitFor({ state: 'visible' });
+  await page.locator('.phrase-swing input').waitFor({ state: 'visible' });
+}
+
 async function seedValue(page: Page) {
   return page.locator('.phrase-seed input').inputValue();
 }
@@ -296,23 +309,66 @@ void test(
     await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.phrase-open');
 
-    for (const width of [1440, 800, 500, 390, 320]) {
-      await assertDeckTabOrder(page, width);
+    for (const width of [1440, 900, 800, 500, 390, 320]) {
+      const closed = await assertDeckTabOrder(page, width);
+      assert.equal(
+        closed.some(
+          (name) =>
+            name === 'Half speed' ||
+            name === 'arch' ||
+            name.toLowerCase().startsWith('tempo'),
+        ),
+        false,
+        `${width}px first look includes a folded control: ${closed.join(', ')}`,
+      );
+      assert.equal(
+        closed.some((name) => name.toLowerCase().startsWith('build')),
+        true,
+        `${width}px build summary missing: ${closed.join(', ')}`,
+      );
     }
 
     await enableHistorySteps(page);
     for (const width of [1440, 390, 320]) {
       const keyboard = await assertDeckTabOrder(page, width);
-      const previous = keyboard.indexOf('Previous phrase');
+      const play = keyboard.indexOf('Play phrase');
       const created = keyboard.indexOf('New phrase');
+      const previous = keyboard.indexOf('Previous phrase');
       const next = keyboard.indexOf('Next phrase');
       assert.ok(
-        previous !== -1 &&
+        play !== -1 &&
           created !== -1 &&
+          previous !== -1 &&
           next !== -1 &&
-          previous < created &&
-          created < next,
+          play < created &&
+          created < previous &&
+          previous < next,
         `${width}px history keyboard ${keyboard.join(', ')}`,
+      );
+    }
+
+    await openDeckFolds(page);
+    for (const width of [1440, 390, 320]) {
+      const keyboard = await assertDeckTabOrder(page, width);
+      const at = (name: string) => keyboard.indexOf(name);
+      const build = keyboard.findIndex((name) =>
+        name.toLowerCase().startsWith('build'),
+      );
+      const tempo = keyboard.findIndex((name) =>
+        name.toLowerCase().startsWith('tempo'),
+      );
+      assert.ok(
+        at('Play phrase') < at('New phrase') &&
+          at('New phrase') < at('Previous phrase') &&
+          at('Previous phrase') < at('Next phrase') &&
+          build !== -1 &&
+          tempo !== -1 &&
+          at('Next phrase') < build &&
+          build < tempo &&
+          tempo < at('Half speed') &&
+          at('Half speed') < at('Swing') &&
+          at('Swing') < at('Seed'),
+        `${width}px open keyboard ${keyboard.join(', ')}`,
       );
     }
     await page.close();
@@ -336,6 +392,22 @@ void test(
     await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.phrase-open');
     await openPhrases(page);
+
+    const closedHeights = new Map<number, number>();
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({
+        width,
+        height: width >= 800 ? 900 : 844,
+      });
+      await page.locator('.deck-key-play').scrollIntoViewIfNeeded();
+      closedHeights.set(
+        width,
+        await page
+          .locator('.phrase-deck')
+          .evaluate((node) => Math.round(node.getBoundingClientRect().height)),
+      );
+    }
+    await openDeckFolds(page);
 
     /* Every band the layout switches at, and the awkward widths inside each:
        a fader once collapsed to 0px at 650px and 1081px because the readout
@@ -368,8 +440,12 @@ void test(
       heights.set(width, deck.height);
     }
     assert.ok(
-      heights.get(1440)! * 2 <= heights.get(320)!,
-      `desktop deck ${heights.get(1440)}px is not half the phone deck ${heights.get(320)}px`,
+      heights.get(1440)! > closedHeights.get(1440)! + 80,
+      `opening build at 1440px (${closedHeights.get(1440)} -> ${heights.get(1440)}) did not reveal the pins`,
+    );
+    assert.ok(
+      heights.get(320)! > closedHeights.get(320)!,
+      `opening build at 320px (${closedHeights.get(320)} -> ${heights.get(320)}) did not grow the deck`,
     );
 
     /* Half speed is a tempo control, so it must never land below Swing or Seed
@@ -478,6 +554,7 @@ void test(
     await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.phrase-open');
     await openPhrases(page);
+    await openDeckFolds(page);
 
     async function resizeKeeps(
       from: number,
