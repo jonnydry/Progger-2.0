@@ -185,7 +185,7 @@
   border-color: var(--edge-lit);
 }
 /* History, loop, and save stay tappable but they are not the next action.
-   No lamp, sunken face, smaller icon. Pressed and saved states below still win. */
+   Resting keys have no lamp. A pressed or saved key lights one, below. */
 .phrase-deck .deck-key-quiet {
   padding: 0 8px;
   background: var(--surface-sunken);
@@ -220,16 +220,18 @@
 }
 .phrase-deck .deck-key[aria-pressed='true']::before,
 .phrase-deck .deck-key.is-latched::before {
+  content: '';
   background: var(--green);
 }
 .phrase-deck .deck-key-quiet[aria-pressed='true'] svg {
-  color: var(--ink);
+  color: var(--green);
 }
 .phrase-deck .deck-key.is-saved {
   background: var(--surface-key-saved);
   border-color: var(--amber);
 }
 .phrase-deck .deck-key.is-saved::before {
+  content: '';
   background: var(--amber);
 }
 /* Dimmed, but Previous and Next stay readable as labels. */

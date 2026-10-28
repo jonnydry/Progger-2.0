@@ -883,14 +883,26 @@ export function PhrasePanel({
     generationLocks.register ? REGISTER_LABEL[generationLocks.register] : '',
     generationLocks.cadence ? CADENCE_LABEL[generationLocks.cadence] : '',
   ].filter((part) => part.length > 0);
+  // playbackTempo is already the sounding rate. Naming it and ½× together
+  // asks the player to halve the number a second time.
+  const tempoBit = trueHalf
+    ? `${playbackTempo}\u00a0BPM, half of\u00a0${tempo}`
+    : slow
+      ? `${playbackTempo}\u00a0BPM, half speed`
+      : `${playbackTempo}\u00a0BPM`;
   const buildBits = [
     pinParts.length === 0 ? 'Nothing pinned' : 'Pinned',
     ...pinParts,
     bars === 2 ? '2-bar' : '4-bar',
-    `${playbackTempo}\u00a0BPM`,
+    tempoBit,
     swing <= 0 ? 'straight' : `swing\u00a0${Math.round(swing * 100)}%`,
-    slow ? '½×' : '',
   ].filter((part) => part.length > 0);
+  const statusAlert =
+    status === 'error' ||
+    !phrase.ok ||
+    notice.startsWith('Could not save') ||
+    notice === 'Stash is full.' ||
+    notice.startsWith('Stash full,');
   const lengthControl = (
     <fieldset key="length" className="deck-setting deck-setting-bars">
       <legend className="deck-legend">Bars</legend>
@@ -1024,27 +1036,24 @@ export function PhrasePanel({
             )}
             <p
               id="phrase-seed-help"
-              className={`phrase-status${status === 'error' ? ' is-alert' : ''}`}
+              className={`phrase-status${statusAlert ? ' is-alert' : ''}`}
             >
-              {status === 'error'
-                ? 'Audio couldn’t start. Tap Play to try again.'
-                : notice
-                  ? notice
-                  : status === 'starting'
-                    ? 'Starting…'
-                    : busy
-                      ? loop
-                        ? 'Looping this phrase.'
-                        : 'Playing this phrase.'
-                      : 'Same seed replays this phrase.'}
-            </p>
-            {!phrase.ok && (
-              <p className="phrase-status is-alert">
-                {phrase.reason === 'no-shared-tones'
+              {!phrase.ok
+                ? phrase.reason === 'no-shared-tones'
                   ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
-                  : 'This plan has no playable line in the register. Try a new phrase.'}
-              </p>
-            )}
+                  : 'This plan has no playable line in the register. Try a new phrase.'
+                : status === 'error'
+                  ? 'Audio couldn’t start. Tap Play to try again.'
+                  : notice
+                    ? notice
+                    : status === 'starting'
+                      ? 'Starting…'
+                      : busy
+                        ? loop
+                          ? 'Looping this phrase.'
+                          : 'Playing this phrase.'
+                        : 'Same seed replays this phrase.'}
+            </p>
           </div>
           <span className="deck-reel" aria-hidden="true" />
         </div>
@@ -1072,7 +1081,7 @@ export function PhrasePanel({
         </div>
         <details className="deck-fold deck-build">
           <summary className="deck-fold-summary">
-            <h3 className="deck-legend">Build</h3>
+            <span className="deck-legend">Build</span>
             <span className="deck-fold-readout">
               {buildBits.map((part, index) => {
                 const last = index === buildBits.length - 1;
