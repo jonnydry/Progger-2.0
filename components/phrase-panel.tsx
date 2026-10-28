@@ -13,6 +13,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  ChevronDown,
   Play,
   RefreshCw,
   Repeat,
@@ -784,12 +785,13 @@ export function PhrasePanel({
   const planSentence = plan
     ? `${CONTOUR_LABEL[plan.contour]} contour, ${RHYTHM_LABEL[plan.rhythm]}, ${REGISTER_LABEL[plan.register]} register, landing on the ${cadenceText}.`
     : '';
-  const { phone: phoneKeys, deckRef } = useDeckBreakpoints();
+  const { deckRef } = useDeckBreakpoints();
   const playKey = (
     <button
       key="play"
       type="button"
       className={`phrase-action deck-key deck-key-play${busy ? ' is-latched' : ''}`}
+      aria-label={busy ? 'Stop phrase' : 'Play phrase'}
       disabled={!phrase.ok}
       onClick={togglePlay}
     >
@@ -801,6 +803,18 @@ export function PhrasePanel({
       <span className="deck-key-label">{busy ? 'Stop' : 'Play'}</span>
     </button>
   );
+  const newPhraseKey = (
+    <button
+      key="new"
+      type="button"
+      className="phrase-action deck-key deck-key-new"
+      ref={newPhraseButton}
+      onClick={regenerate}
+    >
+      <RefreshCw size={18} aria-hidden="true" />
+      <span className="deck-key-label">New phrase</span>
+    </button>
+  );
   const historyBank = (
     <fieldset key="bank" className="phrase-history-steps deck-key-bank">
       <legend className="sr-only">Phrase history</legend>
@@ -809,28 +823,19 @@ export function PhrasePanel({
       </p>
       <button
         type="button"
-        className="phrase-action phrase-history-step deck-key"
+        className="phrase-action phrase-history-step deck-key deck-key-quiet"
         aria-label="Previous phrase"
         aria-describedby="phrase-history-hint"
         disabled={onHistory ? history.index <= 0 : !cursor}
         ref={previousStep}
         onClick={() => stepHistory(-1)}
       >
-        <SkipBack size={18} aria-hidden="true" />
+        <SkipBack size={16} aria-hidden="true" />
         <span className="deck-key-label">Previous</span>
       </button>
       <button
         type="button"
-        className="phrase-action deck-key"
-        ref={newPhraseButton}
-        onClick={regenerate}
-      >
-        <RefreshCw size={18} aria-hidden="true" />
-        <span className="deck-key-label">New phrase</span>
-      </button>
-      <button
-        type="button"
-        className="phrase-action phrase-history-step deck-key"
+        className="phrase-action phrase-history-step deck-key deck-key-quiet"
         aria-label="Next phrase"
         aria-describedby="phrase-history-hint"
         disabled={
@@ -841,7 +846,7 @@ export function PhrasePanel({
         ref={nextStep}
         onClick={() => stepHistory(1)}
       >
-        <SkipForward size={18} aria-hidden="true" />
+        <SkipForward size={16} aria-hidden="true" />
         <span className="deck-key-label">Next</span>
       </button>
     </fieldset>
@@ -850,11 +855,11 @@ export function PhrasePanel({
     <button
       key="loop"
       type="button"
-      className="phrase-action deck-key deck-key-loop"
+      className="phrase-action deck-key deck-key-loop deck-key-quiet"
       aria-pressed={loop}
       onClick={() => setLoop((current) => !current)}
     >
-      <Repeat size={18} aria-hidden="true" />
+      <Repeat size={16} aria-hidden="true" />
       <span className="deck-key-label">Loop</span>
     </button>
   );
@@ -862,7 +867,7 @@ export function PhrasePanel({
     <button
       key="save"
       type="button"
-      className={`phrase-action deck-key deck-key-rec${savedMark ? ' is-saved' : ''}`}
+      className={`phrase-action deck-key deck-key-rec deck-key-quiet${savedMark ? ' is-saved' : ''}`}
       disabled={!phrase.ok}
       onClick={saveToTray}
     >
@@ -872,114 +877,141 @@ export function PhrasePanel({
       </span>
     </button>
   );
+  const pinParts = [
+    generationLocks.contour ? CONTOUR_LABEL[generationLocks.contour] : '',
+    generationLocks.rhythm ? RHYTHM_SHORT[generationLocks.rhythm] : '',
+    generationLocks.register ? REGISTER_LABEL[generationLocks.register] : '',
+    generationLocks.cadence ? CADENCE_LABEL[generationLocks.cadence] : '',
+  ].filter((part) => part.length > 0);
+  // playbackTempo is already the sounding rate. Naming it and ½× together
+  // asks the player to halve the number a second time.
+  const tempoBit = trueHalf
+    ? `${playbackTempo}\u00a0BPM, half of\u00a0${tempo}`
+    : slow
+      ? `${playbackTempo}\u00a0BPM, half speed`
+      : `${playbackTempo}\u00a0BPM`;
+  const buildBits = [
+    pinParts.length === 0 ? 'Nothing pinned' : 'Pinned',
+    ...pinParts,
+    bars === 2 ? '2-bar' : '4-bar',
+    tempoBit,
+    swing <= 0 ? 'straight' : `swing\u00a0${Math.round(swing * 100)}%`,
+  ].filter((part) => part.length > 0);
+  const statusAlert =
+    status === 'error' ||
+    !phrase.ok ||
+    notice.startsWith('Could not save') ||
+    notice === 'Stash is full.' ||
+    notice.startsWith('Stash full,');
   const lengthControl = (
-    <fieldset key="length" className="deck-switch">
+    <fieldset key="length" className="deck-setting deck-setting-bars">
       <legend className="deck-legend">Bars</legend>
-      <button
-        type="button"
-        aria-pressed={bars === 2}
-        onClick={() => chooseBars(2)}
-      >
-        2 bars
-      </button>
-      <button
-        type="button"
-        aria-pressed={bars === 4}
-        onClick={() => chooseBars(4)}
-      >
-        4 bars
-      </button>
+      <div className="deck-switch">
+        <button
+          type="button"
+          aria-pressed={bars === 2}
+          onClick={() => chooseBars(2)}
+        >
+          2 bars
+        </button>
+        <button
+          type="button"
+          aria-pressed={bars === 4}
+          onClick={() => chooseBars(4)}
+        >
+          4 bars
+        </button>
+      </div>
     </fieldset>
   );
   const tempoControl = (
-    <label key="tempo" className="phrase-tempo deck-fader">
-      <span className="deck-legend">Tempo</span>
-      <input
-        type="range"
-        min={PHRASE_TEMPO_MIN}
-        max={tempoMax}
-        step={1}
-        value={playbackTempo}
-        aria-valuetext={
-          trueHalf
-            ? `${playbackTempo} BPM, half of ${tempo}`
-            : `${playbackTempo} BPM`
-        }
-        onChange={changeTempo}
-        onPointerUp={commitTempo}
-        onKeyUp={commitTempo}
-      />
-      <output>{playbackTempo} BPM</output>
-    </label>
-  );
-  const speedControl = (
-    <button
-      key="speed"
-      type="button"
-      className="phrase-action deck-toggle"
-      aria-pressed={slow}
-      onClick={() => setSlow((current) => !current)}
-    >
-      <Turtle size={16} aria-hidden="true" />
-      Half speed
-    </button>
-  );
-  const swingControl = (
-    <label key="swing" className="phrase-tempo phrase-swing deck-fader">
-      <span className="deck-legend">Swing</span>
-      <input
-        type="range"
-        min={SWING_AMOUNT_MIN}
-        max={SWING_AMOUNT_MAX}
-        step={SWING_AMOUNT_STEP}
-        value={swing}
-        aria-valuetext={`${Math.round(swing * 100)} percent`}
-        onChange={(event) => {
-          const next = Math.min(
-            SWING_AMOUNT_MAX,
-            Math.max(SWING_AMOUNT_MIN, Number(event.target.value)),
-          );
-          swingRef.current = next;
-          setSwing(next);
-        }}
-        onPointerUp={commitTempo}
-        onKeyUp={commitTempo}
-      />
-      <output>{Math.round(swing * 100)}%</output>
-    </label>
-  );
-  const seedControl = (
-    <label key="seed" className="phrase-seed deck-counter">
-      <span className="deck-legend">Seed</span>
-      <input
-        // The seed is an editable control, like the bars toggle: it shows the
-        // phrase you are editing, which can be queued behind the bar line.
-        // The heading, staff, and frets show what is sounding, so those wait
-        // for the handoff and this does not.
-        value={seedText}
-        inputMode="numeric"
-        aria-describedby="phrase-seed-help"
-        onChange={(event) => setSeedText(event.target.value)}
-        onBlur={() => commitSeed(seedText)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.currentTarget.blur();
+    <div key="tempo" className="deck-setting deck-setting-tempo">
+      <label className="phrase-tempo deck-fader">
+        <span className="deck-legend">Tempo</span>
+        <input
+          type="range"
+          min={PHRASE_TEMPO_MIN}
+          max={tempoMax}
+          step={1}
+          value={playbackTempo}
+          aria-valuetext={
+            trueHalf
+              ? `${playbackTempo} BPM, half of ${tempo}`
+              : `${playbackTempo} BPM`
           }
-        }}
-      />
-    </label>
-  );
-  const tempoGroup = (
-    <div key="tempo" className="deck-tempo">
-      {tempoControl}
-      {speedControl}
+          onChange={changeTempo}
+          onPointerUp={commitTempo}
+          onKeyUp={commitTempo}
+        />
+        <output>{playbackTempo} BPM</output>
+      </label>
+      <button
+        type="button"
+        className="phrase-action deck-toggle deck-speed"
+        aria-pressed={slow}
+        aria-label="Half speed"
+        title="Half speed"
+        onClick={() => setSlow((current) => !current)}
+      >
+        <Turtle size={16} aria-hidden="true" />
+        <span className="deck-speed-text">Half speed</span>
+        {/* Phone: the toggle shares the tempo line, so it carries the mark and
+            the aria-label rather than pushing the slider down a row. */}
+        <span className="deck-speed-short" aria-hidden="true">
+          ½×
+        </span>
+      </button>
     </div>
   );
-  const transport = phoneKeys
-    ? [playKey, loopKey, saveKey, historyBank]
-    : [playKey, historyBank, loopKey, saveKey];
-  const plate = [lengthControl, tempoGroup, swingControl, seedControl];
-
+  const swingControl = (
+    <div key="swing" className="deck-setting deck-setting-swing">
+      <label className="phrase-tempo phrase-swing deck-fader">
+        <span className="deck-legend">Swing</span>
+        <input
+          type="range"
+          min={SWING_AMOUNT_MIN}
+          max={SWING_AMOUNT_MAX}
+          step={SWING_AMOUNT_STEP}
+          value={swing}
+          aria-valuetext={`${Math.round(swing * 100)} percent`}
+          onChange={(event) => {
+            const next = Math.min(
+              SWING_AMOUNT_MAX,
+              Math.max(SWING_AMOUNT_MIN, Number(event.target.value)),
+            );
+            swingRef.current = next;
+            setSwing(next);
+          }}
+          onPointerUp={commitTempo}
+          onKeyUp={commitTempo}
+        />
+        <output>{Math.round(swing * 100)}%</output>
+      </label>
+    </div>
+  );
+  const seedControl = (
+    <div key="seed" className="deck-setting deck-setting-seed">
+      <label className="phrase-seed deck-counter">
+        <span className="deck-legend">Seed</span>
+        <input
+          // The seed is an editable control, like the bars toggle: it shows
+          // the phrase you are editing, which can be queued behind the bar
+          // line. The heading, staff, and frets show what is sounding, so
+          // those wait for the handoff and this does not.
+          value={seedText}
+          inputMode="numeric"
+          aria-describedby="phrase-seed-help"
+          onChange={(event) => setSeedText(event.target.value)}
+          onBlur={() => commitSeed(seedText)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      </label>
+    </div>
+  );
   return (
     <div className="phrase-panel" data-scale-id={scaleId}>
       <div className="phrase-heading">
@@ -996,33 +1028,32 @@ export function PhrasePanel({
         <div className="deck-window">
           <span className="deck-reel" aria-hidden="true" />
           <div className="deck-window-text">
-            <p id="phrase-seed-help" className="phrase-status">
-              {status === 'error'
-                ? 'Audio couldn’t start. Tap Play to try again.'
-                : notice
-                  ? notice
-                  : status === 'starting'
-                    ? 'Starting…'
-                    : busy
-                      ? loop
-                        ? 'Looping this phrase.'
-                        : 'Playing this phrase.'
-                      : 'Same seed replays this phrase.'}
-            </p>
-            {!phrase.ok && (
-              <p className="phrase-status">
-                {phrase.reason === 'no-shared-tones'
-                  ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
-                  : 'This plan has no playable line in the register. Try a new phrase.'}
-              </p>
-            )}
             {plan && (
               <p className="phrase-plan">
                 {CONTOUR_LABEL[plan.contour]} · {RHYTHM_LABEL[plan.rhythm]} ·{' '}
-                {REGISTER_LABEL[plan.register]} · lands on the{' '}
-                {cadenceText}
+                {REGISTER_LABEL[plan.register]} · lands on the {cadenceText}
               </p>
             )}
+            <p
+              id="phrase-seed-help"
+              className={`phrase-status${statusAlert ? ' is-alert' : ''}`}
+            >
+              {!phrase.ok
+                ? phrase.reason === 'no-shared-tones'
+                  ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
+                  : 'This plan has no playable line in the register. Try a new phrase.'
+                : status === 'error'
+                  ? 'Audio couldn’t start. Tap Play to try again.'
+                  : notice
+                    ? notice
+                    : status === 'starting'
+                      ? 'Starting…'
+                      : busy
+                        ? loop
+                          ? 'Looping this phrase.'
+                          : 'Playing this phrase.'
+                        : 'Same seed replays this phrase.'}
+            </p>
           </div>
           <span className="deck-reel" aria-hidden="true" />
         </div>
@@ -1034,14 +1065,70 @@ export function PhrasePanel({
         <p className="sr-only" aria-live="polite" aria-atomic="true">
           {plan ? `Phrase ${planSentence}` : ''}
         </p>
-        <div className="deck-keys">{transport}</div>
-        <div className="deck-plate">{plate}</div>
-        <PhrasePins
-          plan={plan}
-          locks={generationLocks}
-          onPin={pin}
-          onClear={() => setPins(EMPTY_LOCKS)}
-        />
+        <div className="deck-zone">
+          <h3 className="deck-legend">Play</h3>
+          <div className="deck-play-main">
+            <div className="deck-play-primary">
+              {playKey}
+              {newPhraseKey}
+            </div>
+            <div className="deck-play-secondary">
+              {historyBank}
+              {loopKey}
+              {saveKey}
+            </div>
+          </div>
+        </div>
+        <details className="deck-fold deck-build">
+          <summary className="deck-fold-summary">
+            <span className="deck-legend">Build</span>
+            <span className="deck-fold-readout">
+              {buildBits.map((part, index) => {
+                const last = index === buildBits.length - 1;
+                // The dot is glued to its word. The space after the chip is
+                // the only wrap point, so a narrow row breaks as
+                // "2-bar ·" / "96 BPM" and never as "2-" / "bar".
+                const label = last ? part : `${part}\u00A0·`;
+                return (
+                  <span key={`${index}-${part}`}>
+                    <span className="deck-fold-chip">{label}</span>
+                    {last ? null : ' '}
+                  </span>
+                );
+              })}
+            </span>
+            <ChevronDown
+              className="deck-chevron"
+              size={18}
+              aria-hidden="true"
+            />
+          </summary>
+          <div className="deck-fold-body">
+            <PhrasePins
+              plan={plan}
+              locks={generationLocks}
+              onPin={pin}
+              onClear={() => setPins(EMPTY_LOCKS)}
+            />
+            <details className="deck-fold deck-feel">
+              <summary className="deck-fold-summary">
+                <span className="deck-legend">Tempo</span>
+                <span className="deck-fold-readout">Bars, swing, and seed</span>
+                <ChevronDown
+                  className="deck-chevron"
+                  size={18}
+                  aria-hidden="true"
+                />
+              </summary>
+              <div className="deck-plate">
+                {lengthControl}
+                {tempoControl}
+                {swingControl}
+                {seedControl}
+              </div>
+            </details>
+          </div>
+        </details>
       </div>
       <p
         id="phrase-save-announce"
@@ -1095,7 +1182,6 @@ type StaffRow = {
 type PinOption<K extends keyof PhraseLocks> = {
   key: K;
   label: string;
-  legend: string;
   values: readonly {
     value: NonNullable<PhraseLocks[K]>;
     label: string;
@@ -1106,7 +1192,13 @@ type PinOption<K extends keyof PhraseLocks> = {
  * Pin one part of the plan and re-seed the rest. Pressing a lit pin releases
  * it, so the same button both fixes and frees that field. Everything is a
  * button rather than a select: a four-value plan field is cheaper to scan as
- * a row, and the deck's mobile layout already stacks rows.
+ * a row, and the deck's phone layout already stacks the rows.
+ *
+ * A fieldset's legend cannot share a layout track with its options, so the
+ * visible legend is positioned over the row's label gutter and the row gets
+ * its accessible name from `aria-label` — "Pin contour" rather than a bare
+ * "Contour", which said nothing about what pressing one does. The rows sit
+ * inside the Build fold, so they are not on the first look.
  */
 function PhrasePins({
   plan,
@@ -1122,11 +1214,11 @@ function PhrasePins({
   ) => void;
   onClear: () => void;
 }) {
+  const hintId = 'phrase-pins-hint';
   const rows: PinOption<keyof PhraseLocks>[] = [
     {
       key: 'contour',
       label: 'Contour',
-      legend: 'Pin the shape',
       values: [
         { value: 'arch', label: 'arch' },
         { value: 'rise', label: 'rise' },
@@ -1137,7 +1229,6 @@ function PhrasePins({
     {
       key: 'rhythm',
       label: 'Rhythm',
-      legend: 'Pin the rhythm',
       values: [
         { value: 'quarters', label: RHYTHM_SHORT.quarters },
         { value: 'eighths', label: RHYTHM_SHORT.eighths },
@@ -1148,7 +1239,6 @@ function PhrasePins({
     {
       key: 'register',
       label: 'Register',
-      legend: 'Pin the hand position',
       values: [
         { value: 'low', label: REGISTER_LABEL.low },
         { value: 'mid', label: REGISTER_LABEL.mid },
@@ -1158,7 +1248,6 @@ function PhrasePins({
     {
       key: 'cadence',
       label: 'Lands on',
-      legend: 'Pin the landing note',
       values: [
         { value: 'root', label: CADENCE_LABEL.root },
         { value: 'third', label: CADENCE_LABEL.third },
@@ -1169,40 +1258,46 @@ function PhrasePins({
   const pinned = Object.keys(locks).length > 0;
   return (
     <div className="phrase-pins">
-      <p className="deck-legend phrase-pins-title">
-        Build
+      <p className="phrase-pins-title">
+        <span id={hintId} className="phrase-pins-hint">
+          Pin one, re-roll the rest
+        </span>
         {pinned ? (
           <button type="button" className="phrase-pins-clear" onClick={onClear}>
             Clear pins
           </button>
-        ) : (
-          <span className="phrase-pins-hint">
-            Pick one to keep it while the rest re-rolls
-          </span>
-        )}
+        ) : null}
       </p>
-      <div className="phrase-pins-rows">
+      <div className="phrase-pin-grid">
         {rows.map((row) => (
-          <fieldset key={row.key} className="phrase-pin-row">
-            <legend className="deck-legend">{row.legend}</legend>
-            {row.values.map((option) => {
-              const active = locks[row.key] === option.value;
-              const current = plan?.[row.key] === option.value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  aria-pressed={active}
-                  className={`phrase-pin${current && !active ? ' is-current' : ''}`}
-                  onClick={() => onPin(row.key, option.value)}
-                >
-                  {option.label}
-                  {current && !active ? (
-                    <span className="sr-only"> (playing now)</span>
-                  ) : null}
-                </button>
-              );
-            })}
+          <fieldset
+            key={row.key}
+            className="phrase-pin-row"
+            aria-label={`Pin ${row.label.toLowerCase()}`}
+            aria-describedby={hintId}
+            data-options={row.values.length}
+          >
+            <legend className="deck-legend">{row.label}</legend>
+            <div className="phrase-pin-line">
+              {row.values.map((option) => {
+                const active = locks[row.key] === option.value;
+                const current = plan?.[row.key] === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={active}
+                    className={`phrase-pin${current && !active ? ' is-current' : ''}`}
+                    onClick={() => onPin(row.key, option.value)}
+                  >
+                    {option.label}
+                    {current && !active ? (
+                      <span className="sr-only"> (playing now)</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
           </fieldset>
         ))}
       </div>

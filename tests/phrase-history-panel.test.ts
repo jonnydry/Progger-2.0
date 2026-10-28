@@ -7,10 +7,20 @@ import { TRAY_KEY } from '../lib/tray.ts';
 import { launchNamed } from './browser-launch.ts';
 import { acquireDevServer } from './dev-server.ts';
 
+async function openPhraseFolds(page: Page) {
+  for (const selector of ['.deck-build', '.deck-feel']) {
+    const fold = page.locator(selector);
+    if ((await fold.getAttribute('open')) === null) {
+      await fold.locator('> summary').click();
+    }
+  }
+}
+
 async function openPhrases(page: Page) {
   await page.locator('.phrase-open').click();
   await page.locator('.phrase-panel').waitFor({ state: 'visible' });
   await page.locator('.phrase-action', { hasText: 'Play' }).waitFor();
+  await openPhraseFolds(page);
 }
 
 async function seedOf(page: Page) {
@@ -906,7 +916,10 @@ void test('the lock guard ignores a cross-tab write for a different key or phras
     await resetChanges();
 
     const historyKey = PHRASE_HISTORY_KEY;
-    const stored = await page.evaluate((key) => localStorage.getItem(key), historyKey);
+    const stored = await page.evaluate(
+      (key) => localStorage.getItem(key),
+      historyKey,
+    );
     assert.ok(stored);
     await page.evaluate(() => {
       const other = 'progger.not-the-phrase-history';
@@ -938,14 +951,18 @@ void test('the lock guard ignores a cross-tab write for a different key or phras
         entries: { seed: number }[];
         index: number;
       };
-      const index = parsed.entries.findIndex((_, entry) => entry !== parsed.index);
+      const index = parsed.entries.findIndex(
+        (_, entry) => entry !== parsed.index,
+      );
       const entry = parsed.entries[index];
       if (!entry || index < 0) throw new Error('no other phrase');
       const previous = entry.seed;
       entry.seed = (previous + 97) >>> 0;
       const next = JSON.stringify(parsed);
       localStorage.setItem(key, next);
-      window.dispatchEvent(new StorageEvent('storage', { key, newValue: next }));
+      window.dispatchEvent(
+        new StorageEvent('storage', { key, newValue: next }),
+      );
       return { previous, seed: entry.seed };
     }, historyKey);
     assert.notEqual(otherPhrase.seed, otherPhrase.previous);

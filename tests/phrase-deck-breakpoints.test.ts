@@ -99,3 +99,69 @@ void test('deck stylesheets use the shared breakpoint widths', () => {
   assert.match(panel, /DECK_BREAKPOINT_QUERY\.phone/);
   assert.equal(panel.includes('(max-width:'), false);
 });
+
+/**
+ * First look is the tape, Play, and a closed Build summary. Pins stay in that
+ * fold, and Bars / Tempo / Swing / Seed stay in a second fold. These rules are
+ * what keep the deck readable without breaking tab order, so they are locked
+ * here rather than left to a screenshot.
+ */
+void test('the deck leads with play and keeps build folded', () => {
+  const deck = readFileSync(
+    new URL('../app/phrase-deck.css', import.meta.url),
+    'utf8',
+  );
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(panel, /className="deck-play-primary"/);
+  assert.match(panel, /<h3 className="deck-legend">Play<\/h3>/);
+  assert.equal(
+    panel.includes('deck-build" open'),
+    false,
+    'Build is closed until someone opens it',
+  );
+  assert.equal(
+    panel.includes('deck-feel" open'),
+    false,
+    'Tempo is closed until someone opens it',
+  );
+  assert.match(
+    panel,
+    /<details className="deck-fold deck-build">[\s\S]*<PhrasePins[\s\S]*<details className="deck-fold deck-feel">[\s\S]*<div className="deck-plate">/,
+  );
+  assert.equal(
+    (panel.match(/<PhrasePins/g) ?? []).length,
+    1,
+    'the pins render once, inside Build',
+  );
+  assert.equal(
+    /grid-template-areas:[^;]*pins/.test(deck),
+    false,
+    'pins are not a row of the tempo plate',
+  );
+  assert.match(
+    deck,
+    /\.deck-fold-summary \{[^}]*min-height: var\(--deck-row\)/,
+  );
+  /* A fieldset legend cannot take a layout track, so it is positioned over the
+     row's own gutter. If it ever goes back into the grid the options collapse
+     to one column and every pin clips. */
+  assert.match(
+    deck,
+    /\.phrase-pin-row > \.deck-legend \{[^}]*position: absolute/,
+  );
+  assert.match(
+    deck,
+    /\.phrase-deck \.deck-key \{[^}]*min-height: var\(--deck-row\)/,
+  );
+  for (const label of ['Contour', 'Rhythm', 'Register', 'Lands on']) {
+    assert.match(panel, new RegExp(`label: '${label}'`), label);
+  }
+  assert.equal(
+    panel.includes('Pin the shape'),
+    false,
+    'pin rows use short names',
+  );
+});
