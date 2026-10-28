@@ -790,6 +790,7 @@ export function PhrasePanel({
       key="play"
       type="button"
       className={`phrase-action deck-key deck-key-play${busy ? ' is-latched' : ''}`}
+      aria-label={busy ? 'Stop phrase' : 'Play phrase'}
       disabled={!phrase.ok}
       onClick={togglePlay}
     >
@@ -924,6 +925,7 @@ export function PhrasePanel({
         className="phrase-action deck-toggle deck-speed"
         aria-pressed={slow}
         aria-label="Half speed"
+        title="Half speed"
         onClick={() => setSlow((current) => !current)}
       >
         <Turtle size={16} aria-hidden="true" />
@@ -931,7 +933,7 @@ export function PhrasePanel({
         {/* Phone: the toggle shares the tempo line, so it carries the mark and
             the aria-label rather than pushing the slider down a row. */}
         <span className="deck-speed-short" aria-hidden="true">
-          ½
+          ½×
         </span>
       </button>
     </div>
@@ -1119,6 +1121,11 @@ type PinOption<K extends keyof PhraseLocks> = {
  * it, so the same button both fixes and frees that field. Everything is a
  * button rather than a select: a four-value plan field is cheaper to scan as
  * a row, and the deck's phone layout already stacks the rows.
+ *
+ * A fieldset's legend cannot share a layout track with its options, so the
+ * visible legend is positioned over the row's label gutter and the row gets
+ * its accessible name from `aria-label` — "Pin contour" rather than a bare
+ * "Contour", which said nothing about what pressing one does.
  */
 function PhrasePins({
   plan,
@@ -1134,6 +1141,7 @@ function PhrasePins({
   ) => void;
   onClear: () => void;
 }) {
+  const hintId = 'phrase-pins-hint';
   const rows: PinOption<keyof PhraseLocks>[] = [
     {
       key: 'contour',
@@ -1178,7 +1186,7 @@ function PhrasePins({
   return (
     <div className="phrase-pins">
       <p className="deck-legend phrase-pins-title">
-        Build
+        <span id={hintId}>Build</span>
         {pinned ? (
           <button type="button" className="phrase-pins-clear" onClick={onClear}>
             Clear pins
@@ -1192,15 +1200,9 @@ function PhrasePins({
           <fieldset
             key={row.key}
             className="phrase-pin-row"
+            aria-label={`Pin ${row.label.toLowerCase()}`}
+            aria-describedby={hintId}
             data-options={row.values.length}
-            /* On phones four options only stop fitting when one of them is a
-               long word: contour's "arch rise fall wave" still shares a line at
-               320px, rhythm's "quarters … long–short" does not. */
-            data-stack={
-              row.values.some((option) => option.label.length > 7)
-                ? ''
-                : undefined
-            }
           >
             <legend className="deck-legend">{row.label}</legend>
             <div className="phrase-pin-line">

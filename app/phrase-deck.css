@@ -235,8 +235,9 @@
 }
 .deck-setting {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: 4px var(--space-2);
   min-width: 0;
 }
 /* A fieldset's legend cannot take a layout track, so Bars positions it over
@@ -330,8 +331,10 @@
   gap: 6px;
   border-radius: var(--radius-key);
 }
-/* Half speed changes the tempo, so it ends the tempo line. It keeps the word
-   wherever the word fits; the ½ mark is the fallback at phone width. */
+/* Half speed changes the tempo, so it ends the tempo line when the line is
+   wide enough for a usable slider beside it, and drops to its own line when it
+   is not. `margin-left: auto` would instead hold the line and starve the
+   slider, which once collapsed it to 0px at 650px and 1081px. */
 .deck-speed {
   flex: 0 0 auto;
   margin-left: auto;
@@ -343,7 +346,7 @@
 
 .deck-fader {
   display: flex;
-  flex: 1 1 8rem;
+  flex: 1 1 12rem;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
@@ -360,10 +363,12 @@
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+/* A fader below ~6rem is not a tempo control, so the slider refuses to shrink
+   past it and the row wraps Half speed instead. */
 .deck-fader input[type='range'] {
-  flex: 1 1 4rem;
+  flex: 1 1 6rem;
   width: 100%;
-  min-width: 0;
+  min-width: 6rem;
   height: var(--deck-row);
   margin: 0;
   background: transparent;
@@ -409,7 +414,11 @@
   display: flex;
   flex: 1 1 auto;
   align-items: center;
+  gap: var(--space-2);
   min-width: 0;
+}
+.deck-counter > .deck-legend {
+  flex: 0 0 var(--deck-gutter);
 }
 .deck-counter input {
   box-sizing: border-box;
@@ -446,7 +455,7 @@
 .phrase-pins-title {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: 0 var(--space-2);
   margin: 0;
 }
@@ -458,6 +467,11 @@
   text-transform: none;
 }
 .phrase-pins-clear {
+  /* The title only appears once a pin is set, so this link has to be tappable
+     in its own right: a 14px-tall text link was the smallest target in the
+     deck. Negative inline margin keeps the visual rhythm of the title. */
+  min-height: var(--deck-row);
+  margin: -14px 0;
   padding: 0;
   color: var(--green);
   background: none;
@@ -498,14 +512,22 @@
 .phrase-pin-line {
   display: flex;
   flex: 1 1 auto;
+  flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
   margin-left: calc(var(--deck-gutter) + var(--space-2));
 }
+/* A four-option pin is an even block: four across while the row can hold them,
+   and never a ragged 3+1. */
+.phrase-pin-row[data-options='4'] .phrase-pin-line {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .phrase-pin {
   box-sizing: border-box;
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 1 1 auto;
+  /* Never narrower than a finger. */
+  min-width: 44px;
   min-height: var(--deck-row);
   padding: 0 var(--space-1);
   color: var(--quiet);
@@ -558,6 +580,28 @@
   }
 }
 
+/* Between here and the phone layout the six keys still share one line, but the
+   shorter keys would keep icon and label inline while "New phrase" and "Save to
+   stash" wrapped onto a second line, so the row was ragged. One stacked key
+   shape for the band costs 3px and reads evenly. Widths are
+   DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
+@media (max-width: 860px) {
+  .phrase-deck .deck-key {
+    flex-direction: column;
+    gap: 1px;
+    padding: 6px 4px 3px;
+  }
+}
+
+/* Four options still share one line at phone width; below this they become a
+   2x2 block so nothing clips. Half speed keeps its ½ mark on phones so the
+   tempo slider keeps a usable length. */
+@media (max-width: 470px) {
+  .phrase-pin-row[data-options='4'] .phrase-pin-line {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 640px) {
   .phrase-deck {
     gap: 6px;
@@ -580,11 +624,11 @@
     row-gap: 4px;
   }
   /* Three keys across is too narrow for an icon beside a word, so the phone
-     key stacks them and keeps the same --deck-row target. */
+     key keeps the stacked shape from the band above. Tighter inline padding
+     keeps "Save to stash" on one line, which is what made the top row taller
+     than the history row. */
   .phrase-deck .deck-key {
-    flex-direction: column;
-    gap: 1px;
-    padding: 6px 4px 3px;
+    padding-inline: 2px;
   }
   .deck-plate {
     grid-template-columns: minmax(0, 1fr);
@@ -597,13 +641,9 @@
     gap: 4px;
     padding: 6px 8px;
   }
-  /* The legend stays beside its options: stacking it above them adds a line to
-     every pin, which is the cost this layout removes. A smaller legend keeps
-     the label column from crowding the options. */
-  .phrase-pin-row > .deck-legend {
-    font-size: 10px;
-    letter-spacing: 0.06em;
-  }
+  /* The legend stays beside its options at the same size as every other
+     legend: stacking it above them, or shrinking it, is not what buys the
+     height here. */
   .deck-speed {
     padding-inline: var(--space-2);
   }
@@ -615,20 +655,5 @@
   }
   .deck-counter input {
     width: 100%;
-  }
-}
-
-/* Four options still share one line until one of them is a long word. A pin
-   row marked `data-stack` becomes a 2x2 block here instead of letting
-   "long–short" clip or wrap the line into a ragged 3+1. The three-option rows
-   and the short contour labels stay on one line down to 320px. */
-@media (max-width: 480px) {
-  .phrase-pin-row[data-stack] .phrase-pin-line {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    row-gap: 4px;
-  }
-  .deck-speed {
-    padding-inline: 6px;
   }
 }

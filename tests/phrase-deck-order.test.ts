@@ -162,12 +162,13 @@ type DeckDensity = {
   clipped: string[];
   shortTargets: string[];
   legendGutters: number[];
+  sliders: { name: string; width: number }[];
 };
 
 /**
  * The deck is dense by design, so it has to stay legible while it shrinks:
- * no label may clip, every control keeps a --tap target, and each pin legend
- * shares a line with its own options (never overlapping them or another row).
+ * no label may clip, every control keeps a --tap target, each pin legend
+ * shares a line with its own options, and a fader keeps a usable length.
  */
 async function deckDensity(page: Page): Promise<DeckDensity> {
   return page.evaluate(() => {
@@ -220,12 +221,21 @@ async function deckDensity(page: Page): Promise<DeckDensity> {
       if (!options) return -1;
       return Math.round(options.getBoundingClientRect().left - label.right);
     });
+    const sliders = [
+      ...deck.querySelectorAll<HTMLElement>(
+        '.phrase-tempo input[type="range"], .phrase-swing input[type="range"]',
+      ),
+    ].map((node) => ({
+      name: name(node.closest('label') ?? node),
+      width: Math.round(node.getBoundingClientRect().width),
+    }));
     return {
       height: Math.round(deck.getBoundingClientRect().height),
       rows,
       clipped,
       shortTargets,
       legendGutters,
+      sliders,
     };
   });
 }
@@ -327,10 +337,14 @@ void test(
     await page.waitForSelector('.phrase-open');
     await openPhrases(page);
 
-    /* Phone first, so the tallest reading is the one measured. Desktop must be
-       clearly shorter: the compact plate should never grow with width. */
+    /* Every band the layout switches at, and the awkward widths inside each:
+       a fader once collapsed to 0px at 650px and 1081px because the readout
+       and Half speed held the line and only the slider could give. */
     const heights = new Map<number, number>();
-    for (const width of [1440, 1080, 960, 800, 640, 500, 390, 360, 320]) {
+    for (const width of [
+      1600, 1440, 1250, 1200, 1100, 1081, 1080, 960, 900, 860, 800, 760, 700,
+      650, 641, 640, 500, 480, 420, 390, 360, 320,
+    ]) {
       await page.setViewportSize({
         width,
         height: width >= 800 ? 900 : 844,
@@ -343,6 +357,12 @@ void test(
         assert.ok(
           gap >= 2 && gap <= 24,
           `${width}px pin legend sits ${gap}px from its options`,
+        );
+      }
+      for (const slider of deck.sliders) {
+        assert.ok(
+          slider.width >= 88,
+          `${width}px ${slider.name} fader is ${slider.width}px`,
         );
       }
       heights.set(width, deck.height);
@@ -371,7 +391,7 @@ void test(
         }),
       };
     });
-    assert.deepEqual(pins.lines, [1, 2, 1, 1], 'pin rows at 320px');
+    assert.deepEqual(pins.lines, [2, 2, 1, 1], 'pin rows at 320px');
     await page.close();
   },
 );
