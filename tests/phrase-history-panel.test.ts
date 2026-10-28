@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Page } from 'playwright';
 import { PHRASE_HISTORY_KEY } from '../lib/phrase-history.ts';
+import { RHYTHM_LABEL, type RhythmId } from '../lib/phrase.ts';
 import { TRAY_KEY } from '../lib/tray.ts';
 import { launchNamed } from './browser-launch.ts';
 import { acquireDevServer } from './dev-server.ts';
@@ -868,6 +869,138 @@ void test('a history step that changes bars queues the next downbeat', async (t)
       );
       assert.equal(later[1]?.bars, change.back);
     }
+  } finally {
+    await page.close();
+    await browser.close();
+    await server.release();
+  }
+});
+
+void test('the lock guard ignores a cross-tab write for a different key or phrase and keeps the matching one', async (t) => {
+  const browser = await launchNamed('chromium', t);
+  const server = await acquireDevServer();
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 900 },
+  });
+  try {
+    await freshPhrases(page, server.origin, 1280);
+    await page.getByRole('button', { name: 'New phrase' }).click();
+    await page.getByRole('button', { name: 'New phrase' }).click();
+    const seed = await seedOf(page);
+    const notes = await phraseNotes(page);
+    const plan = await page.locator('.phrase-plan').innerText();
+    await page.locator('.phrase-action', { hasText: 'Play' }).click();
+    await page
+      .locator('#phrase-seed-help', { hasText: 'Playing this phrase.' })
+      .waitFor({ timeout: 15000 });
+    await armPhraseChanges(page);
+    const resetChanges = () =>
+      page.evaluate(() => {
+        const view = window as Window & {
+          __phraseChanges?: number;
+          __phraseChangeCalls?: unknown[];
+        };
+        view.__phraseChanges = 0;
+        view.__phraseChangeCalls = [];
+      });
+    await resetChanges();
+
+    const historyKey = PHRASE_HISTORY_KEY;
+    const stored = await page.evaluate((key) => localStorage.getItem(key), historyKey);
+    assert.ok(stored);
+    await page.evaluate(() => {
+      const other = 'progger.not-the-phrase-history';
+      localStorage.setItem(other, '{"version":1,"entries":[],"index":-1}');
+      window.dispatchEvent(
+        new StorageEvent('storage', {
+          key: other,
+          newValue: localStorage.getItem(other),
+        }),
+      );
+    });
+    assert.equal(await settledChangeCount(page), 0);
+    assert.equal(
+      await page.evaluate((key) => localStorage.getItem(key), historyKey),
+      stored,
+    );
+    assert.deepEqual(await phraseNotes(page), notes);
+    assert.equal(await page.locator('.phrase-plan').innerText(), plan);
+    assert.match(
+      await page.locator('#phrase-seed-help').innerText(),
+      /Playing this phrase\./,
+    );
+
+    await resetChanges();
+    const otherPhrase = await page.evaluate((key) => {
+      const raw = localStorage.getItem(key);
+      if (!raw) throw new Error('history missing');
+      const parsed = JSON.parse(raw) as {
+        entries: { seed: number }[];
+        index: number;
+      };
+      const index = parsed.entries.findIndex((_, entry) => entry !== parsed.index);
+      const entry = parsed.entries[index];
+      if (!entry || index < 0) throw new Error('no other phrase');
+      const previous = entry.seed;
+      entry.seed = (previous + 97) >>> 0;
+      const next = JSON.stringify(parsed);
+      localStorage.setItem(key, next);
+      window.dispatchEvent(new StorageEvent('storage', { key, newValue: next }));
+      return { previous, seed: entry.seed };
+    }, historyKey);
+    assert.notEqual(otherPhrase.seed, otherPhrase.previous);
+    assert.equal(await settledChangeCount(page), 0);
+    assert.equal(await seedOf(page), seed);
+    assert.deepEqual(await phraseNotes(page), notes);
+    assert.equal(await page.locator('.phrase-plan').innerText(), plan);
+    assert.match(
+      await page.locator('#phrase-seed-help').innerText(),
+      /Playing this phrase\./,
+    );
+
+    await resetChanges();
+    const rhythms: readonly { id: RhythmId; label: string }[] = [
+      { id: 'eighths', label: RHYTHM_LABEL.eighths },
+      { id: 'quarters', label: RHYTHM_LABEL.quarters },
+      { id: 'push', label: RHYTHM_LABEL.push },
+      { id: 'long-short', label: RHYTHM_LABEL['long-short'] },
+    ];
+    const rhythm = rhythms.find((item) => !plan.includes(item.label));
+    assert.ok(rhythm, plan);
+    await page.evaluate(
+      ({ key, id }) => {
+        const raw = localStorage.getItem(key);
+        if (!raw) throw new Error('history missing');
+        const parsed = JSON.parse(raw) as {
+          entries: { locks?: { rhythm?: string } }[];
+          index: number;
+        };
+        const entry = parsed.entries[parsed.index];
+        if (!entry) throw new Error('the showing phrase is missing');
+        entry.locks = { ...entry.locks, rhythm: id };
+        const next = JSON.stringify(parsed);
+        localStorage.setItem(key, next);
+        window.dispatchEvent(
+          new StorageEvent('storage', { key, newValue: next }),
+        );
+      },
+      { key: historyKey, id: rhythm.id },
+    );
+    await page
+      .locator('.phrase-plan', { hasText: rhythm.label })
+      .waitFor({ timeout: 5000 });
+    const calls = await phraseChangeCalls(page);
+    assert.ok(
+      calls.some((call) => call.method === 'start'),
+      `the matching phrase was not played: ${JSON.stringify(calls)}`,
+    );
+    assert.match(
+      await page.locator('.phrase-plan').innerText(),
+      new RegExp(rhythm.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    );
+    await page
+      .locator('#phrase-seed-help', { hasText: 'Playing this phrase.' })
+      .waitFor({ timeout: 15000 });
   } finally {
     await page.close();
     await browser.close();

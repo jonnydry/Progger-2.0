@@ -39,6 +39,12 @@ export const PHRASE_NOTE_RELEASE_SEC = 0.03;
  */
 export const PHRASE_START_LEAD_SEC = 0.05;
 /**
+ * How early a mute counts as already reached. A browser's currentTime
+ * can sit one render block behind the audio thread, about 2.7 ms at
+ * 48 kHz. An instant restore in that gap clicks. 10 ms covers the block.
+ */
+export const PHRASE_MUTE_RELEASE_MARGIN_SEC = 0.01;
+/**
  * The slider number is quarter-note BPM. Beat N starts at N * (60 / BPM)
  * seconds. Swing moves the offbeat eighth inside that quarter and does not
  * scale the beat. 40 is largo and 240 is prestissimo.
@@ -693,9 +699,10 @@ export class PhrasePlayer {
   /**
    * Notes the armed switch will not play. Their bus is silent from the
    * bar line, including when this thread stalls past the handoff.
-   * Loop off puts the level back so those notes still sound.
+   * Loop off puts the level back so those notes still sound. `at` is
+   * the instant the bus steps to 0.
    */
-  private switchMutes: { bus: GainNode; level: number }[] = [];
+  private switchMutes: { bus: GainNode; level: number; at: number }[] = [];
   /** Boundary the queue timer is waiting on. */
   private queueAt = Number.NaN;
   private scheduler: LookaheadScheduler | null = null;
@@ -1139,8 +1146,10 @@ export class PhrasePlayer {
     const now = this.clock.now();
     const boundary = nextPhraseBarLine(this.startedAt, now, this.soundingTempo);
     // Silence notes at or after the bar on the audio clock. Turning Loop
-    // off before the bar releases that mute, so they still play. The
-    // handoff drops them when the switch commits.
+    // off well before the bar releases that mute, so they still play.
+    // Inside the release margin the rise is 20 ms, because currentTime
+    // can already be past the mute. The handoff drops them when the
+    // switch commits.
     this.muteVoicesFrom(boundary);
     this.scheduler.suppressFrom(boundary, () => {
       this.armQueuedStart(boundary);
@@ -1176,7 +1185,7 @@ export class PhrasePlayer {
       } catch {
         continue;
       }
-      this.switchMutes.push({ bus, level });
+      this.switchMutes.push({ bus, level, at: boundary });
     }
   }
 
@@ -1187,7 +1196,20 @@ export class PhrasePlayer {
     for (const mute of mutes) {
       try {
         mute.bus.gain.cancelScheduledValues(now);
-        mute.bus.gain.setValueAtTime(mute.level, now);
+        // The mute is still clear of the render block. The note is at
+        // its level, so put that level back in one event.
+        if (mute.at > now + PHRASE_MUTE_RELEASE_MARGIN_SEC) {
+          mute.bus.gain.setValueAtTime(mute.level, now);
+          continue;
+        }
+        // The bar is inside the margin or already past. gain.value
+        // stays at the intrinsic level after the automation has
+        // stepped to 0, so use that read only when it is already
+        // silent, and 0 otherwise. Then rise over the same 20 ms as halt.
+        const current = mute.bus.gain.value;
+        const anchor = current > 0 || !Number.isFinite(current) ? 0 : current;
+        mute.bus.gain.setValueAtTime(anchor, now);
+        mute.bus.gain.linearRampToValueAtTime(mute.level, now + 0.02);
       } catch {
         // The context may already be closed.
       }
