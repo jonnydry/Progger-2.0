@@ -633,7 +633,9 @@ export function PhrasePanel({
 
   function commitSeed(text: string) {
     const parsed = parseSeed(text);
-    if (parsed === null) {
+    // Copy and blur commit the field even when the number did not change.
+    // Releasing here dropped the stash phrase loaded on this seed.
+    if (parsed === null || parsed === seed) {
       setSeedText(String(seed));
       return;
     }
