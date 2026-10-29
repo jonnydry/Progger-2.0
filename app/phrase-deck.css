@@ -1,15 +1,11 @@
-/* Cassette deck, read in three beats: the tape window (what the phrase is),
-   Play (what to do next), and Build (shape the next roll). Build starts
-   closed. Tempo, swing, and seed stay behind a second fold so they never
-   sit in a row of equal keys with the pins.
-
-   Surfaces, edges, type and spacing come from deck-tokens.css. The housing
+/* Surfaces, edges, type and spacing come from deck-tokens.css. The housing
    keeps the hard key edge; new rows use a 1px plate line and no extra shadow. */
 .phrase-deck {
   --deck-led-off: color-mix(in srgb, var(--quiet) 30%, transparent);
   /* The label column and the control height shared by Bars, Tempo, Swing,
      Seed and every Build pin. 4.5rem holds the longest legend, "REGISTER". */
   --deck-gutter: 4.5rem;
+  --deck-control-start: calc(var(--deck-gutter) + var(--space-2));
   --deck-row: 44px;
   display: grid;
   gap: 12px;
@@ -260,23 +256,10 @@
   }
 }
 
-/* Tempo fold: Bars, Tempo, Swing, and Seed. One `legend | control` line each.
-   The grid only changes how those four share the width. */
-.deck-plate {
+.deck-stack {
   display: grid;
-  grid-template-columns:
-    auto minmax(15rem, 1.4fr) minmax(10rem, 1fr)
-    auto;
-  grid-template-areas: 'bars tempo swing seed';
-  align-items: start;
-  gap: 4px 16px;
+  gap: 4px;
   min-width: 0;
-  padding: 4px 0 0;
-  background: transparent;
-  border: 0;
-}
-.deck-plate .deck-legend {
-  margin: 0;
 }
 .deck-setting {
   display: flex;
@@ -285,11 +268,8 @@
   gap: 4px var(--space-2);
   min-width: 0;
 }
-/* A fieldset's legend cannot take a layout track, so Bars positions it over
-   the label gutter and its switch keeps the rest of the line. The faders and
-   the seed are labels, so their own legend is already an item on the line. */
+/* A fieldset legend cannot take a flex track, so Bars paints it over the gutter. */
 .deck-setting-bars {
-  grid-area: bars;
   position: relative;
   min-height: var(--deck-row);
 }
@@ -303,17 +283,8 @@
   transform: translateY(-50%);
 }
 .deck-setting-bars > .deck-switch {
-  flex: 1 1 auto;
-  margin-left: calc(var(--deck-gutter) + var(--space-2));
-}
-.deck-setting-tempo {
-  grid-area: tempo;
-}
-.deck-setting-swing {
-  grid-area: swing;
-}
-.deck-setting-seed {
-  grid-area: seed;
+  flex: 0 1 auto;
+  margin-left: var(--deck-control-start);
 }
 
 .deck-legend {
@@ -330,8 +301,9 @@
 
 .deck-switch {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  flex: 1 1 auto;
+  grid-template-columns: repeat(2, max-content);
+  justify-content: start;
+  flex: 0 1 auto;
   min-width: 0;
 }
 .deck-switch button,
@@ -376,13 +348,11 @@
   gap: 6px;
   border-radius: var(--radius-key);
 }
-/* Half speed changes the tempo, so it ends the tempo line when the line is
-   wide enough for a usable slider beside it, and drops to its own line when it
-   is not. `margin-left: auto` would instead hold the line and starve the
-   slider, which once collapsed it to 0px at 650px and 1081px. */
+/* Half speed ends the tempo line when the slider still has 6rem, and takes
+   the next line of this row when it does not. margin-left: auto held the
+   line and collapsed that slider to 0px at 650px and 1081px. */
 .deck-speed {
   flex: 0 0 auto;
-  margin-left: auto;
 }
 .deck-speed-short {
   display: none;
@@ -390,18 +360,24 @@
 }
 
 .deck-fader {
-  display: flex;
-  flex: 1 1 12rem;
+  display: grid;
+  grid-template-columns: var(--deck-gutter) minmax(6rem, 1fr) auto;
   align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
+  column-gap: var(--space-2);
+  /* flex-basis auto used the range input's intrinsic width and wrapped
+     Half speed while the row still had room. 0 lets the floor below decide. */
+  flex: 1 1 0%;
+  /* 0 let the 6rem slider shove the BPM under Half speed. This floor keeps
+     the legend, the slider, and "240 BPM", so the button wraps instead. */
+  min-width: calc(var(--deck-gutter) + 6rem + 4.5rem + 2px + 2 * var(--space-2));
 }
 .deck-fader > .deck-legend {
-  flex: 0 0 var(--deck-gutter);
+  margin: 0;
 }
 .deck-fader output {
   flex: 0 0 auto;
-  min-width: 3.2em;
+  min-width: calc(4.5rem + 2px);
+  white-space: nowrap;
   color: var(--green);
   font-family: var(--font-arcade), var(--font-ui);
   font-size: var(--text-md);
@@ -457,13 +433,10 @@
 
 .deck-counter {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-}
-.deck-counter > .deck-legend {
-  flex: 0 0 var(--deck-gutter);
 }
 .deck-counter input {
   box-sizing: border-box;
@@ -483,19 +456,17 @@
   letter-spacing: 1px;
 }
 
-/* Build fold. Closed, it is one summary row. Open, the pins are the work and
-   Tempo is a second summary, so the faders do not compete with the pins. */
 .deck-fold {
   min-width: 0;
 }
 .deck-fold-summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 20px;
+  grid-template-columns: var(--deck-gutter) minmax(0, 1fr) 20px;
   align-items: center;
-  gap: 8px;
+  column-gap: var(--space-2);
   min-height: var(--deck-row);
   margin: 0;
-  padding: 6px 10px;
+  padding: 0 10px 0 0;
   color: var(--foreground);
   background: var(--surface-plate);
   border: 1px solid var(--edge);
@@ -507,6 +478,9 @@
 }
 .deck-fold-summary::-webkit-details-marker {
   display: none;
+}
+.deck-fold-summary::marker {
+  content: none;
 }
 .deck-fold-summary .deck-legend {
   margin: 0;
@@ -551,32 +525,80 @@
   display: grid;
   gap: 8px;
   min-width: 0;
-  padding: 8px 8px 10px;
+  padding: 8px 8px 10px 0;
   background: var(--surface-plate);
   border: 1px solid var(--edge);
   border-top: 0;
   border-radius: 0 0 var(--radius-key) var(--radius-key);
 }
+.deck-fold-body.deck-stack {
+  gap: 4px;
+}
 /* Author `display` on the body beats the browser's details rule, which left
    the pins painted while the summary still said they were closed. */
-.deck-fold:not([open]) > :not(summary) {
+.deck-fold:not([open]) > :not(summary),
+.deck-seed:not([open]) > :not(summary) {
   display: none;
 }
-.deck-feel {
-  padding-top: 4px;
-  border-top: 1px solid var(--edge);
-}
-.deck-feel > .deck-fold-summary {
-  /* The build summary's side padding hides the chevron's overflow. This row
-     sits flush with the pins, so it keeps a few pixels on the end only —
-     without them the summary's scroll width sticks past the plate at 1600. */
-  padding-inline: 0 6px;
+.deck-seed > summary {
+  display: grid;
+  grid-template-columns: var(--deck-gutter) minmax(0, 1fr) 20px;
+  align-items: center;
+  column-gap: var(--space-2);
+  min-height: var(--deck-row);
+  margin: 0;
+  padding: 0;
+  color: var(--foreground);
   background: transparent;
   border: 0;
-  border-radius: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  list-style: none;
 }
-.deck-feel[open] > .deck-fold-summary {
-  border-radius: 0;
+.deck-seed > summary::-webkit-details-marker {
+  display: none;
+}
+.deck-seed > summary::marker {
+  content: none;
+}
+.deck-seed > summary .deck-legend {
+  margin: 0;
+  padding-inline-end: var(--tracking-legend);
+}
+.deck-seed > summary .deck-chevron {
+  grid-column: 3;
+}
+.deck-seed > summary:hover .deck-legend,
+.deck-seed > summary:hover .deck-chevron {
+  color: var(--green);
+}
+.deck-seed[open] > summary .deck-legend {
+  color: var(--green);
+}
+.deck-seed[open] > summary .deck-chevron {
+  transform: rotate(180deg);
+}
+.deck-seed-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  margin-left: var(--deck-control-start);
+  min-width: 0;
+}
+.deck-seed-fields .phrase-seed {
+  position: relative;
+  flex: 0 0 auto;
+}
+.deck-seed-fields .phrase-seed input {
+  flex: 0 0 auto;
+  width: calc(10ch + 10px + 2 * 10px + 4px + 4px);
+  max-width: 100%;
+}
+.deck-seed-copy {
+  flex: 0 0 auto;
 }
 @media (prefers-reduced-motion: no-preference) {
   .deck-chevron {
@@ -587,10 +609,7 @@
   transform: rotate(180deg);
 }
 
-/* Pin one field of the plan and re-roll the rest. Each pin is one
-   `legend | options` line, so DOM order, reading order and tab order name
-   the same sequence at every width. A second column only appears when it
-   can hold four options on one line. */
+/* Pin one field of the plan and re-roll the rest. */
 .phrase-pins {
   display: grid;
   gap: 4px;
@@ -627,11 +646,8 @@
 }
 .phrase-pin-grid {
   display: grid;
-  /* Two columns of `legend | options`, so the four Build rows take two lines
-     instead of four. Every column holds four options beside the legend at this
-     width, so no label clips. Below the plate breakpoint it is one column. */
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
   min-width: 0;
 }
 .phrase-pin-row {
@@ -659,17 +675,12 @@
   flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
-  margin-left: calc(var(--deck-gutter) + var(--space-2));
-}
-/* A four-option pin is an even block: four across while the row can hold them,
-   and never a ragged 3+1. */
-.phrase-pin-row[data-options='4'] .phrase-pin-line {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-left: var(--deck-control-start);
 }
 .phrase-pin {
   box-sizing: border-box;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  width: max-content;
   /* Never narrower than a finger. */
   min-width: 44px;
   min-height: var(--deck-row);
@@ -707,20 +718,19 @@
   outline-offset: var(--focus-offset);
 }
 
-/* Below this the four tempo controls cannot hold their sliders, readouts and
-   Half speed on one line. They pair up, and Half speed stays inside the Tempo
-   cell, which is the row above Swing. Pins drop to one column because a
-   half-width column leaves "long–short" 75px and the label needs 76px.
-   Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
+/* Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. */
 @media (max-width: 1210px) {
-  .deck-plate {
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas:
-      'bars tempo'
-      'swing seed';
+  .phrase-pin {
+    flex: 1 1 auto;
+    width: auto;
   }
-  .phrase-pin-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .phrase-pin-row[data-options='4'] .phrase-pin-line {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .deck-switch {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex: 1 1 auto;
   }
 }
 
@@ -756,16 +766,6 @@
     width: 16px;
     height: 16px;
   }
-  .deck-plate {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      'bars'
-      'tempo'
-      'swing'
-      'seed';
-    gap: 4px;
-    padding: 4px 0 0;
-  }
   .deck-speed {
     padding-inline: var(--space-2);
   }
@@ -774,8 +774,5 @@
   }
   .deck-speed-short {
     display: inline;
-  }
-  .deck-counter input {
-    width: 100%;
   }
 }

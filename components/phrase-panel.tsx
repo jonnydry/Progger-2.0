@@ -9,6 +9,7 @@ import {
   useState,
   useSyncExternalStore,
   type ChangeEvent,
+  type ReactNode,
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -214,6 +215,73 @@ export function saveAnnouncement(previous: string, message: string): string {
     return `${message}\u200b`;
   }
   return message;
+}
+
+type BuildChip = string & { readonly fold: 'build' };
+type TempoChip = string & { readonly fold: 'tempo' };
+
+function buildChip(text: string): BuildChip {
+  return text as BuildChip;
+}
+
+function tempoChip(text: string): TempoChip {
+  return text as TempoChip;
+}
+
+function buildReadout(locks: PhraseLocks): readonly BuildChip[] {
+  const labels = [
+    locks.contour ? CONTOUR_LABEL[locks.contour] : '',
+    locks.rhythm ? RHYTHM_SHORT[locks.rhythm] : '',
+    locks.register ? REGISTER_LABEL[locks.register] : '',
+    locks.cadence ? CADENCE_LABEL[locks.cadence] : '',
+  ].filter((label) => label.length > 0);
+  if (labels.length === 0) return [buildChip('Nothing pinned')];
+  return [buildChip('Pinned'), ...labels.map((label) => buildChip(label))];
+}
+
+function tempoSentence(input: {
+  bars: 2 | 4;
+  playbackTempo: number;
+  tempo: number;
+  trueHalf: boolean;
+  slow: boolean;
+  swing: number;
+}): readonly [TempoChip, TempoChip, TempoChip] {
+  // playbackTempo is already the sounding rate. Naming it and ½× together
+  // asks the player to halve the number a second time.
+  const rate = input.trueHalf
+    ? `${input.playbackTempo}\u00a0BPM, half of\u00a0${input.tempo}`
+    : input.slow
+      ? `${input.playbackTempo}\u00a0BPM, half speed`
+      : `${input.playbackTempo}\u00a0BPM`;
+  const feel =
+    input.swing <= 0
+      ? 'straight'
+      : `swing\u00a0${Math.round(input.swing * 100)}%`;
+  const bars = input.bars === 2 ? '2-bar' : '4-bar';
+  return [tempoChip(bars), tempoChip(rate), tempoChip(feel)];
+}
+
+function ReadoutChips(props: { chips: readonly BuildChip[] }): ReactNode;
+function ReadoutChips(props: { chips: readonly TempoChip[] }): ReactNode;
+function ReadoutChips({ chips }: { chips: readonly string[] }) {
+  return (
+    <span className="deck-fold-readout">
+      {chips.map((part, index) => {
+        const last = index === chips.length - 1;
+        // The dot is glued to its word. The space after the chip is
+        // the only wrap point, so a narrow row breaks as
+        // "2-bar ·" / "96 BPM" and never as "2-" / "bar".
+        const label = last ? part : `${part}\u00A0·`;
+        return (
+          <span key={`${index}-${part}`}>
+            <span className="deck-fold-chip">{label}</span>
+            {last ? null : ' '}
+          </span>
+        );
+      })}
+    </span>
+  );
 }
 
 export function PhrasePanel({
@@ -659,6 +727,9 @@ export function PhrasePanel({
   const [saveAnnounce, setSaveAnnounce] = useState('');
   const [announcedFor, setAnnouncedFor] = useState(phraseKey);
   const savedTimer = useRef<number | null>(null);
+  const seedInputRef = useRef<HTMLInputElement>(null);
+  const seedCopyTimer = useRef<number | null>(null);
+  const [seedCopied, setSeedCopied] = useState(false);
   if (announcedFor !== phraseKey) {
     setAnnouncedFor(phraseKey);
     setSaveAnnounce('');
@@ -668,6 +739,9 @@ export function PhrasePanel({
   useEffect(
     () => () => {
       if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+      if (seedCopyTimer.current !== null) {
+        window.clearTimeout(seedCopyTimer.current);
+      }
     },
     [],
   );
@@ -877,26 +951,6 @@ export function PhrasePanel({
       </span>
     </button>
   );
-  const pinParts = [
-    generationLocks.contour ? CONTOUR_LABEL[generationLocks.contour] : '',
-    generationLocks.rhythm ? RHYTHM_SHORT[generationLocks.rhythm] : '',
-    generationLocks.register ? REGISTER_LABEL[generationLocks.register] : '',
-    generationLocks.cadence ? CADENCE_LABEL[generationLocks.cadence] : '',
-  ].filter((part) => part.length > 0);
-  // playbackTempo is already the sounding rate. Naming it and ½× together
-  // asks the player to halve the number a second time.
-  const tempoBit = trueHalf
-    ? `${playbackTempo}\u00a0BPM, half of\u00a0${tempo}`
-    : slow
-      ? `${playbackTempo}\u00a0BPM, half speed`
-      : `${playbackTempo}\u00a0BPM`;
-  const buildBits = [
-    pinParts.length === 0 ? 'Nothing pinned' : 'Pinned',
-    ...pinParts,
-    bars === 2 ? '2-bar' : '4-bar',
-    tempoBit,
-    swing <= 0 ? 'straight' : `swing\u00a0${Math.round(swing * 100)}%`,
-  ].filter((part) => part.length > 0);
   const statusAlert =
     status === 'error' ||
     !phrase.ok ||
@@ -989,29 +1043,40 @@ export function PhrasePanel({
       </label>
     </div>
   );
-  const seedControl = (
-    <div key="seed" className="deck-setting deck-setting-seed">
-      <label className="phrase-seed deck-counter">
-        <span className="deck-legend">Seed</span>
-        <input
-          // The seed is an editable control, like the bars toggle: it shows
-          // the phrase you are editing, which can be queued behind the bar
-          // line. The heading, staff, and frets show what is sounding, so
-          // those wait for the handoff and this does not.
-          value={seedText}
-          inputMode="numeric"
-          aria-describedby="phrase-seed-help"
-          onChange={(event) => setSeedText(event.target.value)}
-          onBlur={() => commitSeed(seedText)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.currentTarget.blur();
-            }
-          }}
-        />
-      </label>
-    </div>
-  );
+  function copySeed() {
+    const input = seedInputRef.current;
+    if (!input) return;
+    const parsed = parseSeed(input.value);
+    if (parsed === null) {
+      input.focus();
+      input.select();
+      return;
+    }
+    let writing: Promise<void>;
+    try {
+      writing = navigator.clipboard.writeText(String(parsed));
+    } catch {
+      input.focus();
+      input.select();
+      return;
+    }
+    void writing.then(
+      () => {
+        setSeedCopied(true);
+        if (seedCopyTimer.current !== null) {
+          window.clearTimeout(seedCopyTimer.current);
+        }
+        seedCopyTimer.current = window.setTimeout(() => {
+          seedCopyTimer.current = null;
+          setSeedCopied(false);
+        }, 1500);
+      },
+      () => {
+        input.focus();
+        input.select();
+      },
+    );
+  }
   return (
     <div className="phrase-panel" data-scale-id={scaleId}>
       <div className="phrase-heading">
@@ -1082,21 +1147,7 @@ export function PhrasePanel({
         <details className="deck-fold deck-build">
           <summary className="deck-fold-summary">
             <span className="deck-legend">Build</span>
-            <span className="deck-fold-readout">
-              {buildBits.map((part, index) => {
-                const last = index === buildBits.length - 1;
-                // The dot is glued to its word. The space after the chip is
-                // the only wrap point, so a narrow row breaks as
-                // "2-bar ·" / "96 BPM" and never as "2-" / "bar".
-                const label = last ? part : `${part}\u00A0·`;
-                return (
-                  <span key={`${index}-${part}`}>
-                    <span className="deck-fold-chip">{label}</span>
-                    {last ? null : ' '}
-                  </span>
-                );
-              })}
-            </span>
+            <ReadoutChips chips={buildReadout(generationLocks)} />
             <ChevronDown
               className="deck-chevron"
               size={18}
@@ -1110,21 +1161,77 @@ export function PhrasePanel({
               onPin={pin}
               onClear={() => setPins(EMPTY_LOCKS)}
             />
-            <details className="deck-fold deck-feel">
-              <summary className="deck-fold-summary">
-                <span className="deck-legend">Tempo</span>
-                <span className="deck-fold-readout">Bars, swing, and seed</span>
+          </div>
+        </details>
+        <details className="deck-fold deck-feel">
+          <summary className="deck-fold-summary">
+            <span className="deck-legend">Tempo</span>
+            <ReadoutChips
+              chips={tempoSentence({
+                bars,
+                playbackTempo,
+                tempo,
+                trueHalf,
+                slow,
+                swing,
+              })}
+            />
+            <ChevronDown
+              className="deck-chevron"
+              size={18}
+              aria-hidden="true"
+            />
+          </summary>
+          <div className="deck-fold-body deck-stack">
+            {lengthControl}
+            {tempoControl}
+            {swingControl}
+            <details
+              className="deck-seed"
+              onToggle={(event) => {
+                if (!event.currentTarget.open) return;
+                const input = seedInputRef.current;
+                if (!input) return;
+                input.focus();
+                input.select();
+              }}
+            >
+              <summary aria-label="Seed">
+                <span className="deck-legend">Seed</span>
                 <ChevronDown
                   className="deck-chevron"
                   size={18}
                   aria-hidden="true"
                 />
               </summary>
-              <div className="deck-plate">
-                {lengthControl}
-                {tempoControl}
-                {swingControl}
-                {seedControl}
+              <div className="deck-seed-fields">
+                <label className="phrase-seed deck-counter">
+                  <span className="sr-only">Seed</span>
+                  <input
+                    ref={seedInputRef}
+                    // The seed is an editable control, like the bars toggle: it shows
+                    // the phrase you are editing, which can be queued behind the bar
+                    // line. The heading, staff, and frets show what is sounding, so
+                    // those wait for the handoff and this does not.
+                    value={seedText}
+                    inputMode="numeric"
+                    aria-describedby="phrase-seed-help"
+                    onChange={(event) => setSeedText(event.target.value)}
+                    onBlur={() => commitSeed(seedText)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="deck-toggle deck-seed-copy"
+                  onClick={copySeed}
+                >
+                  {seedCopied ? 'Copied' : 'Copy seed'}
+                </button>
               </div>
             </details>
           </div>

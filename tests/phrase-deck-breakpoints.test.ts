@@ -101,10 +101,8 @@ void test('deck stylesheets use the shared breakpoint widths', () => {
 });
 
 /**
- * First look is the tape, Play, and a closed Build summary. Pins stay in that
- * fold, and Bars / Tempo / Swing / Seed stay in a second fold. These rules are
- * what keep the deck readable without breaking tab order, so they are locked
- * here rather than left to a screenshot.
+ * These source rules keep the deck readable without breaking tab order, so
+ * they are locked here rather than left to a screenshot.
  */
 void test('the deck leads with play and keeps build folded', () => {
   const deck = readFileSync(
@@ -127,20 +125,33 @@ void test('the deck leads with play and keeps build folded', () => {
     false,
     'Tempo is closed until someone opens it',
   );
-  assert.match(
-    panel,
-    /<details className="deck-fold deck-build">[\s\S]*<PhrasePins[\s\S]*<details className="deck-fold deck-feel">[\s\S]*<div className="deck-plate">/,
+  const buildAt = panel.indexOf('<details className="deck-fold deck-build">');
+  const feelAt = panel.indexOf('<details className="deck-fold deck-feel">');
+  const buildClose = panel.indexOf('</details>', buildAt);
+  const feelClose = panel.indexOf('</details>', feelAt);
+  assert.ok(
+    buildAt !== -1 && feelAt !== -1 && buildClose !== -1 && feelClose !== -1,
   );
+  assert.ok(buildClose < feelAt, 'Build closes before Tempo starts');
+  const buildSlice = panel.slice(buildAt, buildClose);
+  const feelSlice = panel.slice(feelAt, feelClose);
+  assert.match(buildSlice, /<PhrasePins/);
+  assert.equal(buildSlice.includes('deck-feel'), false);
+  assert.match(feelSlice, /deck-seed/);
+  assert.equal(feelSlice.includes('PhrasePins'), false);
   assert.equal(
     (panel.match(/<PhrasePins/g) ?? []).length,
     1,
     'the pins render once, inside Build',
   );
   assert.equal(
-    /grid-template-areas:[^;]*pins/.test(deck),
+    deck.includes('grid-template-areas'),
     false,
-    'pins are not a row of the tempo plate',
+    'the plate no longer uses grid areas',
   );
+  const pinGrid = deck.match(/\.phrase-pin-grid\s*\{[^}]*\}/);
+  assert.ok(pinGrid, 'pin grid rule');
+  assert.equal(pinGrid[0].includes('repeat(2'), false);
   assert.match(
     deck,
     /\.deck-fold-summary \{[^}]*min-height: var\(--deck-row\)/,
