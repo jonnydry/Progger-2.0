@@ -183,24 +183,28 @@ async function drivePhrases(page, origin, dir) {
   await page.getByRole('region', { name: 'Phrase practice' }).waitFor();
   await page.getByRole('heading', { name: 'Phrase', exact: true }).waitFor();
   await page.getByText('Over A tonic in A Dorian.').waitFor();
-  const seed = page.getByRole('textbox', { name: 'Seed' });
+  const seed = page.locator('.phrase-seed input');
   const first = await seed.inputValue();
   check(/^\d+$/.test(first), `seed ${first}`);
   await page.locator('#phrase-tab-host .phrase-staff').waitFor();
+  const tempoSummary = flat(await page.locator('.deck-feel > summary').innerText());
+  check(tempoSummary.includes('2-bar'), tempoSummary);
+  check(tempoSummary.includes('96 BPM'), tempoSummary);
+  check(tempoSummary.includes('straight'), tempoSummary);
+  await page.getByText('Same seed replays this phrase.', { exact: true }).waitFor();
+  await shot(page, dir, '01-open.png');
+  await page.locator('.deck-feel > summary').click();
   check(
     (await page.getByRole('button', { name: '2 bars' }).getAttribute('aria-pressed')) ===
       'true',
     '2 bars was not pressed',
   );
-  await page.getByText('Same seed replays this phrase.', { exact: true }).waitFor();
-  await shot(page, dir, '01-open.png');
+  await page.getByRole('slider', { name: 'Tempo' }).waitFor();
+  await page.getByRole('slider', { name: 'Swing' }).waitFor();
 
   await page.getByRole('button', { name: 'New phrase' }).click();
   await page.waitForFunction((previous) => {
-    const label = [...document.querySelectorAll('label')].find((node) =>
-      node.textContent?.includes('Seed'),
-    );
-    const input = label?.querySelector('input');
+    const input = document.querySelector('.phrase-seed input');
     return input instanceof HTMLInputElement && input.value !== previous;
   }, first);
   const second = await seed.inputValue();
@@ -209,12 +213,12 @@ async function drivePhrases(page, origin, dir) {
   check((await plan.count()) > 0, 'plan line missing after New phrase');
   await shot(page, dir, '02-new-phrase.png');
 
-  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await page.getByRole('button', { name: 'Play phrase', exact: true }).click();
   await page.getByText('Playing this phrase.', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Stop', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Stop phrase', exact: true }).waitFor();
   await shot(page, dir, '03-playing.png');
-  await page.getByRole('button', { name: 'Stop', exact: true }).click();
-  await page.getByRole('button', { name: 'Play', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Stop phrase', exact: true }).click();
+  await page.getByRole('button', { name: 'Play phrase', exact: true }).waitFor();
 
   await page.getByRole('button', { name: 'Save to stash' }).click();
   await page.locator('#phrase-save-announce').getByText('Saved to stash.').waitFor();

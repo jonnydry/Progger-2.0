@@ -23,9 +23,9 @@ Preconditions:
 
 Run `node .cursor/skills/verify-progger/bin/drive.mjs --feature phrases`. The command does the following.
 
-- **Open.** Choose `Phrases`. The region `Phrase practice` appears, the heading is `Phrase`, and the text includes `Over A tonic in A Dorian.` The `Seed` textbox is digits. `2 bars` is pressed. The status is `Same seed replays this phrase.` A staff is visible in the phrase tab host.
-- **New phrase.** Choose `New phrase`. The seed number changes. A visible plan line still contains `lands on the`.
-- **Play.** Choose `Play`. The status becomes `Playing this phrase.` and the button name becomes `Stop`. Choose `Stop`. The button name returns to `Play`.
+- **Open.** Choose `Phrases`. The region `Phrase practice` appears, the heading is `Phrase`, and the text includes `Over A tonic in A Dorian.` The Tempo summary contains `2-bar`, `96 BPM`, and `straight`. The status is `Same seed replays this phrase.` A staff is visible in the phrase tab host. The seed integer is read from the seed field. Then choose the Tempo summary. `2 bars` is pressed, and the tempo slider and Swing are visible. The seed number stays behind the Seed summary (`Show the number`) at the foot of Tempo and does not have to be visible; the drive reads the seed field's value either way.
+- **New phrase.** Choose `New phrase`. The seed field's number changes. A visible plan line still contains `lands on the`.
+- **Play.** Choose `Play phrase`. The visible label is `Play`. The status becomes `Playing this phrase.` and the button name becomes `Stop phrase`. Choose `Stop phrase`. The button name returns to `Play phrase`.
 - **Save.** Choose `Save to stash`. The text `Saved to stash.` appears. Open `Stash`. The dialog includes `A Dorian · 2 bars`.
 - **Reload.** Reload and open `Stash` again. The same row is there. `localStorage` key `progger.tray.v1` contains `A Dorian`.
 - **Proof.** `evidence/phrases/03-playing.png` shows the playing status. `05-stash-after-reload.png` shows the saved row.

@@ -101,10 +101,8 @@ void test('deck stylesheets use the shared breakpoint widths', () => {
 });
 
 /**
- * First look is the tape, Play, and a closed Build summary. Pins stay in that
- * fold, and Bars / Tempo / Swing / Seed stay in a second fold. These rules are
- * what keep the deck readable without breaking tab order, so they are locked
- * here rather than left to a screenshot.
+ * These source rules keep the deck readable without breaking tab order, so
+ * they are locked here rather than left to a screenshot.
  */
 void test('the deck leads with play and keeps build folded', () => {
   const deck = readFileSync(
@@ -115,7 +113,7 @@ void test('the deck leads with play and keeps build folded', () => {
     new URL('../components/phrase-panel.tsx', import.meta.url),
     'utf8',
   );
-  assert.match(panel, /className="deck-play-primary"/);
+  assert.match(panel, /className="deck-transport"/);
   assert.match(panel, /<h3 className="deck-legend">Play<\/h3>/);
   assert.equal(
     panel.includes('deck-build" open'),
@@ -127,19 +125,49 @@ void test('the deck leads with play and keeps build folded', () => {
     false,
     'Tempo is closed until someone opens it',
   );
-  assert.match(
-    panel,
-    /<details className="deck-fold deck-build">[\s\S]*<PhrasePins[\s\S]*<details className="deck-fold deck-feel">[\s\S]*<div className="deck-plate">/,
+  const buildAt = panel.indexOf('<details className="deck-fold deck-build">');
+  const feelAt = panel.indexOf('<details className="deck-fold deck-feel">');
+  const buildClose = panel.indexOf('</details>', buildAt);
+  const feelClose = panel.indexOf('</details>', feelAt);
+  assert.ok(
+    buildAt !== -1 && feelAt !== -1 && buildClose !== -1 && feelClose !== -1,
   );
+  assert.ok(buildClose < feelAt, 'Build closes before Tempo starts');
+  const buildSlice = panel.slice(buildAt, buildClose);
+  const feelSlice = panel.slice(feelAt, feelClose);
+  assert.match(buildSlice, /<PhrasePins/);
+  assert.equal(buildSlice.includes('deck-feel'), false);
+  assert.match(feelSlice, /deck-seed/);
+  assert.equal(feelSlice.includes('PhrasePins'), false);
   assert.equal(
     (panel.match(/<PhrasePins/g) ?? []).length,
     1,
     'the pins render once, inside Build',
   );
   assert.equal(
-    /grid-template-areas:[^;]*pins/.test(deck),
+    deck.includes('grid-template-areas'),
     false,
-    'pins are not a row of the tempo plate',
+    'the plate no longer uses grid areas',
+  );
+  /* Wide decks pair the pin rows in two equal columns on the same gutter;
+     below the plate breakpoint each row fills the full width instead. */
+  const pinGrid = deck.match(/\.phrase-pin-grid\s*\{[^}]*\}/);
+  assert.ok(pinGrid, 'pin grid rule');
+  assert.equal(pinGrid[0].includes('repeat(2'), true);
+  assert.match(
+    deck,
+    /@media \(max-width: 1210px\) \{[\s\S]*?\.phrase-pin-grid \{\s*grid-template-columns: minmax\(0, 1fr\);/,
+    'pins drop to one column at the plate breakpoint',
+  );
+  assert.match(
+    deck,
+    /\.deck-transport \.deck-key-bank \{\s*grid-column: span 2;/,
+    'history keys keep their pair when the transport wraps',
+  );
+  assert.match(
+    deck,
+    /\.phrase-pin \{[^}]*min-width: 44px/,
+    'a pin is never narrower than a finger',
   );
   assert.match(
     deck,

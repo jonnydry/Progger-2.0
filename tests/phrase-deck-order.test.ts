@@ -249,6 +249,7 @@ async function openDeckFolds(page: Page) {
       await fold.locator('> summary').click();
     }
   }
+  assert.equal(await page.locator('.deck-seed').getAttribute('open'), null);
   await page.locator('.phrase-pin').first().waitFor({ state: 'visible' });
   await page.locator('.phrase-swing input').waitFor({ state: 'visible' });
 }
@@ -311,21 +312,38 @@ void test(
 
     for (const width of [1440, 900, 800, 500, 390, 320]) {
       const closed = await assertDeckTabOrder(page, width);
+      for (const name of [
+        'Half speed',
+        'Swing',
+        'Seed',
+        'Copy seed',
+        'arch',
+        '2 bars',
+      ]) {
+        assert.equal(
+          closed.includes(name),
+          false,
+          `${width}px first look includes ${name}: ${closed.join(', ')}`,
+        );
+      }
       assert.equal(
-        closed.some(
-          (name) =>
-            name === 'Half speed' ||
-            name === 'arch' ||
-            name.toLowerCase().startsWith('tempo'),
-        ),
+        closed.some((name) => name.toLowerCase() === 'tempo'),
         false,
-        `${width}px first look includes a folded control: ${closed.join(', ')}`,
+        `${width}px tempo slider is on the first look: ${closed.join(', ')}`,
       );
-      assert.equal(
-        closed.some((name) => name.toLowerCase().startsWith('build')),
-        true,
-        `${width}px build summary missing: ${closed.join(', ')}`,
+      const build = closed.filter((name) =>
+        name.toLowerCase().startsWith('build'),
       );
+      assert.equal(build.length, 1, `${width}px build ${closed.join(', ')}`);
+      assert.equal(build[0]?.includes('Nothing pinned'), true, build[0]);
+      assert.equal(build[0]?.includes('BPM'), false, build[0]);
+      const tempo = closed.filter((name) =>
+        name.toLowerCase().startsWith('tempo'),
+      );
+      assert.equal(tempo.length, 1, `${width}px tempo ${closed.join(', ')}`);
+      assert.equal(tempo[0]?.includes('2-bar'), true, tempo[0]);
+      assert.equal(tempo[0]?.includes('96 BPM'), true, tempo[0]);
+      assert.equal(tempo[0]?.includes('straight'), true, tempo[0]);
     }
 
     await enableHistorySteps(page);
@@ -370,6 +388,12 @@ void test(
           at('Swing') < at('Seed'),
         `${width}px open keyboard ${keyboard.join(', ')}`,
       );
+      assert.equal(
+        keyboard.filter((name) => name.toLowerCase() === 'seed').length,
+        1,
+        `${width}px seed tab stops ${keyboard.join(', ')}`,
+      );
+      assert.equal(keyboard.includes('Copy seed'), false);
     }
     await page.close();
   },
@@ -409,13 +433,51 @@ void test(
     }
     await openDeckFolds(page);
 
+    for (const width of [1440, 320]) {
+      await page.setViewportSize({
+        width,
+        height: width >= 800 ? 900 : 844,
+      });
+      await page.locator('.deck-key-play').scrollIntoViewIfNeeded();
+      const edges = await page.evaluate(() => {
+        const leftOf = (selector: string) => {
+          const node = document.querySelector(selector);
+          if (!node) throw new Error(selector);
+          return node.getBoundingClientRect().left;
+        };
+        return {
+          legends: [
+            leftOf('.deck-build > summary .deck-legend'),
+            leftOf('.deck-feel > summary .deck-legend'),
+            leftOf('.phrase-pin-row > .deck-legend'),
+            leftOf('.deck-setting-bars > .deck-legend'),
+            leftOf('.deck-setting-tempo .deck-legend'),
+            leftOf('.phrase-swing .deck-legend'),
+          ],
+          readout: leftOf('.deck-feel > summary .deck-fold-readout'),
+          bars: leftOf('.deck-setting-bars .deck-switch'),
+        };
+      });
+      const legendMin = Math.min(...edges.legends);
+      const legendMax = Math.max(...edges.legends);
+      assert.ok(
+        legendMax - legendMin <= 1,
+        `${width}px legend edges ${edges.legends.join(', ')}`,
+      );
+      assert.ok(
+        Math.abs(edges.readout - edges.bars) <= 1,
+        `${width}px readout ${edges.readout} bars ${edges.bars}`,
+      );
+    }
+
     /* Every band the layout switches at, and the awkward widths inside each:
        a fader once collapsed to 0px at 650px and 1081px because the readout
        and Half speed held the line and only the slider could give. */
     const heights = new Map<number, number>();
     for (const width of [
       1600, 1440, 1250, 1211, 1210, 1200, 1150, 1100, 1081, 1080, 960, 900, 860,
-      800, 760, 700, 650, 641, 640, 500, 480, 471, 470, 420, 390, 360, 320,
+      800, 760, 700, 650, 641, 640, 510, 501, 500, 480, 471, 470, 420, 390, 360,
+      320,
     ]) {
       await page.setViewportSize({
         width,
@@ -455,16 +517,24 @@ void test(
     for (let width = 320; width <= 1600; width += 20) {
       await page.setViewportSize({ width, height: width >= 800 ? 900 : 844 });
       const order = await page.evaluate(() => {
-        const box = (selector: string) => {
+        const rect = (selector: string) => {
           const node = document.querySelector(selector);
-          if (!node) throw new Error(selector);
-          const rect = node.getBoundingClientRect();
-          return { top: Math.round(rect.top), left: Math.round(rect.left) };
+          if (!(node instanceof HTMLElement)) throw new Error(selector);
+          const box = node.getBoundingClientRect();
+          return {
+            top: box.top,
+            right: box.right,
+            bottom: box.bottom,
+            left: box.left,
+            scrollWidth: node.scrollWidth,
+            clientWidth: node.clientWidth,
+          };
         };
         return {
-          speed: box('.deck-speed'),
-          swing: box('.phrase-swing .deck-legend'),
-          seed: box('.deck-counter .deck-legend'),
+          speed: rect('.deck-speed'),
+          readout: rect('.deck-setting-tempo output'),
+          swing: rect('.phrase-swing .deck-legend'),
+          seed: rect('.deck-seed > summary'),
         };
       });
       for (const next of [order.swing, order.seed]) {
@@ -473,6 +543,20 @@ void test(
           `${width}px Half speed at ${order.speed.top} sits below a control at ${next.top}`,
         );
       }
+      const overlapX =
+        Math.min(order.speed.right, order.readout.right) -
+        Math.max(order.speed.left, order.readout.left);
+      const overlapY =
+        Math.min(order.speed.bottom, order.readout.bottom) -
+        Math.max(order.speed.top, order.readout.top);
+      assert.ok(
+        overlapX <= 1 || overlapY <= 1,
+        `${width}px Half speed covers the tempo readout`,
+      );
+      assert.ok(
+        order.readout.scrollWidth <= order.readout.clientWidth + 1,
+        `${width}px tempo readout is clipped`,
+      );
     }
 
     /* One line per pin row on a phone: the whole pin block is at most two
