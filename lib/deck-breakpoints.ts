@@ -3,11 +3,13 @@
  * stylesheets cannot import TypeScript; `tests/phrase-deck-breakpoints.test.ts`
  * reads the stylesheet and fails if the two copies drift.
  *
- * wide: Play and New phrase sit beside the quiet transport pad. Below this
- *   they stack, because the pad would otherwise squeeze "Save to stash".
- * plate: pin options fill the row. Above this they stay max-content, so an
- *   open Build does not stretch them across the empty half.
- * phone: Half speed keeps the ½ mark so the slider still has room.
+ * plate: above this the transport is one strip and the pins sit in two
+ *   columns. Below it Play and New phrase take a row of their own, the
+ *   quiet keys follow four across, and each pin row fills the full width.
+ * wide: the quiet keys drop from four across to two rows of two, because
+ *   four across would squeeze "Save to stash".
+ * phone: Half speed leaves the tempo line for a ½× toggle under the
+ *   slider, so the fader keeps a usable length.
  * pins: a four-option pin row becomes an even 2x2 block. Four across clips
  *   "long–short" below this, and a plain wrap leaves a lone orphan.
  */

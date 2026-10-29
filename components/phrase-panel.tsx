@@ -1009,8 +1009,8 @@ export function PhrasePanel({
       >
         <Turtle size={16} aria-hidden="true" />
         <span className="deck-speed-text">Half speed</span>
-        {/* Phone: the toggle shares the tempo line, so it carries the mark and
-            the aria-label rather than pushing the slider down a row. */}
+        {/* Kept for the aria-hidden mark in the toggle's pressed label; the
+            phone layout gives the toggle its own row and its full name. */}
         <span className="deck-speed-short" aria-hidden="true">
           ½×
         </span>
@@ -1132,22 +1132,21 @@ export function PhrasePanel({
         </p>
         <div className="deck-zone">
           <h3 className="deck-legend">Play</h3>
-          <div className="deck-play-main">
-            <div className="deck-play-primary">
-              {playKey}
-              {newPhraseKey}
-            </div>
-            <div className="deck-play-secondary">
-              {historyBank}
-              {loopKey}
-              {saveKey}
-            </div>
+          <div className="deck-transport">
+            {playKey}
+            {newPhraseKey}
+            {historyBank}
+            {loopKey}
+            {saveKey}
           </div>
         </div>
         <details className="deck-fold deck-build">
           <summary className="deck-fold-summary">
             <span className="deck-legend">Build</span>
             <ReadoutChips chips={buildReadout(generationLocks)} />
+            <span className="deck-fold-edit" aria-hidden="true">
+              Edit
+            </span>
             <ChevronDown
               className="deck-chevron"
               size={18}
@@ -1176,6 +1175,9 @@ export function PhrasePanel({
                 swing,
               })}
             />
+            <span className="deck-fold-edit" aria-hidden="true">
+              Edit
+            </span>
             <ChevronDown
               className="deck-chevron"
               size={18}
@@ -1198,6 +1200,7 @@ export function PhrasePanel({
             >
               <summary aria-label="Seed">
                 <span className="deck-legend">Seed</span>
+                <span className="deck-seed-hint">Show the number</span>
                 <ChevronDown
                   className="deck-chevron"
                   size={18}

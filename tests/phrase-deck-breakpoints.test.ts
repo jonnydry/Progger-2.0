@@ -113,7 +113,7 @@ void test('the deck leads with play and keeps build folded', () => {
     new URL('../components/phrase-panel.tsx', import.meta.url),
     'utf8',
   );
-  assert.match(panel, /className="deck-play-primary"/);
+  assert.match(panel, /className="deck-transport"/);
   assert.match(panel, /<h3 className="deck-legend">Play<\/h3>/);
   assert.equal(
     panel.includes('deck-build" open'),
@@ -149,9 +149,26 @@ void test('the deck leads with play and keeps build folded', () => {
     false,
     'the plate no longer uses grid areas',
   );
+  /* Wide decks pair the pin rows in two equal columns on the same gutter;
+     below the plate breakpoint each row fills the full width instead. */
   const pinGrid = deck.match(/\.phrase-pin-grid\s*\{[^}]*\}/);
   assert.ok(pinGrid, 'pin grid rule');
-  assert.equal(pinGrid[0].includes('repeat(2'), false);
+  assert.equal(pinGrid[0].includes('repeat(2'), true);
+  assert.match(
+    deck,
+    /@media \(max-width: 1210px\) \{[\s\S]*?\.phrase-pin-grid \{\s*grid-template-columns: minmax\(0, 1fr\);/,
+    'pins drop to one column at the plate breakpoint',
+  );
+  assert.match(
+    deck,
+    /\.deck-transport \.deck-key-bank \{\s*grid-column: span 2;/,
+    'history keys keep their pair when the transport wraps',
+  );
+  assert.match(
+    deck,
+    /\.phrase-pin \{[^}]*min-width: 44px/,
+    'a pin is never narrower than a finger',
+  );
   assert.match(
     deck,
     /\.deck-fold-summary \{[^}]*min-height: var\(--deck-row\)/,
