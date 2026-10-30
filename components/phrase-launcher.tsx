@@ -67,11 +67,19 @@ export function PhraseLauncher({
   const [open, setOpen] = useState(false);
   const [Panel, setPanel] = useState<ComponentType<PanelProps> | null>(null);
   const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [signalSeen, setSignalSeen] = useState(openSignal);
   const opened = useRef(false);
   if (openSignal !== signalSeen) {
     setSignalSeen(openSignal);
-    if (openSignal) setOpen(true);
+    if (openSignal) {
+      setOpen(true);
+      setFailed(false);
+      /* If the deck was already open on the failure line, `open` does not
+         change, so the load effect needs the attempt bump to run again —
+         clearing `failed` alone would strand it on the loading line. */
+      setAttempt((current) => current + 1);
+    }
   }
 
   useEffect(() => {
@@ -84,7 +92,9 @@ export function PhraseLauncher({
     let cancelled = false;
     void import('@/components/phrase-panel')
       .then((module) => {
-        if (!cancelled) setPanel(() => module.PhrasePanel);
+        if (cancelled) return;
+        setFailed(false);
+        setPanel(() => module.PhrasePanel);
       })
       .catch(() => {
         if (!cancelled) setFailed(true);
@@ -92,10 +102,18 @@ export function PhraseLauncher({
     return () => {
       cancelled = true;
     };
-  }, [open, Panel, onMarks]);
+  }, [open, Panel, onMarks, attempt]);
 
   function toggle() {
+    /* Opening again is a fresh attempt: the old failure clears here, in
+       the gesture, so Retry and the loading line never overlap. */
+    if (!open) setFailed(false);
     setOpen((current) => !current);
+  }
+
+  function retry() {
+    setFailed(false);
+    setAttempt((current) => current + 1);
   }
 
   return (
@@ -121,9 +139,17 @@ export function PhraseLauncher({
           className="phrase-launcher"
           aria-label="Phrase practice"
         >
-          {failed && <p className="muted">Phrases didn’t load. Try again.</p>}
-          {!failed && !Panel && <p className="muted">Loading phrases…</p>}
-          {Panel && (
+          {/* One of failed, loading, or the panel — never two at once. */}
+          {failed ? (
+            <p className="muted">
+              Phrases didn’t load.{' '}
+              <button type="button" onClick={retry}>
+                Retry
+              </button>
+            </p>
+          ) : !Panel ? (
+            <p className="muted">Loading phrases…</p>
+          ) : (
             <Panel
               active={active}
               scaleRoot={scaleRoot}

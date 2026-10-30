@@ -8,8 +8,10 @@
  *   quiet keys follow four across, and each pin row fills the full width.
  * wide: the quiet keys drop from four across to two rows of two, because
  *   four across would squeeze "Save to stash".
- * phone: Half speed leaves the tempo line for a ½× toggle under the
- *   slider, so the fader keeps a usable length.
+ * phone: Half speed leaves the tempo line for its own row under the
+ *   slider, so the fader keeps a usable length. The panel also reads
+ *   this width to hold off seed autofocus, so no keyboard opens over
+ *   the deck.
  * pins: a four-option pin row becomes an even 2x2 block. Four across clips
  *   "long–short" below this, and a plain wrap leaves a lone orphan.
  */

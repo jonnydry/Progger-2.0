@@ -598,10 +598,12 @@ void test(
       viewport: { width: 1200, height: 900 },
       deviceScaleFactor: 1,
     });
-    // Chrome accepts focus() in the same turn a focused node moves. Firefox
-    // and Safari can ignore that call and leave the document focused. This
-    // page ignores same-turn focus() inside the deck, then allows it on the
-    // next frame, so the test locks that later restore.
+    // The deck used to move DOM nodes across breakpoints and restore
+    // focus on the next frame, because Firefox and Safari can ignore a
+    // same-turn focus(). It no longer moves nodes — CSS grid owns the
+    // widths — so focus is simply never lost. This page still ignores
+    // same-turn focus() inside the deck, so the test fails if a future
+    // layout goes back to moving the focused node.
     await page.addInitScript({
       content: `(() => {
         let blockDeckFocus = false;
@@ -723,6 +725,188 @@ void test(
       undefined,
       { timeout: 2_000 },
     );
+    await page.close();
+  },
+);
+
+/**
+ * The lead keys once lost their 52px min-height to a later rule of equal
+ * specificity, so this reads the painted boxes, not the stylesheet. The
+ * pins header and the seed focus are the other look regressions that only
+ * show up in a browser: layout jump and a phone keyboard.
+ */
+void test(
+  'play and new phrase lead at 52px, the pins header stays put, and the seed leaves phone focus alone',
+  { timeout: 180_000 },
+  async (t) => {
+    const browser = await launchNamed('chromium', t);
+    const server = await acquireDevServer();
+    t.after(async () => {
+      await browser.close();
+      await server.release();
+    });
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 1,
+    });
+    await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.phrase-open');
+    await openPhrases(page);
+
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({
+        width,
+        height: width >= 800 ? 900 : 844,
+      });
+      const heights = await page.evaluate(() => {
+        const height = (selector: string) =>
+          document.querySelector(selector)?.getBoundingClientRect().height ?? 0;
+        return {
+          play: height('.deck-key-play'),
+          fresh: height('.deck-key-new'),
+          loop: height('.deck-key-loop'),
+        };
+      });
+      assert.ok(heights.play >= 52, `${width}px Play is ${heights.play}px`);
+      assert.ok(
+        heights.fresh >= 52,
+        `${width}px New phrase is ${heights.fresh}px`,
+      );
+      if (width === 390) {
+        assert.ok(
+          heights.loop < heights.play,
+          `phone quiet keys stay shorter: Loop ${heights.loop}px`,
+        );
+      }
+    }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator('.deck-build > summary').click();
+    await page.locator('.phrase-pin').first().waitFor({ state: 'visible' });
+    const titleHeight = () =>
+      page.evaluate(
+        () =>
+          document.querySelector('.phrase-pins-title')?.getBoundingClientRect()
+            .height ?? 0,
+      );
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({
+        width,
+        height: width >= 800 ? 900 : 844,
+      });
+      const unpinned = await titleHeight();
+      await page
+        .locator('.phrase-pin')
+        .filter({ hasText: /^arch/ })
+        .first()
+        .click();
+      await page.locator('.phrase-pins-clear').waitFor({ state: 'visible' });
+      assert.equal(
+        await titleHeight(),
+        unpinned,
+        `${width}px: Clear pins arriving must not grow the pins header`,
+      );
+      await page.locator('.phrase-pins-clear').click();
+      await page.locator('.phrase-pins-clear').waitFor({ state: 'hidden' });
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const seedFocused = () =>
+      page.evaluate(
+        () =>
+          document.activeElement ===
+          document.querySelector('.deck-seed-fields input'),
+      );
+    await page.locator('.deck-feel > summary').click();
+    await page.locator('.deck-seed > summary').click();
+    await page.waitForFunction(
+      () =>
+        document.activeElement ===
+        document.querySelector('.deck-seed-fields input'),
+      undefined,
+      { timeout: 2_000 },
+    );
+    assert.equal(await seedFocused(), true, 'desktop seed open focuses');
+
+    await page.locator('.deck-seed > summary').click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('.deck-seed > summary').click();
+    await page.locator('.deck-seed-fields input').waitFor({ state: 'visible' });
+    /* The details toggle event is queued; give a regressed autofocus its
+       chance to land before reading where focus settled. */
+    await page.waitForTimeout(300);
+    assert.equal(
+      await seedFocused(),
+      false,
+      'phone seed open must not focus and raise the keyboard',
+    );
+
+    /* Half of 40 BPM would sit under the 40 BPM floor, so the readout must
+       say the sounding rate is the minimum, not claim a half. */
+    const tempoSlider = page.locator('.deck-setting-tempo input');
+    await tempoSlider.focus();
+    await page.keyboard.press('Home');
+    await page.locator('.deck-speed').click();
+    const feelSummary = await page.locator('.deck-feel > summary').innerText();
+    assert.match(
+      feelSummary.replace(/\u00a0/g, ' '),
+      /40 BPM, half speed, minimum/,
+      'floored half speed is named in the readout chips',
+    );
+    assert.equal(
+      await tempoSlider.getAttribute('aria-valuetext'),
+      '40 BPM, half speed, minimum',
+    );
+    await page.close();
+  },
+);
+
+void test(
+  'a failed phrase panel load offers Retry, and Retry loads the panel',
+  { timeout: 180_000 },
+  async (t) => {
+    const browser = await launchNamed('chromium', t);
+    const server = await acquireDevServer();
+    t.after(async () => {
+      await browser.close();
+      await server.release();
+    });
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 1,
+    });
+    let blocked = true;
+    await page.route('**/*phrase-panel*', (route) =>
+      blocked ? route.abort() : route.continue(),
+    );
+    await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.phrase-open');
+    /* A click can land before hydration; keep opening until the launcher
+       section exists, as openPhrases does for the loaded panel. */
+    const openButton = page.locator('.phrase-open');
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if ((await openButton.getAttribute('aria-expanded')) !== 'true') {
+        await openButton.click({ timeout: 5_000 });
+      }
+      const shown = await page
+        .locator('.phrase-launcher')
+        .waitFor({ state: 'visible', timeout: 1_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (shown) break;
+    }
+    const retry = page
+      .locator('.phrase-launcher')
+      .getByRole('button', { name: 'Retry' });
+    await retry.waitFor({ state: 'visible' });
+    assert.equal(
+      await page.locator('.phrase-launcher').innerText(),
+      'Phrases didn’t load. Retry',
+      'the failure line stands alone, with no loading line under it',
+    );
+    blocked = false;
+    await retry.click();
+    await page.locator('.deck-key-play').waitFor({ state: 'visible' });
     await page.close();
   },
 );

@@ -193,3 +193,70 @@ void test('the deck leads with play and keeps build folded', () => {
     'pin rows use short names',
   );
 });
+
+void test('look polish: lead specificity, reserved pins header, no dead deck code', () => {
+  const deck = readFileSync(
+    new URL('../app/phrase-deck.css', import.meta.url),
+    'utf8',
+  );
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  const launcher = readFileSync(
+    new URL('../components/phrase-launcher.tsx', import.meta.url),
+    'utf8',
+  );
+  /* The lead must outrank `.phrase-deck .deck-key`, not just precede it. */
+  assert.match(
+    deck,
+    /\.phrase-deck \.deck-transport \.deck-key-play,\s*\.phrase-deck \.deck-transport \.deck-key-new \{[^}]*min-height: 52px/,
+  );
+  assert.match(
+    deck,
+    /\.phrase-pins-title \{[^}]*min-height: var\(--deck-row\)/,
+    'pins header reserves the Clear pins height',
+  );
+  assert.equal(deck.includes('deck-speed-short'), false);
+  assert.equal(panel.includes('deck-speed-short'), false);
+  assert.equal(
+    panel.includes('useDeckBreakpoints'),
+    false,
+    'the unused phone state hook is gone; CSS owns the widths',
+  );
+  assert.match(
+    panel,
+    /matchMedia\(DECK_BREAKPOINT_QUERY\.phone\)/,
+    'seed autofocus still asks the phone width, once, in the gesture',
+  );
+  assert.match(panel, /aria-describedby="phrase-seed-note"/);
+  assert.match(panel, /id="phrase-seed-note"/);
+  assert.equal(
+    panel.includes('aria-describedby="phrase-seed-help"'),
+    false,
+    'the seed description is not the changing status line',
+  );
+  assert.match(panel, /tempo \/ 2 < PHRASE_TEMPO_MIN/);
+  assert.equal(
+    (panel.match(/half speed, minimum/g) ?? []).length >= 2,
+    true,
+    'the floored half speed is named in the readout and the slider text',
+  );
+  assert.match(
+    panel,
+    /matchMedia\('\(pointer: coarse\)'\)/,
+    'seed autofocus also holds off for coarse pointers above phone width',
+  );
+  assert.match(launcher, /failed \? \(/, 'launcher states are exclusive');
+  assert.match(launcher, /onClick=\{retry\}/);
+  assert.equal(
+    (launcher.match(/setAttempt\(\(current\) => current \+ 1\)/g) ?? []).length,
+    2,
+    'Retry and the open signal both re-run the load effect',
+  );
+  assert.match(
+    launcher,
+    /setFailed\(false\);\s*setPanel\(/,
+    'a loaded panel clears the failure',
+  );
+});
