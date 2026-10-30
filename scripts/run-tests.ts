@@ -12,7 +12,9 @@ import { fileURLToPath } from 'node:url';
 /**
  * The Node test suite in slices, so CI can run them as parallel jobs.
  *
- * - unit: no browser and no dev server.
+ * - unit: no browser and no dev server, apart from one harness:
+ *   tests/dev-server.test.ts drives the dev server in child processes to
+ *   test its lifecycle where no sibling file holds it (see that file).
  * - browser: launches Chromium or Firefox, mostly against the vinext dev
  *   server.
  * - render: the two long real-browser audio renders. CI gives them their own
@@ -37,8 +39,8 @@ export const RENDER_FILES = [
  * to each test file as a whole, and it cuts off a longer per-test timeout.
  * Node 26 applies it to each test that sets no timeout of its own. Each value
  * sits above the sum of the explicit per-test timeouts in any one file of its
- * slice: 3 min in unit, 9 min in browser, 22 min in render (drone-peak
- * without the nightly sweep).
+ * slice: 8 min in unit (the dev-server lifecycle tests), 9 min in
+ * browser, 22 min in render (drone-peak without the nightly sweep).
  */
 export const SLICE_TIMEOUT_MS: Record<Slice, number> = {
   unit: 10 * 60_000,

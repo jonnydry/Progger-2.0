@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { closeSync, openSync, readFileSync } from 'node:fs';
 import {
   access,
   mkdir,
@@ -7,6 +8,7 @@ import {
   readdir,
   readFile,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
@@ -102,13 +104,23 @@ async function sweepDeadRefs() {
 
 async function recoverStaleOwner() {
   if (await readLiveOrigin()) return;
+  let ownerAgeMs: number;
   try {
-    await access(OWNER);
+    ownerAgeMs = Date.now() - (await stat(OWNER)).mtimeMs;
   } catch {
     return;
   }
-  const pid = Number(await readFile(`${SHARE}/pid`, 'utf8').catch(() => '0'));
-  if (pidAlive(pid)) return;
+  // OWNER names the process that claimed it. While that process lives it
+  // owns startup (including a server child that died on the way), so never
+  // steal; its own cleanup removes OWNER. Stealing mid-startup starts a
+  // second server whose pid overwrites the real one, and the loser's
+  // fallback then deletes OWNER, so the running server is never stopped.
+  // An OWNER left by a dead process (or an empty one from before the
+  // naming) is stale once it is old enough that a live owner would have
+  // written its pid.
+  const ownerPid = Number(await readFile(OWNER, 'utf8').catch(() => '0'));
+  if (pidAlive(ownerPid)) return;
+  if (ownerAgeMs < 15_000) return;
   await rm(OWNER, { force: true });
   await rm(`${SHARE}/stopping`, { force: true });
 }
@@ -151,23 +163,36 @@ async function stopIfOwnerAndIdle() {
 }
 
 function startServer(port: number): { child: ChildProcess; log: () => string } {
-  let captured = '';
+  // The server must outlive this process: the test file that starts it
+  // exits as soon as its own tests finish, while other files still use the
+  // server. Piped stdio breaks that both ways: child.unref() does not
+  // unref the pipes, so this process cannot exit until the server dies,
+  // and unref'ing the pipes instead would leave the server writing to a
+  // pipe with no reader, which kills a Node process with EPIPE. A log file
+  // keeps neither side hostage and still gives log() a tail to quote.
+  const logPath = `${SHARE}/server.log`;
+  const logFd = openSync(logPath, 'w');
   const child = spawn(
     'npx',
     ['vinext', 'dev', '--port', String(port), '--hostname', '127.0.0.1'],
     {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', logFd, logFd],
     },
   );
-  const keep = (chunk: Buffer) => {
-    captured = `${captured}${chunk.toString()}`.slice(-4000);
-  };
-  child.stdout?.on('data', keep);
-  child.stderr?.on('data', keep);
+  closeSync(logFd);
   child.unref();
-  return { child, log: () => captured };
+  return {
+    child,
+    log: () => {
+      try {
+        return readFileSync(logPath, 'utf8').slice(-4000);
+      } catch {
+        return '';
+      }
+    },
+  };
 }
 
 async function ensureOrigin(): Promise<string> {
@@ -180,6 +205,7 @@ async function ensureOrigin(): Promise<string> {
     let weOwn = false;
     try {
       const handle = await open(OWNER, 'wx');
+      await handle.writeFile(String(process.pid));
       await handle.close();
       weOwn = true;
     } catch (error) {
@@ -191,10 +217,17 @@ async function ensureOrigin(): Promise<string> {
       continue;
     }
 
-    const port = await reservePort();
-    const { child, log } = startServer(port);
-    await writeFile(`${SHARE}/pid`, String(child.pid ?? ''));
+    // Every startup step after the claim runs under the same cleanup: a
+    // throw anywhere here must release OWNER, or the live owner pid in it
+    // would make the claim unstealable until this process exits.
+    let child: ChildProcess | undefined;
+    let log: () => string = () => '';
     try {
+      const port = await reservePort();
+      const started = startServer(port);
+      child = started.child;
+      log = started.log;
+      await writeFile(`${SHARE}/pid`, String(started.child.pid ?? ''));
       await waitForPort(port, 90_000);
       await writeFile(`${SHARE}/origin`, `http://127.0.0.1:${port}`);
       return `http://127.0.0.1:${port}`;
@@ -204,7 +237,7 @@ async function ensureOrigin(): Promise<string> {
         await rm(OWNER, { force: true });
         return fallback;
       }
-      stopProcess(child.pid ?? 0);
+      if (child) stopProcess(child.pid ?? 0);
       await rm(OWNER, { force: true });
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}\n${log()}`,
