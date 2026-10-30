@@ -6,14 +6,98 @@ on:
     branches:
       - main
 
+# A new push to a pull request cancels that pull request's older run. Each
+# push to main gets its own group (the run id), so main runs are never
+# cancelled or skipped.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
+# The test slices come from scripts/run-tests.ts. Each test step has a timeout
+# below its job's, so a hung suite still fails the step and uploads its
+# results. `check` is the merge gate: it passes only when every other job
+# passed.
 jobs:
-  check:
-    name: check
+  build:
+    name: lint, typecheck, build
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
+      # The tray export check opens the static build in Chromium and Firefox.
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: lint
+        run: npm run lint
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: build
+        run: npm run build:vercel
+
+      - name: tray export
+        run: node scripts/check-tray-export.mjs
+
+  unit:
+    name: unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TEST_RESULTS: test-results
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: test:unit
+        timeout-minutes: 15
+        run: npm run test:unit
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-results-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  browser:
+    name: browser tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TEST_RESULTS: test-results
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -36,17 +120,74 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium firefox
 
-      - name: lint
-        run: npm run lint
+      - name: test:browser
+        timeout-minutes: 25
+        run: npm run test:browser
 
-      - name: typecheck
-        run: npm run typecheck
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-test-results-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
 
-      - name: test
-        run: npm test
+  render:
+    name: audio renders
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TEST_RESULTS: test-results
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: build
-        run: npm run build:vercel
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
 
-      - name: tray export
-        run: node scripts/check-tray-export.mjs
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: test:render
+        timeout-minutes: 35
+        run: npm run test:render
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: render-test-results-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  check:
+    name: check
+    if: always()
+    needs: [build, unit, browser, render]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          failed=$(printf '%s' "$RESULTS" | jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"')
+          if [ -n "$failed" ]; then
+            printf '%s\n' "$failed"
+            exit 1
+          fi
+          echo 'every job passed'

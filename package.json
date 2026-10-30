@@ -19,7 +19,10 @@
     "start": "node --import ./scripts/local-tool-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test": "node --experimental-strip-types scripts/run-tests.ts all",
+    "test:unit": "node --experimental-strip-types scripts/run-tests.ts unit",
+    "test:browser": "node --experimental-strip-types scripts/run-tests.ts browser",
+    "test:render": "node --experimental-strip-types scripts/run-tests.ts render",
     "test:headroom": "HEADROOM_SWEEP=full HEADROOM_WRITE=1 node --experimental-strip-types --test --test-name-pattern \"nightly full headroom sweep\" tests/drone-peak.test.ts",
     "test:headroom-check": "node --experimental-strip-types --test --test-name-pattern \"worst cases to render|re-renders the last full sweep\" tests/drone-peak.test.ts",
     "typecheck": "tsc --noEmit"

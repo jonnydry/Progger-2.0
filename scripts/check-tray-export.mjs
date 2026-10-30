@@ -83,12 +83,23 @@ try {
         await page.goto(`${origin}/`, { waitUntil: 'networkidle' });
         await page.locator('.tray-open').waitFor();
         const toggle = page.getByRole('switch', { name: 'Day theme' });
-        if ((await toggle.getAttribute('aria-checked')) !== 'true') {
+        // networkidle does not mean hydrated: a click that lands before
+        // hydration can be lost or replayed late. Re-read the switch and
+        // click again until the day theme actually applies.
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          if ((await toggle.getAttribute('aria-checked')) === 'true') break;
           await toggle.click();
-          await page.waitForFunction(
-            () => document.documentElement.dataset.theme === 'day',
-          );
+          await page
+            .waitForFunction(
+              () => document.documentElement.dataset.theme === 'day',
+              null,
+              { timeout: 5_000 },
+            )
+            .catch(() => {});
         }
+        await page.waitForFunction(
+          () => document.documentElement.dataset.theme === 'day',
+        );
         await page.locator('.tray-open').click();
         await page.locator('#practice-tray').waitFor();
         await page.waitForFunction((viewport) => {

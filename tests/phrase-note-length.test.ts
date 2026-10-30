@@ -650,65 +650,116 @@ void test('playback through PhrasePlayer damps on the live path and disconnects 
   // about 0.50 s, after the fade and the cleanup margin.
   const duringRelease = 0.405;
   const disconnectAt = 0.505;
-  const context = new OfflineAudioContext(1, Math.ceil(RATE * 0.7), RATE);
-  const resume = context.resume.bind(context);
-  context.resume = () => Promise.resolve();
-  const clock = new ManualClock();
-  const gains: GainNode[] = [];
-  const oscillators: OscillatorNode[] = [];
-  const createGain = context.createGain.bind(context);
-  context.createGain = () => {
-    const gain = createGain();
-    gains.push(gain);
-    return gain;
-  };
-  const createOscillator = context.createOscillator.bind(context);
-  context.createOscillator = () => {
-    const oscillator = createOscillator();
-    oscillators.push(oscillator);
-    return oscillator;
-  };
-  const player = new PhrasePlayer(() => {});
-  await player.start({
-    notes: [played(0, 0, 0.5), played(3, 1, 0.5), played(5, 1.2, 0.5)],
-    bars: 2,
-    tempo,
-    swing: 0,
-    loop: false,
-    context,
-    destination: context.destination,
-    clock,
-  });
-  context.resume = resume;
-  const envelope = gains[2];
-  assert.ok(envelope, 'the live path did not build the note envelope');
-  let droppedAt: number | null = null;
-  const disconnect = envelope.disconnect.bind(envelope);
-  envelope.disconnect = () => {
-    droppedAt = context.currentTime;
-    return disconnect();
-  };
-  const voice = oscillators[0];
-  assert.ok(voice, 'the live path did not build the note');
-  voice.disconnect();
-  const constant = context.createConstantSource();
-  constant.offset.value = 1;
-  constant.connect(envelope);
-  constant.start(0);
+  const attemptRender = async () => {
+    const context = new OfflineAudioContext(1, Math.ceil(RATE * 0.7), RATE);
+    const resume = context.resume.bind(context);
+    context.resume = () => Promise.resolve();
+    const clock = new ManualClock();
+    const gains: GainNode[] = [];
+    const oscillators: OscillatorNode[] = [];
+    const createGain = context.createGain.bind(context);
+    context.createGain = () => {
+      const gain = createGain();
+      gains.push(gain);
+      return gain;
+    };
+    const createOscillator = context.createOscillator.bind(context);
+    context.createOscillator = () => {
+      const oscillator = createOscillator();
+      oscillators.push(oscillator);
+      return oscillator;
+    };
+    const player = new PhrasePlayer(() => {});
+    await player.start({
+      notes: [played(0, 0, 0.5), played(3, 1, 0.5), played(5, 1.2, 0.5)],
+      bars: 2,
+      tempo,
+      swing: 0,
+      loop: false,
+      context,
+      destination: context.destination,
+      clock,
+    });
+    context.resume = resume;
+    const envelope = gains[2];
+    assert.ok(envelope, 'the live path did not build the note envelope');
+    let droppedAt: number | null = null;
+    const disconnect = envelope.disconnect.bind(envelope);
+    envelope.disconnect = () => {
+      droppedAt = context.currentTime;
+      return disconnect();
+    };
+    const voice = oscillators[0];
+    assert.ok(voice, 'the live path did not build the note');
+    voice.disconnect();
+    const constant = context.createConstantSource();
+    constant.offset.value = 1;
+    constant.connect(envelope);
+    constant.start(0);
 
-  const firstCut = context.suspend(duringRelease + 0.002);
-  const secondCut = context.suspend(disconnectAt);
-  const rendering = context.startRendering();
-  await firstCut;
-  clock.advance(context.currentTime);
-  const droppedDuringRelease = droppedAt;
-  await context.resume();
-  await secondCut;
-  clock.advance(context.currentTime);
-  const droppedAfter = droppedAt;
-  await context.resume();
-  const rendered = (await rendering).getChannelData(0).slice();
-  player.stop();
+    const firstCut = context.suspend(duringRelease + 0.002);
+    const secondCut = context.suspend(disconnectAt);
+    const rendering = context.startRendering();
+    // Observe every promise from the start: a cut that rejects before its
+    // step below must not surface as an unhandled rejection.
+    void firstCut.catch(() => {});
+    void secondCut.catch(() => {});
+    void rendering.catch(() => {});
+    let suspendRace = false;
+    async function step<T>(pending: Promise<T>): Promise<T> {
+      try {
+        return await pending;
+      } catch (error) {
+        if ((error as { name?: string }).name === 'InvalidStateError') {
+          suspendRace = true;
+        }
+        throw error;
+      }
+    }
+    try {
+      await step(firstCut);
+      clock.advance(context.currentTime);
+      const droppedDuringRelease = droppedAt;
+      await step(context.resume());
+      await step(secondCut);
+      clock.advance(context.currentTime);
+      const droppedAfter = droppedAt;
+      await step(context.resume());
+      const rendered = (await step(rendering)).getChannelData(0).slice();
+      player.stop();
+      return { droppedDuringRelease, droppedAfter, rendered };
+    } catch (error) {
+      // Drain before giving up: resume past any queued cut until the
+      // render settles, or a suspended context keeps this file alive.
+      player.stop();
+      const settled = Promise.allSettled([firstCut, secondCut, rendering]);
+      let drained = false;
+      void settled.then(() => {
+        drained = true;
+      });
+      for (let pass = 0; pass < 20 && !drained; pass += 1) {
+        await context.resume().catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      if (suspendRace) return null;
+      throw error;
+    }
+  };
+
+  // node-web-audio-api registers the queued suspends on its render
+  // thread; under load the render can finish first and a suspend rejects
+  // with InvalidStateError. That race is in the harness, not the player —
+  // the retry below only covers the tagged suspend/resume/render steps,
+  // so a scheduling regression still fails on its first attempt. Retry
+  // with a fresh context, and let any other failure through.
+  let outcome:
+    | Exclude<Awaited<ReturnType<typeof attemptRender>>, null>
+    | undefined;
+  for (let attempt = 0; attempt < 5 && !outcome; attempt += 1) {
+    outcome = (await attemptRender()) ?? undefined;
+  }
+  assert.ok(outcome, 'suspend never registered in time across 5 attempts');
+  const { droppedDuringRelease, droppedAfter, rendered } = outcome;
 
   assert.equal(
     droppedDuringRelease,
