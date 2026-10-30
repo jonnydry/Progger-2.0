@@ -86,82 +86,6 @@ import '@/app/phrase-deck.css';
 
 const EMPTY_LOCKS: PhraseLocks = {};
 
-function focusLostToDocument(): boolean {
-  const active = document.activeElement;
-  return (
-    active === null ||
-    active === document.body ||
-    active === document.documentElement
-  );
-}
-
-function controlIsDisabled(node: HTMLElement): boolean {
-  return (
-    (node instanceof HTMLButtonElement ||
-      node instanceof HTMLInputElement ||
-      node instanceof HTMLSelectElement ||
-      node instanceof HTMLTextAreaElement) &&
-    node.disabled
-  );
-}
-
-/**
- * Widths follow the deck's grid areas, so tab order can match the picture.
- * Moving a focused control clears it onto the document. A focus() call in
- * that same turn sticks in Chrome and can be ignored in Firefox and Safari,
- * so try again on the next frame when the document still has focus.
- */
-function useDeckBreakpoints(): {
-  phone: boolean;
-  deckRef: RefObject<HTMLDivElement | null>;
-} {
-  const deckRef = useRef<HTMLDivElement>(null);
-  const [phone, setPhone] = useState(false);
-  const pendingFocus = useRef<HTMLElement | null>(null);
-  const layout = useRef(false);
-
-  useLayoutEffect(() => {
-    layout.current = phone;
-    const node = pendingFocus.current;
-    pendingFocus.current = null;
-    if (!node) return;
-    let frame = 0;
-    const restore = () => {
-      if (!node.isConnected || controlIsDisabled(node)) return;
-      if (!focusLostToDocument()) return;
-      node.focus({ preventScroll: true });
-    };
-    restore();
-    if (node.isConnected && focusLostToDocument()) {
-      frame = requestAnimationFrame(restore);
-    }
-    return () => cancelAnimationFrame(frame);
-  }, [phone]);
-
-  useLayoutEffect(() => {
-    if (typeof matchMedia !== 'function') return;
-    const phoneMedia = matchMedia(DECK_BREAKPOINT_QUERY.phone);
-    const sync = () => {
-      const next = phoneMedia.matches;
-      if (layout.current === next) return;
-      const active = document.activeElement;
-      const deck = deckRef.current;
-      if (active instanceof HTMLElement && deck?.contains(active)) {
-        pendingFocus.current = active;
-      }
-      layout.current = next;
-      setPhone(next);
-    };
-    sync();
-    phoneMedia.addEventListener('change', sync);
-    return () => {
-      phoneMedia.removeEventListener('change', sync);
-    };
-  }, []);
-
-  return { phone, deckRef };
-}
-
 const EMPTY_NOTES: readonly FingeredNote[] = [];
 
 function sameLocks(a: PhraseLocks, b: PhraseLocks): boolean {
@@ -244,16 +168,21 @@ function tempoSentence(input: {
   playbackTempo: number;
   tempo: number;
   trueHalf: boolean;
+  halfAtFloor: boolean;
   slow: boolean;
   swing: number;
 }): readonly [TempoChip, TempoChip, TempoChip] {
   // playbackTempo is already the sounding rate. Naming it and ½× together
-  // asks the player to halve the number a second time.
+  // asks the player to halve the number a second time. At the 40 BPM floor
+  // the sounding rate is not half of anything, so say so instead of
+  // claiming a half that is not playing.
   const rate = input.trueHalf
     ? `${input.playbackTempo}\u00a0BPM, half of\u00a0${input.tempo}`
-    : input.slow
-      ? `${input.playbackTempo}\u00a0BPM, half speed`
-      : `${input.playbackTempo}\u00a0BPM`;
+    : input.halfAtFloor
+      ? `${input.playbackTempo}\u00a0BPM, half speed, minimum`
+      : input.slow
+        ? `${input.playbackTempo}\u00a0BPM, half speed`
+        : `${input.playbackTempo}\u00a0BPM`;
   const feel =
     input.swing <= 0
       ? 'straight'
@@ -467,6 +396,9 @@ export function PhrasePanel({
   const playbackTempo = clampPhraseTempo(slow ? tempo / 2 : tempo);
   const tempoMax = slow ? PHRASE_TEMPO_MAX / 2 : PHRASE_TEMPO_MAX;
   const trueHalf = slow && playbackTempo * 2 === tempo;
+  /* Half of a tempo under 80 would sit below the 40 BPM floor, so the
+     clamp holds it at 40 and it is no longer half. */
+  const halfAtFloor = slow && tempo / 2 < PHRASE_TEMPO_MIN;
   /**
    * What the listener is actually hearing. A change made during a looping
    * pass waits for the bar line, so the selection can run ahead of the audio.
@@ -998,7 +930,6 @@ export function PhrasePanel({
   const planSentence = plan
     ? `${CONTOUR_LABEL[plan.contour]} contour, ${RHYTHM_LABEL[plan.rhythm]}, ${REGISTER_LABEL[plan.register]} register, landing on the ${cadenceText}.`
     : '';
-  const { deckRef } = useDeckBreakpoints();
   const playKey = (
     <button
       key="play"
@@ -1130,7 +1061,9 @@ export function PhrasePanel({
           aria-valuetext={
             trueHalf
               ? `${playbackTempo} BPM, half of ${tempo}`
-              : `${playbackTempo} BPM`
+              : halfAtFloor
+                ? `${playbackTempo} BPM, half speed, minimum`
+                : `${playbackTempo} BPM`
           }
           onChange={changeTempo}
           onPointerUp={commitTempo}
@@ -1148,11 +1081,6 @@ export function PhrasePanel({
       >
         <Turtle size={16} aria-hidden="true" />
         <span className="deck-speed-text">Half speed</span>
-        {/* Kept for the aria-hidden mark in the toggle's pressed label; the
-            phone layout gives the toggle its own row and its full name. */}
-        <span className="deck-speed-short" aria-hidden="true">
-          ½×
-        </span>
       </button>
     </div>
   );
@@ -1225,10 +1153,7 @@ export function PhrasePanel({
           {frame.scaleName}.
         </p>
       </div>
-      <div
-        ref={deckRef}
-        className={`phrase-deck deck-tape${busy ? ' is-rolling' : ''}`}
-      >
+      <div className={`phrase-deck deck-tape${busy ? ' is-rolling' : ''}`}>
         <div className="deck-window">
           <span className="deck-reel" aria-hidden="true" />
           <div className="deck-window-text">
@@ -1238,6 +1163,8 @@ export function PhrasePanel({
                 {REGISTER_LABEL[plan.register]} · lands on the {cadenceText}
               </p>
             )}
+            {/* Live status line. The id predates the seed field getting
+                its own static note; tests still read status by it. */}
             <p
               id="phrase-seed-help"
               className={`phrase-status${statusAlert ? ' is-alert' : ''}`}
@@ -1310,6 +1237,7 @@ export function PhrasePanel({
                 playbackTempo,
                 tempo,
                 trueHalf,
+                halfAtFloor,
                 slow,
                 swing,
               })}
@@ -1331,6 +1259,14 @@ export function PhrasePanel({
               className="deck-seed"
               onToggle={(event) => {
                 if (!event.currentTarget.open) return;
+                /* Desktop only: focusing on a phone or tablet opens the
+                   keyboard over the deck before the number can be read. */
+                if (
+                  window.matchMedia(DECK_BREAKPOINT_QUERY.phone).matches ||
+                  window.matchMedia('(pointer: coarse)').matches
+                ) {
+                  return;
+                }
                 const input = seedInputRef.current;
                 if (!input) return;
                 input.focus();
@@ -1347,6 +1283,12 @@ export function PhrasePanel({
                 />
               </summary>
               <div className="deck-seed-fields">
+                {/* Static help for the seed field. The status line in the
+                    tape window changes with playback, so it cannot double
+                    as this input's description. */}
+                <span id="phrase-seed-note" className="sr-only">
+                  Same seed replays this phrase.
+                </span>
                 <label className="phrase-seed deck-counter">
                   <span className="sr-only">Seed</span>
                   <input
@@ -1357,7 +1299,7 @@ export function PhrasePanel({
                     // those wait for the handoff and this does not.
                     value={seedText}
                     inputMode="numeric"
-                    aria-describedby="phrase-seed-help"
+                    aria-describedby="phrase-seed-note"
                     onChange={(event) => setSeedText(event.target.value)}
                     onBlur={() => commitSeed(seedText)}
                     onKeyDown={(event) => {

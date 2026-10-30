@@ -108,8 +108,11 @@
   align-items: stretch;
   min-width: 0;
 }
-.deck-transport .deck-key-play,
-.deck-transport .deck-key-new {
+/* Three classes deep so this lead beats `.phrase-deck .deck-key` below,
+   whatever order the two rules end up in. At two classes the later 44px
+   row rule won and Play/New never led. */
+.phrase-deck .deck-transport .deck-key-play,
+.phrase-deck .deck-transport .deck-key-new {
   min-height: 52px;
   font-size: var(--text-sm);
 }
@@ -374,10 +377,6 @@
    and Swing reserves the same slot so the two lines stay aligned. */
 .deck-speed {
   flex: 0 0 auto;
-}
-.deck-speed-short {
-  display: none;
-  font-size: var(--text-sm);
 }
 
 .deck-fader {
@@ -677,6 +676,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 0 var(--space-2);
+  /* Reserve the Clear pins row height before any pin is set, so the
+     button arriving does not push the pin rows down. */
+  min-height: var(--deck-row);
   margin: 0;
 }
 .phrase-pins-hint {
@@ -857,10 +859,5 @@
     width: auto;
     margin-left: var(--deck-control-start);
     padding-inline: var(--space-3);
-  }
-  /* On its own row the toggle has room for its full name; the ½× mark was
-     only needed when it squeezed onto the tempo line. */
-  .deck-speed-short {
-    display: none;
   }
 }
