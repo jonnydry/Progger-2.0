@@ -337,13 +337,13 @@ void test(
       assert.equal(build.length, 1, `${width}px build ${closed.join(', ')}`);
       assert.equal(build[0]?.includes('Nothing pinned'), true, build[0]);
       assert.equal(build[0]?.includes('BPM'), false, build[0]);
-      const tempo = closed.filter((name) =>
-        name.toLowerCase().startsWith('tempo'),
+      const feel = closed.filter((name) =>
+        name.toLowerCase().startsWith('feel?'),
       );
-      assert.equal(tempo.length, 1, `${width}px tempo ${closed.join(', ')}`);
-      assert.equal(tempo[0]?.includes('2-bar'), true, tempo[0]);
-      assert.equal(tempo[0]?.includes('96 BPM'), true, tempo[0]);
-      assert.equal(tempo[0]?.includes('straight'), true, tempo[0]);
+      assert.equal(feel.length, 1, `${width}px feel ${closed.join(', ')}`);
+      assert.equal(feel[0]?.includes('2-bar'), true, feel[0]);
+      assert.equal(feel[0]?.includes('96 BPM'), true, feel[0]);
+      assert.equal(feel[0]?.includes('straight'), true, feel[0]);
     }
 
     await enableHistorySteps(page);
@@ -372,18 +372,18 @@ void test(
       const build = keyboard.findIndex((name) =>
         name.toLowerCase().startsWith('build'),
       );
-      const tempo = keyboard.findIndex((name) =>
-        name.toLowerCase().startsWith('tempo'),
+      const feel = keyboard.findIndex((name) =>
+        name.toLowerCase().startsWith('feel?'),
       );
       assert.ok(
         at('Play phrase') < at('New phrase') &&
           at('New phrase') < at('Previous phrase') &&
           at('Previous phrase') < at('Next phrase') &&
           build !== -1 &&
-          tempo !== -1 &&
+          feel !== -1 &&
           at('Next phrase') < build &&
-          build < tempo &&
-          tempo < at('Half speed') &&
+          build < feel &&
+          feel < at('Half speed') &&
           at('Half speed') < at('Swing') &&
           at('Swing') < at('Seed'),
         `${width}px open keyboard ${keyboard.join(', ')}`,
