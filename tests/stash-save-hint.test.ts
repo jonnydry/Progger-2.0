@@ -264,6 +264,18 @@ void test(
         ['F♯', 'Sustained F♯ under your playing'],
         ['B♭', 'Sustained B♭ under your playing'],
       ] as const) {
+        // The server-rendered trigger accepts the click before React
+        // attaches its open handler. networkidle and #drone-toggle do not
+        // wait for that, so on a busy runner the click is lost and no
+        // option appears. React records props on the node once that
+        // handler is attached.
+        await page.waitForFunction(() => {
+          const node = document.getElementById('explore-root');
+          if (!node) return false;
+          return Object.keys(node).some((key) =>
+            key.startsWith('__reactProps'),
+          );
+        });
         await page.locator('#explore-root').click();
         await page.getByRole('option', { name: label, exact: true }).click();
         await page.locator('.drone-legend-hint', { hasText: hint }).waitFor();
