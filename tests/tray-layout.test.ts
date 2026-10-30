@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import type { Browser, Page } from 'playwright';
 import { launchNamed } from './browser-launch.ts';
 import { acquireDevServer } from './dev-server.ts';
+import { openTray } from './open-tray.ts';
 
 type Box = {
   top: number;
@@ -83,8 +84,7 @@ for (const name of ['chromium', 'firefox'] as const) {
           'false',
           `${width}px starts closed`,
         );
-        await page.locator('.tray-open').click();
-        await page.locator('#practice-tray').waitFor({ state: 'visible' });
+        await openTray(page);
         await page.waitForFunction((viewport) => {
           const panel = document.querySelector('#practice-tray');
           if (!(panel instanceof HTMLElement)) return false;
@@ -139,8 +139,7 @@ for (const name of ['chromium', 'firefox'] as const) {
 
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.emulateMedia({ reducedMotion: 'reduce' });
-      await page.locator('.tray-open').click();
-      await page.locator('#practice-tray').waitFor({ state: 'visible' });
+      await openTray(page);
       await page.waitForFunction(() => {
         const panel = document.querySelector('#practice-tray');
         if (!(panel instanceof HTMLElement)) return false;

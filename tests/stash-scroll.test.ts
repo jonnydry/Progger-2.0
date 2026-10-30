@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import type { Page } from 'playwright';
 import { launchNamed } from './browser-launch.ts';
 import { acquireDevServer } from './dev-server.ts';
+import { openTray } from './open-tray.ts';
 
 const START = 948;
 const SLACK = 4;
@@ -47,8 +48,7 @@ void test(
         const start = await scrollY(page);
         near(start, START, `${width} start`);
 
-        await page.locator('.tray-open').click();
-        await page.locator('#practice-tray').waitFor();
+        await openTray(page);
         await settle(page);
         near(await scrollY(page), start, `${width} open`);
 
@@ -59,8 +59,7 @@ void test(
 
         await page.evaluate((top) => window.scrollTo(0, top), START);
         await settle(page);
-        await page.locator('.tray-open').click();
-        await page.locator('#practice-tray').waitFor();
+        await openTray(page);
         await page.keyboard.press('Escape');
         await page.locator('#practice-tray').waitFor({ state: 'detached' });
         await settle(page);
