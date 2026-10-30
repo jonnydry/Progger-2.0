@@ -185,8 +185,10 @@ async function main(): Promise<void> {
     (arg) => arg !== '--list' && !arg.endsWith('.test.ts'),
   );
 
+  let browsersMissing = false;
   if (run.some((file) => !slices.unit.includes(file))) {
     const missing = await missingBrowsers();
+    browsersMissing = missing.length > 0;
     if (missing.length) {
       const names = missing.join(' and ');
       const fix = 'npx playwright install --with-deps chromium firefox';
@@ -198,6 +200,19 @@ async function main(): Promise<void> {
         `warning: ${names} not installed, so tests that need ${missing.length > 1 ? 'them' : 'it'} will skip. Run: ${fix}\n`,
       );
     }
+  }
+
+  // Hold one dev-server ref for the whole run when browser files are in
+  // it. Without this, the shared server stops whenever the running files
+  // happen to be between acquires at the same moment, and the next test
+  // pays a respawn plus a cold compile that can exceed its UI timeouts.
+  // The last release (this one, after the child exits) stops the server.
+  // Render-only runs skip this: their files never use the server, and the
+  // dev-server lifecycle tests need that job cold.
+  let releaseServer: (() => Promise<void>) | undefined;
+  if (!browsersMissing && run.some((file) => slices.browser.includes(file))) {
+    const { acquireDevServer } = await import('../tests/dev-server.ts');
+    releaseServer = (await acquireDevServer()).release;
   }
 
   // CI points TEST_RESULTS at a directory it uploads when a job fails.
@@ -236,7 +251,10 @@ async function main(): Promise<void> {
     process.on(signal, () => child.kill(signal));
   }
   child.on('exit', (code) => {
-    process.exit(code ?? 1);
+    void Promise.resolve(releaseServer?.()).then(
+      () => process.exit(code ?? 1),
+      () => process.exit(code ?? 1),
+    );
   });
 }
 
