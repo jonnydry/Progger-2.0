@@ -1641,6 +1641,17 @@ function PhraseStaff({
       return;
     }
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    // The staff's heads and marks render from `notes` and `bars` alone, and
+    // a change to either re-runs this effect after the new staff commits.
+    // Look them up once per run, not on every frame.
+    const heads = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-phrase-playhead]'),
+      (head) => ({ head, bar: head.dataset.phrasePlayhead }),
+    );
+    const marks = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-phrase-note]'),
+      (mark) => ({ mark, note: Number(mark.dataset.phraseNote) }),
+    );
     let frame = 0;
     const tick = () => {
       const elapsed = player.current?.elapsed() ?? 0;
@@ -1661,21 +1672,14 @@ function PhraseStaff({
       const local = landing ? beat - bars * 4 : beat - (Number(barId) - 1) * 4;
       const span = landing ? 2 : 4;
       const x = `${Math.min(1, Math.max(0, local / span)) * 100}%`;
-      root
-        .querySelectorAll<HTMLElement>('[data-phrase-playhead]')
-        .forEach((head) => {
-          const mine = head.dataset.phrasePlayhead === barId;
-          head.hidden = !mine;
-          if (mine) head.style.left = x;
-        });
-      root
-        .querySelectorAll<HTMLElement>('[data-phrase-note]')
-        .forEach((mark) => {
-          mark.classList.toggle(
-            'is-current',
-            mark.dataset.phraseNote === String(index),
-          );
-        });
+      for (const { head, bar } of heads) {
+        const mine = bar === barId;
+        head.hidden = !mine;
+        if (mine) head.style.left = x;
+      }
+      for (const { mark, note } of marks) {
+        mark.classList.toggle('is-current', note === index);
+      }
       const sounding = index >= 0 ? notes[index] : null;
       publishPhrasePlayhead(
         sounding ? `${sounding.string}:${sounding.fret}` : null,
