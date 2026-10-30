@@ -381,6 +381,19 @@ export function PhrasePanel({
   const soundingTempo = useRef(tempo);
   const swingRef = useRef(swing);
   const soundingSwing = useRef(swing);
+  /**
+   * Written feel of the pass that is sounding, for the stash snapshot.
+   * Sliders move the written state before the release that commits it,
+   * so state alone can name a tempo nobody is hearing. This only moves
+   * when a pass actually starts: a queued pass stages its feel in
+   * `queuedFeel`, and the handoff adopts it.
+   */
+  const soundingFeel = useRef({ tempo, slow, swing });
+  const queuedFeel = useRef<{
+    tempo: number;
+    slow: boolean;
+    swing: number;
+  } | null>(null);
   if ((held?.id ?? null) !== heldCursor) {
     setHeldCursor(held?.id ?? null);
     if (held) {
@@ -462,9 +475,25 @@ export function PhrasePanel({
    * playing. It is released when the player reports the handoff, when the
    * pass simply starts, or when playback stops.
    */
-  const liveFrame = useMemo(
+  const liveMusical = useMemo(
     () => ({ phrase, bars, scaleRoot, scaleName, chordSymbol }),
     [phrase, bars, scaleRoot, scaleName, chordSymbol],
+  );
+  // The full frame also carries what a stash snapshot needs: scale id,
+  // chord, chord tones for the cadence label, and the written feel. Feel
+  // changes alone do not hold the screen (see below), but a held frame
+  // freezes them with the phrase that is sounding.
+  const liveFrame = useMemo(
+    () => ({
+      ...liveMusical,
+      scaleId,
+      chord,
+      chordNotes,
+      tempo,
+      slow,
+      swing,
+    }),
+    [liveMusical, scaleId, chord, chordNotes, tempo, slow, swing],
   );
   /** True while a pass is actually sounding, so a change has to wait. */
   const soundingNow = status === 'playing' || status === 'starting';
@@ -478,20 +507,44 @@ export function PhrasePanel({
    */
   const [heldFrame, setHeldFrame] = useState(liveFrame);
   const [awaitingHandoff, setAwaitingHandoff] = useState(false);
+  /**
+   * Loop was turned off and the pass is finishing its cadence. Mirrors the
+   * player's own finishing state (what `phraseChangeWaits()` reports) so
+   * the hold below can keep the screen on the finishing phrase without
+   * reading the player during render. Set by the Loop toggle when it
+   * turns off over a live pass, cleared when a new pass starts or
+   * playback stops.
+   */
+  const [finishingHold, setFinishingHold] = useState(false);
   const [seenFrame, setSeenFrame] = useState(liveFrame);
   if (liveFrame !== seenFrame) {
-    // A new selection arrived. While a looping pass is sounding, the player
-    // will defer it to the bar line, so keep showing the frame that is
-    // sounding — the one the panel had until this render. Every other change
-    // starts at once, so the panel follows it immediately.
-    const deferred = soundingNow && loop;
+    // A new selection arrived. While a looping or finishing pass is
+    // sounding, the player will defer it to the bar line or the end of
+    // the cadence, so keep showing the frame that is sounding — the one
+    // the panel had until this render. Every other change starts at
+    // once, so the panel follows it immediately. Tempo, half speed, and
+    // swing are not musical changes here: they restart playback at once
+    // on commit, so they never hold the screen by themselves.
+    const musicalChange =
+      liveFrame.phrase !== seenFrame.phrase ||
+      liveFrame.bars !== seenFrame.bars ||
+      liveFrame.scaleRoot !== seenFrame.scaleRoot ||
+      liveFrame.scaleName !== seenFrame.scaleName ||
+      liveFrame.chordSymbol !== seenFrame.chordSymbol;
     const outgoing = seenFrame;
     setSeenFrame(liveFrame);
-    if (deferred) {
-      setHeldFrame(outgoing);
-      setAwaitingHandoff(true);
-    } else {
-      setAwaitingHandoff(false);
+    if (musicalChange) {
+      const deferred = soundingNow && (loop || finishingHold);
+      if (deferred) {
+        // Only the first deferred change captures the sounding frame. A
+        // second one replaces the queued phrase in the player, and the
+        // intermediate never sounds — capturing it here would put a
+        // phrase nobody hears on screen.
+        if (!awaitingHandoff) setHeldFrame(outgoing);
+        setAwaitingHandoff(true);
+      } else {
+        setAwaitingHandoff(false);
+      }
     }
   }
   const frame = awaitingHandoff && soundingNow ? heldFrame : liveFrame;
@@ -509,6 +562,19 @@ export function PhrasePanel({
    */
   const adoptQueued = useCallback(() => {
     setAwaitingHandoff(false);
+    setFinishingHold(false);
+    // The queued pass is sounding now, so its feel becomes the sounding
+    // feel in the same beat as the screen adopts its frame.
+    if (queuedFeel.current) {
+      soundingFeel.current = queuedFeel.current;
+      queuedFeel.current = null;
+      soundingTempo.current = clampPhraseTempo(
+        soundingFeel.current.slow
+          ? soundingFeel.current.tempo / 2
+          : soundingFeel.current.tempo,
+      );
+      soundingSwing.current = soundingFeel.current.swing;
+    }
   }, []);
   /**
    * Drop a held change without waiting for a bar line. Stop, a context
@@ -517,10 +583,18 @@ export function PhrasePanel({
    */
   const dropQueued = useCallback(() => {
     setAwaitingHandoff(false);
+    setFinishingHold(false);
+    queuedFeel.current = null;
   }, []);
   useEffect(() => {
     const current = new PhrasePlayer((next) => {
-      if (next === 'idle' || next === 'error') live.current = false;
+      if (next === 'idle' || next === 'error') {
+        live.current = false;
+        // The finishing pass is over (or never started), so a later pass
+        // must not be held as if its cadence were still sounding.
+        setFinishingHold(false);
+        queuedFeel.current = null;
+      }
       // 'starting' is the bar-line handoff: the queued frame begins to sound
       // on that downbeat. 'playing' covers a handoff whose starting state was
       // coalesced away, so the screen still catches up.
@@ -581,8 +655,10 @@ export function PhrasePanel({
     }
     // Loop off mid-pass keeps this pass and lands on the closing note.
     // A new start would cut that note and begin again at beat 1.
+    let finishHandled = false;
     if (turnedOff && player.current?.isLooping) {
       player.current.finishPass();
+      finishHandled = true;
     }
     const tempoNow = clampPhraseTempo(
       slow ? tempoRef.current / 2 : tempoRef.current,
@@ -599,6 +675,11 @@ export function PhrasePanel({
     // cadence sounds; starting a fresh pass here would jump back to bar 1
     // under the player's ear, which is what this used to do.
     if (turnedOn) {
+      queuedFeel.current = {
+        tempo: tempoRef.current,
+        slow,
+        swing: swingRef.current,
+      };
       player.current?.replaceAfterPass({ ...next, loop: true });
       return;
     }
@@ -606,8 +687,14 @@ export function PhrasePanel({
     // is sounding. A finishing pass keeps its closing note. Only the latest
     // request is kept. Stop still cuts immediately.
     if (phraseChanged && player.current?.phraseChangeWaits()) {
-      soundingTempo.current = tempoNow;
-      soundingSwing.current = swingRef.current;
+      // Stage the queued feel without touching the sounding one: the
+      // playhead and a stash save during the hold must keep describing
+      // the pass that is playing.
+      queuedFeel.current = {
+        tempo: tempoRef.current,
+        slow,
+        swing: swingRef.current,
+      };
       player.current.queuePhrase(next);
       // The selection moved but the speakers did not. Freeze the whole frame
       // — phrase, bars, key, scale, and chord — until the player reports the
@@ -615,12 +702,34 @@ export function PhrasePanel({
       // nothing here has to touch state.
       return;
     }
-    if (turnedOff) return;
+    if (turnedOff) {
+      if (!finishHandled) {
+        // The sounding pass itself was not looping — it is finishing
+        // its cadence, or still starting — so finishPass above did not
+        // run, and a replacement armed by an earlier Loop-on can still
+        // be waiting to loop. Re-queue it to play once, the same
+        // rewrite finishPass gives a phrase queued under Loop. During
+        // a start this supersedes the in-flight looping start instead.
+        queuedFeel.current = {
+          tempo: tempoRef.current,
+          slow,
+          swing: swingRef.current,
+        };
+        player.current?.queuePhrase({ ...next, loop: false });
+      }
+      return;
+    }
     soundingTempo.current = tempoNow;
     soundingSwing.current = swingRef.current;
+    soundingFeel.current = {
+      tempo: tempoRef.current,
+      slow,
+      swing: swingRef.current,
+    };
+    queuedFeel.current = null;
     setAwaitingHandoff(false);
     void player.current?.start(next);
-  }, [active, phrase, bars, slow, loop, liveFrame, seenFrame, dropQueued]);
+  }, [active, phrase, bars, slow, loop, liveMusical, dropQueued]);
   const marks = useMemo(
     () => (sounding.ok ? phraseFretMarks(notes, dots) : null),
     [sounding.ok, notes, dots],
@@ -724,7 +833,10 @@ export function PhrasePanel({
     setBars(next);
     setNotice('');
   }
-  const phraseKey = `${scaleId}:${scaleRoot}:${seed}:${bars}`;
+  // The saved mark belongs to the phrase on screen. Keying it by the live
+  // selection would leave "Saved ✓" lit for a queued phrase that was
+  // never saved once the handoff lands.
+  const phraseKey = `${frame.scaleId}:${frame.scaleRoot}:${frame.chordSymbol}:${sounding.ok ? sounding.phrase.seed : seed}:${sounding.ok ? sounding.phrase.bars : bars}:${sounding.ok ? `${sounding.phrase.plan.contour}/${sounding.phrase.plan.rhythm}/${sounding.phrase.plan.register}/${sounding.phrase.plan.cadence}` : ''}`;
   const [savedFor, setSavedFor] = useState<string | null>(null);
   const [saveAnnounce, setSaveAnnounce] = useState('');
   const [announcedFor, setAnnouncedFor] = useState(phraseKey);
@@ -766,30 +878,46 @@ export function PhrasePanel({
         position: note.position,
         shift: note.shift,
       })),
-      key: scaleRoot,
-      scaleId,
-      scaleName,
-      chord: chord
+      // Key, scale, chord, and feel come from the sounding frame too.
+      // The live selection can already name a queued phrase in another
+      // key at another tempo, and stashing that with these notes would
+      // save a phrase nobody heard.
+      key: frame.scaleRoot,
+      scaleId: frame.scaleId,
+      scaleName: frame.scaleName,
+      chord: frame.chord
         ? {
-            symbol: chord.symbol,
-            root: chord.root,
-            qualityId: chord.qualityId,
-            bass: chord.bass,
-            notes: chord.notes.map((note) => ({
+            symbol: frame.chord.symbol,
+            root: frame.chord.root,
+            qualityId: frame.chord.qualityId,
+            bass: frame.chord.bass,
+            notes: frame.chord.notes.map((note) => ({
               name: note.name,
               pc: note.pc,
               degree: note.degree,
             })),
-            fromContext: chord.fromContext,
+            fromContext: frame.chord.fromContext,
           }
         : null,
       bars: sounding.phrase.bars,
-      tempo,
-      slow,
-      swing,
+      // While a pass is sounding, its started feel wins over the frame's
+      // written feel: a slider can move without committing, and the
+      // stash must not name that unsounded tempo or swing.
+      tempo: soundingNow ? soundingFeel.current.tempo : frame.tempo,
+      slow: soundingNow ? soundingFeel.current.slow : frame.slow,
+      swing: soundingNow ? soundingFeel.current.swing : frame.swing,
       plan: sounding.phrase.plan,
       seed: sounding.phrase.seed,
       ...capture,
+      // The restore place follows the sounding chord, not the tab the
+      // selection has since moved to.
+      place: historyPlace(frame.chord),
+      ...(frame.chord && !frame.chord.fromContext
+        ? {
+            chordRoot: frame.chord.root,
+            qualityId: frame.chord.qualityId,
+          }
+        : {}),
     });
     const message = traySaveMessage(saved.status, 'phrase', saved.removed);
     setNotice(message);
@@ -814,6 +942,8 @@ export function PhrasePanel({
     const tempoNow = clampPhraseTempo(slow ? tempo / 2 : tempo);
     soundingTempo.current = tempoNow;
     soundingSwing.current = swing;
+    soundingFeel.current = { tempo, slow, swing };
+    queuedFeel.current = null;
     live.current = true;
     void player.current?.start({
       notes: phrase.phrase.notes,
@@ -822,6 +952,13 @@ export function PhrasePanel({
       swing,
       loop,
     });
+  }
+  function toggleLoop() {
+    // Turning Loop off over a live pass sends that pass into its
+    // cadence (or re-queues its armed replacement to play once). Hold
+    // the screen on it until the player reports the next start.
+    if (loop && live.current) setFinishingHold(true);
+    setLoop((current) => !current);
   }
   function togglePlay() {
     if (!phrase.ok) return;
@@ -857,7 +994,7 @@ export function PhrasePanel({
   // tonic has both a flat fifth and a fifth in its default chord, and the
   // cadence is the fifth, so the readout must not say "5th" when it means
   // "the tritone" (or the reverse).
-  const cadenceText = plan ? cadenceLabel(plan.cadence, chordNotes) : '';
+  const cadenceText = plan ? cadenceLabel(plan.cadence, frame.chordNotes) : '';
   const planSentence = plan
     ? `${CONTOUR_LABEL[plan.contour]} contour, ${RHYTHM_LABEL[plan.rhythm]}, ${REGISTER_LABEL[plan.register]} register, landing on the ${cadenceText}.`
     : '';
@@ -933,7 +1070,7 @@ export function PhrasePanel({
       type="button"
       className="phrase-action deck-key deck-key-loop deck-key-quiet"
       aria-pressed={loop}
-      onClick={() => setLoop((current) => !current)}
+      onClick={toggleLoop}
     >
       <Repeat size={16} aria-hidden="true" />
       <span className="deck-key-label">Loop</span>
@@ -1253,7 +1390,7 @@ export function PhrasePanel({
       {sounding.ok && dots === 'shown' && (
         <PhraseStaff
           notes={notes}
-          bars={bars}
+          bars={frame.bars}
           swing={soundingSwing}
           playing={status === 'playing'}
           player={player}
