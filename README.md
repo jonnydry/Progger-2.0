@@ -84,6 +84,17 @@ through Playwright; install them once with
 `npx playwright install --with-deps chromium firefox`. The full suite takes
 a few minutes.
 
+CI runs the suite as three slices in parallel jobs, and each can run on its
+own:
+
+- `npm run test:unit`: no browser
+- `npm run test:browser`: the app and component tests in Chromium and Firefox
+- `npm run test:render`: the long drone audio renders in both browsers
+
+`scripts/run-tests.ts` decides the slices from each test's imports. Pass test
+files to run only those, for example
+`npm run test:browser -- tests/phrase-panel-loop.test.ts`.
+
 ## Project layout
 
 - `app/`: the page, layout and styles
