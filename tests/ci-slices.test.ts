@@ -83,24 +83,14 @@ void test('a file that launches a browser or the dev server is not a unit test',
       file,
     );
   }
-  // Imports only the share-dir helper from dev-server.ts. Its lifecycle
-  // tests are the one deliberate unit-slice exception: they drive the dev
-  // server in child processes (the PROGGER_DEV_SERVER harness), because
-  // the unit job is the only runner where no sibling file holds the
-  // server. It must stay the only unit file doing so.
+  // Imports only the share-dir helper from dev-server.ts.
   assert.ok(unit.includes('tests/dev-server.test.ts'));
-  assert.deepEqual(
-    unit.filter(
-      (file) =>
-        file !== 'tests/ci-slices.test.ts' &&
-        source(file).includes('PROGGER_DEV_SERVER'),
-    ),
-    ['tests/dev-server.test.ts'],
-  );
   // A browser harness with no dev server.
   assert.ok(browser.includes('tests/phrase-held-release.test.ts'));
   assert.ok(browser.includes('tests/phrase-panel-loop.test.ts'));
   assert.ok(render.includes('tests/drone-peak.test.ts'));
+  // Drives the dev server in child processes; render is the cold slice for it.
+  assert.ok(render.includes('tests/dev-server-lifecycle.test.ts'));
 });
 
 void test('the slicer reads value imports, not type imports', () => {

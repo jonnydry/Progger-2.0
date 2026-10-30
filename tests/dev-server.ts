@@ -247,29 +247,81 @@ async function ensureOrigin(): Promise<string> {
   throw new Error('timed out waiting for the dev server');
 }
 
+async function stoppingInProgress(): Promise<boolean> {
+  try {
+    await access(`${SHARE}/stopping`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** One vinext dev server for the browser tests. A server already on disk is reused. */
 export async function acquireDevServer(): Promise<{
   origin: string;
   release: () => Promise<void>;
 }> {
-  await mkdir(REFS, { recursive: true });
-  await sweepDeadRefs();
-  const ref = `${REFS}/${process.pid}-${randomUUID()}`;
-  await writeFile(ref, '');
-  try {
-    const origin = await ensureOrigin();
-    let released = false;
-    return {
-      origin,
-      release: async () => {
-        if (released) return;
-        released = true;
-        await rm(ref, { force: true });
-        await stopIfOwnerAndIdle();
-      },
-    };
-  } catch (error) {
-    await rm(ref, { force: true });
-    throw error;
+  const deadline = Date.now() + 120_000;
+  for (;;) {
+    await mkdir(REFS, { recursive: true });
+    await sweepDeadRefs();
+    const ref = `${REFS}/${process.pid}-${randomUUID()}`;
+    let wroteRef = true;
+    try {
+      await writeFile(ref, '');
+    } catch {
+      wroteRef = false;
+    }
+    // The last holder claims `stopping`, rechecks the refs, then kills the
+    // server and removes SHARE. A ref written after that recheck would be
+    // deleted with SHARE and its origin killed underneath us, so when a
+    // stop is in progress (or just removed SHARE under our ref write),
+    // back out and retry once the stop finishes (SHARE gone, recreated
+    // above) or aborts (flag removed). A ref the recheck can see makes
+    // the stopper abort instead.
+    let refGone = false;
+    if (wroteRef) {
+      try {
+        await access(ref);
+      } catch {
+        refGone = true;
+      }
+    }
+    if (!wroteRef || refGone || (await stoppingInProgress())) {
+      await rm(ref, { force: true });
+      if (Date.now() > deadline) {
+        throw new Error('timed out waiting for the dev server to stop');
+      }
+      while ((await stoppingInProgress()) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      continue;
+    }
+    try {
+      const origin = await ensureOrigin();
+      let released = false;
+      return {
+        origin,
+        release: async () => {
+          if (released) return;
+          released = true;
+          await rm(ref, { force: true });
+          await stopIfOwnerAndIdle();
+        },
+      };
+    } catch (error) {
+      await rm(ref, { force: true });
+      // A stop that slipped between the checks above and ensureOrigin
+      // surfaces as a missing SHARE (e.g. opening OWNER): retry fresh
+      // instead of failing the acquire.
+      let shareGone = false;
+      try {
+        await access(SHARE);
+      } catch {
+        shareGone = true;
+      }
+      if (shareGone && Date.now() < deadline) continue;
+      throw error;
+    }
   }
 }
