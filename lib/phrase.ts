@@ -562,6 +562,10 @@ export type PhraseRuleReport = {
   strongChord: number;
   steps: number;
   leaps: number;
+  /** Semitone intervals of 5 or more. */
+  wideLeaps: number;
+  /** Wide leaps whose next note steps back against the leap. */
+  wideResolved: number;
   /** Intervals of 1 or 2 semitones, whatever the scale calls them. */
   semitoneSteps: number;
   /** Intervals of 3 semitones or more. */
@@ -588,6 +592,8 @@ export function phraseRuleReport(
   let semitoneLeaps = 0;
   let unisons = 0;
   let unresolved = 0;
+  let wideLeaps = 0;
+  let wideResolved = 0;
   for (let index = 0; index < phrase.notes.length; index++) {
     const note = phrase.notes[index];
     if (note.strong) {
@@ -603,6 +609,20 @@ export function phraseRuleReport(
     else unisons += 1;
     if (distance > 0 && distance <= 2) semitoneSteps += 1;
     else if (distance > 2) semitoneLeaps += 1;
+    const landed = Math.abs(note.midi - previous.midi);
+    if (landed >= WIDE_LEAP_SEMIS) {
+      wideLeaps += 1;
+      const next = phrase.notes[index + 1];
+      if (next) {
+        const step = next.midi - note.midi;
+        if (
+          Math.sign(step) === -Math.sign(note.midi - previous.midi) &&
+          Math.abs(step) >= 1 &&
+          Math.abs(step) <= 2
+        )
+          wideResolved += 1;
+      }
+    }
     if (motion !== 'leap') continue;
     const next = phrase.notes[index + 1];
     if (!next) {
@@ -621,6 +641,8 @@ export function phraseRuleReport(
     strongChord,
     steps,
     leaps,
+    wideLeaps,
+    wideResolved,
     semitoneSteps,
     semitoneLeaps,
     unisons,
@@ -1155,6 +1177,27 @@ function pickPatterns(
 }
 
 const PROXIMITY_VAR = 8;
+/**
+ * A leap this wide asks the line to settle afterwards. Five semitones is
+ * a fourth, the smallest interval that stops sounding like a step.
+ */
+const WIDE_LEAP_SEMIS = 5;
+/**
+ * A preference after a wide leap, never a filter: an opposite step of one
+ * or two semitones is more likely. There is no run-on penalty to match it.
+ * Tuning found that barrelling on is already rare enough once a wide leap
+ * has landed, and that damping it clustered pitches badly: at 0.5 the
+ * top-two guard went to 38.50%, and only 1.0 held it. A multiplier of 1 is
+ * not worth a constant, so the term is a bonus only.
+ *
+ * The bonus is small because `topHeavy` sits at 37.75% against a 38%
+ * ceiling on the 800-phrase sweep, about two phrases of room. Every value
+ * that lifts the settle rate past ~32% lifts the guard past the ceiling:
+ * at 4 the rate reaches 38.18% but the guard 39.88%. 1.25 is the strongest
+ * bonus that holds it, and it breaks even phrase for phrase (302 of 800
+ * before and after). See the PR for the measured frontier.
+ */
+const LEAP_SETTLE_BONUS = 1.25;
 const RANGE_VAR = 29;
 /**
  * Wide enough that a note can leave the contour curve. The third-mean
@@ -1224,6 +1267,7 @@ function pitchWeight(
   centre: number,
   event: GridEvent,
   cadenceMidi: number | null,
+  nearCadence: boolean,
 ): number {
   const midi = ladder[tone].midi;
   let weight = gauss(midi - goal, CONTOUR_VAR) * gauss(midi - centre, RANGE_VAR);
@@ -1231,6 +1275,21 @@ function pitchWeight(
     const gap = midi - prevMidi;
     weight *= gauss(gap, PROXIMITY_VAR);
     if (prevPrevMidi !== null && midi === prevPrevMidi) weight *= 0.18;
+  }
+  // A wide leap asks to settle. The bonus never competes with the
+  // chord-tone preference on a held or strong note, so held non-chord
+  // notes cannot rise through this term.
+  if (!nearCadence && prevMidi !== null && prevPrevMidi !== null) {
+    const leap = prevMidi - prevPrevMidi;
+    if (Math.abs(leap) >= WIDE_LEAP_SEMIS) {
+      const step = midi - prevMidi;
+      const mag = Math.abs(step);
+      const opposite = Math.sign(step) === -Math.sign(leap);
+      if (opposite && mag >= 1 && mag <= 2) {
+        if (!(event.strong || event.duration >= 1))
+          weight *= LEAP_SETTLE_BONUS;
+      }
+    }
   }
   if (event.strong || event.duration >= 1) {
     weight *= ladder[tone].chordTone ? 2.15 : 0.72;
@@ -1733,6 +1792,7 @@ function walkScored(
         centre,
         event,
         index === events.length - 2 ? cadenceMidi : null,
+        index >= events.length - 3,
       ),
     );
     // The returned figure is already placed. The note before the approach
