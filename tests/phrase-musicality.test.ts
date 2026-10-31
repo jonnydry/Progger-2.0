@@ -553,3 +553,35 @@ void test('a sentence returns the opening figure, shifted more often than copied
   const p95 = ordered[Math.ceil(0.95 * ordered.length) - 1] ?? 0;
   assert.ok(p95 < 20, `p95 ${p95.toFixed(2)} ms`);
 });
+
+void test('a wide leap settles on an opposite step more often than not', () => {
+  let wideLeaps = 0;
+  let wideResolved = 0;
+  for (const [root, scaleId, symbol] of SWEEP) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(symbol).notes;
+    for (const bars of [2, 4] as const) {
+      for (let seed = 1; seed <= 50; seed++) {
+        const phrase = generate(root, scaleId, symbol, seed, bars);
+        const report = phraseRuleReport(phrase, scaleNotes, chordNotes);
+        wideLeaps += report.wideLeaps;
+        wideResolved += report.wideResolved;
+      }
+    }
+  }
+  const ratio = wideResolved / Math.max(1, wideLeaps);
+  // Before the settle term, 31.11% (605/1945) of leaps of 5 or more
+  // semitones stepped back a tone or less. The term is deliberately small:
+  // `topHeavy` sits 0.25 pt under its ceiling at 37.75%, and every bonus
+  // strong enough to reach 0.40 lifts it past 38%. See the PR for the
+  // measured frontier. This floor is a regression gate, not the target.
+  assert.ok(
+    ratio >= 0.32,
+    `wide leap settles ${(100 * ratio).toFixed(2)}% (${wideResolved}/${wideLeaps})`,
+  );
+  // The term has to move something, or the floor above would pass on main.
+  assert.ok(
+    wideResolved > 605,
+    `wide leap settles ${wideResolved}/${wideLeaps}, no better than before the term`,
+  );
+});

@@ -305,7 +305,11 @@ void test('these cadence tails stay on the weighted pitches', () => {
     // A low wave. Its cadence still lands on the bottom C.
     ['C', 'major', 'C', 4, 2, [60, 59, 62, 60, 59, 57, 64, 62, 65, 64, 59, 48]],
     ['C', 'major', 'C', 20, 4, [64, 65, 69, 67, 64, 62, 60, 62, 65, 64, 67, 62, 64, 60, 62, 65, 67, 65, 69, 71, 67, 62, 60]],
-    ['C', 'major', 'C', 5, 4, [55, 57, 60, 59, 62, 55, 57, 60, 59, 55, 52, 53, 48, 50, 55, 52, 50, 55, 53, 50, 52]],
+    // Re-pinned with the wide-leap settle. The walk now turns the opening
+    // A-D second into a D-C-B-A figure and settles each leap, which is one
+    // bar longer. Still legal: a 1-semitone step into the C cadence, a
+    // 14-semitone range, and the closing note on the bar line.
+    ['C', 'major', 'C', 5, 4, [57, 62, 60, 59, 57, 62, 59, 64, 62, 60, 59, 60, 64, 62, 60, 59, 55, 52, 53, 55, 50, 53, 57, 53, 52]],
     ['A', 'dorian', 'Am', 7, 2, [69, 72, 71, 69, 72, 76, 74, 72, 67, 64]],
   ];
   for (const [root, scaleId, symbol, seed, bars, midis] of lines) {
