@@ -523,7 +523,7 @@ for (const pair of PAIRS) {
   const swing = swingText(pair);
   const swap =
     pair.swappedFrom === null
-      ? 'Seed kept from the previous render.'
+      ? 'Seed chosen for this pack.'
       : `Swapped from seed ${pair.swappedFrom}, which now matches main.`;
   const block = [
     `## ${pair.id}`,
