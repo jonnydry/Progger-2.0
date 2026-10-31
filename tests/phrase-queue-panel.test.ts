@@ -162,6 +162,92 @@ async function notesChanged(page: Page) {
   );
 }
 
+/**
+ * A looping pass hands the next phrase off at the following bar line.
+ * At 40 BPM that line is six seconds out. Choosing a root from the menu
+ * can outlast it on a busy runner, and the screen then adopts the queued
+ * phrase — which is what playback should do, and what makes a stash
+ * snapshot of the sounding chord fail. This parks that handoff until the
+ * test has saved: from the moment "Looping this phrase." is visible, the
+ * audio clock stays where it is, and a timer longer than a scheduler
+ * tick never fires. Clicks, the root menu, and the stash write still run.
+ *
+ * The threshold sits above the 25 ms scheduler tick and the 150 ms
+ * lookahead, and below a 40 BPM bar. A delay of 400 ms still runs: the
+ * root menu's select gate uses that delay.
+ */
+const PHRASE_HANDOFF_HOLD = `(() => {
+  const nativeTimeout = window.setTimeout.bind(window);
+  const nativeClear = window.clearTimeout.bind(window);
+  let hold = false;
+  const parked = new Map();
+  let parkId = 1000000000;
+  window.setTimeout = function (fn, ms) {
+    const delay = ms == null ? 0 : Number(ms);
+    if (hold && delay > 400) {
+      const id = parkId++;
+      parked.set(id, true);
+      return id;
+    }
+    return nativeTimeout.apply(window, arguments);
+  };
+  window.clearTimeout = function (id) {
+    if (parked.has(id)) {
+      parked.delete(id);
+      return;
+    }
+    return nativeClear(id);
+  };
+  // currentTime lives on BaseAudioContext, not AudioContext.
+  const desc = Object.getOwnPropertyDescriptor(
+    BaseAudioContext.prototype,
+    'currentTime',
+  );
+  if (!desc || typeof desc.get !== 'function' || !desc.configurable) {
+    window.__phraseHoldReady = false;
+    return;
+  }
+  const read = desc.get;
+  const frozen = new WeakMap();
+  Object.defineProperty(BaseAudioContext.prototype, 'currentTime', {
+    configurable: true,
+    enumerable: Boolean(desc.enumerable),
+    get() {
+      const real = read.call(this);
+      if (!hold) return real;
+      let cap = frozen.get(this);
+      if (cap === undefined) {
+        cap = real;
+        frozen.set(this, cap);
+      }
+      return cap;
+    },
+  });
+  window.__holdPhraseHandoff = () => {
+    hold = true;
+  };
+  window.__phraseHoldReady = true;
+})();`;
+
+async function installPhraseHandoffHold(page: Page) {
+  await page.addInitScript({ content: PHRASE_HANDOFF_HOLD });
+}
+
+async function holdPhraseHandoff(page: Page) {
+  const ready = await page.evaluate(() => {
+    const view = window as Window & {
+      __phraseHoldReady?: boolean;
+      __holdPhraseHandoff?: () => void;
+    };
+    if (view.__phraseHoldReady !== true || !view.__holdPhraseHandoff) {
+      return false;
+    }
+    view.__holdPhraseHandoff();
+    return true;
+  });
+  assert.equal(ready, true, 'phrase handoff hold did not install');
+}
+
 const menuStepMs = 5_000;
 
 async function controlShows(page: Page, id: string, expected: string) {
@@ -472,6 +558,7 @@ void test('saving while a phrase waits for the bar line stashes the sounding phr
     page = await browser.newPage({
       viewport: { width: 1280, height: 900 },
     });
+    await installPhraseHandoffHold(page);
     await page.goto(server.origin, { waitUntil: 'networkidle' });
     await page.evaluate((key) => localStorage.removeItem(key), TRAY_KEY);
     await chooseRoot(page, 'E');
@@ -504,6 +591,7 @@ void test('saving while a phrase waits for the bar line stashes the sounding phr
     await page
       .locator('#phrase-seed-help', { hasText: 'Looping this phrase.' })
       .waitFor({ timeout: 15000 });
+    await holdPhraseHandoff(page);
     const soundingNotes = await phraseNotes(page);
     const soundingSeed = await seedOf(page);
     assert.ok(soundingNotes.length > 2, soundingNotes.join(' | '));
@@ -589,6 +677,7 @@ void test('saving while a chord change waits stashes the sounding chord', async 
     page = await browser.newPage({
       viewport: { width: 1280, height: 900 },
     });
+    await installPhraseHandoffHold(page);
     await page.goto(server.origin, { waitUntil: 'networkidle' });
     await page.evaluate((key) => localStorage.removeItem(key), TRAY_KEY);
     await openPhrases(page);
@@ -615,6 +704,7 @@ void test('saving while a chord change waits stashes the sounding chord', async 
     await page
       .locator('#phrase-seed-help', { hasText: 'Looping this phrase.' })
       .waitFor({ timeout: 15000 });
+    await holdPhraseHandoff(page);
     const soundingNotes = await phraseNotes(page);
     const soundingSeed = await seedOf(page);
     assert.ok(soundingNotes.length > 2, soundingNotes.join(' | '));

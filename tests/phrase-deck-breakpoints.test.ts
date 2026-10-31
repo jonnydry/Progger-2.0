@@ -123,7 +123,7 @@ void test('the deck leads with play and keeps build folded', () => {
   assert.equal(
     panel.includes('deck-feel" open'),
     false,
-    'Tempo is closed until someone opens it',
+    'Feel? is closed until someone opens it',
   );
   const buildAt = panel.indexOf('<details className="deck-fold deck-build">');
   const feelAt = panel.indexOf('<details className="deck-fold deck-feel">');
@@ -132,12 +132,24 @@ void test('the deck leads with play and keeps build folded', () => {
   assert.ok(
     buildAt !== -1 && feelAt !== -1 && buildClose !== -1 && feelClose !== -1,
   );
-  assert.ok(buildClose < feelAt, 'Build closes before Tempo starts');
+  assert.ok(buildClose < feelAt, 'Build closes before Feel? starts');
   const buildSlice = panel.slice(buildAt, buildClose);
   const feelSlice = panel.slice(feelAt, feelClose);
   assert.match(buildSlice, /<PhrasePins/);
   assert.equal(buildSlice.includes('deck-feel'), false);
   assert.match(feelSlice, /deck-seed/);
+  assert.match(feelSlice, /<span className="deck-legend">Feel\?<\/span>/);
+  assert.equal(
+    feelSlice.includes('deck-legend">Tempo'),
+    false,
+    'the feel fold summary legend is Feel?, not Tempo',
+  );
+  assert.match(
+    panel,
+    /className="deck-setting deck-setting-tempo"[\s\S]*?<span className="deck-legend">Tempo<\/span>/,
+  );
+  assert.match(panel, /className="phrase-pins-hint">\s*Pin any\s*<\/span>/);
+  assert.equal(panel.includes('Pin one, re-roll the rest'), false);
   assert.equal(feelSlice.includes('PhrasePins'), false);
   assert.equal(
     (panel.match(/<PhrasePins/g) ?? []).length,

@@ -8,6 +8,7 @@ import {
 } from '../lib/tray.ts';
 import { launchNamed } from './browser-launch.ts';
 import { acquireDevServer } from './dev-server.ts';
+import { openTray } from './open-tray.ts';
 
 const phrase: TrayPhrase = {
   id: 'phrase-1',
@@ -80,8 +81,7 @@ void test(
       [TRAY_KEY, JSON.stringify({ version: 1, items: [phrase] })] as const,
     );
     await page.goto(`${server.origin}/`, { waitUntil: 'networkidle' });
-    await page.locator('.tray-open').click();
-    await page.locator('#practice-tray').waitFor();
+    await openTray(page);
     await page.waitForFunction(() => {
       const panel = document.querySelector('#practice-tray');
       if (!(panel instanceof HTMLElement)) return false;
@@ -180,8 +180,7 @@ void test(
         raw,
       ] as const);
       await page.reload({ waitUntil: 'networkidle' });
-      await page.locator('.tray-open').click();
-      await page.locator('#practice-tray').waitFor();
+      await openTray(page);
       await page.getByText(TRAY_UNREADABLE_NOTE).waitFor();
       assert.equal(
         await page.locator('#practice-tray-empty').textContent(),
@@ -197,7 +196,7 @@ void test(
     }
     await page.evaluate((key) => localStorage.removeItem(key), TRAY_KEY);
     await page.reload({ waitUntil: 'networkidle' });
-    await page.locator('.tray-open').click();
+    await openTray(page);
     await page.getByRole('heading', { name: 'Nothing saved yet' }).waitFor();
     assert.equal(await page.getByText(TRAY_UNREADABLE_NOTE).count(), 0);
   },

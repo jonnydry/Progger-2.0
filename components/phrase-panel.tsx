@@ -1230,7 +1230,7 @@ export function PhrasePanel({
         </details>
         <details className="deck-fold deck-feel">
           <summary className="deck-fold-summary">
-            <span className="deck-legend">Tempo</span>
+            <span className="deck-legend">Feel?</span>
             <ReadoutChips
               chips={tempoSentence({
                 bars,
@@ -1451,7 +1451,7 @@ function PhrasePins({
     <div className="phrase-pins">
       <p className="phrase-pins-title">
         <span id={hintId} className="phrase-pins-hint">
-          Pin one, re-roll the rest
+          Pin any
         </span>
         {pinned ? (
           <button type="button" className="phrase-pins-clear" onClick={onClear}>

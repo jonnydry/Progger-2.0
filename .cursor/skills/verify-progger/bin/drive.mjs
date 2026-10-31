@@ -188,6 +188,7 @@ async function drivePhrases(page, origin, dir) {
   check(/^\d+$/.test(first), `seed ${first}`);
   await page.locator('#phrase-tab-host .phrase-staff').waitFor();
   const tempoSummary = flat(await page.locator('.deck-feel > summary').innerText());
+  check(tempoSummary.toLowerCase().includes('feel?'), tempoSummary);
   check(tempoSummary.includes('2-bar'), tempoSummary);
   check(tempoSummary.includes('96 BPM'), tempoSummary);
   check(tempoSummary.includes('straight'), tempoSummary);
