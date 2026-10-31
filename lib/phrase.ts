@@ -1184,19 +1184,20 @@ const PROXIMITY_VAR = 8;
 const WIDE_LEAP_SEMIS = 5;
 /**
  * A preference after a wide leap, never a filter: an opposite step of one
- * or two semitones is more likely.
+ * or two semitones is more likely. There is no run-on penalty to match it.
+ * Tuning found that barrelling on is already rare enough once a wide leap
+ * has landed, and that damping it clustered pitches badly: at 0.5 the
+ * top-two guard went to 38.50%, and only 1.0 held it. A multiplier of 1 is
+ * not worth a constant, so the term is a bonus only.
  *
- * Both knobs are small, and the settle bonus is the one that matters. On
- * the 800-phrase sweep `topHeavy` sits at 37.75% against a 38% ceiling, so
- * the term has roughly two phrases of room. Every setting that lifts
- * `wideResolved` past ~32% also lifts `topHeavy` past the ceiling: at 4 it
- * reaches 38.18% resolved but 39.88% top-two. 1.25 is the strongest bonus
- * that holds the ceiling. The run-on penalty is 1 (a no-op) because it was
- * the main pitch-clusterer and cost `topHeavy` while buying ~0.2 pt of
- * resolution. See the PR for the measured frontier.
+ * The bonus is small because `topHeavy` sits at 37.75% against a 38%
+ * ceiling on the 800-phrase sweep, about two phrases of room. Every value
+ * that lifts the settle rate past ~32% lifts the guard past the ceiling:
+ * at 4 the rate reaches 38.18% but the guard 39.88%. 1.25 is the strongest
+ * bonus that holds it, and it breaks even phrase for phrase (302 of 800
+ * before and after). See the PR for the measured frontier.
  */
 const LEAP_SETTLE_BONUS = 1.25;
-const LEAP_RUNON_PENALTY = 1;
 const RANGE_VAR = 29;
 /**
  * Wide enough that a note can leave the contour curve. The third-mean
@@ -1275,8 +1276,8 @@ function pitchWeight(
     weight *= gauss(gap, PROXIMITY_VAR);
     if (prevPrevMidi !== null && midi === prevPrevMidi) weight *= 0.18;
   }
-  // A wide leap asks to settle. The resolution bonus never competes with
-  // the chord-tone preference on a held or strong note, so held non-chord
+  // A wide leap asks to settle. The bonus never competes with the
+  // chord-tone preference on a held or strong note, so held non-chord
   // notes cannot rise through this term.
   if (!nearCadence && prevMidi !== null && prevPrevMidi !== null) {
     const leap = prevMidi - prevPrevMidi;
@@ -1287,7 +1288,7 @@ function pitchWeight(
       if (opposite && mag >= 1 && mag <= 2) {
         if (!(event.strong || event.duration >= 1))
           weight *= LEAP_SETTLE_BONUS;
-      } else if (!opposite && mag >= 3) weight *= LEAP_RUNON_PENALTY;
+      }
     }
   }
   if (event.strong || event.duration >= 1) {
