@@ -24,16 +24,11 @@ import {
 
 /** Straight clips. Amount 0 is ratio 1, the same timing as the 'straight' feel. */
 const CLIP_STRAIGHT_SWING = 0;
-/**
- * Light swing these pairs used when 0.6 was the session default, before #27
- * started new sessions straight. Pinned so the clips keep that timing.
- */
-const CLIP_LIGHT_SWING = 0.6;
 
 const RATE = 44100;
 const TAIL_SEC = 2.7;
 const BARS = 4 as const;
-const BASE_SHA = '00a5de376e061a16d6ae8a09076ea2e807cd31b3';
+const BASE_SHA = 'aaeafd846099b3b81b6f51755418e9465427c68a';
 const SOUND =
   'plucked phrase guitar (schedulePhrase → scheduleVoicing, trim 0.2)';
 const LU_LIMIT = 0.5;
@@ -77,96 +72,102 @@ type Pair = {
   swappedFrom: number | null;
 };
 
+/**
+ * Wide-leap pack. Every seed below keeps one rhythm and one plan on both
+ * sides, so the only difference is pitch: A takes a jump of five semitones
+ * or more and carries on, B settles it. Seeds span early, middle, and late
+ * leaps so the pack is not all cadential.
+ */
 const PAIRS: readonly Pair[] = [
   {
     id: 'pair1',
-    stem: 'pair1_A-dorian_90bpm_straight',
-    seed: 16,
-    root: 'A',
-    scaleId: 'dorian',
-    scaleLabel: 'A Dorian',
-    chord: 'Am',
-    tempo: 90,
-    swing: CLIP_STRAIGHT_SWING,
-    swingLabel: 'straight (amount 0, ratio 1)',
-    swappedFrom: 7,
-    listen:
-      'Seed 7 is the same E–F# loop on both sides now, so this pair is seed 16. A steps B down to A, then D to C. B leaps A up to D and settles C–D–C. Same quarter-note beats.',
-  },
-  {
-    id: 'pair2',
-    stem: 'pair2_C-major_120bpm_straight',
+    stem: 'pair1_G7_early-leap_100bpm_straight',
     seed: 3,
     root: 'C',
     scaleId: 'major',
-    scaleLabel: 'C major',
-    chord: 'C',
-    tempo: 120,
-    swing: CLIP_STRAIGHT_SWING,
-    swingLabel: 'straight (amount 0, ratio 1)',
-    swappedFrom: 1,
-    listen:
-      'Seed 1 is the same G–A loop on both sides now, so this pair is seed 3. A ends by wobbling D and C. B walks F–E–D–C down to the root. Same quarter-note beats.',
-  },
-  {
-    id: 'pair3',
-    stem: 'pair3_A-dorian_120bpm_straight',
-    seed: 1,
-    root: 'A',
-    scaleId: 'dorian',
-    scaleLabel: 'A Dorian',
-    chord: 'Am',
-    tempo: 120,
+    scaleLabel: 'C major over G7',
+    chord: 'G7',
+    tempo: 100,
     swing: CLIP_STRAIGHT_SWING,
     swingLabel: 'straight (amount 0, ratio 1)',
     swappedFrom: null,
     listen:
-      'Same seed as before. A leaps C up to F# into the fifth. B steps D–E–F#–E on the same quarter-note beats.',
+      'Note 2 is the one to hear. A climbs D–F–G and holds the F under the G7, so the third is left hanging. B climbs D–E–G instead and lands on the chord tone. Same quarter-note beats.',
+  },
+  {
+    id: 'pair2',
+    stem: 'pair2_F#maj7_mid-leap_100bpm_straight',
+    seed: 32,
+    root: 'F#',
+    scaleId: 'major',
+    scaleLabel: 'F# major over F#maj7',
+    chord: 'F#maj7',
+    tempo: 100,
+    swing: CLIP_STRAIGHT_SWING,
+    swingLabel: 'straight (amount 0, ratio 1)',
+    swappedFrom: null,
+    listen:
+      'A drops C#–A#–F#–D# in a staircase, each fall as wide as the last. B reaches B after the C# and steps A#–E#–F#, so the descent breathes instead of sliding. Same pushed eighths.',
+  },
+  {
+    id: 'pair3',
+    stem: 'pair3_Dm7_late-leap_100bpm_straight',
+    seed: 107,
+    root: 'D',
+    scaleId: 'dorian',
+    scaleLabel: 'D Dorian over Dm7',
+    chord: 'Dm7',
+    tempo: 100,
+    swing: CLIP_STRAIGHT_SWING,
+    swingLabel: 'straight (amount 0, ratio 1)',
+    swappedFrom: null,
+    listen:
+      'Bar 3 is the loudest difference. A falls A–E–B and F–C, two fifths in a row with no rest between them. B steps C–D and E–B instead, so each fall lands and turns. Same eighth-note grid.',
   },
   {
     id: 'pair4',
-    stem: 'pair4_A-dorian_90bpm_swing',
-    seed: 18,
-    root: 'A',
-    scaleId: 'dorian',
-    scaleLabel: 'A Dorian',
-    chord: 'Am',
-    tempo: 90,
-    swing: CLIP_LIGHT_SWING,
-    swingLabel: '',
-    swappedFrom: 8,
+    stem: 'pair4_Em_late-step_100bpm_straight',
+    seed: 50,
+    root: 'E',
+    scaleId: 'minor',
+    scaleLabel: 'E minor over Em',
+    chord: 'Em',
+    tempo: 100,
+    swing: CLIP_STRAIGHT_SWING,
+    swingLabel: 'straight (amount 0, ratio 1)',
+    swappedFrom: null,
     listen:
-      'Seed 8 matches main now, so this pair is seed 18. Both lines are long–short, so the 60% swing is in A and in B. A holds B–A into the root. B steps G up to A.',
+      'One note changes, near the end. A climbs G up to B a major third, then C. B steps G–A and continues to C, so the last bar opens up. Everything before it is identical.',
   },
   {
     id: 'pair5',
-    stem: 'pair5_A-dorian_120bpm_swing',
-    seed: 28,
-    root: 'A',
-    scaleId: 'dorian',
-    scaleLabel: 'A Dorian',
-    chord: 'Am',
-    tempo: 120,
-    swing: CLIP_LIGHT_SWING,
-    swingLabel: '',
-    swappedFrom: 24,
+    stem: 'pair5_Bb7_mid-descent_100bpm_straight',
+    seed: 112,
+    root: 'Bb',
+    scaleId: 'mixolydian',
+    scaleLabel: 'Bb mixolydian over Bb7',
+    chord: 'Bb7',
+    tempo: 100,
+    swing: CLIP_STRAIGHT_SWING,
+    swingLabel: 'straight (amount 0, ratio 1)',
+    swappedFrom: null,
     listen:
-      'Seed 24 is pushed eighths and matches main, as does every push seed from 1 to 64 in A Dorian and C major. This pair is seed 28, long–short. A stays on E and F#. B steps down to D, then back through E–F#–E. The 60% swing is in both.',
+      'A steps down F–D–C in thirds, then falls a fourth to A-flat. B reaches G, F, D, and lands on B-flat, so the descent walks down the chord instead of tumbling. Same long–short beats.',
   },
   {
     id: 'pair6',
-    stem: 'pair6_C-major_120bpm_swing',
-    seed: 11,
-    root: 'C',
-    scaleId: 'major',
-    scaleLabel: 'C major',
-    chord: 'C',
-    tempo: 120,
-    swing: CLIP_LIGHT_SWING,
-    swingLabel: '',
-    swappedFrom: 8,
+    stem: 'pair6_Dm7_one-note_100bpm_straight',
+    seed: 75,
+    root: 'D',
+    scaleId: 'dorian',
+    scaleLabel: 'D Dorian over Dm7',
+    chord: 'Dm7',
+    tempo: 100,
+    swing: CLIP_STRAIGHT_SWING,
+    swingLabel: 'straight (amount 0, ratio 1)',
+    swappedFrom: null,
     listen:
-      'Seed 8 matches main now, so this pair is seed 11. Both lines are long–short with the same 60% swing. A walks D–C, then leaps to F. B turns the ending into F–E–F–E.',
+      'The smallest change in the pack: one note at beat 7.5. A drops A down to F, a major third, before D. B drops A to G and then D, so the top of the arch resolves. Same quarter notes.',
   },
 ];
 
