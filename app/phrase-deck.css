@@ -860,4 +860,21 @@
     margin-left: var(--deck-control-start);
     padding-inline: var(--space-3);
   }
+  /* Play sits under this window. A wrapping plan or status used to change
+     the deck height and slide the key out from under the finger. Reserve
+     the lines those sentences reach on a phone. Desktop stays content-sized:
+     the plan holds one line there. The 420px query below raises the plan
+     to three lines, and it has to follow this rule or 2lh wins the cascade. */
+  .phrase-deck .deck-window .phrase-plan {
+    min-height: 2lh;
+  }
+  .phrase-deck .deck-window .phrase-status {
+    min-height: 3lh;
+  }
+}
+
+@media (max-width: 420px) {
+  .phrase-deck .deck-window .phrase-plan {
+    min-height: 3lh;
+  }
 }

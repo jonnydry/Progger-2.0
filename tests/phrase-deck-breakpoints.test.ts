@@ -185,6 +185,31 @@ void test('the deck leads with play and keeps build folded', () => {
     deck,
     /\.deck-fold-summary \{[^}]*min-height: var\(--deck-row\)/,
   );
+  /* Phone tape text is reserved so a wrapping plan or status cannot move
+     Play. 2lh lives in the phone query; 3lh for the plan follows it, or
+     the wider rule would win the cascade on the narrowest phones. */
+  const phoneAt = deck.indexOf('@media (max-width: 640px)');
+  const tapeAt = deck.indexOf('@media (max-width: 420px)');
+  assert.ok(phoneAt !== -1 && tapeAt > phoneAt, 'tape query follows phone');
+  const phoneSlice = deck.slice(phoneAt, tapeAt);
+  const tapeSlice = deck.slice(tapeAt);
+  assert.match(
+    phoneSlice,
+    /\.phrase-deck \.deck-window \.phrase-plan \{[^}]*min-height: 2lh;/,
+  );
+  assert.match(
+    phoneSlice,
+    /\.phrase-deck \.deck-window \.phrase-status \{[^}]*min-height: 3lh;/,
+  );
+  assert.match(
+    tapeSlice,
+    /\.phrase-deck \.deck-window \.phrase-plan \{[^}]*min-height: 3lh;/,
+  );
+  assert.equal(
+    panel.includes('DECK_BREAKPOINT_QUERY.tape'),
+    false,
+    'the tape width is CSS only',
+  );
   /* A fieldset legend cannot take a layout track, so it is positioned over the
      row's own gutter. If it ever goes back into the grid the options collapse
      to one column and every pin clips. */
