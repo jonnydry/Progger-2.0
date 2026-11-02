@@ -24,51 +24,110 @@
   box-shadow: var(--shadow-key);
 }
 
-.deck-window {
+/* The cassette bay: window on top, keys under it, one object. The bay is
+   tight (8px) so it reads as one mechanism; the folds below it are set off
+   by the deck gap and their own hairline. */
+.deck-bay {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 20px;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The cassette window is the face of the deck. A label on top says what is
+   on the tape in two fixed lines; the reels sit in the lower band with the
+   live status between them, where the tape runs. Both bands have fixed
+   heights, so nothing the window says can move the keys under it. The
+   content is a cassette-sized column centred in the window, so a wide deck
+   shows a cassette in a window, not a line of text across a slot. */
+.deck-window {
+  --deck-reel: 28px;
+  --deck-label-size: var(--text-md);
+  --deck-status-size: var(--text-xs);
+  --deck-tape-w: 28rem;
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr) var(--deck-reel) minmax(0, var(--deck-tape-w))
+    var(--deck-reel) minmax(0, 1fr);
+  grid-template-rows:
+    calc(2 * 1.3 * var(--deck-label-size))
+    calc(2 * 1.3 * var(--deck-status-size));
   align-items: center;
-  gap: var(--space-2);
-  padding: 4px var(--space-2);
+  row-gap: 6px;
+  min-width: 0;
+  padding: 12px 12px 10px;
   background: var(--surface-sunken);
   border: 2px solid var(--edge);
   border-radius: var(--radius-key);
   box-shadow: var(--shadow-sunken);
 }
-.deck-window-text {
-  display: grid;
-  gap: 1px;
+.deck-label {
+  grid-column: 2 / 5;
+  grid-row: 1;
   min-width: 0;
   text-align: center;
 }
 .phrase-deck .deck-window .phrase-plan {
+  margin: 0;
   color: var(--foreground);
-  font-size: var(--text-sm);
+  font-size: var(--deck-label-size);
   font-weight: 600;
-  text-wrap: balance;
+  line-height: 1.3;
+}
+/* One line each. Every plan fits its line at 320px; the ellipsis is a
+   guard so a future label can never grow the window and push the keys. */
+.phrase-plan-line {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.deck-window > .deck-reel:first-of-type {
+  grid-column: 2;
+  grid-row: 2;
+}
+.deck-window > .deck-reel:last-of-type {
+  grid-column: 4;
+  grid-row: 2;
 }
 .phrase-deck .deck-window .phrase-status {
-  color: var(--green);
-  font-size: var(--text-xs);
-  font-weight: 600;
+  grid-column: 3;
+  grid-row: 2;
+  min-width: 0;
+  margin: 0;
+  padding-inline: 10px;
+  color: var(--quiet);
+  font-size: var(--deck-status-size);
+  font-weight: 500;
+  line-height: 1.3;
+  text-align: center;
   text-wrap: balance;
+}
+.phrase-deck .deck-window .phrase-status.is-live {
+  color: var(--green);
 }
 .phrase-deck .deck-window .phrase-status.is-alert {
   color: var(--amber);
 }
-.phrase-deck .deck-window-text p {
-  line-height: 1.3;
+/* No playable phrase: the explanation owns the whole window and the reels
+   go dark, because there is nothing on the tape to run. */
+.deck-window.is-blank .deck-label,
+.deck-window.is-blank > .deck-reel {
+  visibility: hidden;
+}
+.phrase-deck .deck-window.is-blank .phrase-status {
+  grid-column: 2 / 5;
+  grid-row: 1 / -1;
 }
 .deck-reel {
   box-sizing: border-box;
-  width: 20px;
-  height: 20px;
+  width: var(--deck-reel);
+  height: var(--deck-reel);
   background: radial-gradient(
-    circle,
-    var(--quiet) 0 2px,
-    transparent 3px 5px,
-    color-mix(in srgb, var(--quiet) 45%, transparent) 6px 7px,
-    transparent 8px
+    circle closest-side,
+    var(--quiet) 0 24%,
+    transparent 32% 50%,
+    color-mix(in srgb, var(--quiet) 45%, transparent) 58% 70%,
+    transparent 78%
   );
   border: 2px dotted var(--quiet);
   border-radius: 50%;
@@ -84,29 +143,32 @@
   }
 }
 
-/* Play: one transport strip. Play and New phrase lead, then history, loop,
-   and save as quieter keys on the same baseline and at the same height, so
-   nothing is a tall empty slab beside a short pad. Narrower widths wrap
-   the same strip into even rows (see the breakpoint blocks below); DOM
-   order matches every picture, so tab order never reorders the keys. */
+/* The transport: one row of keys under the window. Play leads by width and
+   by its lit face; New phrase matches its height but not its light; the
+   quiet keys (history, loop, save) sit on the sunken plate colour. Every
+   key has a fixed track, so Play/Stop and Saved swaps never move a key.
+   Narrower decks stack the lead pair over the quiet row (see the
+   breakpoint blocks below); DOM order matches every picture, so tab order
+   never reorders the keys. */
 .deck-zone {
-  display: grid;
-  gap: 6px;
   min-width: 0;
 }
-.deck-zone > .deck-legend {
-  margin: 0;
-  white-space: nowrap;
-}
+/* Wide decks: one flat row. The lead and quiet groups dissolve into the
+   row so each key gets its own track; every track is at least as wide as
+   its key's label, and the spare width goes to Play first. The history
+   pair is one track (the fieldset) split evenly. */
 .deck-transport {
   display: grid;
-  /* Play is the widest key in the strip; the quiet keys share the rest. */
   grid-template-columns:
-    minmax(0, 1.6fr) minmax(0, 1.3fr) minmax(0, 1.7fr)
-    minmax(0, 0.85fr) minmax(0, 1.15fr);
+    minmax(max-content, 2.4fr) minmax(max-content, 2fr)
+    minmax(max-content, 2.6fr) minmax(max-content, 1.2fr)
+    minmax(max-content, 1.9fr);
   gap: 6px;
-  align-items: stretch;
   min-width: 0;
+}
+.deck-lead,
+.deck-quiet {
+  display: contents;
 }
 /* Three classes deep so this lead beats `.phrase-deck .deck-key` below,
    whatever order the two rules end up in. At two classes the later 44px
@@ -173,9 +235,6 @@
 .phrase-deck .deck-key-play {
   padding-inline: var(--space-2);
   background: var(--surface-key-lit);
-  border-color: var(--edge-lit);
-}
-.phrase-deck .deck-key-new {
   border-color: var(--edge-lit);
 }
 /* History, loop, and save stay tappable but they are not the next action.
@@ -788,35 +847,32 @@
 }
 
 /* Widths are DECK_BREAKPOINT_PX in lib/deck-breakpoints.ts. Above the
-   plate width the transport is one strip and the pins sit in two
-   columns. Below it Play and New phrase take their own row, the quiet
-   keys follow four across, and each pin row fills the full width. */
+   plate width the pins sit in two columns; below it each pin row fills
+   the full width. The transport stays one row under the window. */
 @media (max-width: 1210px) {
-  .deck-transport {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-  .deck-transport .deck-key-play,
-  .deck-transport .deck-key-new,
-  .deck-transport .deck-key-bank {
-    grid-column: span 2;
-  }
   .phrase-pin-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-/* Below the wide width four quiet keys across would squeeze "Save to
-   stash", so history takes a row and loop/save share the next. */
+/* Below the wide width six keys in one row would squeeze their labels, so
+   the lead pair takes the first row under the window and the quiet keys
+   share the second, still in one row and still in DOM order. */
 @media (max-width: 860px) {
   .deck-transport {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .deck-lead,
+  .deck-quiet {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+  .deck-lead {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .deck-transport .deck-key-play,
-  .deck-transport .deck-key-new {
-    grid-column: span 1;
-  }
-  .deck-transport .deck-key-bank {
-    grid-column: span 2;
+  .deck-quiet {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 1.4fr);
   }
 }
 
@@ -841,13 +897,21 @@
     padding: 8px;
   }
   .deck-window {
-    grid-template-columns: 16px minmax(0, 1fr) 16px;
-    gap: 6px;
-    padding: 6px;
+    --deck-reel: 24px;
+    --deck-label-size: var(--text-sm);
+    padding: 10px 8px 8px;
   }
-  .deck-reel {
-    width: 16px;
-    height: 16px;
+  .phrase-deck .deck-window .phrase-status {
+    padding-inline: 8px;
+  }
+  /* History keys show their transport glyphs, as a tape deck does; the
+     accessible names and the hover titles still say Previous and Next.
+     That leaves room for loop and save on the same row. */
+  .deck-quiet {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1.9fr);
+  }
+  .deck-key-bank .deck-key-label {
+    display: none;
   }
   .deck-setting-tempo,
   .deck-setting-swing {
@@ -859,5 +923,16 @@
     width: auto;
     margin-left: var(--deck-control-start);
     padding-inline: var(--space-3);
+  }
+}
+
+/* The narrowest phones cannot fit "Save to stash" beside history and
+   loop, so save takes its own full line under them. */
+@media (max-width: 380px) {
+  .deck-quiet {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+  .deck-quiet > .deck-key-rec {
+    grid-column: 1 / -1;
   }
 }

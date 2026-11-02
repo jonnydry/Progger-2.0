@@ -969,6 +969,7 @@ export function PhrasePanel({
         type="button"
         className="phrase-action phrase-history-step deck-key deck-key-quiet"
         aria-label="Previous phrase"
+        title="Previous phrase"
         aria-describedby="phrase-history-hint"
         disabled={onHistory ? history.index <= 0 : !cursor}
         ref={previousStep}
@@ -981,6 +982,7 @@ export function PhrasePanel({
         type="button"
         className="phrase-action phrase-history-step deck-key deck-key-quiet"
         aria-label="Next phrase"
+        title="Next phrase"
         aria-describedby="phrase-history-hint"
         disabled={
           !onHistory ||
@@ -1154,20 +1156,39 @@ export function PhrasePanel({
         </p>
       </div>
       <div className={`phrase-deck deck-tape${busy ? ' is-rolling' : ''}`}>
-        <div className="deck-window">
-          <span className="deck-reel" aria-hidden="true" />
-          <div className="deck-window-text">
-            {plan && (
-              <p className="phrase-plan">
-                {CONTOUR_LABEL[plan.contour]} · {RHYTHM_LABEL[plan.rhythm]} ·{' '}
-                {REGISTER_LABEL[plan.register]} · lands on the {cadenceText}
-              </p>
-            )}
-            {/* Live status line. The id predates the seed field getting
-                its own static note; tests still read status by it. */}
+        {/*
+          The cassette bay: the window is the face of the deck and the keys
+          sit under it, as on a real tape deck. Every row of the window has a
+          fixed height, so a plan that unmounts, a notice, or an error never
+          moves the keys below it. The window holds no controls, so the tab
+          order is the key order at every width.
+        */}
+        <div className="deck-bay">
+          <div className={`deck-window${phrase.ok ? '' : ' is-blank'}`}>
+            <div className="deck-label">
+              {plan && (
+                /* The cassette label, in two fixed lines: how the line
+                   moves, then where it sits and ends. */
+                <p className="phrase-plan">
+                  <span className="phrase-plan-line">
+                    {CONTOUR_LABEL[plan.contour]} · {RHYTHM_LABEL[plan.rhythm]}
+                  </span>{' '}
+                  <span className="phrase-plan-line">
+                    {REGISTER_LABEL[plan.register]} · lands on the{' '}
+                    {cadenceText}
+                  </span>
+                </p>
+              )}
+            </div>
+            <span className="deck-reel" aria-hidden="true" />
+            {/* Live status line, between the reels. The id predates the
+                seed field getting its own static note; tests still read
+                status by it. */}
             <p
               id="phrase-seed-help"
-              className={`phrase-status${statusAlert ? ' is-alert' : ''}`}
+              className={`phrase-status${
+                statusAlert ? ' is-alert' : busy || notice ? ' is-live' : ''
+              }`}
             >
               {!phrase.ok
                 ? phrase.reason === 'no-shared-tones'
@@ -1185,25 +1206,29 @@ export function PhrasePanel({
                           : 'Playing this phrase.'
                         : 'Same seed replays this phrase.'}
             </p>
+            <span className="deck-reel" aria-hidden="true" />
           </div>
-          <span className="deck-reel" aria-hidden="true" />
-        </div>
-        {/*
-          The plan line is visual shorthand. A screen reader gets one sentence
-          that says the same thing, and it is a live region so a regenerated
-          phrase is announced instead of changing silently.
-        */}
-        <p className="sr-only" aria-live="polite" aria-atomic="true">
-          {plan ? `Phrase ${planSentence}` : ''}
-        </p>
-        <div className="deck-zone">
-          <h3 className="deck-legend">Play</h3>
-          <div className="deck-transport">
-            {playKey}
-            {newPhraseKey}
-            {historyBank}
-            {loopKey}
-            {saveKey}
+          {/*
+            The plan line is visual shorthand. A screen reader gets one
+            sentence that says the same thing, and it is a live region so a
+            regenerated phrase is announced instead of changing silently.
+          */}
+          <p className="sr-only" aria-live="polite" aria-atomic="true">
+            {plan ? `Phrase ${planSentence}` : ''}
+          </p>
+          <div className="deck-zone">
+            <h3 className="sr-only">Play</h3>
+            <div className="deck-transport">
+              <div className="deck-lead">
+                {playKey}
+                {newPhraseKey}
+              </div>
+              <div className="deck-quiet">
+                {historyBank}
+                {loopKey}
+                {saveKey}
+              </div>
+            </div>
           </div>
         </div>
         <details className="deck-fold deck-build">

@@ -114,7 +114,12 @@ void test('the deck leads with play and keeps build folded', () => {
     'utf8',
   );
   assert.match(panel, /className="deck-transport"/);
-  assert.match(panel, /<h3 className="deck-legend">Play<\/h3>/);
+  // Cassette bay: window is the face; Play legend is sr-only (no visible PLAY chrome).
+  assert.match(panel, /className=\{\`deck-window\$\{/);
+  assert.match(panel, /<h3 className="sr-only">Play<\/h3>/);
+  const windowAt = panel.indexOf('className={`deck-window');
+  const zoneAt = panel.indexOf('className="deck-zone"');
+  assert.ok(windowAt !== -1 && zoneAt !== -1 && windowAt < zoneAt, 'window sits above the keys');
   assert.equal(
     panel.includes('deck-build" open'),
     false,
@@ -173,8 +178,13 @@ void test('the deck leads with play and keeps build folded', () => {
   );
   assert.match(
     deck,
-    /\.deck-transport \.deck-key-bank \{\s*grid-column: span 2;/,
-    'history keys keep their pair when the transport wraps',
+    /@media \(max-width: 860px\) \{[\s\S]*?\.deck-lead \{[\s\S]*?grid-template-columns: repeat\(2/,
+    'below wide, lead keys share one row under the window',
+  );
+  assert.match(
+    deck,
+    /\.deck-bay \{[\s\S]*?\.deck-window \{[\s\S]*?grid-template-rows:/,
+    'cassette window reserves fixed rows so keys below cannot hop',
   );
   assert.match(
     deck,
