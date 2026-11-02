@@ -114,7 +114,9 @@ void test('the deck leads with play and keeps build folded', () => {
     'utf8',
   );
   assert.match(panel, /className="deck-transport"/);
-  assert.match(panel, /<h3 className="deck-legend">Play<\/h3>/);
+  /* The Play key says Play; the heading stays for screen readers only. */
+  assert.match(panel, /<h3 className="sr-only">Play<\/h3>/);
+  assert.equal(panel.includes('<h3 className="deck-legend">Play'), false);
   assert.equal(
     panel.includes('deck-build" open'),
     false,
@@ -173,8 +175,8 @@ void test('the deck leads with play and keeps build folded', () => {
   );
   assert.match(
     deck,
-    /\.deck-transport \.deck-key-bank \{\s*grid-column: span 2;/,
-    'history keys keep their pair when the transport wraps',
+    /\.deck-key-bank \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/,
+    'Previous and Next stay an even pair',
   );
   assert.match(
     deck,
@@ -203,6 +205,147 @@ void test('the deck leads with play and keeps build folded', () => {
     panel.includes('Pin the shape'),
     false,
     'pin rows use short names',
+  );
+});
+
+/** Body of the one `@media (max-width: Npx)` block, comments stripped. */
+function mediaBlock(css: string, px: number): string {
+  const source = stripCssComments(css);
+  const head = `@media (max-width: ${px}px) {`;
+  const start = source.indexOf(head);
+  assert.notEqual(start, -1, head);
+  let depth = 0;
+  for (let index = start + head.length - 1; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    else if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start + head.length, index);
+    }
+  }
+  throw new Error(`${head} never closes`);
+}
+
+void test('mediaBlock reads one balanced block and nothing after it', () => {
+  const css =
+    '@media (max-width: 10px) { .a { color: red } .b { x: y } } .c { z: w }';
+  assert.equal(mediaBlock(css, 10).trim(), '.a { color: red } .b { x: y }');
+});
+
+/**
+ * The redesign's layout contract: the keys come first and nothing the tape
+ * window says can move them. These are source rules because the browser
+ * journeys that measure the same thing need a dev server.
+ */
+void test('the head puts the keys first and the window beside or under them', () => {
+  const deck = readFileSync(
+    new URL('../app/phrase-deck.css', import.meta.url),
+    'utf8',
+  );
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  const css = stripCssComments(deck);
+
+  /* DOM: head > zone (transport: lead row, quiet row) then window. */
+  const headAt = panel.indexOf('<div className="deck-head">');
+  const zoneAt = panel.indexOf('<div className="deck-zone">');
+  const leadAt = panel.indexOf('<div className="deck-lead">');
+  const quietAt = panel.indexOf('<div className="deck-quiet">');
+  const windowAt = panel.indexOf('<div className="deck-window">');
+  const buildAt = panel.indexOf('<details className="deck-fold deck-build">');
+  assert.ok(
+    headAt !== -1 &&
+      headAt < zoneAt &&
+      zoneAt < leadAt &&
+      leadAt < quietAt &&
+      quietAt < windowAt &&
+      windowAt < buildAt,
+    'head, keys (lead then quiet), window, then Build',
+  );
+  const lead = panel.slice(leadAt, quietAt);
+  assert.match(lead, /\{playKey\}\s*\{newPhraseKey\}/);
+  const quiet = panel.slice(quietAt, windowAt);
+  assert.match(quiet, /\{historyBank\}\s*\{loopKey\}\s*\{saveKey\}/);
+  assert.equal(
+    (panel.match(/className="deck-window"/g) ?? []).length,
+    1,
+    'one tape window',
+  );
+
+  /* The plan is a two-line label; each field keeps its dot on its chip. */
+  const plan = panel.slice(
+    panel.indexOf('<p className="phrase-plan">'),
+    panel.indexOf('id="phrase-seed-help"'),
+  );
+  assert.equal((plan.match(/className="phrase-plan-line"/g) ?? []).length, 2);
+  assert.equal((plan.match(/className="phrase-plan-chip"/g) ?? []).length, 4);
+  assert.ok(
+    plan.indexOf('CONTOUR_LABEL') < plan.indexOf('RHYTHM_LABEL') &&
+      plan.indexOf('RHYTHM_LABEL') < plan.indexOf('REGISTER_LABEL') &&
+      plan.indexOf('REGISTER_LABEL') < plan.indexOf('lands on the'),
+    'shape and rhythm, then register and landing',
+  );
+  /* A wide window keeps its reels beside a bounded label, not 600px apart. */
+  assert.match(
+    css,
+    /\.deck-window \{[^}]*grid-template-columns: 20px minmax\(0, 18rem\) 20px;[^}]*justify-content: center/,
+  );
+  assert.match(css, /\.phrase-plan-line \{[^}]*display: block/);
+  assert.match(css, /\.phrase-plan-chip \{[^}]*white-space: nowrap/);
+
+  /* The status line is quiet until it has news. */
+  assert.match(
+    css,
+    /\.phrase-deck \.deck-window \.phrase-status \{[^}]*color: var\(--quiet\)/,
+  );
+  assert.match(
+    css,
+    /\.phrase-deck\.is-rolling \.deck-window \.phrase-status \{[^}]*color: var\(--green\)/,
+  );
+  assert.ok(
+    css.indexOf('.phrase-deck .deck-window .phrase-status.is-alert {') >
+      css.indexOf('.phrase-deck.is-rolling .deck-window .phrase-status {'),
+    'an alert outranks the rolling colour',
+  );
+
+  /* Wide: a fixed cluster beside the window, top-aligned. */
+  assert.match(
+    css,
+    /\.deck-head \{[^}]*grid-template-columns: var\(--deck-cluster-w\) minmax\(0, 1fr\)/,
+  );
+  assert.match(css, /\.deck-zone \{[^}]*align-self: start/);
+  assert.match(css, /\.deck-lead \{[^}]*repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.equal(
+    /grid-column:\s*span/.test(css),
+    false,
+    'no key spans tracks of a shared transport grid any more',
+  );
+
+  /* Below wide the window drops under the keys. */
+  assert.match(
+    mediaBlock(deck, DECK_BREAKPOINT_PX.wide),
+    /\.deck-head \{\s*grid-template-columns: minmax\(0, 1fr\);/,
+  );
+  /* Phone: icon history keys, one quiet row, no Edit word. */
+  const phone = mediaBlock(deck, DECK_BREAKPOINT_PX.phone);
+  assert.match(phone, /\.deck-key-bank \.deck-key-label \{\s*display: none;/);
+  assert.match(
+    phone,
+    /\.deck-key-bank \{\s*grid-template-columns: repeat\(2, var\(--deck-history-key\)\);/,
+  );
+  assert.match(phone, /\.deck-fold-edit \{\s*display: none;/);
+  assert.match(phone, /\.deck-quiet \{\s*grid-template-columns: auto/);
+  /* Icon keys keep a name. */
+  assert.match(panel, /aria-label="Previous phrase"\s*title="Previous phrase"/);
+  assert.match(panel, /aria-label="Next phrase"\s*title="Next phrase"/);
+  /* Narrow: Save takes its own line, and the block follows the phone one. */
+  const narrow = mediaBlock(deck, DECK_BREAKPOINT_PX.narrow);
+  assert.match(narrow, /\.deck-quiet > \.deck-key-rec \{\s*grid-column: 1 \/ -1;/);
+  assert.ok(
+    css.indexOf(`@media (max-width: ${DECK_BREAKPOINT_PX.narrow}px)`) >
+      css.indexOf(`@media (max-width: ${DECK_BREAKPOINT_PX.phone}px)`),
+    'the narrow block comes after the phone block so its columns win',
   );
 });
 

@@ -969,6 +969,7 @@ export function PhrasePanel({
         type="button"
         className="phrase-action phrase-history-step deck-key deck-key-quiet"
         aria-label="Previous phrase"
+        title="Previous phrase"
         aria-describedby="phrase-history-hint"
         disabled={onHistory ? history.index <= 0 : !cursor}
         ref={previousStep}
@@ -981,6 +982,7 @@ export function PhrasePanel({
         type="button"
         className="phrase-action phrase-history-step deck-key deck-key-quiet"
         aria-label="Next phrase"
+        title="Next phrase"
         aria-describedby="phrase-history-hint"
         disabled={
           !onHistory ||
@@ -1154,39 +1156,79 @@ export function PhrasePanel({
         </p>
       </div>
       <div className={`phrase-deck deck-tape${busy ? ' is-rolling' : ''}`}>
-        <div className="deck-window">
-          <span className="deck-reel" aria-hidden="true" />
-          <div className="deck-window-text">
-            {plan && (
-              <p className="phrase-plan">
-                {CONTOUR_LABEL[plan.contour]} · {RHYTHM_LABEL[plan.rhythm]} ·{' '}
-                {REGISTER_LABEL[plan.register]} · lands on the {cadenceText}
-              </p>
-            )}
-            {/* Live status line. The id predates the seed field getting
-                its own static note; tests still read status by it. */}
-            <p
-              id="phrase-seed-help"
-              className={`phrase-status${statusAlert ? ' is-alert' : ''}`}
-            >
-              {!phrase.ok
-                ? phrase.reason === 'no-shared-tones'
-                  ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
-                  : 'This plan has no playable line in the register. Try a new phrase.'
-                : status === 'error'
-                  ? 'Audio couldn’t start. Tap Play to try again.'
-                  : notice
-                    ? notice
-                    : status === 'starting'
-                      ? 'Starting…'
-                      : busy
-                        ? loop
-                          ? 'Looping this phrase.'
-                          : 'Playing this phrase.'
-                        : 'Same seed replays this phrase.'}
-            </p>
+        {/*
+          The head is the open lane: the keys, then the tape window that says
+          what they will play. The keys come first so nothing the window says
+          can move them: on a phone the window sits under the keys, and on a
+          wide deck it sits beside them. The window holds no controls, so the
+          tab order is the key order at every width.
+        */}
+        <div className="deck-head">
+          <div className="deck-zone">
+            <h3 className="sr-only">Play</h3>
+            <div className="deck-transport">
+              <div className="deck-lead">
+                {playKey}
+                {newPhraseKey}
+              </div>
+              <div className="deck-quiet">
+                {historyBank}
+                {loopKey}
+                {saveKey}
+              </div>
+            </div>
           </div>
-          <span className="deck-reel" aria-hidden="true" />
+          <div className="deck-window">
+            <span className="deck-reel" aria-hidden="true" />
+            <div className="deck-window-text">
+              {plan && (
+                /* A cassette label in two fixed lines: how the line moves,
+                   then where it sits and ends. Each field keeps its dot, so
+                   a line that has to wrap breaks between fields. */
+                <p className="phrase-plan">
+                  <span className="phrase-plan-line">
+                    <span className="phrase-plan-chip">
+                      {CONTOUR_LABEL[plan.contour]} ·
+                    </span>{' '}
+                    <span className="phrase-plan-chip">
+                      {RHYTHM_LABEL[plan.rhythm]}
+                    </span>
+                  </span>{' '}
+                  <span className="phrase-plan-line">
+                    <span className="phrase-plan-chip">
+                      {REGISTER_LABEL[plan.register]} ·
+                    </span>{' '}
+                    <span className="phrase-plan-chip">
+                      lands on the {cadenceText}
+                    </span>
+                  </span>
+                </p>
+              )}
+              {/* Live status line. The id predates the seed field getting
+                  its own static note; tests still read status by it. */}
+              <p
+                id="phrase-seed-help"
+                className={`phrase-status${statusAlert ? ' is-alert' : ''}`}
+              >
+                {!phrase.ok
+                  ? phrase.reason === 'no-shared-tones'
+                    ? 'This chord has no tones in the selected scale, so the phrase has nowhere to land.'
+                    : 'This plan has no playable line in the register. Try a new phrase.'
+                  : status === 'error'
+                    ? 'Audio couldn’t start. Tap Play to try again.'
+                    : notice
+                      ? notice
+                      : status === 'starting'
+                        ? 'Starting…'
+                        : busy
+                          ? loop
+                            ? 'Looping this phrase.'
+                            : 'Playing this phrase.'
+                          : 'Same seed replays this phrase.'}
+              </p>
+            </div>
+            <span className="deck-reel" aria-hidden="true" />
+          </div>
         </div>
         {/*
           The plan line is visual shorthand. A screen reader gets one sentence
@@ -1196,16 +1238,6 @@ export function PhrasePanel({
         <p className="sr-only" aria-live="polite" aria-atomic="true">
           {plan ? `Phrase ${planSentence}` : ''}
         </p>
-        <div className="deck-zone">
-          <h3 className="deck-legend">Play</h3>
-          <div className="deck-transport">
-            {playKey}
-            {newPhraseKey}
-            {historyBank}
-            {loopKey}
-            {saveKey}
-          </div>
-        </div>
         <details className="deck-fold deck-build">
           <summary className="deck-fold-summary">
             <span className="deck-legend">Build</span>

@@ -475,9 +475,9 @@ void test(
        and Half speed held the line and only the slider could give. */
     const heights = new Map<number, number>();
     for (const width of [
-      1600, 1440, 1250, 1211, 1210, 1200, 1150, 1100, 1081, 1080, 960, 900, 860,
-      800, 760, 700, 650, 641, 640, 510, 501, 500, 480, 471, 470, 420, 390, 360,
-      320,
+      1600, 1440, 1280, 1250, 1211, 1210, 1200, 1150, 1100, 1081, 1080, 960,
+      941, 940, 900, 860, 800, 760, 700, 650, 641, 640, 510, 501, 500, 480, 471,
+      470, 420, 390, 381, 380, 375, 360, 320,
     ]) {
       await page.setViewportSize({
         width,
@@ -856,6 +856,183 @@ void test(
     assert.equal(
       await tempoSlider.getAttribute('aria-valuetext'),
       '40 BPM, half speed, minimum',
+    );
+    await page.close();
+  },
+);
+
+type HeadPicture = {
+  play: { top: number; deckTop: number; pageTop: number };
+  lead: number[];
+  quiet: { top: number; bottom: number }[];
+  clusterRight: number;
+  clusterBottom: number;
+  window: { top: number; left: number; height: number };
+  planLines: number[];
+  plan: string;
+};
+
+async function headPicture(page: Page): Promise<HeadPicture> {
+  return page.evaluate(() => {
+    const box = (selector: string) => {
+      const node = document.querySelector(selector);
+      if (!node) throw new Error(selector);
+      return node.getBoundingClientRect();
+    };
+    const play = box('.deck-key-play');
+    const deck = box('.phrase-deck');
+    const zone = box('.deck-zone');
+    const tape = box('.deck-window');
+    return {
+      play: {
+        top: play.top,
+        deckTop: play.top - deck.top,
+        pageTop: play.top + window.scrollY,
+      },
+      lead: [box('.deck-key-play').top, box('.deck-key-new').top],
+      quiet: [
+        ...document.querySelectorAll('.deck-quiet .deck-key'),
+      ].map((node) => {
+        const rect = node.getBoundingClientRect();
+        return { top: rect.top, bottom: rect.bottom };
+      }),
+      clusterRight: zone.right,
+      clusterBottom: zone.bottom,
+      window: { top: tape.top, left: tape.left, height: tape.height },
+      planLines: [...document.querySelectorAll('.phrase-plan-line')].map(
+        (node) => Math.round(node.getBoundingClientRect().height),
+      ),
+      plan:
+        document.querySelector<HTMLElement>('.phrase-plan')?.innerText ?? '',
+    };
+  });
+}
+
+/**
+ * The redesign's promise: the keys lead and the tape window follows them,
+ * so a plan that wraps differently, an error that replaces it, or a save
+ * notice can never move Play, New phrase or Save under the finger. The
+ * picture is checked too: the window beside the key cluster on a desktop,
+ * under the keys on a phone, and the quiet keys on one line down to the
+ * narrow width.
+ */
+void test(
+  'play holds still across new phrases and the tape window follows the keys',
+  { timeout: 180_000 },
+  async (t) => {
+    const browser = await launchNamed('chromium', t);
+    const server = await acquireDevServer();
+    t.after(async () => {
+      await browser.close();
+      await server.release();
+    });
+    const page = await browser.newPage({
+      viewport: { width: 1280, height: 900 },
+      deviceScaleFactor: 1,
+    });
+    await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.phrase-open');
+    await openPhrases(page);
+
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({
+        width,
+        height: width >= 800 ? 900 : 844,
+      });
+      await page.locator('.deck-key-play').scrollIntoViewIfNeeded();
+      const first = await headPicture(page);
+      const plans = new Set([first.plan]);
+      for (let press = 0; press < 8; press += 1) {
+        const before = await seedValue(page);
+        await page.getByRole('button', { name: 'New phrase' }).click();
+        await page.waitForFunction(
+          (previous) =>
+            document.querySelector<HTMLInputElement>('.phrase-seed input')
+              ?.value !== previous,
+          before,
+        );
+        const now = await headPicture(page);
+        plans.add(now.plan);
+        assert.ok(
+          Math.abs(now.play.deckTop - first.play.deckTop) <= 0.5 &&
+            Math.abs(now.play.pageTop - first.play.pageTop) <= 0.5,
+          `${width}px press ${press}: Play moved ${now.play.deckTop - first.play.deckTop}px in the deck, ${now.play.pageTop - first.play.pageTop}px on the page (${now.plan})`,
+        );
+        /* A seed with no playable line shows no plan; that is fine. */
+        if (now.plan) {
+          assert.equal(now.planLines.length, 2, `${width}px plan lines`);
+        }
+      }
+      assert.ok(plans.size >= 2, `${width}px only saw ${[...plans].join(' | ')}`);
+
+      const picture = await headPicture(page);
+      assert.ok(
+        Math.abs(picture.lead[0] - picture.lead[1]) <= 1,
+        `${width}px Play and New phrase share a row`,
+      );
+      const quietTops = picture.quiet.map((key) => key.top);
+      assert.ok(
+        Math.max(...quietTops) - Math.min(...quietTops) <= 1,
+        `${width}px quiet keys on one line: ${quietTops.join(', ')}`,
+      );
+      if (width === 1280) {
+        assert.ok(
+          picture.window.left >= picture.clusterRight,
+          `1280px window starts at ${picture.window.left}, cluster ends at ${picture.clusterRight}`,
+        );
+        assert.ok(
+          Math.abs(picture.window.top - picture.play.top) <= 1,
+          '1280px window and Play share a top line',
+        );
+      } else {
+        const quietBottom = Math.max(...picture.quiet.map((key) => key.bottom));
+        assert.ok(
+          picture.window.top >= quietBottom,
+          `390px window at ${picture.window.top} sits above the quiet keys (${quietBottom})`,
+        );
+        /* Each plan line is one line of 13px type at 390. */
+        for (const line of picture.planLines) {
+          assert.ok(line <= 22, `390px plan line is ${line}px tall`);
+        }
+      }
+
+      /* A save notice lands in the window, not on top of the keys. */
+      const beforeSave = await headPicture(page);
+      await page.getByRole('button', { name: 'Save to stash' }).click();
+      await page
+        .locator('.deck-key-rec.is-saved')
+        .waitFor({ state: 'visible' });
+      const saved = await headPicture(page);
+      assert.ok(
+        Math.abs(saved.play.pageTop - beforeSave.play.pageTop) <= 0.5,
+        `${width}px Save moved Play`,
+      );
+      /* A saved key sinks 1px by transform, so allow that and no more. */
+      saved.quiet.forEach((key, index) => {
+        const was = beforeSave.quiet[index]?.top ?? Number.NaN;
+        assert.ok(
+          Math.abs(key.top - was) <= 1.5,
+          `${width}px Save moved quiet key ${index}: ${was} -> ${key.top}`,
+        );
+      });
+      await page
+        .locator('.deck-key-rec.is-saved')
+        .waitFor({ state: 'detached', timeout: 5_000 });
+    }
+
+    /* The narrow fallback: Save takes its own full line under the rest. */
+    await page.setViewportSize({ width: 320, height: 844 });
+    const narrow = await headPicture(page);
+    const [previous, next, loop, save] = narrow.quiet;
+    assert.ok(
+      previous && next && loop && save,
+      `320px found ${narrow.quiet.length} quiet keys`,
+    );
+    assert.ok(
+      Math.abs(previous.top - loop.top) <= 1 &&
+        Math.abs(next.top - loop.top) <= 1 &&
+        save.top >= loop.bottom,
+      `320px quiet rows ${narrow.quiet.map((key) => key.top).join(', ')}`,
     );
     await page.close();
   },
