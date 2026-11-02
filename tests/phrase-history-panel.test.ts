@@ -17,8 +17,25 @@ async function openPhraseFolds(page: Page) {
 }
 
 async function openPhrases(page: Page) {
-  await page.locator('.phrase-open').click();
-  await page.locator('.phrase-panel').waitFor({ state: 'visible' });
+  const button = page.locator('.phrase-open');
+  await button.waitFor();
+  // The server-rendered button accepts a click before React attaches its
+  // handler. networkidle does not wait for that, so on a busy runner the
+  // click is lost and .phrase-panel never appears.
+  await page.waitForFunction(() => {
+    const node = document.querySelector('.phrase-open');
+    if (!node) return false;
+    return Object.keys(node).some((key) => key.startsWith('__reactProps'));
+  });
+  await button.click();
+  try {
+    await page.locator('.phrase-panel').waitFor({ state: 'visible' });
+  } catch (error) {
+    // A second click toggles the deck shut once opening has started.
+    if ((await button.getAttribute('aria-expanded')) === 'true') throw error;
+    await button.click();
+    await page.locator('.phrase-panel').waitFor({ state: 'visible' });
+  }
   await page.locator('.phrase-action', { hasText: 'Play' }).waitFor();
   await openPhraseFolds(page);
 }
