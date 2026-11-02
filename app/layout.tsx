@@ -16,6 +16,7 @@ import './reference-panels.css';
 import './connected-neck.css';
 import './match-welcome.css';
 import { chunkReloadBootstrap } from '@/lib/chunk-reload';
+import { headerLockCss } from '@/lib/header-lock';
 import { themeBootstrap } from '@/lib/theme';
 
 const arcade = Silkscreen({
@@ -48,6 +49,7 @@ export default function RootLayout({
           type="font/woff2"
           crossOrigin="anonymous"
         />
+        <style dangerouslySetInnerHTML={{ __html: headerLockCss }} />
       </head>
       <body className={`${arcade.variable} antialiased`}>
         <SkipLink />
