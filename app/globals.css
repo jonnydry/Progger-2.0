@@ -691,10 +691,11 @@ main {
   letter-spacing: 0;
   white-space: nowrap;
 }
+/* Open is a surface step, like Stash. The green fill stays on Play. */
 .phrase-open:hover,
 .phrase-open[aria-expanded='true'] {
-  color: var(--primary-foreground);
-  background: var(--green);
+  color: var(--accent-foreground);
+  background: var(--accent);
   border-color: var(--green);
 }
 .phrase-open[aria-expanded='true'] {
