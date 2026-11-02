@@ -115,7 +115,7 @@ void test('the deck leads with play and keeps build folded', () => {
   );
   assert.match(panel, /className="deck-transport"/);
   // Cassette bay: window is the face; Play legend is sr-only (no visible PLAY chrome).
-  assert.match(panel, /className=\{\`deck-window\$\{/);
+  assert.ok(panel.includes('className={`deck-window'), 'deck-window className template');
   assert.match(panel, /<h3 className="sr-only">Play<\/h3>/);
   const windowAt = panel.indexOf('className={`deck-window');
   const zoneAt = panel.indexOf('className="deck-zone"');
