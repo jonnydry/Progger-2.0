@@ -185,30 +185,54 @@ void test('the deck leads with play and keeps build folded', () => {
     deck,
     /\.deck-fold-summary \{[^}]*min-height: var\(--deck-row\)/,
   );
-  /* Phone tape text is reserved so a wrapping plan or status cannot move
-     Play. 2lh lives in the phone query; 3lh for the plan follows it, or
-     the wider rule would win the cascade on the narrowest phones. */
+  /* Phone tape text is reserved as one block so a wrapping plan or status,
+     or an error that drops the plan, cannot move Play. */
   const phoneAt = deck.indexOf('@media (max-width: 640px)');
-  const tapeAt = deck.indexOf('@media (max-width: 420px)');
-  assert.ok(phoneAt !== -1 && tapeAt > phoneAt, 'tape query follows phone');
-  const phoneSlice = deck.slice(phoneAt, tapeAt);
-  const tapeSlice = deck.slice(tapeAt);
+  assert.ok(phoneAt !== -1, 'phone query');
+  const phoneSlice = stripCssComments(deck.slice(phoneAt));
   assert.match(
-    phoneSlice,
-    /\.phrase-deck \.deck-window \.phrase-plan \{[^}]*min-height: 2lh;/,
+    deck,
+    /\.deck-window-text \{[^}]*--tape-plan-line: calc\(var\(--text-sm\) \* 1\.3\);[^}]*--tape-status-line: calc\(var\(--text-xs\) \* 1\.3\);/,
   );
   assert.match(
-    phoneSlice,
-    /\.phrase-deck \.deck-window \.phrase-status \{[^}]*min-height: 3lh;/,
+    deck,
+    /\.phrase-deck \.deck-window \.phrase-plan \{[^}]*line-height: var\(--tape-plan-line\);/,
+    'the plan line is the unit the window reserves',
   );
   assert.match(
-    tapeSlice,
-    /\.phrase-deck \.deck-window \.phrase-plan \{[^}]*min-height: 3lh;/,
+    deck,
+    /\.phrase-deck \.deck-window \.phrase-status \{[^}]*line-height: var\(--tape-status-line\);/,
+    'the status line is the unit the window reserves',
+  );
+  /* Three plan lines and a status line: a two-line plan over a two-line
+     error, or a plan-less error of up to four lines. */
+  assert.match(
+    phoneSlice,
+    /\.deck-window-text \{[^}]*min-height: calc\(\s*3 \* var\(--tape-plan-line\) \+ var\(--tape-status-line\) \+ 1px\s*\);/,
+  );
+  /* With no drop shadow, a lit key must not sit 1px below its neighbour. */
+  assert.match(
+    phoneSlice,
+    /\.phrase-deck \.deck-key\[aria-pressed='true'\],\s*\.phrase-deck \.deck-key\.is-latched,\s*\.phrase-deck \.deck-key\.is-saved \{\s*transform: none;/,
+  );
+  /* The reels leave the text row on a phone, so the plan and status get
+     the full width of the window. */
+  assert.match(phoneSlice, /\.deck-reel \{[^}]*grid-row: 1;/);
+  assert.match(
+    phoneSlice,
+    /\.deck-window-text \{[^}]*grid-column: 1 \/ -1;[^}]*grid-row: 2;/,
   );
   assert.equal(
-    panel.includes('DECK_BREAKPOINT_QUERY.tape'),
+    /\.phrase-(plan|status) \{[^}]*min-height/.test(deck),
     false,
-    'the tape width is CSS only',
+    'the reserve is on the block, not on a line that an error removes',
+  );
+  /* A plan breaks between fields, never before a dot, and reads the same. */
+  assert.match(deck, /\.phrase-plan-chip \{[^}]*white-space: nowrap/);
+  assert.equal(
+    (panel.match(/className="phrase-plan-chip"/g) ?? []).length,
+    4,
+    'one chip per plan field',
   );
   /* A fieldset legend cannot take a layout track, so it is positioned over the
      row's own gutter. If it ever goes back into the grid the options collapse

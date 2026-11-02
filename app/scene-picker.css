@@ -160,10 +160,13 @@
   }
 }
 
+/* Stash, Scene and the theme key share one row: same 44px height, same
+   centre line as the wordmark, same gap. No nudge on the Appearance group,
+   or it rides above Stash. */
 @media (max-width: 500px) {
+  .night-swim .header-utilities,
   .appearance-controls {
     gap: 5px;
-    margin-top: -7px;
   }
 
   .night-swim .appearance-controls .theme-toggle {

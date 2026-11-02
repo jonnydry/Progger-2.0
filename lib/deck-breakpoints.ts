@@ -14,15 +14,12 @@
  *   the deck.
  * pins: a four-option pin row becomes an even 2x2 block. Four across clips
  *   "long–short" below this, and a plain wrap leaves a lone orphan.
- * tape: the plan sentence reaches a third line. The stylesheet reserves
- *   that height here. The panel does not read this width.
  */
 export const DECK_BREAKPOINT_PX = {
   wide: 860,
   plate: 1210,
   phone: 640,
   pins: 470,
-  tape: 420,
 } as const;
 
 export const DECK_BREAKPOINT_QUERY = {
@@ -30,5 +27,4 @@ export const DECK_BREAKPOINT_QUERY = {
   plate: `(max-width: ${DECK_BREAKPOINT_PX.plate}px)`,
   phone: `(max-width: ${DECK_BREAKPOINT_PX.phone}px)`,
   pins: `(max-width: ${DECK_BREAKPOINT_PX.pins}px)`,
-  tape: `(max-width: ${DECK_BREAKPOINT_PX.tape}px)`,
 } as const;

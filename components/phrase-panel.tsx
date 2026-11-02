@@ -1158,9 +1158,21 @@ export function PhrasePanel({
           <span className="deck-reel" aria-hidden="true" />
           <div className="deck-window-text">
             {plan && (
+              /* Each field keeps its dot, so a wrapping plan breaks between
+                 fields and no line starts with "·". The text is unchanged. */
               <p className="phrase-plan">
-                {CONTOUR_LABEL[plan.contour]} · {RHYTHM_LABEL[plan.rhythm]} ·{' '}
-                {REGISTER_LABEL[plan.register]} · lands on the {cadenceText}
+                <span className="phrase-plan-chip">
+                  {CONTOUR_LABEL[plan.contour]} ·
+                </span>{' '}
+                <span className="phrase-plan-chip">
+                  {RHYTHM_LABEL[plan.rhythm]} ·
+                </span>{' '}
+                <span className="phrase-plan-chip">
+                  {REGISTER_LABEL[plan.register]} ·
+                </span>{' '}
+                <span className="phrase-plan-chip">
+                  lands on the {cadenceText}
+                </span>
               </p>
             )}
             {/* Live status line. The id predates the seed field getting
