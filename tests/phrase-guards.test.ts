@@ -323,8 +323,8 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     four.notes.map((note) => note.midi),
     [
-      60, 59, 62, 64, 60, 64, 65, 64, 62, 65, 67, 64, 65, 64, 62, 67, 65, 64,
-      65, 62, 64, 65, 64, 62, 60, 65, 64,
+      60, 59, 62, 64, 60, 64, 65, 64, 62, 65, 67, 64, 67, 62, 60, 64, 62, 60,
+      65, 64, 60, 62, 65, 62, 64,
     ],
   );
 });
@@ -388,7 +388,7 @@ void test('these cadence tails stay on the weighted pitches', () => {
       'F#maj7',
       2,
       2,
-      [58, 63, 61, 58, 59, 61, 59, 54, 59, 58, 54, 53, 58, 56, 58],
+      [61, 59, 58, 61, 58, 56, 59, 58, 56, 54, 58, 61, 59, 58],
     ],
     // A low wave. Its cadence still lands on the bottom C.
     [

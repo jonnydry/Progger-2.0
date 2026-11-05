@@ -1188,7 +1188,7 @@ function pickPatterns(
   const chosen: BarPattern[] = [];
   let previous = '';
   for (let bar = 0; bar < bars; bar++) {
-    if (exact && bar > 0 && previous) {
+    if (exact && bar > 0 && (bars === 2 || bar === 1) && previous) {
       const same = catalog.filter((pattern) => pattern.onset === previous);
       if (same.length) {
         const copy = same[0];
@@ -1245,12 +1245,20 @@ function pickPatterns(
           const quarter = options.filter(
             (pattern) => pattern.ids === 'q ee ee ee',
           );
-          const downbeat = source.filter(
-            (pattern) => pattern.ids === 'ee ee ee zr',
-          );
-          if (quarter.length && downbeat.length)
-            options = [...quarter, ...quarter, ...quarter, ...downbeat];
-          else if (quarter.length) options = quarter;
+          if (quarter.length)
+            options = [
+              ...options,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+            ];
         }
       }
       if (exact) {
@@ -1260,13 +1268,32 @@ function pickPatterns(
         if (longs.length) options = longs;
       }
     }
-    if (rhythm === 'eighths' && bar !== 0 && contour !== 'wave') {
+    if (!exact && rhythm === 'eighths' && bar !== 0 && contour !== 'wave') {
       const grids = options.filter((pattern) => pattern.ids === 'ee ee ee zr');
-      if (grids.length)
-        options = [...options, ...grids, ...grids, ...grids, ...grids];
+      const offbeat = options.filter(
+        (pattern) => pattern.ids === 'ee zr ee zr',
+      );
+      if (grids.length || offbeat.length)
+        options = [
+          ...options,
+          ...grids,
+          ...grids,
+          ...grids,
+          ...grids,
+          ...offbeat,
+        ];
     }
-    const pattern =
-      options[Math.floor(random() * options.length)] ?? options[0];
+    let pattern = options[Math.floor(random() * options.length)] ?? options[0];
+    // A wall of eighths has no off-beat rest. The sibling with a rest on
+    // beat 4 keeps the six-eighth run and restores one syncopation.
+    if (pattern?.ids === 'ee ee ee ee') {
+      const rested =
+        options.find((item) => item.ids === 'ee ee ee zr') ??
+        source.find(
+          (item) => item.ids === 'ee ee ee zr' && item.onset !== previous,
+        );
+      if (rested) pattern = rested;
+    }
     chosen.push(pattern);
     previous = pattern.onset;
   }
@@ -2747,6 +2774,28 @@ function sampleLanes(
  * samples more lanes and more attempts before it accepts one, so dropping a
  * lane here costs a candidate, not a phrase.
  */
+function repeatsFour(notes: readonly { midi: number }[]): boolean {
+  const midis = notes.map((note) => note.midi);
+  for (let start = 0; start + 8 <= midis.length; start++) {
+    let match = true;
+    for (let index = 4; index < 8; index++) {
+      if (midis[start + index] !== midis[start + (index % 4)]) match = false;
+    }
+    if (!match) continue;
+    if (new Set(midis.slice(start, start + 4)).size < 2) continue;
+    return true;
+  }
+  return false;
+}
+
+function stepsIntoCadence(notes: readonly { midi: number }[]): boolean {
+  if (notes.length < 2) return true;
+  const gap = Math.abs(
+    notes[notes.length - 1].midi - notes[notes.length - 2].midi,
+  );
+  return gap === 1 || gap === 2;
+}
+
 function sampleLane(
   input: {
     seed: number;
@@ -2827,7 +2876,11 @@ function sampleLane(
         !handAccepts(
           fingerNotes(probed, forms, REGISTER_ANCHOR[plan.register]),
         );
-      if (!seamBad && !handBad) {
+      // A grouping that leaves no step into the cadence is dropped.
+      // The free walk still has that step.
+      const stepBad = input.bars === 4 && !stepsIntoCadence(walked.notes);
+      const cycleBad = repeatsFour(walked.notes);
+      if (!seamBad && !handBad && !stepBad && !cycleBad) {
         pitches = walked.notes;
         groupingAtomsPassed += walked.groupings;
         tried = 0;
