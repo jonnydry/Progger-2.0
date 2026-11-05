@@ -174,7 +174,7 @@ function startServer(port: number): { child: ChildProcess; log: () => string } {
   const logFd = openSync(logPath, 'w');
   const child = spawn(
     'npx',
-    ['vinext', 'dev', '--port', String(port), '--hostname', '127.0.0.1'],
+    ['vinext', 'dev', '--port', String(port), '--host', '127.0.0.1'],
     {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
       detached: true,

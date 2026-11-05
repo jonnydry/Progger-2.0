@@ -19,7 +19,7 @@ From the repo root:
 node .cursor/skills/verify-progger/bin/launch.mjs
 ```
 
-Launch runs `npm run dev -- --hostname 127.0.0.1 --port 4173`. Override the port with `VERIFY_APP_PORT` before launch. If that port is taken, launch exits and names the listener. It does not free the port.
+Launch runs `npm run dev -- --host 127.0.0.1 --port 4173`. Override the port with `VERIFY_APP_PORT` before launch. If that port is taken, launch exits and names the listener. It does not free the port.
 
 Ready means `GET http://127.0.0.1:4173/` returns 200 and the HTML contains `<title>Progger`, `A Dorian guitar reference`, and `aria-label="Guitar reference explorer"`. The `Local:` log line only means the process is listening. The first request compiles the page, so ready can take a while. Launch waits up to 120 seconds.
 
