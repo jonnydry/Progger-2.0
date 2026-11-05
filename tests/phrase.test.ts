@@ -833,7 +833,7 @@ void test('a cadence lock lands on the chord root', () => {
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.phrase.plan.cadence, 'root');
-  assert.equal(result.phrase.plan.rhythm, 'long-short');
+  assert.equal(result.phrase.plan.rhythm, 'eighths');
   const notes = result.phrase.notes;
   assert.equal(notes.at(-1)?.pc, 9);
   assert.equal(notes.at(-1)?.beat, 8);

@@ -100,8 +100,16 @@ function period3Outside(
     }
     for (let index = 1; index < 4 && matched; index++) {
       if (
-        scaleStep(left[index - 1]?.note.midi ?? 0, left[index]?.note.midi ?? 0, pcs) !==
-        scaleStep(right[index - 1]?.note.midi ?? 0, right[index]?.note.midi ?? 0, pcs)
+        scaleStep(
+          left[index - 1]?.note.midi ?? 0,
+          left[index]?.note.midi ?? 0,
+          pcs,
+        ) !==
+        scaleStep(
+          right[index - 1]?.note.midi ?? 0,
+          right[index]?.note.midi ?? 0,
+          pcs,
+        )
       )
         matched = false;
     }
@@ -147,7 +155,8 @@ void test('sentence guards stay visible in the notes', () => {
         const notes = line.notes;
         const closing = notes.at(-1);
         const before = notes.at(-2);
-        if (closing && before && Math.abs(closing.midi - before.midi) >= 3) leap += 1;
+        if (closing && before && Math.abs(closing.midi - before.midi) >= 3)
+          leap += 1;
         if ((notes[0]?.duration ?? 0) >= 1) heldOpen += 1;
         for (const note of notes) {
           if (note.shift) assert.ok(note.duration > 0.5);
@@ -158,21 +167,33 @@ void test('sentence guards stay visible in the notes', () => {
         );
         for (const group of groups) {
           bars += 1;
-          if (!group.some((note) => Math.abs(note.beat - Math.round(note.beat)) < 1e-6))
+          if (
+            !group.some(
+              (note) => Math.abs(note.beat - Math.round(note.beat)) < 1e-6,
+            )
+          )
             silent += 1;
         }
         const opening = groups[0] ?? [];
         const answer = groups[1] ?? [];
         if (opening.length >= 4 && answer.length >= 4) {
           const rhythm = (group: typeof opening) =>
-            group.slice(0, 4).map((note) => eighth(note.beat)).join(',');
+            group
+              .slice(0, 4)
+              .map((note) => eighth(note.beat))
+              .join(',');
           const motion = (group: typeof opening) =>
             group
               .slice(0, 4)
               .slice(1)
-              .map((note, index) => scaleStep(group[index]?.midi ?? 0, note.midi, pcs))
+              .map((note, index) =>
+                scaleStep(group[index]?.midi ?? 0, note.midi, pcs),
+              )
               .join(',');
-          if (rhythm(opening) === rhythm(answer) && motion(opening) === motion(answer))
+          if (
+            rhythm(opening) === rhythm(answer) &&
+            motion(opening) === motion(answer)
+          )
             returned += 1;
         }
         if (barsCount === 4) {
@@ -184,7 +205,10 @@ void test('sentence guards stay visible in the notes', () => {
           if (head.length >= 2 && fragment.length >= 4) {
             const first = eighth(head[0]?.beat ?? 0);
             const second = eighth(head[1]?.beat ?? 0);
-            const secondDur = Math.max(1, Math.round((head[1]?.duration ?? 0.5) * 2));
+            const secondDur = Math.max(
+              1,
+              Math.round((head[1]?.duration ?? 0.5) * 2),
+            );
             const span = second + secondDur - first;
             const rhythm =
               eighth(fragment[0]?.beat ?? 0) === first &&
@@ -192,8 +216,16 @@ void test('sentence guards stay visible in the notes', () => {
               eighth(fragment[2]?.beat ?? 0) === first + span &&
               eighth(fragment[3]?.beat ?? 0) === second + span;
             const idea = scaleStep(head[0]?.midi ?? 0, head[1]?.midi ?? 0, pcs);
-            const left = scaleStep(fragment[0]?.midi ?? 0, fragment[1]?.midi ?? 0, pcs);
-            const right = scaleStep(fragment[2]?.midi ?? 0, fragment[3]?.midi ?? 0, pcs);
+            const left = scaleStep(
+              fragment[0]?.midi ?? 0,
+              fragment[1]?.midi ?? 0,
+              pcs,
+            );
+            const right = scaleStep(
+              fragment[2]?.midi ?? 0,
+              fragment[3]?.midi ?? 0,
+              pcs,
+            );
             if (
               rhythm &&
               idea === left &&
@@ -205,7 +237,13 @@ void test('sentence guards stay visible in the notes', () => {
             }
           }
         }
-        if (monotone(notes.map((note) => note.midi), pcs) >= 5) monotonePhrases += 1;
+        if (
+          monotone(
+            notes.map((note) => note.midi),
+            pcs,
+          ) >= 5
+        )
+          monotonePhrases += 1;
         if (period3Outside(notes, pcs)) period3 += 1;
         for (const note of notes) {
           syncNotes += 1;
@@ -214,7 +252,9 @@ void test('sentence guards stay visible in the notes', () => {
           const fraction = note.beat - Math.floor(note.beat + 1e-9);
           if (Math.abs(fraction - 0.5) >= 0.01) continue;
           const following = Math.floor(note.beat) + 1;
-          const struck = notes.some((item) => Math.abs(item.beat - following) < 0.01);
+          const struck = notes.some(
+            (item) => Math.abs(item.beat - following) < 0.01,
+          );
           if (!struck) sync += 1;
         }
         const cells = line.plan.cells ?? [];
@@ -236,14 +276,14 @@ void test('sentence guards stay visible in the notes', () => {
   // Free seeds skip the bar-3 fragment chooser. Tip sequenced 23/24 of
   // these lines. One scored walk still lands on the same two intervals:
   // F# major, F#maj7, seed 8.
-  assert.ok(
-    freeSequenced <= 1,
-    `free fragment ${freeSequenced}/${freeFour}`,
-  );
+  assert.ok(freeSequenced <= 1, `free fragment ${freeSequenced}/${freeFour}`);
   assert.ok(heldOpen / phrases >= 0.7, `held opening ${heldOpen}/${phrases}`);
   assert.ok(silent / bars <= 0.02, `no on-beat ${silent}/${bars}`);
   assert.ok(returned / phrases >= 0.8, `return ${returned}/${phrases}`);
-  assert.ok(monotonePhrases / phrases <= 0.02, `monotone ${monotonePhrases}/${phrases}`);
+  assert.ok(
+    monotonePhrases / phrases <= 0.02,
+    `monotone ${monotonePhrases}/${phrases}`,
+  );
   // The walk refuses a 3-cycle on its own. Two phrases appear when that
   // refusal is off, which still sits under a 0.8% ceiling.
   assert.equal(period3, 0, `period-3 ${period3}/${phrases}`);
@@ -282,7 +322,10 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   const four = phrase('C', 'major', 'C', 15, 4);
   assert.deepEqual(
     four.notes.map((note) => note.midi),
-    [64, 62, 65, 64, 62, 59, 67, 65, 69, 67, 71, 67, 65, 71, 69, 65, 64, 69, 67, 65, 62, 65, 64],
+    [
+      60, 59, 62, 64, 60, 64, 65, 64, 62, 65, 67, 64, 67, 62, 60, 64, 62, 60,
+      65, 64, 60, 62, 65, 62, 64,
+    ],
   );
 });
 
@@ -290,26 +333,93 @@ void test('these cadence tails stay on the weighted pitches', () => {
   // Re-pinned with the held-chord walk. A later pitch change has to update
   // the rows on purpose. Am seed 7 is the ×0.35 leap penalty: without it
   // the approach moves from 67 to 69.
-  const lines: readonly (readonly [string, string, string, number, 2 | 4, readonly number[]])[] = [
+  const lines: readonly (readonly [
+    string,
+    string,
+    string,
+    number,
+    2 | 4,
+    readonly number[],
+  ])[] = [
     // Re-pinned with the register-anchored hand and the contour-true wave.
     // A later pitch change has to update these rows on purpose.
     ['C', 'major', 'C', 7, 2, [72, 76, 72, 67, 76, 79, 76, 71, 69, 67]],
-    ['C', 'major', 'C', 46, 2, [60, 57, 59, 60, 64, 67, 64, 60, 62, 64, 65, 57, 55]],
-    ['C', 'major', 'C', 1, 4, [60, 64, 62, 60, 64, 67, 65, 64, 62, 57, 60, 55, 59, 60, 64, 67, 57, 55]],
-    ['C', 'major', 'C', 7, 4, [72, 74, 76, 72, 76, 77, 79, 76, 77, 69, 71, 67, 69, 72, 71, 69, 65, 67]],
+    [
+      'C',
+      'major',
+      'C',
+      46,
+      2,
+      [60, 57, 59, 60, 64, 67, 64, 60, 62, 64, 65, 57, 55],
+    ],
+    [
+      'C',
+      'major',
+      'C',
+      1,
+      4,
+      [60, 64, 62, 60, 64, 67, 65, 64, 62, 57, 60, 55, 59, 60, 64, 67, 57, 55],
+    ],
+    [
+      'C',
+      'major',
+      'C',
+      7,
+      4,
+      [72, 74, 76, 72, 76, 77, 79, 76, 77, 69, 71, 67, 69, 72, 71, 69, 65, 67],
+    ],
     // Free 4-bar seed (24 % 8 === 0). Bar 3 is the scored walk, not the
     // two-note fragment.
-    ['F#', 'major', 'F#maj7', 24, 4, [54, 56, 53, 54, 49, 51, 54, 56, 59, 58, 61, 59, 58, 56, 59, 61, 63, 65, 61, 58, 56, 54, 58, 56, 66]],
+    [
+      'F#',
+      'major',
+      'F#maj7',
+      24,
+      4,
+      [
+        54, 56, 53, 54, 49, 51, 54, 56, 59, 58, 61, 59, 58, 56, 59, 61, 63, 65,
+        61, 58, 56, 54, 58, 56, 66,
+      ],
+    ],
     ['C', 'major', 'C', 1, 2, [64, 67, 69, 67, 60, 64, 65, 64, 62, 55]],
-    ['F#', 'major', 'F#maj7', 2, 2, [61, 59, 56, 61, 63, 65, 58, 56, 53, 58, 59, 58]],
+    [
+      'F#',
+      'major',
+      'F#maj7',
+      2,
+      2,
+      [61, 59, 58, 61, 58, 56, 59, 58, 56, 54, 58, 61, 59, 58],
+    ],
     // A low wave. Its cadence still lands on the bottom C.
-    ['C', 'major', 'C', 4, 2, [60, 59, 62, 60, 59, 57, 64, 62, 65, 64, 59, 48]],
-    ['C', 'major', 'C', 20, 4, [64, 65, 69, 67, 64, 62, 60, 62, 65, 64, 67, 62, 64, 60, 62, 65, 67, 65, 69, 71, 67, 62, 60]],
-    // Re-pinned with the wide-leap settle. The walk now turns the opening
-    // A-D second into a D-C-B-A figure and settles each leap, which is one
-    // bar longer. Still legal: a 1-semitone step into the C cadence, a
-    // 14-semitone range, and the closing note on the bar line.
-    ['C', 'major', 'C', 5, 4, [57, 62, 60, 59, 57, 62, 59, 64, 62, 60, 59, 60, 64, 62, 60, 59, 55, 52, 53, 55, 50, 53, 57, 53, 52]],
+    [
+      'C',
+      'major',
+      'C',
+      4,
+      2,
+      [52, 57, 60, 59, 55, 57, 53, 48, 53, 57, 55, 53, 50, 48],
+    ],
+    [
+      'C',
+      'major',
+      'C',
+      20,
+      4,
+      [
+        64, 62, 65, 67, 64, 67, 69, 60, 59, 62, 64, 62, 59, 65, 64, 67, 65, 62,
+        67, 69, 71, 69, 67, 62, 60,
+      ],
+    ],
+    // Re-pinned with grouping cells. Still a 1-semitone step into the C
+    // cadence, and the closing note sits on the bar line.
+    [
+      'C',
+      'major',
+      'C',
+      5,
+      4,
+      [60, 62, 59, 60, 64, 65, 62, 64, 65, 57, 59, 55, 57, 52, 55, 60, 53, 52],
+    ],
     ['A', 'dorian', 'Am', 7, 2, [69, 72, 71, 69, 72, 76, 74, 72, 67, 64]],
   ];
   for (const [root, scaleId, symbol, seed, bars, midis] of lines) {

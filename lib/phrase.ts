@@ -1,4 +1,11 @@
-import { mod, patterns, pretty, TUNING, type Note, type Pattern } from './music.ts';
+import {
+  mod,
+  patterns,
+  pretty,
+  TUNING,
+  type Note,
+  type Pattern,
+} from './music.ts';
 import type { PhraseFretMark } from './phrase-marks.ts';
 
 /**
@@ -57,6 +64,39 @@ function resetSearchCount(): void {
   phraseSearchSteps = 0;
   phraseSearchPeak = 0;
   phraseSearchRefused = false;
+}
+
+/**
+ * Atoms that passed `blockAllowed` and stayed in the candidate line.
+ * Mutually exclusive with {@link groupingAtomsDropped}.
+ */
+let groupingAtomsKept = 0;
+/**
+ * Atoms that passed `blockAllowed` and were then rejected (seam, hand,
+ * cadence step, or a repeated four-pitch cell), including each salt retry.
+ */
+let groupingAtomsDropped = 0;
+
+/** Clear the grouping counters. A metrics run resets once, then generates the set. */
+export function resetGroupingAtomReport(): void {
+  groupingAtomsKept = 0;
+  groupingAtomsDropped = 0;
+}
+
+/**
+ * One atom is either kept or dropped, never both.
+ * `attempted` is their sum: every `blockAllowed` pass, including salts.
+ */
+export function groupingAtomReport(): {
+  kept: number;
+  dropped: number;
+  attempted: number;
+} {
+  return {
+    kept: groupingAtomsKept,
+    dropped: groupingAtomsDropped,
+    attempted: groupingAtomsKept + groupingAtomsDropped,
+  };
 }
 
 /** Start another attempt without letting the new count hide an earlier one. */
@@ -141,6 +181,12 @@ export type PhraseResult =
 
 const CONTOURS = ['arch', 'rise', 'fall', 'wave'] as const;
 const RHYTHMS = ['quarters', 'eighths', 'long-short', 'push'] as const;
+/**
+ * Rhythm draw, in `RHYTHMS` order. Eighths are five of eight draws so a
+ * six-eighth run exists often enough for a grouping cell. Cells on the
+ * old uniform catalog are about 0.6% of notes.
+ */
+export const RHYTHM_DRAW_WEIGHTS: readonly number[] = [1, 5, 1, 1];
 const REGISTERS = ['low', 'mid', 'high'] as const;
 const CADENCES = ['root', 'third', 'fifth'] as const;
 const REGISTER_LOW: Record<RegisterName, number> = {
@@ -314,7 +360,11 @@ export function cadencePitchClasses(
   const degree = cadenceDegrees(chordNotes)[role];
   const pcs: number[] = [];
   for (const note of chordNotes) {
-    if (note.degree === degree && scalePcs.has(note.pc) && !pcs.includes(note.pc))
+    if (
+      note.degree === degree &&
+      scalePcs.has(note.pc) &&
+      !pcs.includes(note.pc)
+    )
       pcs.push(note.pc);
   }
   return pcs;
@@ -477,13 +527,44 @@ export function contourHeight(contour: Contour, t: number): number {
   }
 }
 
+function mulberry32Step(state: number): { state: number; value: number } {
+  const next = (state + 0x6d2b79f5) | 0;
+  let mixed = Math.imul(next ^ (next >>> 15), 1 | next);
+  mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
+  return {
+    state: next,
+    value: ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296,
+  };
+}
+
 export function mulberry32(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
-    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+    const stepped = mulberry32Step(state);
+    state = stepped.state;
+    return stepped.value;
+  };
+}
+
+/** Same stream as {@link mulberry32}, with a mark so a rejected grouping can walk again. */
+function rngBox(seed: number): {
+  next: () => number;
+  get: () => number;
+  set: (state: number) => void;
+} {
+  let state = seed >>> 0;
+  return {
+    next() {
+      const stepped = mulberry32Step(state);
+      state = stepped.state;
+      return stepped.value;
+    },
+    get() {
+      return state >>> 0;
+    },
+    set(next) {
+      state = next >>> 0;
+    },
   };
 }
 
@@ -515,9 +596,25 @@ export function rulePlan(
     ? available
     : ['root'];
   // Roll every field before applying locks so a lock does not reshuffle the rest.
+  // Eighths take five of eight rhythm draws. A grouping needs a run of
+  // eighths, and the other three rhythms rarely grow one. One random()
+  // call, same place in the stream as the old uniform roll.
+  const contour = CONTOURS[Math.floor(random() * CONTOURS.length)];
+  const rhythmWeights = RHYTHM_DRAW_WEIGHTS;
+  let rhythmTotal = 0;
+  for (const weight of rhythmWeights) rhythmTotal += weight;
+  let rhythmCursor = random() * rhythmTotal;
+  let rhythm: RhythmId = 'eighths';
+  for (let index = 0; index < RHYTHMS.length; index++) {
+    rhythmCursor -= rhythmWeights[index] ?? 0;
+    if (rhythmCursor < 0) {
+      rhythm = RHYTHMS[index] ?? 'eighths';
+      break;
+    }
+  }
   const rolled: PhrasePlan = {
-    contour: CONTOURS[Math.floor(random() * CONTOURS.length)],
-    rhythm: RHYTHMS[Math.floor(random() * RHYTHMS.length)],
+    contour,
+    rhythm,
     register: REGISTERS[Math.floor(random() * REGISTERS.length)],
     cadence: choices[Math.floor(random() * choices.length)] ?? 'root',
   };
@@ -728,6 +825,10 @@ const RAW_BARS: Record<RhythmId, readonly (readonly string[])[]> = {
   ],
   eighths: [
     ['ee', 'ee', 'ee', 'ee'],
+    // Extra eighth grids. A grouping needs six, eight, or twelve eighths in a row.
+    ['ee', 'ee', 'ee', 'zr'],
+    ['q', 'ee', 'ee', 'ee'],
+    ['ee', 'ee', 'ee', 'q'],
     ['ee', 'zr', 'ee', 'zr'],
     ['q', 'ee', 'q', 'ee'],
     ['zr', 'ee', 'zr', 'ee'],
@@ -1045,9 +1146,7 @@ function answerPattern(
     if (built) return built;
   }
   if (fourth.at >= 7) return null;
-  const shrunk = prefix
-    .slice(0, 3)
-    .concat([{ at: fourth.at, dur: 1 }]);
+  const shrunk = prefix.slice(0, 3).concat([{ at: fourth.at, dur: 1 }]);
   return withTail(shrunk, fourth.at + 1, head.onset, random);
 }
 
@@ -1096,6 +1195,7 @@ function pickPatterns(
   density: number,
   exact: boolean,
   answer: boolean,
+  contour: Contour = 'arch',
 ): BarPattern[] {
   const catalog = BAR_PATTERNS[rhythm];
   const grounded = catalog.filter(hasOnBeat);
@@ -1111,7 +1211,7 @@ function pickPatterns(
   const chosen: BarPattern[] = [];
   let previous = '';
   for (let bar = 0; bar < bars; bar++) {
-    if (exact && bar > 0 && previous) {
+    if (exact && bar > 0 && (bars === 2 || bar === 1) && previous) {
       const same = catalog.filter((pattern) => pattern.onset === previous);
       if (same.length) {
         const copy = same[0];
@@ -1156,10 +1256,33 @@ function pickPatterns(
       if (!exact) {
         // The answer leaps back to this opening. A quarter or longer
         // can take that leap; an eighth cannot pass a fourth.
-        const held = options.filter((pattern) => (pattern.hits[0]?.dur ?? 0) >= 2);
+        const held = options.filter(
+          (pattern) => (pattern.hits[0]?.dur ?? 0) >= 2,
+        );
         if (held.length) options = held;
         const ready = options.filter(answerable);
         if (ready.length) options = ready;
+        // The held quarter leaves six eighths on beat 2. That is the run
+        // a grouping can actually sit on.
+        if (rhythm === 'eighths' && contour !== 'wave') {
+          const quarter = options.filter(
+            (pattern) => pattern.ids === 'q ee ee ee',
+          );
+          if (quarter.length)
+            options = [
+              ...options,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+              ...quarter,
+            ];
+        }
       }
       if (exact) {
         const longs = options.filter((pattern) =>
@@ -1168,8 +1291,32 @@ function pickPatterns(
         if (longs.length) options = longs;
       }
     }
-    const pattern =
-      options[Math.floor(random() * options.length)] ?? options[0];
+    if (!exact && rhythm === 'eighths' && bar !== 0 && contour !== 'wave') {
+      const grids = options.filter((pattern) => pattern.ids === 'ee ee ee zr');
+      const offbeat = options.filter(
+        (pattern) => pattern.ids === 'ee zr ee zr',
+      );
+      if (grids.length || offbeat.length)
+        options = [
+          ...options,
+          ...grids,
+          ...grids,
+          ...grids,
+          ...grids,
+          ...offbeat,
+        ];
+    }
+    let pattern = options[Math.floor(random() * options.length)] ?? options[0];
+    // A wall of eighths has no off-beat rest. The sibling with a rest on
+    // beat 4 keeps the six-eighth run and restores one syncopation.
+    if (pattern?.ids === 'ee ee ee ee') {
+      const rested =
+        options.find((item) => item.ids === 'ee ee ee zr') ??
+        source.find(
+          (item) => item.ids === 'ee ee ee zr' && item.onset !== previous,
+        );
+      if (rested) pattern = rested;
+    }
     chosen.push(pattern);
     previous = pattern.onset;
   }
@@ -1213,7 +1360,10 @@ function answersOpening(seed: number): boolean {
   return seed % 8 !== 0;
 }
 
-function pitchedFromLadder(ladder: readonly LadderTone[], tone: number): Pitched {
+function pitchedFromLadder(
+  ladder: readonly LadderTone[],
+  tone: number,
+): Pitched {
   const row = ladder[tone];
   return {
     midi: row.midi,
@@ -1270,7 +1420,8 @@ function pitchWeight(
   nearCadence: boolean,
 ): number {
   const midi = ladder[tone].midi;
-  let weight = gauss(midi - goal, CONTOUR_VAR) * gauss(midi - centre, RANGE_VAR);
+  let weight =
+    gauss(midi - goal, CONTOUR_VAR) * gauss(midi - centre, RANGE_VAR);
   if (prevMidi !== null) {
     const gap = midi - prevMidi;
     weight *= gauss(gap, PROXIMITY_VAR);
@@ -1286,8 +1437,7 @@ function pitchWeight(
       const mag = Math.abs(step);
       const opposite = Math.sign(step) === -Math.sign(leap);
       if (opposite && mag >= 1 && mag <= 2) {
-        if (!(event.strong || event.duration >= 1))
-          weight *= LEAP_SETTLE_BONUS;
+        if (!(event.strong || event.duration >= 1)) weight *= LEAP_SETTLE_BONUS;
       }
     }
   }
@@ -1423,8 +1573,7 @@ function withoutMonotone(
   if (notes.length < 4) return [...candidates];
   if (endingRun(notes.map((note) => note.index)) < 4) return [...candidates];
   const last = notes[notes.length - 1]?.index ?? 0;
-  const dir =
-    last - (notes[notes.length - 2]?.index ?? last);
+  const dir = last - (notes[notes.length - 2]?.index ?? last);
   const others = candidates.filter((tone) => tone - last !== dir);
   return others.length ? others : [...candidates];
 }
@@ -1455,7 +1604,9 @@ function sameOpening(
 ): boolean {
   if (left.length < count || right.length < count) return false;
   for (let index = 0; index < count; index++) {
-    if (eighthOf(events, left[index] ?? 0) !== eighthOf(events, right[index] ?? 0))
+    if (
+      eighthOf(events, left[index] ?? 0) !== eighthOf(events, right[index] ?? 0)
+    )
       return false;
   }
   return true;
@@ -1556,8 +1707,7 @@ function chooseSequence(
     for (let index = 0; index < tones.length; index++) {
       const event = events[slots[index] ?? 0];
       const tone = tones[index] ?? -1;
-      const chord =
-        tone >= 0 && tone < ladder.length && ladder[tone].chordTone;
+      const chord = tone >= 0 && tone < ladder.length && ladder[tone].chordTone;
       if (!event) continue;
       if (event.duration >= 1 && !chord) miss += 1;
       if (event.strong && !chord) strongMiss += 1;
@@ -1605,7 +1755,12 @@ function chooseFragment(
     const seconds = [shift * 2, shift + Math.sign(shift)];
     for (const second of seconds) {
       if (second === 0 || second === shift) continue;
-      const tones = [left + shift, right + shift, left + second, right + second];
+      const tones = [
+        left + shift,
+        right + shift,
+        left + second,
+        right + second,
+      ];
       if (!blockAllowed(ladder, alive, events, notes, slots, tones)) continue;
       let score = 0;
       for (let index = 0; index < tones.length; index++) {
@@ -1625,15 +1780,301 @@ function chooseFragment(
 }
 
 /**
+ * Scale sequenced in groups of 3, 4, or 6. Offsets are ladder steps from
+ * the cell's first note. The mirror negates every offset and the shift.
+ * Textbook 1-2-3 and 1-2-3-4 are left out: `blockAllowed` already refuses them.
+ */
+type GroupingCell = {
+  id: string;
+  k: 3 | 4 | 6;
+  offsets: readonly number[];
+  shift: number;
+};
+
+export const GROUPING_CELLS: readonly GroupingCell[] = [
+  { id: 'g3-skip', k: 3, offsets: [0, 2, 1], shift: 2 },
+  { id: 'g3-turn', k: 3, offsets: [0, 1, -1], shift: 1 },
+  { id: 'g3-open', k: 3, offsets: [0, 2, 3], shift: 1 },
+  { id: 'g4-return', k: 4, offsets: [0, 1, 2, 0], shift: 2 },
+  // Four notes in thirds: degrees 1–3–2–4, then the same shape a third up.
+  { id: 'g4-thirds', k: 4, offsets: [0, 2, 1, 3], shift: 2 },
+  { id: 'g4-roll', k: 4, offsets: [0, 2, 1, 0], shift: 1 },
+  { id: 'g4-turn', k: 4, offsets: [0, 1, 0, -1], shift: 1 },
+  // `g4-roll` and `g6-wave` stay in the table. A quarter plus six eighths
+  // only fits the groups of 3, so the roll and the wave rarely play.
+  { id: 'g6-wave', k: 6, offsets: [0, 1, 2, 3, 2, 1], shift: -1 },
+];
+
+/** First draw at a qualifying eighth run. 0.5 under-shot the band: most
+ * phrases never grow a six-eighth run, so a run that does appear should
+ * usually take the cell. Tuned against the 800-phrase set. */
+const P_GROUP = 1;
+
+function groupingRelative(
+  offsets: readonly number[],
+  shift: number,
+  repeats: number,
+): number[] {
+  const width = offsets.length;
+  const tones: number[] = [];
+  for (let index = 0; index < repeats * width; index++) {
+    tones.push(
+      (offsets[index % width] ?? 0) + shift * Math.floor(index / width),
+    );
+  }
+  return tones;
+}
+
+/** Ladder indexes for one cell. `down` uses the mirror. */
+export function groupingTones(
+  offsets: readonly number[],
+  shift: number,
+  start: number,
+  repeats: number,
+  down: boolean,
+): number[] {
+  const sign = down ? -1 : 1;
+  return groupingRelative(
+    offsets.map((offset) => offset * sign),
+    shift * sign,
+    repeats,
+  ).map((offset) => start + offset);
+}
+
+function isEighthEvent(event: GridEvent | undefined): boolean {
+  return !!event && Math.abs(event.duration - 0.5) < 1e-6;
+}
+
+function eighthRunLength(events: readonly GridEvent[], start: number): number {
+  if (!isEighthEvent(events[start])) return 0;
+  let count = 1;
+  for (let index = start + 1; index < events.length; index++) {
+    const prev = events[index - 1];
+    const event = events[index];
+    if (!prev || !isEighthEvent(event)) break;
+    if (Math.abs(event.beat - (prev.beat + 0.5)) > 1e-6) break;
+    count += 1;
+  }
+  return count;
+}
+
+function eighthRunStarts(events: readonly GridEvent[], index: number): boolean {
+  if (!isEighthEvent(events[index])) return false;
+  if (index === 0) return true;
+  const prev = events[index - 1];
+  if (!prev || !isEighthEvent(prev)) return true;
+  return Math.abs((events[index]?.beat ?? 0) - (prev.beat + 0.5)) > 1e-6;
+}
+
+/**
+ * 3s take two groups, or three when nine eighths are free. 4s take two.
+ * 6s take exactly two. The run has to stay off the sentence slots and off
+ * the last two events before the cadence.
+ */
+function repeatsThatFit(
+  k: number,
+  run: number,
+  events: readonly GridEvent[],
+  start: number,
+  claimed: ReadonlySet<number>,
+): number {
+  const options = k === 6 ? [2] : k === 3 ? [3, 2] : [2];
+  for (const repeats of options) {
+    const need = repeats * k;
+    if (k === 3 && repeats === 3 && run < 9) continue;
+    if (run < need) continue;
+    let fits = true;
+    for (let step = 0; step < need; step++) {
+      const at = start + step;
+      if (at >= events.length - 3 || claimed.has(at)) {
+        fits = false;
+        break;
+      }
+    }
+    if (fits) return repeats;
+  }
+  return 0;
+}
+
+function groupingStarts(
+  ladder: readonly LadderTone[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  index: number,
+  plan: PhrasePlan,
+  bars: 2 | 4,
+): number[] {
+  const event = events[index];
+  if (!event) return [];
+  const prev = notes.length ? notes[notes.length - 1] : null;
+  if (!prev) {
+    const goal = contourGoal(plan, event.beat, bars);
+    const found: number[] = [];
+    for (let tone = 0; tone < ladder.length; tone++) {
+      if (event.strong && !ladder[tone].chordTone) continue;
+      found.push(tone);
+    }
+    found.sort(
+      (a, b) =>
+        Math.abs(ladder[a].midi - goal) - Math.abs(ladder[b].midi - goal) ||
+        a - b,
+    );
+    return found;
+  }
+  const found: number[] = [];
+  for (let delta = -2; delta <= 2; delta++) {
+    const tone = prev.index + delta;
+    if (tone < 0 || tone >= ladder.length) continue;
+    if (event.strong && !ladder[tone].chordTone) continue;
+    found.push(tone);
+  }
+  found.sort(
+    (a, b) => Math.abs(a - prev.index) - Math.abs(b - prev.index) || a - b,
+  );
+  return found;
+}
+
+/**
+ * One grouping on this eighth run, or nothing. Draws `P_GROUP` and the cell
+ * from the walk's own `random`. The first start `blockAllowed` accepts wins.
+ */
+function chooseGrouping(
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  index: number,
+  plan: PhrasePlan,
+  bars: 2 | 4,
+  claimed: ReadonlySet<number>,
+  groupingWindow: number,
+  random: () => number,
+  salt: number,
+): { tones: number[]; k: number } | null {
+  if (!eighthRunStarts(events, index)) return null;
+  const event = events[index];
+  if (!event) return null;
+  if (plan.contour === 'wave') {
+    const total = bars * 4;
+    const startT = event.beat / total;
+    const endT = (event.beat + 3) / total;
+    if (endT > 0.34 && startT < 0.67) return null;
+  }
+  const run = eighthRunLength(events, index);
+  const bar = Math.floor(event.beat / 4);
+  if (Math.floor(bar / 2) === groupingWindow) return null;
+  const eighth = eighthOf(events, index);
+  const fitting: { cell: GroupingCell; repeats: number }[] = [];
+  for (const cell of GROUPING_CELLS) {
+    if (cell.k === 6) {
+      if (eighth !== 0) continue;
+    } else if (eighth !== 0 && eighth !== 2 && eighth !== 4) {
+      // 0 and 4 are the strong eighths. 2 is the on-beat after a held
+      // quarter: `q ee ee ee` leaves its six eighths there, and a strong
+      // eighth inside that run does not have six notes left.
+      continue;
+    }
+    const repeats = repeatsThatFit(cell.k, run, events, index, claimed);
+    if (repeats) fitting.push({ cell, repeats });
+  }
+  if (!fitting.length) return null;
+  fitting.sort(
+    (a, b) =>
+      b.repeats * b.cell.k - a.repeats * a.cell.k || a.cell.k - b.cell.k,
+  );
+  const longest = fitting[0]?.repeats * (fitting[0]?.cell.k ?? 1);
+  const family = fitting.filter(
+    (item) => item.repeats * item.cell.k === longest,
+  );
+  if (random() >= P_GROUP) return null;
+  const pick =
+    family[(Math.floor(random() * family.length) + salt) % family.length] ??
+    family[0];
+  if (!pick) return null;
+  const here = contourGoal(plan, event.beat, bars);
+  const ahead = contourGoal(plan, Math.min(bars * 4, event.beat + 1.5), bars);
+  const current = notes.length ? notes[notes.length - 1].midi : here;
+  // Follow the contour's slope across the cell. A flat spot falls back
+  // to moving toward the contour's pitch.
+  const down =
+    Math.abs(ahead - here) >= 0.5 ? ahead < here : here - current < 0;
+  const slots = Array.from(
+    { length: pick.repeats * pick.cell.k },
+    (_, step) => index + step,
+  );
+  const starts = groupingStarts(ladder, events, notes, index, plan, bars);
+  for (const start of starts) {
+    const tones = groupingTones(
+      pick.cell.offsets,
+      pick.cell.shift,
+      start,
+      pick.repeats,
+      down,
+    );
+    if (!blockAllowed(ladder, alive, events, notes, slots, tones)) continue;
+    return { tones, k: pick.cell.k };
+  }
+  return null;
+}
+
+/**
+ * The real `blockAllowed`, on a wide ladder, for one cell. Tests use this
+ * so a mirrored copy of the filter cannot drift from the engine.
+ */
+export function groupingBlockAllowed(
+  offsets: readonly number[],
+  shift: number,
+  repeats: number,
+  scale: 'major' | 'minor-pentatonic' = 'major',
+): boolean {
+  const steps = scale === 'major' ? [0, 2, 4, 5, 7, 9, 11] : [0, 3, 5, 7, 10];
+  const names =
+    scale === 'major'
+      ? ['C', 'D', 'E', 'F', 'G', 'A', 'B']
+      : ['C', 'Eb', 'F', 'G', 'Bb'];
+  const degrees =
+    scale === 'major'
+      ? ['1', '2', '3', '4', '5', '6', '7']
+      : ['1', 'b3', '4', '5', 'b7'];
+  const ladder: LadderTone[] = [];
+  for (let midi = 36; midi <= 96; midi++) {
+    const pc = mod(midi);
+    const at = steps.indexOf(pc);
+    if (at < 0) continue;
+    ladder.push({
+      midi,
+      chordTone: false,
+      note: { name: names[at] ?? 'C', pc, degree: degrees[at] ?? '1' },
+    });
+  }
+  const relative = groupingRelative(offsets, shift, repeats);
+  if (!relative.length) return false;
+  const low = Math.min(...relative);
+  const high = Math.max(...relative);
+  const start = -low + 2;
+  if (start < 0 || start + high >= ladder.length) return false;
+  const tones = relative.map((offset) => start + offset);
+  const events: GridEvent[] = tones.map((_, index) => ({
+    beat: index * 0.5,
+    duration: 0.5,
+    strong: index % 4 === 0,
+  }));
+  const alive = events.map(() => Array<boolean>(ladder.length).fill(true));
+  const slots = tones.map((_, index) => index);
+  return blockAllowed(ladder, alive, events, [], slots, tones);
+}
+
+/**
  * Scored pitches, then a sentence. On most seeds bar 2 opens on bar 1's
  * first four attacks, transposed by one or two scale steps. A 4-bar phrase
  * that answers the opening sequences a two-note fragment twice in bar 3.
  * A free line, every eighth seed, skips that sequence and stays on the
- * scored walk. A held note is a chord tone when one is still legal. The
- * approach is not: it stays a step from the cadence. The free tail walks
- * to that step when one is still legal. A second two-pitch return, a
- * repeated three-pitch cell, and a fifth scale step in the same direction
- * are refused when another tone is legal.
+ * scored walk. A qualifying eighth run may open on one grouping cell per
+ * two bars, from the same `random` stream. A held note is a chord tone
+ * when one is still legal. The approach is not: it stays a step from the
+ * cadence. The free tail walks to that step when one is still legal. A
+ * second two-pitch return, a repeated three-pitch cell, and a fifth scale
+ * step in the same direction are refused when another tone is legal.
  */
 function walkScored(
   ladder: readonly LadderTone[],
@@ -1644,7 +2085,9 @@ function walkScored(
   alive: readonly (readonly boolean[])[],
   random: () => number,
   seed: number,
-): Pitched[] | null {
+  allowGrouping: boolean,
+  salt: number,
+): { notes: Pitched[] | null; groupings: number } | null {
   const centre = REGISTER_LOW[plan.register] + PHRASE_RANGE / 2;
   const cadenceMidi = ladder[cadenceAt]?.midi ?? 0;
   const notes: Pitched[] = [];
@@ -1656,7 +2099,27 @@ function walkScored(
     const bar = Math.floor(event.beat / 4);
     if (bar >= 0 && bar < bars) byBar[bar]?.push(index);
   });
+  const claimed = new Set<number>();
+  const headSlots = byBar[0] ?? [];
+  const answerSlots = byBar[1] ?? [];
+  if (sameOpening(events, headSlots, answerSlots, 4)) {
+    for (const slot of answerSlots.slice(0, 4)) claimed.add(slot);
+  }
+  if (
+    answersOpening(seed) &&
+    bars === 4 &&
+    fragmentRhythm(events, headSlots, byBar[2] ?? [])
+  ) {
+    for (const slot of (byBar[2] ?? []).slice(0, 4)) claimed.add(slot);
+  }
   let pending: number[] = [];
+  let placed = 0;
+  let groupingWindow = -1;
+  let pullChordAt = -1;
+  const giveUp = (): { notes: null; groupings: number } => ({
+    notes: null,
+    groupings: placed,
+  });
   for (let index = 0; index < events.length; index++) {
     if (countSearchStep()) return null;
     if (index === events.length - 1) {
@@ -1665,12 +2128,12 @@ function walkScored(
     }
     if (pending.length) {
       const tone = pending.shift();
-      if (tone === undefined) return null;
+      if (tone === undefined) return giveUp();
       notes.push(pitchedFromLadder(ladder, tone));
       continue;
     }
     const event = events[index];
-    if (!event) return null;
+    if (!event) return giveUp();
     const bar = Math.floor(event.beat / 4);
     const head = byBar[0] ?? [];
     const here = byBar[bar] ?? [];
@@ -1700,7 +2163,10 @@ function walkScored(
       here[0] === index &&
       fragmentRhythm(events, head, here)
     ) {
-      const idea = [notes[head[0] ?? 0]?.index ?? -1, notes[head[1] ?? 0]?.index ?? -1];
+      const idea = [
+        notes[head[0] ?? 0]?.index ?? -1,
+        notes[head[1] ?? 0]?.index ?? -1,
+      ];
       const tones = chooseFragment(
         order,
         idea,
@@ -1713,6 +2179,37 @@ function walkScored(
       if (tones) {
         pending = tones.slice(1);
         notes.push(pitchedFromLadder(ladder, tones[0] ?? 0));
+        continue;
+      }
+    }
+    if (allowGrouping) {
+      const grouped = chooseGrouping(
+        ladder,
+        alive,
+        events,
+        notes,
+        index,
+        plan,
+        bars,
+        claimed,
+        groupingWindow,
+        random,
+        salt,
+      );
+      if (grouped) {
+        placed += 1;
+        groupingWindow = Math.floor(bar / 2);
+        if (grouped.k === 3) {
+          const resume = index + grouped.tones.length;
+          for (let next = resume; next < events.length - 2; next++) {
+            if (events[next]?.strong) {
+              pullChordAt = next;
+              break;
+            }
+          }
+        }
+        pending = grouped.tones.slice(1);
+        notes.push(pitchedFromLadder(ladder, grouped.tones[0] ?? 0));
         continue;
       }
     }
@@ -1730,7 +2227,7 @@ function walkScored(
       ),
       notes,
     );
-    if (!candidates.length) return null;
+    if (!candidates.length) return giveUp();
     const answerFourth = byBar[1]?.[3];
     if (
       head[3] === index &&
@@ -1744,20 +2241,38 @@ function walkScored(
       );
       if (stepped.length) candidates = stepped;
     }
+    // After a grouping, keep the loop wrap legal when a cadence step
+    // can still do it. A step wins when the two cannot both be had.
+    if (index === events.length - 2 && placed && notes[0]) {
+      const opening = notes[0].midi;
+      const fast = event.duration <= 0.5;
+      const ready = candidates.filter((tone) => {
+        const midi = ladder[tone]?.midi ?? 0;
+        const gap = Math.abs(midi - cadenceMidi);
+        const seam = Math.abs(midi - opening);
+        return (
+          gap > 0 && gap <= 2 && seam > 0 && seam <= 12 && !(fast && seam > 5)
+        );
+      });
+      if (ready.length) candidates = ready;
+    }
     // A held note is a chord tone when one can still be reached. The
     // approach is exempt: it has to be a step into the cadence. Opening
     // held notes also keep a shift that lands on a chord tone.
     if (event.duration >= 1 && index < events.length - 2) {
       let chordTones = candidates.filter((tone) => ladder[tone].chordTone);
       const openingSlot = byBar[0]?.indexOf(index) ?? -1;
-      if (bar === 0 && openingSlot >= 0 && openingSlot < 4 && chordTones.length) {
+      if (
+        bar === 0 &&
+        openingSlot >= 0 &&
+        openingSlot < 4 &&
+        chordTones.length
+      ) {
         const pool = openShifts ?? order;
         const anchored = chordTones.filter((tone) =>
           pool.some((shift) => {
             const next = tone + shift;
-            return (
-              next >= 0 && next < ladder.length && ladder[next].chordTone
-            );
+            return next >= 0 && next < ladder.length && ladder[next].chordTone;
           }),
         );
         if (anchored.length) chordTones = anchored;
@@ -1778,6 +2293,13 @@ function walkScored(
       } else if (chordTones.length) {
         candidates = chordTones;
       }
+    }
+    // After a group of 3, the next strong eighth is a chord tone when one
+    // is still legal. The approach stays a step, so it is left alone.
+    if (index === pullChordAt && index < events.length - 2) {
+      const chordTones = candidates.filter((tone) => ladder[tone].chordTone);
+      if (chordTones.length) candidates = chordTones;
+      pullChordAt = -1;
     }
     const along = index / Math.max(1, events.length - 1);
     const goal = contourMidi(plan, along);
@@ -1826,9 +2348,14 @@ function walkScored(
               return gap > 0 && gap <= 2;
             })
           : chosenTone();
-    if (chosen === undefined) return null;
+    if (chosen === undefined) return giveUp();
     const openingSlot = byBar[0]?.indexOf(index) ?? -1;
-    if (event.duration >= 1 && bar === 0 && openingSlot >= 0 && openingSlot < 4) {
+    if (
+      event.duration >= 1 &&
+      bar === 0 &&
+      openingSlot >= 0 &&
+      openingSlot < 4
+    ) {
       const pool: readonly number[] = openShifts ?? order;
       const fits: number[] = pool.filter((shift) => {
         const next = chosen + shift;
@@ -1838,10 +2365,9 @@ function walkScored(
     }
     notes.push(pitchedFromLadder(ladder, chosen));
   }
-  if (!lineIsLegal(notes, events, cadenceMidi)) return null;
-  return notes;
+  if (!lineIsLegal(notes, events, cadenceMidi)) return giveUp();
+  return { notes, groupings: placed };
 }
-
 
 function walkPitches(
   ladder: readonly LadderTone[],
@@ -1851,7 +2377,9 @@ function walkPitches(
   cadenceAt: number,
   random: () => number,
   seed: number,
-): Pitched[] | null {
+  allowGrouping: boolean,
+  salt: number,
+): { notes: Pitched[] | null; groupings: number } | null {
   const alive = reachable(ladder, events, cadenceAt);
   if (!alive[0].some(Boolean)) return null;
   return walkScored(
@@ -1863,6 +2391,8 @@ function walkPitches(
     alive,
     random,
     seed,
+    allowGrouping,
+    salt,
   );
 }
 
@@ -1936,7 +2466,11 @@ function longestMonotone(
   let run = 1;
   let dir = 0;
   for (let index = 1; index < midis.length; index++) {
-    const step = scaleStepCount(midis[index - 1] ?? 0, midis[index] ?? 0, scalePcs);
+    const step = scaleStepCount(
+      midis[index - 1] ?? 0,
+      midis[index] ?? 0,
+      scalePcs,
+    );
     if (Math.abs(step) === 1 && step === dir) run += 1;
     else if (Math.abs(step) === 1) {
       dir = step;
@@ -1983,8 +2517,7 @@ function sentenceCover(
     notes
       .map((note, index) => ({ note, index }))
       .filter(
-        (item) =>
-          Math.floor(item.note.beat / 4) === bar && item.note.beat < 8,
+        (item) => Math.floor(item.note.beat / 4) === bar && item.note.beat < 8,
       ),
   );
   const left = grouped[0] ?? [];
@@ -2188,7 +2721,8 @@ function pitchCriticPenalty(
   const counts = new Map<number, number>();
   for (const midi of midis) counts.set(midi, (counts.get(midi) ?? 0) + 1);
   const ranked = [...counts.values()].sort((a, b) => b - a);
-  const top2 = ((ranked[0] ?? 0) + (ranked[1] ?? 0)) / Math.max(1, midis.length);
+  const top2 =
+    ((ranked[0] ?? 0) + (ranked[1] ?? 0)) / Math.max(1, midis.length);
   if (top2 > 0.45) penalty += Math.round((top2 - 0.45) * 220);
   let total = 0;
   let small = 0;
@@ -2232,6 +2766,7 @@ function sampleLanes(
   scalePcs: ReadonlySet<number>,
   lanes: number,
   attempt: number,
+  forms: readonly Pattern[],
 ): LaneResult[] {
   const found: LaneResult[] = [];
   for (let lane = 0; lane < lanes; lane++) {
@@ -2247,6 +2782,7 @@ function sampleLanes(
       attempt,
       exact,
       lanes,
+      forms,
     );
     if (sampled) found.push(sampled);
   }
@@ -2264,6 +2800,28 @@ function sampleLanes(
  * samples more lanes and more attempts before it accepts one, so dropping a
  * lane here costs a candidate, not a phrase.
  */
+function repeatsFour(notes: readonly { midi: number }[]): boolean {
+  const midis = notes.map((note) => note.midi);
+  for (let start = 0; start + 8 <= midis.length; start++) {
+    let match = true;
+    for (let index = 4; index < 8; index++) {
+      if (midis[start + index] !== midis[start + (index % 4)]) match = false;
+    }
+    if (!match) continue;
+    if (new Set(midis.slice(start, start + 4)).size < 2) continue;
+    return true;
+  }
+  return false;
+}
+
+function stepsIntoCadence(notes: readonly { midi: number }[]): boolean {
+  if (notes.length < 2) return true;
+  const gap = Math.abs(
+    notes[notes.length - 1].midi - notes[notes.length - 2].midi,
+  );
+  return gap === 1 || gap === 2;
+}
+
 function sampleLane(
   input: {
     seed: number;
@@ -2279,17 +2837,19 @@ function sampleLane(
   attempt: number,
   exact: boolean,
   lanes: number,
+  forms: readonly Pattern[],
 ): LaneResult | null {
   const tries = 3;
   for (let roll = 0; roll < tries; roll++) {
     if (searchAtCap() || phraseSearchRefused) break;
-    const random = mulberry32(
+    const rng = rngBox(
       (input.seed +
         (lane + 1) * 0x9e3779b9 +
         attempt * 0x85ebca6b +
         roll * 0xc2b2ae35) >>>
         0,
     );
+    const random = () => rng.next();
     const patterns = pickPatterns(
       plan.rhythm,
       input.bars,
@@ -2297,18 +2857,74 @@ function sampleLane(
       exact ? 1 : lane % 3,
       exact,
       answersOpening(input.seed),
+      plan.contour,
     );
     if (patterns.length !== input.bars) continue;
     const events = eventsForCells(patterns, input.bars);
-    const pitches = walkPitches(
-      ladder,
-      events,
-      plan,
-      input.bars,
-      cadenceAt,
-      random,
-      input.seed,
-    );
+    const mark = rng.get();
+    let pitches: Pitched[] | null = null;
+    let tried = false;
+    // Three cell rotations of the same walk. Each one that passes
+    // blockAllowed is its own attempt: kept or dropped, never both.
+    for (let salt = 0; salt < 3; salt++) {
+      rng.set(mark);
+      const walked = walkPitches(
+        ladder,
+        events,
+        plan,
+        input.bars,
+        cadenceAt,
+        random,
+        input.seed,
+        true,
+        salt,
+      );
+      if (!walked) break;
+      if (!walked.notes) {
+        if (!walked.groupings) break;
+        groupingAtomsDropped += walked.groupings;
+        tried = true;
+        continue;
+      }
+      if (!walked.groupings) {
+        pitches = walked.notes;
+        break;
+      }
+      tried = true;
+      const probed = notesFromPitches(walked.notes, events);
+      const seamBad = seamIsIllegal(probed, input.bars);
+      const handBad =
+        !seamBad &&
+        !handAccepts(
+          fingerNotes(probed, forms, REGISTER_ANCHOR[plan.register]),
+        );
+      // Four-bar lines drop a grouping whose approach is not a 1–2
+      // semitone step. Two-bar lines do not: that drop pulls grouped
+      // notes under 15%. A two-bar grouping can still leap in.
+      const stepBad = input.bars === 4 && !stepsIntoCadence(walked.notes);
+      const cycleBad = repeatsFour(walked.notes);
+      if (!seamBad && !handBad && !stepBad && !cycleBad) {
+        pitches = walked.notes;
+        groupingAtomsKept += walked.groupings;
+        break;
+      }
+      groupingAtomsDropped += walked.groupings;
+    }
+    if (!pitches && tried) {
+      rng.set(mark);
+      const again = walkPitches(
+        ladder,
+        events,
+        plan,
+        input.bars,
+        cadenceAt,
+        random,
+        input.seed,
+        false,
+        0,
+      );
+      pitches = again?.notes ?? null;
+    }
     if (!pitches) continue;
     const notes = notesFromPitches(pitches, events);
     if (seamIsIllegal(notes, input.bars)) continue;
@@ -2364,6 +2980,7 @@ function composePhrase(
       scalePcs,
       lanes,
       attempt,
+      forms,
     );
     if (!found.length) continue;
     // The copied bar is a fallback for a ladder that cannot change rhythm.
@@ -2394,7 +3011,11 @@ function composePhrase(
     null;
   for (const item of ranked) {
     if (best && item.score <= best.score) break;
-    const fingered = fingerNotes(item.notes, forms, REGISTER_ANCHOR[plan.register]);
+    const fingered = fingerNotes(
+      item.notes,
+      forms,
+      REGISTER_ANCHOR[plan.register],
+    );
     if (!handAccepts(fingered)) continue;
     let shifts = 0;
     for (const note of fingered) if (note.shift) shifts += 1;
