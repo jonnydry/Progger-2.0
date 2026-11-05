@@ -167,9 +167,10 @@ console.log({
   shiftsPerPhrase: (shifts / N).toFixed(2),
   fastLeapsOver5: fast6,
   p95ms: ms[Math.floor(ms.length * 0.95)].toFixed(2),
-  atomsPassed: report.passed,
+  atomsKept: report.kept,
   atomsDropped: report.dropped,
-  atomDropRate: pct(report.dropped, report.passed),
+  atomsAttempted: report.attempted,
+  atomRejectRate: pct(report.dropped, report.attempted),
   report,
   listen: listen.slice(0, 8),
 });

@@ -66,20 +66,37 @@ function resetSearchCount(): void {
   phraseSearchRefused = false;
 }
 
-/** Grouping atoms that passed `blockAllowed` and stayed in a playable line. */
-let groupingAtomsPassed = 0;
-/** Atoms removed so that same line could keep a legal loop seam or hand. */
+/**
+ * Atoms that passed `blockAllowed` and stayed in the candidate line.
+ * Mutually exclusive with {@link groupingAtomsDropped}.
+ */
+let groupingAtomsKept = 0;
+/**
+ * Atoms that passed `blockAllowed` and were then rejected (seam, hand,
+ * cadence step, or a repeated four-pitch cell), including each salt retry.
+ */
 let groupingAtomsDropped = 0;
 
 /** Clear the grouping counters. A metrics run resets once, then generates the set. */
 export function resetGroupingAtomReport(): void {
-  groupingAtomsPassed = 0;
+  groupingAtomsKept = 0;
   groupingAtomsDropped = 0;
 }
 
-/** Atoms kept in a playable line, and atoms removed so the line could stay. */
-export function groupingAtomReport(): { passed: number; dropped: number } {
-  return { passed: groupingAtomsPassed, dropped: groupingAtomsDropped };
+/**
+ * One atom is either kept or dropped, never both.
+ * `attempted` is their sum: every `blockAllowed` pass, including salts.
+ */
+export function groupingAtomReport(): {
+  kept: number;
+  dropped: number;
+  attempted: number;
+} {
+  return {
+    kept: groupingAtomsKept,
+    dropped: groupingAtomsDropped,
+    attempted: groupingAtomsKept + groupingAtomsDropped,
+  };
 }
 
 /** Start another attempt without letting the new count hide an earlier one. */
@@ -164,6 +181,12 @@ export type PhraseResult =
 
 const CONTOURS = ['arch', 'rise', 'fall', 'wave'] as const;
 const RHYTHMS = ['quarters', 'eighths', 'long-short', 'push'] as const;
+/**
+ * Rhythm draw, in `RHYTHMS` order. Eighths are five of eight draws so a
+ * six-eighth run exists often enough for a grouping cell. Cells on the
+ * old uniform catalog are about 0.6% of notes.
+ */
+export const RHYTHM_DRAW_WEIGHTS: readonly number[] = [1, 5, 1, 1];
 const REGISTERS = ['low', 'mid', 'high'] as const;
 const CADENCES = ['root', 'third', 'fifth'] as const;
 const REGISTER_LOW: Record<RegisterName, number> = {
@@ -577,7 +600,7 @@ export function rulePlan(
   // eighths, and the other three rhythms rarely grow one. One random()
   // call, same place in the stream as the old uniform roll.
   const contour = CONTOURS[Math.floor(random() * CONTOURS.length)];
-  const rhythmWeights = [1, 5, 1, 1];
+  const rhythmWeights = RHYTHM_DRAW_WEIGHTS;
   let rhythmTotal = 0;
   for (const weight of rhythmWeights) rhythmTotal += weight;
   let rhythmCursor = random() * rhythmTotal;
@@ -1773,9 +1796,12 @@ export const GROUPING_CELLS: readonly GroupingCell[] = [
   { id: 'g3-turn', k: 3, offsets: [0, 1, -1], shift: 1 },
   { id: 'g3-open', k: 3, offsets: [0, 2, 3], shift: 1 },
   { id: 'g4-return', k: 4, offsets: [0, 1, 2, 0], shift: 2 },
+  // Four notes in thirds: degrees 1–3–2–4, then the same shape a third up.
   { id: 'g4-thirds', k: 4, offsets: [0, 2, 1, 3], shift: 2 },
   { id: 'g4-roll', k: 4, offsets: [0, 2, 1, 0], shift: 1 },
   { id: 'g4-turn', k: 4, offsets: [0, 1, 0, -1], shift: 1 },
+  // `g4-roll` and `g6-wave` stay in the table. A quarter plus six eighths
+  // only fits the groups of 3, so the roll and the wave rarely play.
   { id: 'g6-wave', k: 6, offsets: [0, 1, 2, 3, 2, 1], shift: -1 },
 ];
 
@@ -2837,7 +2863,9 @@ function sampleLane(
     const events = eventsForCells(patterns, input.bars);
     const mark = rng.get();
     let pitches: Pitched[] | null = null;
-    let tried = 0;
+    let tried = false;
+    // Three cell rotations of the same walk. Each one that passes
+    // blockAllowed is its own attempt: kept or dropped, never both.
     for (let salt = 0; salt < 3; salt++) {
       rng.set(mark);
       const walked = walkPitches(
@@ -2854,21 +2882,15 @@ function sampleLane(
       if (!walked) break;
       if (!walked.notes) {
         if (!walked.groupings) break;
-        tried = walked.groupings;
+        groupingAtomsDropped += walked.groupings;
+        tried = true;
         continue;
       }
       if (!walked.groupings) {
         pitches = walked.notes;
-        if (
-          tried &&
-          !seamIsIllegal(notesFromPitches(walked.notes, events), input.bars)
-        ) {
-          groupingAtomsPassed += tried;
-          groupingAtomsDropped += tried;
-        }
         break;
       }
-      tried = walked.groupings;
+      tried = true;
       const probed = notesFromPitches(walked.notes, events);
       const seamBad = seamIsIllegal(probed, input.bars);
       const handBad =
@@ -2876,16 +2898,17 @@ function sampleLane(
         !handAccepts(
           fingerNotes(probed, forms, REGISTER_ANCHOR[plan.register]),
         );
-      // A grouping that leaves no step into the cadence is dropped.
-      // The free walk still has that step.
+      // Four-bar lines drop a grouping whose approach is not a 1–2
+      // semitone step. Two-bar lines do not: that drop pulls grouped
+      // notes under 15%. A two-bar grouping can still leap in.
       const stepBad = input.bars === 4 && !stepsIntoCadence(walked.notes);
       const cycleBad = repeatsFour(walked.notes);
       if (!seamBad && !handBad && !stepBad && !cycleBad) {
         pitches = walked.notes;
-        groupingAtomsPassed += walked.groupings;
-        tried = 0;
+        groupingAtomsKept += walked.groupings;
         break;
       }
+      groupingAtomsDropped += walked.groupings;
     }
     if (!pitches && tried) {
       rng.set(mark);
@@ -2901,13 +2924,6 @@ function sampleLane(
         0,
       );
       pitches = again?.notes ?? null;
-      if (
-        pitches &&
-        !seamIsIllegal(notesFromPitches(pitches, events), input.bars)
-      ) {
-        groupingAtomsPassed += tried;
-        groupingAtomsDropped += tried;
-      }
     }
     if (!pitches) continue;
     const notes = notesFromPitches(pitches, events);

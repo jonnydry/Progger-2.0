@@ -3,7 +3,12 @@ import { test } from 'node:test';
 import { parseChord } from '../lib/harmony.ts';
 import { SCALES, spell } from '../lib/music.ts';
 import {
+  LISTEN_SEEDS,
+  playedGroupingAtoms,
+} from '../scripts/grouping-listen-seeds.mts';
+import {
   GROUPING_CELLS,
+  RHYTHM_DRAW_WEIGHTS,
   generatePhrase,
   groupingBlockAllowed,
   groupingTones,
@@ -152,6 +157,53 @@ void test('textbook 1-2-3 and 1-2-3-4 still fail blockAllowed', () => {
       `4s down ×${times}`,
     );
   }
+});
+
+void test('listen seeds play a grouping on this head', () => {
+  assert.equal(LISTEN_SEEDS.length, 5);
+  for (const row of LISTEN_SEEDS) {
+    const scale = SCALES.find((item) => item.id === row.scale);
+    assert.ok(scale, row.scale);
+    const scaleNotes = spell(row.key, scale.formula);
+    const result = generatePhrase({
+      seed: row.seed,
+      bars: row.bars,
+      scaleNotes,
+      chordNotes: parseChord(row.chord).notes,
+    });
+    assert.equal(result.ok, true, String(row.seed));
+    if (!result.ok) continue;
+    const atoms = playedGroupingAtoms(
+      result.phrase.notes.map((note) => note.midi),
+      result.phrase.notes.map((note) => note.beat),
+      new Set(scaleNotes.map((note) => note.pc)),
+    );
+    assert.ok(atoms >= 1, `${row.seed} atoms ${atoms}`);
+  }
+});
+
+void test('eighths are five of the eight rhythm draws', () => {
+  assert.deepEqual([...RHYTHM_DRAW_WEIGHTS], [1, 5, 1, 1]);
+  const scale = SCALES.find((item) => item.id === 'major');
+  assert.ok(scale);
+  const scaleNotes = spell('C', scale.formula);
+  const chordNotes = parseChord('C').notes;
+  let eighths = 0;
+  const draws = 800;
+  for (let seed = 0; seed < draws; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes,
+      chordNotes,
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    if (result.phrase.plan.rhythm === 'eighths') eighths++;
+  }
+  // Five of eight draws. The band leaves room for the integer weights.
+  assert.ok(eighths / draws > 0.5, String(eighths));
+  assert.ok(eighths / draws < 0.75, String(eighths));
 });
 
 void test('the three extra eighth bars are drawable', () => {
