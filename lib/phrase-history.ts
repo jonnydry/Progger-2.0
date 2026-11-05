@@ -521,17 +521,20 @@ function project(raw: string | null, failedRead = false): HistoryDoc {
     ) {
       return { writable: false, state: EMPTY_PHRASE_HISTORY };
     }
+    // Writes keep three phrases, appended, so the newest sit at the end.
+    // Slice to that window before parsing. A longer blob must not be walked.
+    const rawEntries = parsed.entries;
+    const overflow = Math.max(0, rawEntries.length - PHRASE_HISTORY_LIMIT);
+    const window = overflow > 0 ? rawEntries.slice(overflow) : rawEntries;
     const entries: PhraseHistoryEntry[] = [];
-    for (const entry of parsed.entries) {
+    for (const entry of window) {
       const clean = entryOf(entry);
       if (clean) entries.push(clean);
     }
+    const index = typeof parsed.index === 'number' ? parsed.index : Number.NaN;
     return {
       writable: true,
-      state: capLoadedHistory(
-        entries,
-        typeof parsed.index === 'number' ? parsed.index : Number.NaN,
-      ),
+      state: capLoadedHistory(entries, index - overflow),
     };
   } catch {
     return { writable: false, state: EMPTY_PHRASE_HISTORY };

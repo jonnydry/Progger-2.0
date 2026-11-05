@@ -757,7 +757,10 @@ function interpret(raw: string | null, failedRead = false): TrayDoc {
     }
     const slots: Slot[] = [];
     const ids = new Set<string>();
-    for (const entry of parsed.items) {
+    // Saves insert at the front and stop at TRAY_MAX_ITEMS. Read that same
+    // prefix before parsing so a larger blob cannot stall the tab.
+    const items = parsed.items.slice(0, TRAY_MAX_ITEMS);
+    for (const entry of items) {
       const item = itemOf(entry);
       if (item && !ids.has(item.id)) {
         ids.add(item.id);
