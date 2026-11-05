@@ -15,6 +15,7 @@ import {
   trayReadable,
   onTrayStorage,
   parseTray,
+  TRAY_MAX_ITEMS,
   phraseStopApplies,
   readTray,
   removeTrayItem,
@@ -289,8 +290,9 @@ void test('an unreadable tray is left untouched and is not a fresh empty tray', 
   }
 });
 
-void test('reading does not trim a tray that is already over the cap', () => {
-  const items = Array.from({ length: 81 }, (_item, index) => ({
+void test('reading keeps the newest 80 items and does not write', () => {
+  assert.equal(TRAY_MAX_ITEMS, 80);
+  const items = Array.from({ length: 200 }, (_item, index) => ({
     ...phrase(),
     id: `kept-${index}`,
     savedAt: index + 1,
@@ -299,7 +301,11 @@ void test('reading does not trim a tray that is already over the cap', () => {
   const held = installTray(raw);
   try {
     assert.equal(trayReadable(), true);
-    assert.equal(getTray().items.length, 81);
+    assert.equal(getTray().items.length, 80);
+    assert.deepEqual(
+      getTray().items.map((item) => item.id),
+      items.slice(0, 80).map((item) => item.id),
+    );
     assert.equal(held.raw(), raw);
     assert.equal(held.writes.length, 0);
   } finally {

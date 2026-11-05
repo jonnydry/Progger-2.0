@@ -316,7 +316,7 @@ void test('a corrupt entry is ignored and the phrases around it remain', () => {
   const raw = JSON.stringify({
     version: 1,
     index: 0,
-    entries: [first, { seed: 'nope' }, null, second, { seed: 1, bars: 3 }],
+    entries: [first, { seed: 'nope' }, second],
   });
   const store = memory(raw);
   const loaded = readPhraseHistory(store);
@@ -356,6 +356,20 @@ void test('a stored list longer than 3 loads only the newest 3', () => {
   const store = memory(raw);
   assert.equal(readPhraseHistory(store).entries.length, 3);
   assert.equal(store.raw(), raw);
+  const stale = [
+    entry(1),
+    entry(2),
+    entry(3),
+    { bars: 2 },
+    { bars: 4 },
+    { bars: 2 },
+  ];
+  const ignored = parsePhraseHistory(
+    JSON.stringify({ version: 1, index: 5, entries: stale }),
+  );
+  assert.equal(ignored.writable, true);
+  assert.deepEqual(ignored.state.entries, []);
+  assert.equal(ignored.state.index, -1);
 });
 
 void test('a repeated phrase moves to the current spot instead of being stored twice', () => {
