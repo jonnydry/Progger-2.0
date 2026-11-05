@@ -64,7 +64,7 @@ mkdirSync(runDir, { recursive: true });
 const logFd = openSync(logPath, 'a');
 const child = spawn(
   'npm',
-  ['run', 'dev', '--', '--hostname', '127.0.0.1', '--port', String(port)],
+  ['run', 'dev', '--', '--host', '127.0.0.1', '--port', String(port)],
   {
     cwd: repoRoot,
     detached: true,
