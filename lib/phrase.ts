@@ -114,6 +114,18 @@ let skipPlayedSkips = 0;
 let skipEligible = 0;
 /** Those runs that drew the atom and found a shape. */
 let skipRolled = 0;
+/** Skip atoms whose notes are in the phrase that was returned. */
+let skipSoundingAtoms = 0;
+/** Phrases whose candidate pool held a lane with a skip atom. */
+let skipLanePhrases = 0;
+/** Of those, the returned phrase still had the atom. */
+let skipLaneWon = 0;
+/** Of those, a plain lane outscored every skip lane. */
+let skipLaneLost = 0;
+/** Sum of (best plain score − best skip score) when a plain lane won. */
+let skipLostGapSum = 0;
+/** Counts of that gap: ≤5, ≤12, ≤25, wider. */
+const skipLostGapBuckets = [0, 0, 0, 0];
 
 /** Clear the skip counters. A metrics run resets once, then generates the set. */
 export function resetSkipAtomReport(): void {
@@ -123,6 +135,15 @@ export function resetSkipAtomReport(): void {
   skipPlayedSkips = 0;
   skipEligible = 0;
   skipRolled = 0;
+  skipSoundingAtoms = 0;
+  skipLanePhrases = 0;
+  skipLaneWon = 0;
+  skipLaneLost = 0;
+  skipLostGapSum = 0;
+  skipLostGapBuckets[0] = 0;
+  skipLostGapBuckets[1] = 0;
+  skipLostGapBuckets[2] = 0;
+  skipLostGapBuckets[3] = 0;
   for (const key of Object.keys(skipFailReason)) delete skipFailReason[key];
 }
 
@@ -135,6 +156,12 @@ export function skipAtomReport(): {
   eligible: number;
   rolled: number;
   failReason: Record<string, number>;
+  soundingAtoms: number;
+  lanePhrases: number;
+  laneWon: number;
+  laneLost: number;
+  lostGapSum: number;
+  lostGapBuckets: readonly number[];
 } {
   return {
     kept: skipAtomsKept,
@@ -145,7 +172,50 @@ export function skipAtomReport(): {
     eligible: skipEligible,
     rolled: skipRolled,
     failReason: { ...skipFailReason },
+    soundingAtoms: skipSoundingAtoms,
+    lanePhrases: skipLanePhrases,
+    laneWon: skipLaneWon,
+    laneLost: skipLaneLost,
+    lostGapSum: skipLostGapSum,
+    lostGapBuckets: [...skipLostGapBuckets],
   };
+}
+
+function noteSkipRank(
+  ranked: readonly { score: number; spots: readonly (SkipSpot | null)[] }[],
+  winnerSpots: readonly (SkipSpot | null)[] | null,
+): void {
+  let bestSkip = -Infinity;
+  let bestPlain = -Infinity;
+  for (const item of ranked) {
+    if (item.spots.some(Boolean)) bestSkip = Math.max(bestSkip, item.score);
+    else bestPlain = Math.max(bestPlain, item.score);
+  }
+  if (bestSkip === -Infinity) return;
+  skipLanePhrases += 1;
+  const won = winnerSpots?.some(Boolean) ?? false;
+  if (won) {
+    skipLaneWon += 1;
+    return;
+  }
+  if (bestPlain === -Infinity) return;
+  skipLaneLost += 1;
+  const gap = bestPlain - bestSkip;
+  skipLostGapSum += gap;
+  if (gap <= 5) skipLostGapBuckets[0] += 1;
+  else if (gap <= 12) skipLostGapBuckets[1] += 1;
+  else if (gap <= 25) skipLostGapBuckets[2] += 1;
+  else skipLostGapBuckets[3] += 1;
+}
+
+function countSoundingAtoms(spots: readonly (SkipSpot | null)[]): number {
+  let atoms = 0;
+  let open = false;
+  for (const spot of spots) {
+    if (spot && !open) atoms += 1;
+    open = spot != null;
+  }
+  return atoms;
 }
 
 /** Start another attempt without letting the new count hide an earlier one. */
@@ -3864,7 +3934,11 @@ function composePhrase(
         spots: item.spots,
       };
   }
-  if (best) recordPlayedSkips(best.notes, best.spots);
+  noteSkipRank(ranked, best?.spots ?? null);
+  if (best) {
+    recordPlayedSkips(best.notes, best.spots);
+    skipSoundingAtoms += countSoundingAtoms(best.spots);
+  }
   return best ? { notes: best.notes, plan: best.plan } : null;
 }
 
@@ -3979,6 +4053,21 @@ function recordPlayedSkips(
   }
 }
 
+/** Spots on the atom's string and form, when any exist. Otherwise the full set. */
+function spotsForHint(
+  spots: readonly Spot[],
+  hint: SkipSpot | null | undefined,
+  shapes: ReadonlyMap<number, number[]>,
+): Spot[] {
+  if (!hint) return [...spots];
+  const matched = spots.filter((spot) => {
+    if (spot.string !== hint.string) return false;
+    const hits = shapes.get(shapeKey(spot.string, spot.fret));
+    return hits?.includes(hint.formIndex) ?? false;
+  });
+  return matched.length ? matched : [...spots];
+}
+
 function fingerNotes(
   notes: PhraseNote[],
   forms: readonly Pattern[],
@@ -3992,7 +4081,9 @@ function fingerNotes(
     anchor,
   );
   const shaped = forms.length > 0;
-  const choices = notes.map((note) => spotsFor(note.midi));
+  const choices = notes.map((note, index) =>
+    spotsForHint(spotsFor(note.midi), hints?.[index], shapes),
+  );
   const cost = choices.map((spots) =>
     spots.map(() => Number.POSITIVE_INFINITY),
   );
