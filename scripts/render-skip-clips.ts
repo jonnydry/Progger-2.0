@@ -1,7 +1,8 @@
 /**
  * Old-vs-new listen pack for string-skip atoms.
  *
- * A is main af93416 (groupings, no skip atoms). B is this checkout.
+ * A is the held skip tip 95d8e00. B is this checkout.
+ * This pack is the revision against that tip, not main against the first skip PR.
  * Same seeds, 96 BPM, straight feel, OfflineAudioContext. Nothing here
  * uploads audio. Pass an output folder and the wavs land there.
  *
@@ -25,26 +26,26 @@ import {
   type FingeredNote,
 } from '../lib/phrase.ts';
 
-const BASE = 'af93416';
+const BASE = '95d8e00';
 const TEMPO = 96;
 const SWING = 0;
 const RATE = 44100;
 const TAIL_SEC = 2.7;
 
 /** Seeds that play at least one pinned eighth leap on this head. */
+/** The only four seeds in the 800-phrase set where B adds a pinned eighth leap. */
 const PAIRS = [
-  { seed: 1004, bars: 4 as const, root: 'C', scale: 'major', chord: 'C' },
-  { seed: 1055, bars: 4 as const, root: 'A', scale: 'dorian', chord: 'Am' },
-  { seed: 1211, bars: 4 as const, root: 'E', scale: 'minor', chord: 'Em' },
+  { seed: 1103, bars: 4 as const, root: 'C', scale: 'major', chord: 'G7' },
+  { seed: 1192, bars: 4 as const, root: 'F', scale: 'major', chord: 'Fmaj7' },
   {
-    seed: 1315,
-    bars: 2 as const,
-    root: 'Bb',
-    scale: 'mixolydian',
-    chord: 'Bb7',
+    seed: 1359,
+    bars: 4 as const,
+    root: 'A',
+    scale: 'minor-pentatonic',
+    chord: 'Am7',
   },
   {
-    seed: 1361,
+    seed: 1385,
     bars: 2 as const,
     root: 'A',
     scale: 'minor-pentatonic',
@@ -127,7 +128,7 @@ const baseline = await loadBaseline();
 const lines: string[] = [
   `# Skip listen pack`,
   ``,
-  `A = ${BASE} (groupings, no skip atoms). B = ${git(['rev-parse', '--short', 'HEAD']).trim()}.`,
+  `A = ${BASE} (first skip tip). B = ${git(['rev-parse', '--short', 'HEAD']).trim()} (hint sticks to the pinned string).`,
   `96 BPM, straight feel, OfflineAudioContext 44100 Hz mono.`,
   `These files were rendered on this machine. They are not in the repo.`,
   ``,
