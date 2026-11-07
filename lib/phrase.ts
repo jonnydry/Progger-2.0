@@ -123,6 +123,8 @@ export function resetSkipAtomReport(): void {
   skipPlayedSkips = 0;
   skipEligible = 0;
   skipRolled = 0;
+  skipWitnesses.length = 0;
+  skipWitnessViolations.length = 0;
   for (const key of Object.keys(skipFailReason)) delete skipFailReason[key];
 }
 
@@ -1043,7 +1045,7 @@ export function arrivalOk(
   if (!pin || gap < 6) return false;
   if (Math.abs(pin.from.string - pin.to.string) !== 2) return false;
   if (Math.abs(pin.from.formIndex - pin.to.formIndex) > 1) return false;
-  if (pin.shiftFrets > 3) return false;
+  if (pin.shiftFrets !== 0) return false;
   return pin.arrivalsInBar < 4;
 }
 
@@ -2150,6 +2152,8 @@ export function groupingBlockAllowed(
 export type SkipSpot = {
   string: number;
   formIndex: number;
+  fret: number;
+  position: number;
 };
 
 /**
@@ -2247,7 +2251,7 @@ function skipArrivalPin(
   return {
     from: prev.spot,
     to: note.spot,
-    shiftFrets: 0,
+    shiftFrets: Math.abs(prev.spot.position - note.spot.position),
     arrivalsInBar: arrivals,
   };
 }
@@ -2286,7 +2290,12 @@ function pinsForCandidate(
     const at = slots[step] ?? 0;
     const bar = Math.floor((events[at]?.beat ?? 0) / 4);
     const arrivals = counts.get(bar) ?? 0;
-    pins.push({ from, to, shiftFrets: 0, arrivalsInBar: arrivals });
+    pins.push({
+      from,
+      to,
+      shiftFrets: Math.abs(from.position - to.position),
+      arrivalsInBar: arrivals,
+    });
     const prevTone = tones[step - 1] ?? 0;
     const tone = tones[step] ?? 0;
     const gap = Math.abs(
@@ -2426,7 +2435,12 @@ function realizeSteps(
     const tone = midiIndex.get(position.midi);
     if (tone === undefined) return null;
     tones.push(tone);
-    spots.push({ string: position.string, formIndex });
+    spots.push({
+      string: position.string,
+      formIndex,
+      fret: position.fret,
+      position: 0,
+    });
     frets.push(position.fret);
   }
   if (fretSpan(frets) > 3) return null;
@@ -2682,6 +2696,7 @@ function chooseSkip(
           continue;
         if (played.frets.some((fret) => fret < hand || fret > hand + 3))
           continue;
+        const stamped = spots.map((spot) => ({ ...spot, position: hand }));
         const slots = tones.map((_, step) => index + step);
         const pins = pinsForCandidate(
           notes,
@@ -2689,12 +2704,12 @@ function chooseSkip(
           slots,
           ladder,
           tones,
-          spots,
+          stamped,
         );
         if (!blockAllowed(ladder, alive, events, notes, slots, tones, pins))
           continue;
         const list = found.get(shape.id) ?? [];
-        list.push({ id: shape.id, tones, spots });
+        list.push({ id: shape.id, tones, spots: stamped });
         found.set(shape.id, list);
       }
     }
@@ -3476,7 +3491,36 @@ function skipRealized(
     const prev = spots[index - 1];
     const before = notes[index - 1];
     if (!prev || !before || !isSkipPair(prev, hint)) continue;
-    if (Math.abs(note.position - before.position) >= SHIFT_FRETS) return false;
+    if (note.position !== before.position) return false;
+    if (note.fret !== hint.fret || before.fret !== prev.fret) return false;
+  }
+  let run = -1;
+  for (let index = 0; index <= notes.length; index++) {
+    const inside = index < notes.length && spots[index];
+    if (inside && run < 0) run = index;
+    if (!inside && run >= 0) {
+      const entry = notes[run];
+      const before = notes[run - 1];
+      if (
+        entry &&
+        before &&
+        entry.duration <= 0.5 &&
+        entry.position !== before.position
+      ) {
+        return false;
+      }
+      const exit = notes[index];
+      const last = notes[index - 1];
+      if (
+        exit &&
+        last &&
+        exit.duration <= 0.5 &&
+        exit.position !== last.position
+      ) {
+        return false;
+      }
+      run = -1;
+    }
   }
   return true;
 }
@@ -3967,15 +4011,78 @@ function spotHintBonus(
   return -10;
 }
 
+export type SkipWitness = {
+  gap: number;
+  duration: number;
+  fromString: number;
+  toString: number;
+  fromFret: number;
+  toFret: number;
+  fromPosition: number;
+  toPosition: number;
+  fromForm: number;
+  toForm: number;
+  bar: number;
+};
+
+const skipWitnesses: SkipWitness[] = [];
+const skipWitnessViolations: string[] = [];
+
+export function drainSkipWitnesses(): {
+  witnesses: SkipWitness[];
+  violations: string[];
+} {
+  const witnesses = skipWitnesses.splice(0);
+  const violations = skipWitnessViolations.splice(0);
+  return { witnesses, violations };
+}
+
 function recordPlayedSkips(
   notes: readonly FingeredNote[],
   spots: readonly (SkipSpot | null)[],
 ): void {
+  const perBar = new Map<number, number>();
   for (let index = 1; index < notes.length; index++) {
-    if (!spots[index] || !spots[index - 1]) continue;
+    const hint = spots[index];
+    const prevHint = spots[index - 1];
+    if (!hint || !prevHint) continue;
     skipPlayedInside += 1;
-    if (Math.abs(notes[index].string - notes[index - 1].string) === 2)
-      skipPlayedSkips += 1;
+    const note = notes[index];
+    const before = notes[index - 1];
+    if (!note || !before) continue;
+    if (Math.abs(note.string - before.string) === 2) skipPlayedSkips += 1;
+    const gap = Math.abs(note.midi - before.midi);
+    if (!(note.duration <= 0.5 && gap >= 6 && gap <= 12)) continue;
+    const bar = Math.floor(note.beat / 4);
+    const count = (perBar.get(bar) ?? 0) + 1;
+    perBar.set(bar, count);
+    const witness: SkipWitness = {
+      gap,
+      duration: note.duration,
+      fromString: before.string,
+      toString: note.string,
+      fromFret: before.fret,
+      toFret: note.fret,
+      fromPosition: before.position,
+      toPosition: note.position,
+      fromForm: prevHint.formIndex,
+      toForm: hint.formIndex,
+      bar,
+    };
+    if (skipWitnesses.length < 4000) skipWitnesses.push(witness);
+    if (Math.abs(note.string - before.string) !== 2) {
+      skipWitnessViolations.push(`not two strings gap ${gap}`);
+    }
+    if (note.position !== before.position) {
+      skipWitnessViolations.push(`hand moved gap ${gap}`);
+    }
+    if (note.fret !== hint.fret || before.fret !== prevHint.fret) {
+      skipWitnessViolations.push(`fret left the spot gap ${gap}`);
+    }
+    if (Math.abs(hint.formIndex - prevHint.formIndex) > 1) {
+      skipWitnessViolations.push(`forms ${prevHint.formIndex} ${hint.formIndex}`);
+    }
+    if (count > 4) skipWitnessViolations.push(`bar ${bar} has ${count}`);
   }
 }
 
