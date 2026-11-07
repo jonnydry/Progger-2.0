@@ -99,6 +99,57 @@ export function groupingAtomReport(): {
   };
 }
 
+/**
+ * Skip atoms that passed `blockAllowed` and stayed in the candidate line.
+ * Mutually exclusive with {@link skipAtomsDropped}.
+ */
+let skipAtomsKept = 0;
+/** Skip atoms rejected after `blockAllowed`, including each salt retry. */
+let skipAtomsDropped = 0;
+/** Transitions inside skip atoms of phrases actually returned. */
+let skipPlayedInside = 0;
+/** Those transitions whose fingering landed two strings apart. */
+let skipPlayedSkips = 0;
+/** Eighth runs that had a legal skip shape and passed the P_SKIP roll. */
+let skipEligible = 0;
+/** Those runs that drew the atom and found a shape. */
+let skipRolled = 0;
+
+/** Clear the skip counters. A metrics run resets once, then generates the set. */
+export function resetSkipAtomReport(): void {
+  skipAtomsKept = 0;
+  skipAtomsDropped = 0;
+  skipPlayedInside = 0;
+  skipPlayedSkips = 0;
+  skipEligible = 0;
+  skipRolled = 0;
+  skipWitnesses.length = 0;
+  skipWitnessViolations.length = 0;
+  for (const key of Object.keys(skipFailReason)) delete skipFailReason[key];
+}
+
+export function skipAtomReport(): {
+  kept: number;
+  dropped: number;
+  attempted: number;
+  playedInside: number;
+  playedInsideSkips: number;
+  eligible: number;
+  rolled: number;
+  failReason: Record<string, number>;
+} {
+  return {
+    kept: skipAtomsKept,
+    dropped: skipAtomsDropped,
+    attempted: skipAtomsKept + skipAtomsDropped,
+    playedInside: skipPlayedInside,
+    playedInsideSkips: skipPlayedSkips,
+    eligible: skipEligible,
+    rolled: skipRolled,
+    failReason: { ...skipFailReason },
+  };
+}
+
 /** Start another attempt without letting the new count hide an earlier one. */
 function nextSearchAttempt(): void {
   phraseSearchPeak = Math.max(phraseSearchPeak, phraseSearchSteps);
@@ -931,6 +982,8 @@ type Pitched = {
   chordTone: boolean;
   /** Ladder index. */
   index: number;
+  /** Form slot a skip atom intended. Absent on a free note. */
+  spot: SkipSpot | null;
 };
 
 /**
@@ -939,7 +992,7 @@ type Pitched = {
  * The same MIDI twice in a row stays illegal: arrival rejects a gap of 0.
  */
 function lineIsLegal(
-  notes: readonly { midi: number }[],
+  notes: readonly { midi: number; spot?: SkipSpot | null }[],
   events: readonly GridEvent[],
   cadenceMidi: number,
 ): boolean {
@@ -950,7 +1003,8 @@ function lineIsLegal(
     if (!spotsFor(notes[index].midi).length) return false;
     if (index === 0) continue;
     const gap = Math.abs(notes[index].midi - notes[index - 1].midi);
-    if (!arrivalOk(gap, events[index].duration)) return false;
+    const pin = skipArrivalPin(notes, events, index);
+    if (!arrivalOk(gap, events[index].duration, pin)) return false;
   }
   return true;
 }
@@ -974,10 +1028,25 @@ function handSlack(duration: number): number {
   return duration <= 0.5 ? SHIFT_FRETS - 1 : 5;
 }
 
-/** An octave is allowed. Anything wider, or a leap past a fourth onto an eighth, is not. */
-function arrivalOk(gap: number, duration: number): boolean {
+/**
+ * An octave is allowed on a note longer than an eighth. Anything wider is
+ * not. A leap past a fourth onto an eighth is not, unless `pin` says the
+ * atom meant a 2-string skip with no hand shift and both spots in one form
+ * (or the next). The pin is the atom's claim at the pitch stage. Strings
+ * chosen later by the fingerer do not open this gate.
+ */
+export function arrivalOk(
+  gap: number,
+  duration: number,
+  pin?: SkipArrivalPin | null,
+): boolean {
   if (gap === 0 || gap > 12) return false;
-  return !(duration <= 0.5 && gap > 5);
+  if (!(duration <= 0.5 && gap > 5)) return true;
+  if (!pin || gap < 6) return false;
+  if (Math.abs(pin.from.string - pin.to.string) !== 2) return false;
+  if (Math.abs(pin.from.formIndex - pin.to.formIndex) > 1) return false;
+  if (pin.shiftFrets !== 0) return false;
+  return pin.arrivalsInBar < 4;
 }
 
 /** The note before the cadence still has a scale tone a step away after the history guards. */
@@ -1363,6 +1432,7 @@ function answersOpening(seed: number): boolean {
 function pitchedFromLadder(
   ladder: readonly LadderTone[],
   tone: number,
+  spot: SkipSpot | null = null,
 ): Pitched {
   const row = ladder[tone];
   return {
@@ -1372,6 +1442,7 @@ function pitchedFromLadder(
     degree: row.note.degree,
     chordTone: row.chordTone,
     index: tone,
+    spot,
   };
 }
 
@@ -1644,6 +1715,7 @@ function blockAllowed(
   notes: readonly Pitched[],
   slots: readonly number[],
   tones: readonly number[],
+  pins?: readonly (SkipArrivalPin | null)[],
 ): boolean {
   if (tones.length !== slots.length) return false;
   const midis = notes.map((note) => note.midi);
@@ -1656,7 +1728,11 @@ function blockAllowed(
     const midi = ladder[tone].midi;
     if (
       prev !== null &&
-      !arrivalOk(Math.abs(midi - prev), events[at]?.duration ?? 1)
+      !arrivalOk(
+        Math.abs(midi - prev),
+        events[at]?.duration ?? 1,
+        pins?.[step] ?? null,
+      )
     )
       return false;
     const soFar = midis.map((item) => ({ midi: item }));
@@ -1948,6 +2024,7 @@ function chooseGrouping(
   bars: 2 | 4,
   claimed: ReadonlySet<number>,
   groupingWindow: number,
+  blockedBars: ReadonlySet<number>,
   random: () => number,
   salt: number,
 ): { tones: number[]; k: number } | null {
@@ -1975,7 +2052,14 @@ function chooseGrouping(
       continue;
     }
     const repeats = repeatsThatFit(cell.k, run, events, index, claimed);
-    if (repeats) fitting.push({ cell, repeats });
+    if (!repeats) continue;
+    let blocked = false;
+    for (let step = 0; step < repeats * cell.k; step++) {
+      const at = index + step;
+      const touched = Math.floor((events[at]?.beat ?? 0) / 4);
+      if (blockedBars.has(touched)) blocked = true;
+    }
+    if (!blocked) fitting.push({ cell, repeats });
   }
   if (!fitting.length) return null;
   fitting.sort(
@@ -2064,17 +2148,604 @@ export function groupingBlockAllowed(
   return blockAllowed(ladder, alive, events, [], slots, tones);
 }
 
+/** Form slot a skip atom intends to play. String 0 is the lowest course. */
+export type SkipSpot = {
+  string: number;
+  formIndex: number;
+  fret: number;
+  position: number;
+};
+
+/**
+ * The atom's claim that this arrival is a 2-string skip. `arrivalOk` reads
+ * the claim here, while the line is still pitches. The fingerer has not
+ * chosen strings yet. `shiftFrets` is the hand move already measured on the
+ * form frets. `arrivalsInBar` counts earlier pinned wide arrivals in the bar.
+ */
+export type SkipArrivalPin = {
+  from: SkipSpot;
+  to: SkipSpot;
+  shiftFrets: number;
+  arrivalsInBar: number;
+};
+
+/** First draw at a qualifying eighth run. Read from the slice-2 brief. */
+const P_SKIP = 0.3;
+
+const SKIP_IDS = ['s-sixth', 's-octave', 's-pedal', 's-arp'] as const;
+type SkipId = (typeof SKIP_IDS)[number];
+
+type SlotStep = { string: number; slot: number };
+
+type SkipBuilt = {
+  id: SkipId;
+  tones: number[];
+  spots: SkipSpot[];
+};
+
+function notesPerString(form: Pattern): number {
+  if (form.positions.length === 18) return 3;
+  if (form.positions.length === 12) return 2;
+  return 0;
+}
+
+function formAt(
+  form: Pattern,
+  nps: number,
+  string: number,
+  slot: number,
+): { string: number; fret: number; midi: number } | null {
+  if (string < 0 || string > 5 || slot < 0 || slot >= nps) return null;
+  return form.positions[string * nps + slot] ?? null;
+}
+
+function fretSpan(frets: readonly number[]): number {
+  let low = Infinity;
+  let high = -Infinity;
+  for (const fret of frets) {
+    if (fret < low) low = fret;
+    if (fret > high) high = fret;
+  }
+  return high - low;
+}
+
+/** Some fingering of `midi` sits in the atom's fret window, so one position can play both. */
+function midiInWindow(midi: number, low: number, high: number): boolean {
+  for (let string = 0; string < TUNING.length; string++) {
+    const fret = midi - (TUNING[string] ?? 0);
+    if (fret >= low && fret <= high) return true;
+  }
+  return false;
+}
+
+function isSkipPair(
+  from: SkipSpot | null | undefined,
+  to: SkipSpot | null | undefined,
+): from is SkipSpot {
+  if (!from || !to) return false;
+  if (Math.abs(from.string - to.string) !== 2) return false;
+  return Math.abs(from.formIndex - to.formIndex) <= 1;
+}
+
+function skipArrivalPin(
+  notes: readonly { midi: number; spot?: SkipSpot | null }[],
+  events: readonly GridEvent[],
+  index: number,
+): SkipArrivalPin | null {
+  const prev = notes[index - 1];
+  const note = notes[index];
+  if (!prev?.spot || !note?.spot || !isSkipPair(prev.spot, note.spot))
+    return null;
+  const bar = Math.floor((events[index]?.beat ?? 0) / 4);
+  let arrivals = 0;
+  for (let at = 1; at < index; at++) {
+    if (Math.floor((events[at]?.beat ?? 0) / 4) !== bar) continue;
+    const left = notes[at - 1];
+    const right = notes[at];
+    if (!left?.spot || !right?.spot || !isSkipPair(left.spot, right.spot))
+      continue;
+    const gap = Math.abs(right.midi - left.midi);
+    if ((events[at]?.duration ?? 1) <= 0.5 && gap > 5 && gap <= 12)
+      arrivals += 1;
+  }
+  return {
+    from: prev.spot,
+    to: note.spot,
+    shiftFrets: Math.abs(prev.spot.position - note.spot.position),
+    arrivalsInBar: arrivals,
+  };
+}
+
+function pinsForCandidate(
+  notes: readonly Pitched[],
+  events: readonly GridEvent[],
+  slots: readonly number[],
+  ladder: readonly LadderTone[],
+  tones: readonly number[],
+  spots: readonly SkipSpot[],
+): (SkipArrivalPin | null)[] {
+  const counts = new Map<number, number>();
+  for (let index = 1; index < notes.length; index++) {
+    const left = notes[index - 1];
+    const right = notes[index];
+    if (!left?.spot || !right?.spot || !isSkipPair(left.spot, right.spot))
+      continue;
+    const gap = Math.abs(right.midi - left.midi);
+    if ((events[index]?.duration ?? 1) > 0.5 || gap <= 5 || gap > 12) continue;
+    const bar = Math.floor((events[index]?.beat ?? 0) / 4);
+    counts.set(bar, (counts.get(bar) ?? 0) + 1);
+  }
+  const pins: (SkipArrivalPin | null)[] = [];
+  for (let step = 0; step < tones.length; step++) {
+    if (step === 0) {
+      pins.push(null);
+      continue;
+    }
+    const from = spots[step - 1];
+    const to = spots[step];
+    if (!from || !to || !isSkipPair(from, to)) {
+      pins.push(null);
+      continue;
+    }
+    const at = slots[step] ?? 0;
+    const bar = Math.floor((events[at]?.beat ?? 0) / 4);
+    const arrivals = counts.get(bar) ?? 0;
+    pins.push({
+      from,
+      to,
+      shiftFrets: Math.abs(from.position - to.position),
+      arrivalsInBar: arrivals,
+    });
+    const prevTone = tones[step - 1] ?? 0;
+    const tone = tones[step] ?? 0;
+    const gap = Math.abs(
+      (ladder[tone]?.midi ?? 0) - (ladder[prevTone]?.midi ?? 0),
+    );
+    if ((events[at]?.duration ?? 1) <= 0.5 && gap > 5 && gap <= 12)
+      counts.set(bar, arrivals + 1);
+  }
+  return pins;
+}
+
+function shiftSteps(steps: readonly SlotStep[], base: number): SlotStep[] | null {
+  const moved = steps.map((step) => ({
+    string: step.string + base,
+    slot: step.slot,
+  }));
+  if (moved.some((step) => step.string > 5)) return null;
+  return moved;
+}
+
+/** Two diatonic sixths, then the pair is out of notes on the string. */
+function sixthSteps(nps: number): SlotStep[] | null {
+  if (nps === 3) {
+    return [
+      { string: 0, slot: 1 },
+      { string: 2, slot: 0 },
+      { string: 0, slot: 2 },
+      { string: 2, slot: 1 },
+    ];
+  }
+  if (nps === 2) {
+    return [
+      { string: 0, slot: 1 },
+      { string: 2, slot: 0 },
+    ];
+  }
+  return null;
+}
+
+/**
+ * Top of the low string up a fifth onto s+2, then the bottom of the low
+ * string up an octave onto s+2. The fifth is the note a sweep would have
+ * played on the string in between.
+ */
+function arpSteps(nps: number): SlotStep[] | null {
+  if (nps === 3) {
+    return [
+      { string: 0, slot: 2 },
+      { string: 2, slot: 0 },
+      { string: 0, slot: 0 },
+      { string: 2, slot: 1 },
+    ];
+  }
+  if (nps === 2) {
+    return [
+      { string: 0, slot: 1 },
+      { string: 2, slot: 0 },
+      { string: 0, slot: 0 },
+      { string: 2, slot: 1 },
+    ];
+  }
+  return null;
+}
+
+function octaveSteps(form: Pattern, nps: number, base: number): SlotStep[] | null {
+  if (base + 2 > 5) return null;
+  for (let slot = 0; slot < nps; slot++) {
+    const low = formAt(form, nps, base, slot);
+    if (!low) continue;
+    for (let highSlot = 0; highSlot < nps; highSlot++) {
+      const high = formAt(form, nps, base + 2, highSlot);
+      if (!high || high.midi - low.midi !== 12) continue;
+      const steps: SlotStep[] = [
+        { string: base, slot },
+        { string: base + 2, slot: highSlot },
+      ];
+      const next = formAt(form, nps, base, slot + 1);
+      if (next) {
+        const back = Math.abs(next.midi - high.midi);
+        const span = fretSpan([low.fret, high.fret, next.fret]);
+        if (back > 0 && back <= 12 && span <= 3)
+          steps.push({ string: base, slot: slot + 1 });
+      }
+      return steps;
+    }
+  }
+  return null;
+}
+
+/** Pedal on `base`, then two different notes on the string two up. */
+function pedalSteps(form: Pattern, nps: number, base: number): SlotStep[] | null {
+  if (base + 2 > 5) return null;
+  for (let slot = 0; slot < nps; slot++) {
+    const pedal = formAt(form, nps, base, slot);
+    if (!pedal) continue;
+    const highs: { slot: number; fret: number }[] = [];
+    for (let highSlot = 0; highSlot < nps; highSlot++) {
+      const high = formAt(form, nps, base + 2, highSlot);
+      if (!high) continue;
+      const gap = Math.abs(high.midi - pedal.midi);
+      if (gap < 6 || gap > 12) continue;
+      highs.push({ slot: highSlot, fret: high.fret });
+    }
+    for (let left = 0; left < highs.length; left++) {
+      for (let right = left + 1; right < highs.length; right++) {
+        const a = highs[left];
+        const b = highs[right];
+        if (!a || !b) continue;
+        if (fretSpan([pedal.fret, a.fret, b.fret]) > 3) continue;
+        return [
+          { string: base, slot },
+          { string: base + 2, slot: a.slot },
+          { string: base, slot },
+          { string: base + 2, slot: b.slot },
+        ];
+      }
+    }
+  }
+  return null;
+}
+
+function realizeSteps(
+  form: Pattern,
+  formIndex: number,
+  nps: number,
+  steps: readonly SlotStep[],
+  ladder: readonly LadderTone[],
+): { tones: number[]; spots: SkipSpot[]; frets: number[] } | null {
+  const midiIndex = new Map<number, number>();
+  ladder.forEach((tone, index) => midiIndex.set(tone.midi, index));
+  const tones: number[] = [];
+  const spots: SkipSpot[] = [];
+  const frets: number[] = [];
+  for (const step of steps) {
+    const position = formAt(form, nps, step.string, step.slot);
+    if (!position) return null;
+    const tone = midiIndex.get(position.midi);
+    if (tone === undefined) return null;
+    tones.push(tone);
+    spots.push({
+      string: position.string,
+      formIndex,
+      fret: position.fret,
+      position: 0,
+    });
+    frets.push(position.fret);
+  }
+  if (fretSpan(frets) > 3) return null;
+  for (let index = 1; index < tones.length; index++) {
+    if (Math.abs(steps[index].string - steps[index - 1].string) !== 2)
+      return null;
+    const gap = Math.abs(
+      (ladder[tones[index] ?? 0]?.midi ?? 0) -
+        (ladder[tones[index - 1] ?? 0]?.midi ?? 0),
+    );
+    if (gap === 0 || gap > 12) return null;
+  }
+  let wide = false;
+  for (let index = 1; index < tones.length; index++) {
+    const gap = Math.abs(
+      (ladder[tones[index] ?? 0]?.midi ?? 0) -
+        (ladder[tones[index - 1] ?? 0]?.midi ?? 0),
+    );
+    if (gap >= 6) wide = true;
+  }
+  if (!wide) return null;
+  return { tones, spots, frets };
+}
+
+/**
+ * The notes after the atom still have to put the approach within a step of
+ * the cadence and inside the seam window of the opening. If even a chromatic
+ * walk cannot do both, the atom would be dropped for the seam, so it is not
+ * offered.
+ */
+function tailCanClose(
+  events: readonly GridEvent[],
+  index: number,
+  length: number,
+  fromMidi: number,
+  homeMidi: number,
+  cadenceMidi: number,
+  ladder: readonly LadderTone[],
+): boolean {
+  const approachAt = events.length - 2;
+  if (index + length > approachAt) return false;
+  let low = fromMidi;
+  let high = fromMidi;
+  for (let at = index + length; at < approachAt; at++) {
+    const hop = (events[at]?.duration ?? 1) <= 0.5 ? 5 : 12;
+    low -= hop;
+    high += hop;
+  }
+  const approach = events[approachAt];
+  const fast = (approach?.duration ?? 1) <= 0.5;
+  const hop = fast ? 5 : 12;
+  const seam = fast ? 5 : 12;
+  const lo = Math.max(low - hop, homeMidi - seam, cadenceMidi - 2);
+  const hi = Math.min(high + hop, homeMidi + seam, cadenceMidi + 2);
+  return ladder.some((tone) => {
+    const midi = tone.midi;
+    if (midi < lo || midi > hi) return false;
+    if (midi === homeMidi || midi === cadenceMidi) return false;
+    return Math.abs(midi - cadenceMidi) <= 2 && Math.abs(midi - homeMidi) <= seam;
+  });
+}
+
+function contourDown(
+  plan: PhrasePlan,
+  bars: 2 | 4,
+  beat: number,
+  current: number,
+): boolean {
+  const here = contourGoal(plan, beat, bars);
+  const ahead = contourGoal(plan, Math.min(bars * 4, beat + 1.5), bars);
+  return Math.abs(ahead - here) >= 0.5 ? ahead < here : here - current < 0;
+}
+
+function skipWindowsOf(
+  events: readonly GridEvent[],
+  index: number,
+  length: number,
+): number[] {
+  const windows: number[] = [];
+  for (let step = 0; step < length; step++) {
+    const bar = Math.floor((events[index + step]?.beat ?? 0) / 4);
+    const window = Math.floor(bar / 2);
+    if (!windows.includes(window)) windows.push(window);
+  }
+  return windows;
+}
+
+function skipFitsRun(
+  events: readonly GridEvent[],
+  index: number,
+  length: number,
+  claimed: ReadonlySet<number>,
+  groupingBars: ReadonlySet<number>,
+  skipWindows: ReadonlySet<number>,
+): boolean {
+  if (eighthRunLength(events, index) < length) return false;
+  for (let step = 0; step < length; step++) {
+    const at = index + step;
+    if (at >= events.length - 3 || claimed.has(at)) return false;
+    const bar = Math.floor((events[at]?.beat ?? 0) / 4);
+    if (groupingBars.has(bar)) return false;
+  }
+  return skipWindowsOf(events, index, length).every(
+    (window) => !skipWindows.has(window),
+  );
+}
+
+function nearbyForms(
+  forms: readonly Pattern[],
+  ladder: readonly LadderTone[],
+  anchor: number,
+): { form: Pattern; index: number }[] {
+  const midis = new Set(ladder.map((tone) => tone.midi));
+  return forms
+    .map((form, index) => ({
+      form,
+      index,
+      dist: Math.abs((form.min + form.max) / 2 - anchor),
+      hit: form.positions.some((position) => midis.has(position.midi)),
+    }))
+    .filter((item) => item.hit)
+    .sort((a, b) => a.dist - b.dist || a.index - b.index)
+    .slice(0, 4)
+    .map((item) => ({ form: item.form, index: item.index }));
+}
+
+/**
+ * One skip on this eighth run, or nothing. Draws `P_SKIP`, then the family,
+ * then a shape, from the walk's own `random`. No forms, no draw.
+ */
+function chooseSkip(
+  ladder: readonly LadderTone[],
+  alive: readonly (readonly boolean[])[],
+  events: readonly GridEvent[],
+  notes: readonly Pitched[],
+  index: number,
+  plan: PhrasePlan,
+  bars: 2 | 4,
+  claimed: ReadonlySet<number>,
+  groupingBars: ReadonlySet<number>,
+  skipWindows: ReadonlySet<number>,
+  forms: readonly Pattern[],
+  cadenceMidi: number,
+  random: () => number,
+  rng: { get: () => number; set: (state: number) => void },
+  salt: number,
+): SkipBuilt | null {
+  if (!forms.length || !eighthRunStarts(events, index)) return null;
+  const event = events[index];
+  if (!event) return null;
+  if (plan.contour === 'wave') {
+    const total = bars * 4;
+    const startT = event.beat / total;
+    const endT = (event.beat + 3) / total;
+    if (endT > 0.34 && startT < 0.67) return null;
+  }
+  if (eighthRunLength(events, index) < 2) return null;
+  if (!skipFitsRun(events, index, 2, claimed, groupingBars, skipWindows))
+    return null;
+  // A failed roll must not move the walk's stream, or later lines miss
+  // contour and the search multiplies. Only a placed atom keeps the draws.
+  const mark = rng.get();
+  if (random() >= P_SKIP) {
+    rng.set(mark);
+    return null;
+  }
+  const anchor = REGISTER_ANCHOR[plan.register];
+  const formsHere = nearbyForms(forms, ladder, anchor);
+  if (!formsHere.length) {
+    rng.set(mark);
+    return null;
+  }
+  const prev = notes.length ? notes[notes.length - 1] : null;
+  // Position the previous note can already use nearest the anchor. The
+  // fingerer will not shift an eighth to chase a hint outside that box.
+  let hand = anchor;
+  if (prev) {
+    let best = Infinity;
+    for (const spot of spotsFor(prev.midi)) {
+      const dist = Math.abs(spot.position - anchor);
+      if (dist < best) {
+        best = dist;
+        hand = spot.position;
+      }
+    }
+  }
+  const down = contourDown(
+    plan,
+    bars,
+    event.beat,
+    prev ? prev.midi : contourGoal(plan, event.beat, bars),
+  );
+  const found = new Map<SkipId, SkipBuilt[]>();
+  for (const { form, index: formIndex } of formsHere) {
+    const nps = notesPerString(form);
+    if (!nps) continue;
+    for (let base = 0; base <= 3; base++) {
+      const shapes: { id: SkipId; steps: SlotStep[] | null }[] = [
+        { id: 's-sixth', steps: shiftSteps(sixthSteps(nps) ?? [], base) },
+        { id: 's-octave', steps: octaveSteps(form, nps, base) },
+        { id: 's-pedal', steps: pedalSteps(form, nps, base) },
+        { id: 's-arp', steps: shiftSteps(arpSteps(nps) ?? [], base) },
+      ];
+      for (const shape of shapes) {
+        if (!shape.steps) continue;
+        if (
+          !skipFitsRun(
+            events,
+            index,
+            shape.steps.length,
+            claimed,
+            groupingBars,
+            skipWindows,
+          )
+        )
+          continue;
+        const played = realizeSteps(
+          form,
+          formIndex,
+          nps,
+          shape.steps,
+          ladder,
+        );
+        if (!played) continue;
+        const tones = played.tones.slice();
+        const spots = played.spots.slice();
+        if (down) {
+          tones.reverse();
+          spots.reverse();
+        }
+        const start = tones[0] ?? -1;
+        if (start < 0 || !ladder[start]) continue;
+        if (event.strong && !ladder[start].chordTone) continue;
+        if (prev && Math.abs(start - prev.index) > 2) continue;
+        if (prev) {
+          const low = Math.min(...played.frets);
+          const high = Math.max(...played.frets);
+          if (!midiInWindow(prev.midi, low, high)) continue;
+        }
+        const home = notes[0]?.midi ?? ladder[tones[0] ?? 0]?.midi ?? 0;
+        const endMidi = ladder[tones[tones.length - 1] ?? 0]?.midi ?? home;
+        if (
+          !tailCanClose(
+            events,
+            index,
+            tones.length,
+            endMidi,
+            home,
+            cadenceMidi,
+            ladder,
+          )
+        )
+          continue;
+        if (played.frets.some((fret) => fret < hand || fret > hand + 3))
+          continue;
+        const stamped = spots.map((spot) => ({ ...spot, position: hand }));
+        const slots = tones.map((_, step) => index + step);
+        const pins = pinsForCandidate(
+          notes,
+          events,
+          slots,
+          ladder,
+          tones,
+          stamped,
+        );
+        if (!blockAllowed(ladder, alive, events, notes, slots, tones, pins))
+          continue;
+        const list = found.get(shape.id) ?? [];
+        list.push({ id: shape.id, tones, spots: stamped });
+        found.set(shape.id, list);
+      }
+    }
+  }
+  const available = SKIP_IDS.filter((id) => (found.get(id)?.length ?? 0) > 0);
+  if (!available.length) {
+    rng.set(mark);
+    return null;
+  }
+  skipEligible += 1;
+  skipRolled += 1;
+  const family =
+    available[(Math.floor(random() * available.length) + salt) % available.length];
+  const pool = family ? found.get(family) : undefined;
+  if (!pool?.length || !family) {
+    rng.set(mark);
+    return null;
+  }
+  return (
+    pool[(Math.floor(random() * pool.length) + salt) % pool.length] ?? null
+  );
+}
+
 /**
  * Scored pitches, then a sentence. On most seeds bar 2 opens on bar 1's
  * first four attacks, transposed by one or two scale steps. A 4-bar phrase
  * that answers the opening sequences a two-note fragment twice in bar 3.
  * A free line, every eighth seed, skips that sequence and stays on the
  * scored walk. A qualifying eighth run may open on one grouping cell per
- * two bars, from the same `random` stream. A held note is a chord tone
- * when one is still legal. The approach is not: it stays a step from the
- * cadence. The free tail walks to that step when one is still legal. A
- * second two-pitch return, a repeated three-pitch cell, and a fifth scale
- * step in the same direction are refused when another tone is legal.
+ * two bars, and on one string-skip atom per two bars when the scale has a
+ * form, never in a bar that already has the other. Both draw from the same
+ * `random` stream. A held note is a chord tone when one is still legal. The
+ * approach is not: it stays a step from the cadence. The free tail walks to
+ * that step when one is still legal. A second two-pitch return, a repeated
+ * three-pitch cell, and a fifth scale step in the same direction are refused
+ * when another tone is legal.
  */
 function walkScored(
   ladder: readonly LadderTone[],
@@ -2084,10 +2755,13 @@ function walkScored(
   cadenceAt: number,
   alive: readonly (readonly boolean[])[],
   random: () => number,
+  rng: { get: () => number; set: (state: number) => void },
   seed: number,
   allowGrouping: boolean,
+  allowSkip: boolean,
   salt: number,
-): { notes: Pitched[] | null; groupings: number } | null {
+  forms: readonly Pattern[],
+): { notes: Pitched[] | null; groupings: number; skips: number } | null {
   const centre = REGISTER_LOW[plan.register] + PHRASE_RANGE / 2;
   const cadenceMidi = ladder[cadenceAt]?.midi ?? 0;
   const notes: Pitched[] = [];
@@ -2112,13 +2786,18 @@ function walkScored(
   ) {
     for (const slot of (byBar[2] ?? []).slice(0, 4)) claimed.add(slot);
   }
-  let pending: number[] = [];
+  let pending: { tone: number; spot: SkipSpot | null }[] = [];
   let placed = 0;
+  let skips = 0;
   let groupingWindow = -1;
+  const groupingBars = new Set<number>();
+  const skipBars = new Set<number>();
+  const skipWindows = new Set<number>();
   let pullChordAt = -1;
-  const giveUp = (): { notes: null; groupings: number } => ({
+  const giveUp = (): { notes: null; groupings: number; skips: number } => ({
     notes: null,
     groupings: placed,
+    skips,
   });
   for (let index = 0; index < events.length; index++) {
     if (countSearchStep()) return null;
@@ -2127,9 +2806,9 @@ function walkScored(
       continue;
     }
     if (pending.length) {
-      const tone = pending.shift();
-      if (tone === undefined) return giveUp();
-      notes.push(pitchedFromLadder(ladder, tone));
+      const next = pending.shift();
+      if (!next) return giveUp();
+      notes.push(pitchedFromLadder(ladder, next.tone, next.spot));
       continue;
     }
     const event = events[index];
@@ -2151,7 +2830,7 @@ function walkScored(
         cadenceMidi,
       );
       if (tones) {
-        pending = tones.slice(1);
+        pending = tones.slice(1).map((tone) => ({ tone, spot: null }));
         notes.push(pitchedFromLadder(ladder, tones[0] ?? 0));
         continue;
       }
@@ -2177,7 +2856,7 @@ function walkScored(
         notes,
       );
       if (tones) {
-        pending = tones.slice(1);
+        pending = tones.slice(1).map((tone) => ({ tone, spot: null }));
         notes.push(pitchedFromLadder(ladder, tones[0] ?? 0));
         continue;
       }
@@ -2193,12 +2872,17 @@ function walkScored(
         bars,
         claimed,
         groupingWindow,
+        skipBars,
         random,
         salt,
       );
       if (grouped) {
         placed += 1;
         groupingWindow = Math.floor(bar / 2);
+        for (let step = 0; step < grouped.tones.length; step++) {
+          const touched = Math.floor((events[index + step]?.beat ?? 0) / 4);
+          groupingBars.add(touched);
+        }
         if (grouped.k === 3) {
           const resume = index + grouped.tones.length;
           for (let next = resume; next < events.length - 2; next++) {
@@ -2208,8 +2892,47 @@ function walkScored(
             }
           }
         }
-        pending = grouped.tones.slice(1);
+        pending = grouped.tones.slice(1).map((tone) => ({ tone, spot: null }));
         notes.push(pitchedFromLadder(ladder, grouped.tones[0] ?? 0));
+        continue;
+      }
+    }
+    if (allowSkip) {
+      const skipped = chooseSkip(
+        ladder,
+        alive,
+        events,
+        notes,
+        index,
+        plan,
+        bars,
+        claimed,
+        groupingBars,
+        skipWindows,
+        forms,
+        cadenceMidi,
+        random,
+        rng,
+        salt,
+      );
+      if (skipped) {
+        skips += 1;
+        for (let step = 0; step < skipped.tones.length; step++) {
+          const touched = Math.floor((events[index + step]?.beat ?? 0) / 4);
+          skipBars.add(touched);
+          skipWindows.add(Math.floor(touched / 2));
+        }
+        pending = skipped.tones.slice(1).map((tone, step) => ({
+          tone,
+          spot: skipped.spots[step + 1] ?? null,
+        }));
+        notes.push(
+          pitchedFromLadder(
+            ladder,
+            skipped.tones[0] ?? 0,
+            skipped.spots[0] ?? null,
+          ),
+        );
         continue;
       }
     }
@@ -2241,9 +2964,9 @@ function walkScored(
       );
       if (stepped.length) candidates = stepped;
     }
-    // After a grouping, keep the loop wrap legal when a cadence step
-    // can still do it. A step wins when the two cannot both be had.
-    if (index === events.length - 2 && placed && notes[0]) {
+    // After a grouping or a skip, keep the loop wrap legal when a cadence
+    // step can still do it. A step wins when the two cannot both be had.
+    if (index === events.length - 2 && (placed || skips) && notes[0]) {
       const opening = notes[0].midi;
       const fast = event.duration <= 0.5;
       const ready = candidates.filter((tone) => {
@@ -2366,7 +3089,7 @@ function walkScored(
     notes.push(pitchedFromLadder(ladder, chosen));
   }
   if (!lineIsLegal(notes, events, cadenceMidi)) return giveUp();
-  return { notes, groupings: placed };
+  return { notes, groupings: placed, skips };
 }
 
 function walkPitches(
@@ -2376,10 +3099,13 @@ function walkPitches(
   bars: 2 | 4,
   cadenceAt: number,
   random: () => number,
+  rng: { get: () => number; set: (state: number) => void },
   seed: number,
   allowGrouping: boolean,
+  allowSkip: boolean,
   salt: number,
-): { notes: Pitched[] | null; groupings: number } | null {
+  forms: readonly Pattern[],
+): { notes: Pitched[] | null; groupings: number; skips: number } | null {
   const alive = reachable(ladder, events, cadenceAt);
   if (!alive[0].some(Boolean)) return null;
   return walkScored(
@@ -2390,9 +3116,12 @@ function walkPitches(
     cadenceAt,
     alive,
     random,
+    rng,
     seed,
     allowGrouping,
+    allowSkip,
     salt,
+    forms,
   );
 }
 
@@ -2742,11 +3471,109 @@ function pitchCriticPenalty(
 
 type LaneResult = {
   notes: PhraseNote[];
+  spots: readonly (SkipSpot | null)[];
   plan: PhrasePlan;
   score: number;
   exact: boolean;
   lane: number;
 };
+
+function skipRealized(
+  notes: readonly FingeredNote[],
+  spots: readonly (SkipSpot | null)[],
+): boolean {
+  for (let index = 0; index < notes.length; index++) {
+    const hint = spots[index];
+    const note = notes[index];
+    if (!hint || !note) continue;
+    if (note.string !== hint.string) return false;
+    if (index === 0) continue;
+    const prev = spots[index - 1];
+    const before = notes[index - 1];
+    if (!prev || !before || !isSkipPair(prev, hint)) continue;
+    if (note.position !== before.position) return false;
+    if (note.fret !== hint.fret || before.fret !== prev.fret) return false;
+  }
+  let run = -1;
+  for (let index = 0; index <= notes.length; index++) {
+    const inside = index < notes.length && spots[index];
+    if (inside && run < 0) run = index;
+    if (!inside && run >= 0) {
+      const entry = notes[run];
+      const before = notes[run - 1];
+      if (
+        entry &&
+        before &&
+        entry.duration <= 0.5 &&
+        entry.position !== before.position
+      ) {
+        return false;
+      }
+      const exit = notes[index];
+      const last = notes[index - 1];
+      if (
+        exit &&
+        last &&
+        exit.duration <= 0.5 &&
+        exit.position !== last.position
+      ) {
+        return false;
+      }
+      run = -1;
+    }
+  }
+  return true;
+}
+
+const skipFailReason: Record<string, number> = {};
+
+function atomLineFails(
+  walked: readonly Pitched[],
+  events: readonly GridEvent[],
+  bars: 2 | 4,
+  forms: readonly Pattern[],
+  register: RegisterName,
+  requireStep: boolean,
+): boolean {
+  const probed = notesFromPitches(walked, events);
+  const spots = walked.map((note) => note.spot);
+  let reason = '';
+  if (seamIsIllegal(probed, bars)) reason = 'seam';
+  else if (requireStep && !stepsIntoCadence(walked)) reason = 'step';
+  else if (repeatsFour(walked)) reason = 'cycle';
+  else {
+    const fingered = fingerNotes(
+      probed,
+      forms,
+      REGISTER_ANCHOR[register],
+      spots,
+    );
+    if (!handAccepts(fingered)) reason = 'hand';
+    else if (spots.some(Boolean) && !skipRealized(fingered, spots)) {
+      let stringMiss = 0;
+      let shiftMiss = 0;
+      for (let index = 0; index < fingered.length; index++) {
+        const hint = spots[index];
+        const note = fingered[index];
+        if (!hint || !note) continue;
+        if (note.string !== hint.string) stringMiss += 1;
+        else if (
+          index > 0 &&
+          spots[index - 1] &&
+          isSkipPair(spots[index - 1], hint) &&
+          Math.abs(
+            note.position - (fingered[index - 1]?.position ?? note.position),
+          ) >= SHIFT_FRETS
+        )
+          shiftMiss += 1;
+      }
+      reason = stringMiss ? 'string' : shiftMiss ? 'shift' : 'finger';
+    }
+  }
+  if (reason && spots.some(Boolean))
+    skipFailReason[reason] = (skipFailReason[reason] ?? 0) + 1;
+  return reason !== '';
+}
 
 /**
  * Try every lane once. Lane 0 is the copied bar; the rest vary the rhythm.
@@ -2875,40 +3702,82 @@ function sampleLane(
         input.bars,
         cadenceAt,
         random,
+        rng,
         input.seed,
         true,
+        true,
         salt,
+        forms,
       );
       if (!walked) break;
       if (!walked.notes) {
-        if (!walked.groupings) break;
+        if (!walked.groupings && !walked.skips) break;
         groupingAtomsDropped += walked.groupings;
+        skipAtomsDropped += walked.skips;
         tried = true;
         continue;
       }
-      if (!walked.groupings) {
+      if (!walked.groupings && !walked.skips) {
         pitches = walked.notes;
         break;
       }
       tried = true;
-      const probed = notesFromPitches(walked.notes, events);
-      const seamBad = seamIsIllegal(probed, input.bars);
-      const handBad =
-        !seamBad &&
-        !handAccepts(
-          fingerNotes(probed, forms, REGISTER_ANCHOR[plan.register]),
-        );
-      // Four-bar lines drop a grouping whose approach is not a 1–2
-      // semitone step. Two-bar lines do not: that drop pulls grouped
-      // notes under 15%. A two-bar grouping can still leap in.
-      const stepBad = input.bars === 4 && !stepsIntoCadence(walked.notes);
-      const cycleBad = repeatsFour(walked.notes);
-      if (!seamBad && !handBad && !stepBad && !cycleBad) {
+      // Four-bar lines drop an atom whose approach is not a 1–2 semitone
+      // step. Two-bar lines do not: that drop pulls grouped notes under 15%.
+      const failed = atomLineFails(
+        walked.notes,
+        events,
+        input.bars,
+        forms,
+        plan.register,
+        input.bars === 4,
+      );
+      if (!failed) {
         pitches = walked.notes;
         groupingAtomsKept += walked.groupings;
+        skipAtomsKept += walked.skips;
         break;
       }
+      // A skip that the hand will not play must not take the grouping with
+      // it. Rewalking without the skip uses the same draws as the grouping
+      // line, because the skip never gets to roll.
+      if (walked.skips && walked.groupings) {
+        skipAtomsDropped += walked.skips;
+        rng.set(mark);
+        const grouped = walkPitches(
+          ladder,
+          events,
+          plan,
+          input.bars,
+          cadenceAt,
+          random,
+          rng,
+          input.seed,
+          true,
+          false,
+          salt,
+          forms,
+        );
+        if (
+          grouped?.notes &&
+          !atomLineFails(
+            grouped.notes,
+            events,
+            input.bars,
+            forms,
+            plan.register,
+            input.bars === 4,
+          )
+        ) {
+          pitches = grouped.notes;
+          groupingAtomsKept += grouped.groupings;
+          break;
+        }
+        groupingAtomsDropped += walked.groupings;
+        continue;
+      }
       groupingAtomsDropped += walked.groupings;
+      skipAtomsDropped += walked.skips;
     }
     if (!pitches && tried) {
       rng.set(mark);
@@ -2919,9 +3788,12 @@ function sampleLane(
         input.bars,
         cadenceAt,
         random,
+        rng,
         input.seed,
         false,
+        false,
         0,
+        forms,
       );
       pitches = again?.notes ?? null;
     }
@@ -2935,6 +3807,7 @@ function sampleLane(
     };
     return {
       notes,
+      spots: pitches.map((note) => note.spot),
       plan: nextPlan,
       score: criticScore(notes, nextPlan, input.bars, scalePcs),
       exact,
@@ -3007,23 +3880,36 @@ function composePhrase(
   const ranked = pool
     .slice()
     .sort((a, b) => b.score - a.score || a.lane - b.lane);
-  let best: { notes: FingeredNote[]; plan: PhrasePlan; score: number } | null =
-    null;
+  let best: {
+    notes: FingeredNote[];
+    plan: PhrasePlan;
+    score: number;
+    spots: readonly (SkipSpot | null)[];
+  } | null = null;
   for (const item of ranked) {
     if (best && item.score <= best.score) break;
     const fingered = fingerNotes(
       item.notes,
       forms,
       REGISTER_ANCHOR[plan.register],
+      item.spots,
     );
     if (!handAccepts(fingered)) continue;
+    if (item.spots.some(Boolean) && !skipRealized(fingered, item.spots))
+      continue;
     let shifts = 0;
     for (const note of fingered) if (note.shift) shifts += 1;
     const score = item.score - shifts * 8;
     if (!best || score > best.score)
-      best = { notes: fingered, plan: item.plan, score };
+      best = {
+        notes: fingered,
+        plan: item.plan,
+        score,
+        spots: item.spots,
+      };
   }
-  return best;
+  if (best) recordPlayedSkips(best.notes, best.spots);
+  return best ? { notes: best.notes, plan: best.plan } : null;
 }
 
 /**
@@ -3110,10 +3996,101 @@ function shapeCover(
   return best;
 }
 
+/** −2 when this fret is the string and form the atom pinned. */
+function spotHintBonus(
+  spot: Spot,
+  hint: SkipSpot | null | undefined,
+  shapes: ReadonlyMap<number, number[]>,
+): number {
+  if (!hint || spot.string !== hint.string) return 0;
+  const hits = shapes.get(shapeKey(spot.string, spot.fret));
+  if (!hits?.includes(hint.formIndex)) return 0;
+  // The out-of-form penalty is 8. A −2 bonus loses to it, so the pin's
+  // string never wins unless it was already the active form. Clearing 8
+  // keeps the hand-shift cost (an eighth reach is 200+) in charge.
+  return -10;
+}
+
+export type SkipWitness = {
+  gap: number;
+  duration: number;
+  fromString: number;
+  toString: number;
+  fromFret: number;
+  toFret: number;
+  fromPosition: number;
+  toPosition: number;
+  fromForm: number;
+  toForm: number;
+  bar: number;
+};
+
+const skipWitnesses: SkipWitness[] = [];
+const skipWitnessViolations: string[] = [];
+
+export function drainSkipWitnesses(): {
+  witnesses: SkipWitness[];
+  violations: string[];
+} {
+  const witnesses = skipWitnesses.splice(0);
+  const violations = skipWitnessViolations.splice(0);
+  return { witnesses, violations };
+}
+
+function recordPlayedSkips(
+  notes: readonly FingeredNote[],
+  spots: readonly (SkipSpot | null)[],
+): void {
+  const perBar = new Map<number, number>();
+  for (let index = 1; index < notes.length; index++) {
+    const hint = spots[index];
+    const prevHint = spots[index - 1];
+    if (!hint || !prevHint) continue;
+    skipPlayedInside += 1;
+    const note = notes[index];
+    const before = notes[index - 1];
+    if (!note || !before) continue;
+    if (Math.abs(note.string - before.string) === 2) skipPlayedSkips += 1;
+    const gap = Math.abs(note.midi - before.midi);
+    if (!(note.duration <= 0.5 && gap >= 6 && gap <= 12)) continue;
+    const bar = Math.floor(note.beat / 4);
+    const count = (perBar.get(bar) ?? 0) + 1;
+    perBar.set(bar, count);
+    const witness: SkipWitness = {
+      gap,
+      duration: note.duration,
+      fromString: before.string,
+      toString: note.string,
+      fromFret: before.fret,
+      toFret: note.fret,
+      fromPosition: before.position,
+      toPosition: note.position,
+      fromForm: prevHint.formIndex,
+      toForm: hint.formIndex,
+      bar,
+    };
+    if (skipWitnesses.length < 4000) skipWitnesses.push(witness);
+    if (Math.abs(note.string - before.string) !== 2) {
+      skipWitnessViolations.push(`not two strings gap ${gap}`);
+    }
+    if (note.position !== before.position) {
+      skipWitnessViolations.push(`hand moved gap ${gap}`);
+    }
+    if (note.fret !== hint.fret || before.fret !== prevHint.fret) {
+      skipWitnessViolations.push(`fret left the spot gap ${gap}`);
+    }
+    if (Math.abs(hint.formIndex - prevHint.formIndex) > 1) {
+      skipWitnessViolations.push(`forms ${prevHint.formIndex} ${hint.formIndex}`);
+    }
+    if (count > 4) skipWitnessViolations.push(`bar ${bar} has ${count}`);
+  }
+}
+
 function fingerNotes(
   notes: PhraseNote[],
   forms: readonly Pattern[],
   anchor: number,
+  hints?: readonly (SkipSpot | null)[],
 ): FingeredNote[] {
   const shapes = formLookup(forms);
   const active = shapeCover(
@@ -3130,13 +4107,17 @@ function fingerNotes(
   for (let spot = 0; spot < choices[0].length; spot++) {
     cost[0][spot] =
       Math.abs(choices[0][spot].position - anchor) * 0.05 +
-      shapeCost(shapes, choices[0][spot], shaped, active);
+      shapeCost(shapes, choices[0][spot], shaped, active) +
+      (hints?.[0] ? spotHintBonus(choices[0][spot], hints[0], shapes) : 0);
   }
   for (let index = 1; index < notes.length; index++) {
     const pitch = Math.sign(notes[index].midi - notes[index - 1].midi);
     for (let spot = 0; spot < choices[index].length; spot++) {
       let best = Number.POSITIVE_INFINITY;
       let from = -1;
+      const bonus = hints?.[index]
+        ? spotHintBonus(choices[index][spot], hints[index], shapes)
+        : 0;
       for (let previous = 0; previous < choices[index - 1].length; previous++) {
         if (!Number.isFinite(cost[index - 1][previous])) continue;
         const next =
@@ -3150,7 +4131,7 @@ function fingerNotes(
             active,
             notes[index].duration <= 0.5,
             anchor,
-          );
+          ) + bonus;
         if (next < best) {
           best = next;
           from = previous;
