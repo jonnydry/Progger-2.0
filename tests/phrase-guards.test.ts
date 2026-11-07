@@ -323,8 +323,10 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     four.notes.map((note) => note.midi),
     [
+      // Re-pinned when string-skip atoms landed in the tail: 62–72 is the
+      // pinned octave/skip, then the line steps back.
       60, 59, 62, 64, 60, 64, 65, 64, 62, 65, 67, 64, 67, 62, 60, 64, 62, 60,
-      65, 64, 60, 62, 65, 62, 64,
+      65, 62, 72, 60, 64, 65, 64,
     ],
   );
 });
