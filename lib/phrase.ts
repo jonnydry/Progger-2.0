@@ -311,7 +311,14 @@ export const CADENCE_LABEL: Record<CadenceTarget, string> = {
 };
 
 type LadderTone = { midi: number; note: Note; chordTone: boolean };
-type Spot = { string: number; fret: number; position: number; finger: number };
+type Spot = {
+  string: number;
+  fret: number;
+  position: number;
+  finger: number;
+  /** Stable index from the spot cache, for pair-cost keys. */
+  id: number;
+};
 
 /**
  * The cadence category a spelled degree can claim. The third is `3` or `b3`;
@@ -2249,14 +2256,11 @@ function skipArrivalPin(
   };
 }
 
-function pinsForCandidate(
+/** Pinned wide arrivals already played, per bar. Fixed for a whole site. */
+function pinnedArrivalsByBar(
   notes: readonly Pitched[],
   events: readonly GridEvent[],
-  slots: readonly number[],
-  ladder: readonly LadderTone[],
-  tones: readonly number[],
-  spots: readonly SkipSpot[],
-): (SkipArrivalPin | null)[] {
+): Map<number, number> {
   const counts = new Map<number, number>();
   for (let index = 1; index < notes.length; index++) {
     const left = notes[index - 1];
@@ -2268,6 +2272,19 @@ function pinsForCandidate(
     const bar = Math.floor((events[index]?.beat ?? 0) / 4);
     counts.set(bar, (counts.get(bar) ?? 0) + 1);
   }
+  return counts;
+}
+
+function pinsForCandidate(
+  notes: readonly Pitched[],
+  events: readonly GridEvent[],
+  slots: readonly number[],
+  ladder: readonly LadderTone[],
+  tones: readonly number[],
+  spots: readonly SkipSpot[],
+  prior: ReadonlyMap<number, number> = pinnedArrivalsByBar(notes, events),
+): (SkipArrivalPin | null)[] {
+  const counts = new Map(prior);
   const pins: (SkipArrivalPin | null)[] = [];
   for (let step = 0; step < tones.length; step++) {
     if (step === 0) {
@@ -2450,6 +2467,42 @@ function cellForms(
   return null;
 }
 
+type CachedCell = HandCell & { formIndexes: number[] };
+
+/**
+ * Cells for one hand position, with their forms, kept per ladder. The same
+ * ladder serves every lane of a phrase, and salt rotations re-walk the same
+ * prefixes, so enumerating the box once per hand replaces once per site.
+ * Cells no form (or neighbouring pair) holds can never be offered, so they
+ * are dropped here instead of at every site. Order is handCells order.
+ */
+const handCellCache = new WeakMap<
+  readonly LadderTone[],
+  Map<number, CachedCell[]>
+>();
+
+function handCellsFor(
+  hand: number,
+  shapes: ReadonlyMap<number, number[]>,
+  ladder: readonly LadderTone[],
+  formCount: number,
+): CachedCell[] {
+  let byHand = handCellCache.get(ladder);
+  if (!byHand) {
+    byHand = new Map();
+    handCellCache.set(ladder, byHand);
+  }
+  const cached = byHand.get(hand);
+  if (cached) return cached;
+  const cells: CachedCell[] = [];
+  for (const cell of handCells(hand, shapes, ladder)) {
+    const formIndexes = cellForms(cell.steps, shapes, formCount);
+    if (formIndexes) cells.push({ ...cell, formIndexes });
+  }
+  byHand.set(hand, cells);
+  return cells;
+}
+
 /**
  * The notes after the atom still have to put the approach within a step of
  * the cadence and inside the seam window of the opening. If even a chromatic
@@ -2520,8 +2573,9 @@ function skipFitsRun(
   claimed: ReadonlySet<number>,
   groupingBars: ReadonlySet<number>,
   skipWindows: ReadonlySet<number>,
+  run = eighthRunLength(events, index),
 ): boolean {
-  if (eighthRunLength(events, index) < length) return false;
+  if (run < length) return false;
   for (let step = 0; step < length; step++) {
     const at = index + step;
     if (at >= events.length - 3 || claimed.has(at)) return false;
@@ -2566,8 +2620,9 @@ function chooseSkip(
     const endT = (event.beat + 3) / total;
     if (endT > 0.34 && startT < 0.67) return null;
   }
-  if (eighthRunLength(events, index) < 2) return null;
-  if (!skipFitsRun(events, index, 2, claimed, groupingBars, skipWindows))
+  const run = eighthRunLength(events, index);
+  if (run < 2) return null;
+  if (!skipFitsRun(events, index, 2, claimed, groupingBars, skipWindows, run))
     return null;
   skipSites += 1;
   // A failed roll must not move the walk's stream, or later lines miss
@@ -2588,8 +2643,9 @@ function chooseSkip(
     event.beat,
     prev ? prev.midi : contourGoal(plan, event.beat, bars),
   );
+  const priorPins = pinnedArrivalsByBar(notes, events);
   const found = new Map<SkipId, SkipBuilt[]>();
-  for (const cell of handCells(hand, shapes, ladder)) {
+  for (const cell of handCellsFor(hand, shapes, ladder, forms.length)) {
     if (
       !skipFitsRun(
         events,
@@ -2598,15 +2654,14 @@ function chooseSkip(
         claimed,
         groupingBars,
         skipWindows,
+        run,
       )
     )
       continue;
-    const formIndexes = cellForms(cell.steps, shapes, forms.length);
-    if (!formIndexes) continue;
     const tones = cell.steps.map((step) => step.tone);
     const spots: SkipSpot[] = cell.steps.map((step, at) => ({
       string: step.string,
-      formIndex: formIndexes[at] ?? 0,
+      formIndex: cell.formIndexes[at] ?? 0,
       atom: index,
     }));
     if (down) {
@@ -2632,7 +2687,15 @@ function chooseSkip(
     )
       continue;
     const slots = tones.map((_, step) => index + step);
-    const pins = pinsForCandidate(notes, events, slots, ladder, tones, spots);
+    const pins = pinsForCandidate(
+      notes,
+      events,
+      slots,
+      ladder,
+      tones,
+      spots,
+      priorPins,
+    );
     if (!blockAllowed(ladder, alive, events, notes, slots, tones, pins))
       continue;
     const list = found.get(cell.id) ?? [];
@@ -3909,18 +3972,38 @@ export const REGISTER_ANCHOR: Record<RegisterName, number> = {
  * on the anchor is what puts the hand there. Scale sizes that produce no
  * forms (pentatonic, blues, whole tone, diminished) keep the old fallback.
  */
+/** Form midi sets and cover answers, kept per forms array. */
+const coverCache = new WeakMap<
+  readonly Pattern[],
+  { sets: Set<number>[]; cover: Map<string, number> }
+>();
+
 function shapeCover(
   forms: readonly Pattern[],
   midis: readonly number[],
   anchor: number,
 ): number {
   if (!forms.length) return -1;
+  let entry = coverCache.get(forms);
+  if (!entry) {
+    entry = {
+      sets: forms.map(
+        (form) => new Set(form.positions.map((position) => position.midi)),
+      ),
+      cover: new Map(),
+    };
+    coverCache.set(forms, entry);
+  }
   const distinct = new Set(midis);
+  const key =
+    `${anchor}|` + [...distinct].sort((a, b) => a - b).join(',');
+  const cached = entry.cover.get(key);
+  if (cached !== undefined) return cached;
   let best = 0;
   let bestHit = -1;
   let bestDist = Infinity;
   forms.forEach((form, index) => {
-    const have = new Set(form.positions.map((position) => position.midi));
+    const have = entry.sets[index];
     let hit = 0;
     for (const midi of distinct) if (have.has(midi)) hit += 1;
     // Coverage first, then the form nearest the register's hand position.
@@ -3935,6 +4018,7 @@ function shapeCover(
       bestDist = dist;
     }
   });
+  entry.cover.set(key, best);
   return best;
 }
 
@@ -3965,13 +4049,58 @@ function recordPlayedSkips(
   }
 }
 
-function fingerNotes(
+/**
+ * Picked spots for a line, kept per forms array. The shortest path depends
+ * only on the midis, which notes are eighths, the hints, and the anchor, and
+ * the lane search fingers the same prefixes and lines again and again (salt
+ * rotations, then ranking). Spots themselves come from the shared spot
+ * cache and are never mutated; callers still get fresh note objects.
+ */
+const fingerPickCache = new WeakMap<
+  readonly Pattern[],
+  Map<string, Spot[]>
+>();
+
+function fingerKey(
+  notes: readonly PhraseNote[],
+  anchor: number,
+  hints?: readonly (SkipSpot | null)[],
+): string {
+  let key = `${anchor}|`;
+  for (let index = 0; index < notes.length; index++) {
+    const hint = hints?.[index];
+    key += `${notes[index].midi}${notes[index].duration <= 0.5 ? 'f' : 's'}${hint ? `${hint.string}:${hint.formIndex}` : ''};`;
+  }
+  return key;
+}
+
+function pickSpots(
   notes: PhraseNote[],
   forms: readonly Pattern[],
   anchor: number,
   hints?: readonly (SkipSpot | null)[],
-): FingeredNote[] {
-  const shapes = formLookup(forms);
+): Spot[] {
+  let byLine = fingerPickCache.get(forms);
+  if (!byLine) {
+    byLine = new Map();
+    fingerPickCache.set(forms, byLine);
+  }
+  const key = fingerKey(notes, anchor, hints);
+  const cached = byLine.get(key);
+  if (cached) return cached;
+  const picked = pickSpotsFresh(notes, forms, anchor, hints);
+  if (byLine.size > 4096) byLine.clear();
+  byLine.set(key, picked);
+  return picked;
+}
+
+function pickSpotsFresh(
+  notes: PhraseNote[],
+  forms: readonly Pattern[],
+  anchor: number,
+  hints?: readonly (SkipSpot | null)[],
+): Spot[] {
+  const shapes = formLookupFor(forms);
   const active = shapeCover(
     forms,
     notes.map((note) => note.midi),
@@ -3979,38 +4108,56 @@ function fingerNotes(
   );
   const shaped = forms.length > 0;
   const choices = notes.map((note) => spotsFor(note.midi));
+  // What a spot costs on its own (anchor pull, form loyalty, open-string
+  // discount, pin bonus) does not depend on where the line came from, so it
+  // is priced once per spot instead of once per pair. The pair price left
+  // in the inner loop is the shift, the cached jump term, and the
+  // pitch-direction term: together they are moveCost unchanged, only
+  // regrouped.
+  const spotBase = choices.map((spots, index) =>
+    spots.map((spot) => {
+      let base =
+        Math.abs(spot.position - anchor) * (index === 0 ? 0.05 : 0.02) +
+        shapeCost(shapes, spot, shaped, active);
+      if (index > 0 && spot.fret === 0) base -= 0.15;
+      const hint = hints?.[index];
+      if (hint) base += spotHintBonus(spot, hint, shapes);
+      return base;
+    }),
+  );
+  const terms = jumpTermsFor(forms);
   const cost = choices.map((spots) =>
     spots.map(() => Number.POSITIVE_INFINITY),
   );
   const back = choices.map((spots) => spots.map(() => -1));
   for (let spot = 0; spot < choices[0].length; spot++) {
-    cost[0][spot] =
-      Math.abs(choices[0][spot].position - anchor) * 0.05 +
-      shapeCost(shapes, choices[0][spot], shaped, active) +
-      (hints?.[0] ? spotHintBonus(choices[0][spot], hints[0], shapes) : 0);
+    cost[0][spot] = spotBase[0][spot];
   }
   for (let index = 1; index < notes.length; index++) {
     const pitch = Math.sign(notes[index].midi - notes[index - 1].midi);
-    for (let spot = 0; spot < choices[index].length; spot++) {
+    const fast = notes[index].duration <= 0.5;
+    const prevSpots = choices[index - 1];
+    const prevCosts = cost[index - 1];
+    const curSpots = choices[index];
+    for (let spot = 0; spot < curSpots.length; spot++) {
       let best = Number.POSITIVE_INFINITY;
       let from = -1;
-      const bonus = hints?.[index]
-        ? spotHintBonus(choices[index][spot], hints[index], shapes)
-        : 0;
-      for (let previous = 0; previous < choices[index - 1].length; previous++) {
-        if (!Number.isFinite(cost[index - 1][previous])) continue;
-        const next =
-          cost[index - 1][previous] +
-          moveCost(
-            choices[index - 1][previous],
-            choices[index][spot],
-            pitch,
-            shapes,
-            shaped,
-            active,
-            notes[index].duration <= 0.5,
-            anchor,
-          ) + bonus;
+      const to = curSpots[spot];
+      const base = spotBase[index][spot];
+      for (let previous = 0; previous < prevSpots.length; previous++) {
+        if (!Number.isFinite(prevCosts[previous])) continue;
+        const fromSpot = prevSpots[previous];
+        const key = fromSpot.id * 8192 + to.id;
+        let jump = terms.get(key);
+        if (jump === undefined) {
+          jump = computeJumpTerm(shapes, shaped, fromSpot, to);
+          terms.set(key, jump);
+        }
+        let pair =
+          handShiftCost(to.position - fromSpot.position, fast) + jump;
+        if (pitch > 0 && to.string < fromSpot.string) pair += 0.35;
+        if (pitch < 0 && to.string > fromSpot.string) pair += 0.35;
+        const next = prevCosts[previous] + pair + base;
         if (next < best) {
           best = next;
           from = previous;
@@ -4029,6 +4176,16 @@ function fingerNotes(
     picked[index] = choices[index][spot];
     spot = back[index][spot];
   }
+  return picked;
+}
+
+function fingerNotes(
+  notes: PhraseNote[],
+  forms: readonly Pattern[],
+  anchor: number,
+  hints?: readonly (SkipSpot | null)[],
+): FingeredNote[] {
+  const picked = pickSpots(notes, forms, anchor, hints);
   return notes.map((note, index) => ({
     ...note,
     string: picked[index].string,
@@ -4043,6 +4200,7 @@ function fingerNotes(
 }
 
 const spotCache = new Map<number, Spot[]>();
+let nextSpotId = 0;
 
 function spotsFor(midi: number): Spot[] {
   const cached = spotCache.get(midi);
@@ -4053,13 +4211,13 @@ function spotsFor(midi: number): Spot[] {
     if (fret < 0 || fret > 24) continue;
     if (fret === 0) {
       for (let position = 0; position <= 17; position++)
-        spots.push({ string, fret, position, finger: 0 });
+        spots.push({ string, fret, position, finger: 0, id: nextSpotId++ });
       continue;
     }
     for (let finger = 1; finger <= 4; finger++) {
       const position = fret - (finger - 1);
       if (position < 0 || position > 21) continue;
-      spots.push({ string, fret, position, finger });
+      spots.push({ string, fret, position, finger, id: nextSpotId++ });
     }
   }
   spotCache.set(midi, spots);
@@ -4097,18 +4255,32 @@ function shapeCost(
   return 8;
 }
 
-function moveCost(
-  from: Spot,
-  to: Spot,
-  pitch: number,
+/**
+ * The part of the old moveCost that depends only on the two spots and the
+ * forms (string jump and form distance), kept per forms array under
+ * `from.id * 8192 + to.id`. The spot cache holds well under 8192 spots.
+ */
+const jumpTermCache = new WeakMap<
+  readonly Pattern[],
+  Map<number, number>
+>();
+
+function jumpTermsFor(forms: readonly Pattern[]): Map<number, number> {
+  let terms = jumpTermCache.get(forms);
+  if (!terms) {
+    terms = new Map();
+    jumpTermCache.set(forms, terms);
+  }
+  return terms;
+}
+
+function computeJumpTerm(
   shapes: ReadonlyMap<number, number[]>,
   shaped: boolean,
-  active: number,
-  fast: boolean,
-  anchor: number,
+  from: Spot,
+  to: Spot,
 ): number {
-  let cost = Math.abs(to.position - anchor) * 0.02;
-  cost += handShiftCost(to.position - from.position, fast);
+  let cost = 0;
   const jump = Math.abs(from.string - to.string);
   const fromShapes = shapes.get(shapeKey(from.string, from.fret));
   const toShapes = shapes.get(shapeKey(to.string, to.fret));
@@ -4128,10 +4300,6 @@ function moveCost(
     }
     if (nearest >= 2) cost += 6;
   }
-  cost += shapeCost(shapes, to, shaped, active);
-  if (pitch > 0 && to.string < from.string) cost += 0.35;
-  if (pitch < 0 && to.string > from.string) cost += 0.35;
-  if (to.fret === 0) cost -= 0.15;
   return cost;
 }
 
