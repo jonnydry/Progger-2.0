@@ -2378,6 +2378,13 @@ function handCells(
       const from = steps[index - 1];
       const to = steps[index];
       if (!from || !to || !wideMove(from, to)) return;
+      // Pedal and arp cells do not offer a tritone move; it is playable in
+      // the box but it is not one of the named shapes.
+      if (
+        (id === 's-pedal' || id === 's-arp') &&
+        Math.abs(to.midi - from.midi) === 6
+      )
+        return;
     }
     cells.push({ id, steps });
   };
@@ -2657,8 +2664,9 @@ function chooseSkip(
  * that answers the opening sequences a two-note fragment twice in bar 3.
  * A free line, every eighth seed, skips that sequence and stays on the
  * scored walk. A qualifying eighth run may open on one grouping cell per
- * two bars, and on one string-skip atom per two bars when the scale has a
- * form, never in a bar that already has the other. Both draw from the same
+ * two bars. A skip atom may start on any eighth of a run, at most one per
+ * two bars when the scale has a form, never in a bar that already has the
+ * other, and never across the answered head. Both draw from the same
  * `random` stream. A held note is a chord tone when one is still legal. The
  * approach is not: it stays a step from the cadence. The free tail walks to
  * that step when one is still legal. A second two-pitch return, a repeated
@@ -2701,8 +2709,18 @@ function walkScored(
   const claimed = new Set<number>();
   const headSlots = byBar[0] ?? [];
   const answerSlots = byBar[1] ?? [];
-  if (sameOpening(events, headSlots, answerSlots, 4)) {
+  const answered = sameOpening(events, headSlots, answerSlots, 4);
+  if (answered) {
     for (const slot of answerSlots.slice(0, 4)) claimed.add(slot);
+  }
+  // Skips also stay off the head's first three attacks when bar 2 answers
+  // bar 1. A wide eighth among the answered four cannot be copied (the copy
+  // carries no pin), so the sequence chooser fails and the answer is lost.
+  // An atom starting on the fourth attack is fine: it enters by step and its
+  // wide arrival lands outside the answered four.
+  const skipClaimed = new Set(claimed);
+  if (answered) {
+    for (const slot of headSlots.slice(0, 3)) skipClaimed.add(slot);
   }
   if (
     answersOpening(seed) &&
@@ -2832,7 +2850,7 @@ function walkScored(
         index,
         plan,
         bars,
-        claimed,
+        skipClaimed,
         groupingBars,
         skipWindows,
         forms,
