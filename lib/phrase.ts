@@ -114,6 +114,10 @@ let skipPlayedSkips = 0;
 let skipEligible = 0;
 /** Those runs that drew the atom and found a shape. */
 let skipRolled = 0;
+/** Eighths where a skip atom was allowed to roll. */
+let skipSites = 0;
+/** Those sites that passed the P_SKIP roll, before any cell was looked for. */
+let skipRollPassed = 0;
 
 /** Clear the skip counters. A metrics run resets once, then generates the set. */
 export function resetSkipAtomReport(): void {
@@ -123,6 +127,8 @@ export function resetSkipAtomReport(): void {
   skipPlayedSkips = 0;
   skipEligible = 0;
   skipRolled = 0;
+  skipSites = 0;
+  skipRollPassed = 0;
   for (const key of Object.keys(skipFailReason)) delete skipFailReason[key];
 }
 
@@ -134,6 +140,8 @@ export function skipAtomReport(): {
   playedInsideSkips: number;
   eligible: number;
   rolled: number;
+  sites: number;
+  rollPassed: number;
   failReason: Record<string, number>;
 } {
   return {
@@ -144,6 +152,8 @@ export function skipAtomReport(): {
     playedInsideSkips: skipPlayedSkips,
     eligible: skipEligible,
     rolled: skipRolled,
+    sites: skipSites,
+    rollPassed: skipRollPassed,
     failReason: { ...skipFailReason },
   };
 }
@@ -2150,7 +2160,31 @@ export function groupingBlockAllowed(
 export type SkipSpot = {
   string: number;
   formIndex: number;
+  /** Event index of the atom's first note. Absent on hand-written pins. */
+  atom?: number;
 };
+
+/** One returned note of a played skip atom, as the final fingering has it. */
+export type SkipWitnessSpot = {
+  string: number;
+  fret: number;
+  position: number;
+  formIndex: number;
+  atom: number;
+};
+
+let skipWitness: {
+  spots: (SkipWitnessSpot | null)[];
+  groupingBars: number[];
+} | null = null;
+
+/** Skip atoms and grouping bars of the last phrase `composePhrase` returned. */
+export function lastSkipWitness(): {
+  spots: (SkipWitnessSpot | null)[];
+  groupingBars: number[];
+} | null {
+  return skipWitness;
+}
 
 /**
  * The atom's claim that this arrival is a 2-string skip. `arrivalOk` reads
@@ -2171,48 +2205,11 @@ const P_SKIP = 0.3;
 const SKIP_IDS = ['s-sixth', 's-octave', 's-pedal', 's-arp'] as const;
 type SkipId = (typeof SKIP_IDS)[number];
 
-type SlotStep = { string: number; slot: number };
-
 type SkipBuilt = {
   id: SkipId;
   tones: number[];
   spots: SkipSpot[];
 };
-
-function notesPerString(form: Pattern): number {
-  if (form.positions.length === 18) return 3;
-  if (form.positions.length === 12) return 2;
-  return 0;
-}
-
-function formAt(
-  form: Pattern,
-  nps: number,
-  string: number,
-  slot: number,
-): { string: number; fret: number; midi: number } | null {
-  if (string < 0 || string > 5 || slot < 0 || slot >= nps) return null;
-  return form.positions[string * nps + slot] ?? null;
-}
-
-function fretSpan(frets: readonly number[]): number {
-  let low = Infinity;
-  let high = -Infinity;
-  for (const fret of frets) {
-    if (fret < low) low = fret;
-    if (fret > high) high = fret;
-  }
-  return high - low;
-}
-
-/** Some fingering of `midi` sits in the atom's fret window, so one position can play both. */
-function midiInWindow(midi: number, low: number, high: number): boolean {
-  for (let string = 0; string < TUNING.length; string++) {
-    const fret = midi - (TUNING[string] ?? 0);
-    if (fret >= low && fret <= high) return true;
-  }
-  return false;
-}
 
 function isSkipPair(
   from: SkipSpot | null | undefined,
@@ -2298,157 +2295,152 @@ function pinsForCandidate(
   return pins;
 }
 
-function shiftSteps(steps: readonly SlotStep[], base: number): SlotStep[] | null {
-  const moved = steps.map((step) => ({
-    string: step.string + base,
-    slot: step.slot,
-  }));
-  if (moved.some((step) => step.string > 5)) return null;
-  return moved;
-}
+type BoxTone = { string: number; fret: number; midi: number; tone: number };
 
-/** Two diatonic sixths, then the pair is out of notes on the string. */
-function sixthSteps(nps: number): SlotStep[] | null {
-  if (nps === 3) {
-    return [
-      { string: 0, slot: 1 },
-      { string: 2, slot: 0 },
-      { string: 0, slot: 2 },
-      { string: 2, slot: 1 },
-    ];
+type HandCell = { id: SkipId; steps: BoxTone[] };
+
+const formLookups = new WeakMap<readonly Pattern[], Map<number, number[]>>();
+
+function formLookupFor(forms: readonly Pattern[]): Map<number, number[]> {
+  let shapes = formLookups.get(forms);
+  if (!shapes) {
+    shapes = formLookup(forms);
+    formLookups.set(forms, shapes);
   }
-  if (nps === 2) {
-    return [
-      { string: 0, slot: 1 },
-      { string: 2, slot: 0 },
-    ];
-  }
-  return null;
+  return shapes;
 }
 
 /**
- * Top of the low string up a fifth onto s+2, then the bottom of the low
- * string up an octave onto s+2. The fifth is the note a sweep would have
- * played on the string in between.
+ * Where the fingerer puts the hand for the notes accepted so far. It is the
+ * real `fingerNotes` on the prefix, so it is a provisional answer: the
+ * finished line may still sit the hand somewhere else.
  */
-function arpSteps(nps: number): SlotStep[] | null {
-  if (nps === 3) {
-    return [
-      { string: 0, slot: 2 },
-      { string: 2, slot: 0 },
-      { string: 0, slot: 0 },
-      { string: 2, slot: 1 },
-    ];
-  }
-  if (nps === 2) {
-    return [
-      { string: 0, slot: 1 },
-      { string: 2, slot: 0 },
-      { string: 0, slot: 0 },
-      { string: 2, slot: 1 },
-    ];
-  }
-  return null;
+function prefixHand(
+  notes: readonly Pitched[],
+  events: readonly GridEvent[],
+  forms: readonly Pattern[],
+  anchor: number,
+): number {
+  if (!notes.length) return anchor;
+  const fingered = fingerNotes(
+    notesFromPitches(notes, events),
+    forms,
+    anchor,
+    notes.map((note) => note.spot),
+  );
+  return fingered[fingered.length - 1]?.position ?? anchor;
 }
 
-function octaveSteps(form: Pattern, nps: number, base: number): SlotStep[] | null {
-  if (base + 2 > 5) return null;
-  for (let slot = 0; slot < nps; slot++) {
-    const low = formAt(form, nps, base, slot);
-    if (!low) continue;
-    for (let highSlot = 0; highSlot < nps; highSlot++) {
-      const high = formAt(form, nps, base + 2, highSlot);
-      if (!high || high.midi - low.midi !== 12) continue;
-      const steps: SlotStep[] = [
-        { string: base, slot },
-        { string: base + 2, slot: highSlot },
-      ];
-      const next = formAt(form, nps, base, slot + 1);
-      if (next) {
-        const back = Math.abs(next.midi - high.midi);
-        const span = fretSpan([low.fret, high.fret, next.fret]);
-        if (back > 0 && back <= 12 && span <= 3)
-          steps.push({ string: base, slot: slot + 1 });
-      }
-      return steps;
-    }
+/** Scale tones under the four fingers on one string: frets `hand..hand+3`. */
+function boxTones(
+  string: number,
+  hand: number,
+  shapes: ReadonlyMap<number, number[]>,
+  midiIndex: ReadonlyMap<number, number>,
+): BoxTone[] {
+  const found: BoxTone[] = [];
+  for (let fret = Math.max(0, hand); fret <= hand + 3 && fret <= 24; fret++) {
+    if (!shapes.has(shapeKey(string, fret))) continue;
+    const midi = (TUNING[string] ?? 0) + fret;
+    const tone = midiIndex.get(midi);
+    if (tone === undefined) continue;
+    found.push({ string, fret, midi, tone });
   }
-  return null;
+  return found;
 }
 
-/** Pedal on `base`, then two different notes on the string two up. */
-function pedalSteps(form: Pattern, nps: number, base: number): SlotStep[] | null {
-  if (base + 2 > 5) return null;
-  for (let slot = 0; slot < nps; slot++) {
-    const pedal = formAt(form, nps, base, slot);
-    if (!pedal) continue;
-    const highs: { slot: number; fret: number }[] = [];
-    for (let highSlot = 0; highSlot < nps; highSlot++) {
-      const high = formAt(form, nps, base + 2, highSlot);
-      if (!high) continue;
-      const gap = Math.abs(high.midi - pedal.midi);
-      if (gap < 6 || gap > 12) continue;
-      highs.push({ slot: highSlot, fret: high.fret });
-    }
-    for (let left = 0; left < highs.length; left++) {
-      for (let right = left + 1; right < highs.length; right++) {
-        const a = highs[left];
-        const b = highs[right];
-        if (!a || !b) continue;
-        if (fretSpan([pedal.fret, a.fret, b.fret]) > 3) continue;
-        return [
-          { string: base, slot },
-          { string: base + 2, slot: a.slot },
-          { string: base, slot },
-          { string: base + 2, slot: b.slot },
-        ];
-      }
-    }
-  }
-  return null;
+function wideMove(from: BoxTone, to: BoxTone): boolean {
+  const gap = Math.abs(to.midi - from.midi);
+  return gap >= 6 && gap <= 12;
 }
 
-function realizeSteps(
-  form: Pattern,
-  formIndex: number,
-  nps: number,
-  steps: readonly SlotStep[],
+function isSixth(low: BoxTone, high: BoxTone): boolean {
+  const gap = high.midi - low.midi;
+  return gap === 8 || gap === 9;
+}
+
+/**
+ * Every skip lick the hand can play without moving: a zigzag between two
+ * strings two apart, all frets inside one four-fret box, every move 6–12
+ * semitones. Cells start on the lower string; the caller reverses them when
+ * the contour falls.
+ */
+function handCells(
+  hand: number,
+  shapes: ReadonlyMap<number, number[]>,
   ladder: readonly LadderTone[],
-): { tones: number[]; spots: SkipSpot[]; frets: number[] } | null {
+): HandCell[] {
   const midiIndex = new Map<number, number>();
   ladder.forEach((tone, index) => midiIndex.set(tone.midi, index));
-  const tones: number[] = [];
-  const spots: SkipSpot[] = [];
-  const frets: number[] = [];
-  for (const step of steps) {
-    const position = formAt(form, nps, step.string, step.slot);
-    if (!position) return null;
-    const tone = midiIndex.get(position.midi);
-    if (tone === undefined) return null;
-    tones.push(tone);
-    spots.push({ string: position.string, formIndex });
-    frets.push(position.fret);
+  const cells: HandCell[] = [];
+  const push = (id: SkipId, steps: BoxTone[]) => {
+    for (let index = 1; index < steps.length; index++) {
+      const from = steps[index - 1];
+      const to = steps[index];
+      if (!from || !to || !wideMove(from, to)) return;
+    }
+    cells.push({ id, steps });
+  };
+  for (let string = 0; string + 2 <= 5; string++) {
+    const lows = boxTones(string, hand, shapes, midiIndex);
+    const highs = boxTones(string + 2, hand, shapes, midiIndex);
+    if (!lows.length || !highs.length) continue;
+    lows.forEach((low, at) => {
+      const above = lows[at + 1];
+      highs.forEach((high, over) => {
+        const next = highs[over + 1];
+        // Octave shape, then the next scale tone on the low string.
+        if (high.midi - low.midi === 12)
+          push('s-octave', above ? [low, high, above] : [low, high]);
+        // One sixth, or two parallel sixths a scale step apart.
+        if (isSixth(low, high)) {
+          push('s-sixth', [low, high]);
+          if (above && next && isSixth(above, next))
+            push('s-sixth', [low, high, above, next]);
+        }
+        // One finger stays down; the other string plays two neighbours.
+        if (next) push('s-pedal', [low, high, low, next]);
+      });
+    });
+    // Chord tones only, three or four different ones.
+    const lowChord = lows.filter((item) => ladder[item.tone]?.chordTone);
+    const highChord = highs.filter((item) => ladder[item.tone]?.chordTone);
+    for (const first of lowChord) {
+      for (const second of highChord) {
+        for (const third of lowChord) {
+          if (third === first) continue;
+          push('s-arp', [first, second, third]);
+          for (const fourth of highChord) {
+            if (fourth === second) continue;
+            push('s-arp', [first, second, third, fourth]);
+          }
+        }
+      }
+    }
   }
-  if (fretSpan(frets) > 3) return null;
-  for (let index = 1; index < tones.length; index++) {
-    if (Math.abs(steps[index].string - steps[index - 1].string) !== 2)
-      return null;
-    const gap = Math.abs(
-      (ladder[tones[index] ?? 0]?.midi ?? 0) -
-        (ladder[tones[index - 1] ?? 0]?.midi ?? 0),
-    );
-    if (gap === 0 || gap > 12) return null;
+  return cells;
+}
+
+/**
+ * One form, or two neighbouring forms, that hold every note of the cell.
+ * The pin needs both ends of an arrival in one form or the next.
+ */
+function cellForms(
+  steps: readonly BoxTone[],
+  shapes: ReadonlyMap<number, number[]>,
+  count: number,
+): number[] | null {
+  const hits = steps.map(
+    (step) => shapes.get(shapeKey(step.string, step.fret)) ?? [],
+  );
+  for (let form = 0; form < count; form++) {
+    if (hits.every((list) => list.includes(form))) return hits.map(() => form);
   }
-  let wide = false;
-  for (let index = 1; index < tones.length; index++) {
-    const gap = Math.abs(
-      (ladder[tones[index] ?? 0]?.midi ?? 0) -
-        (ladder[tones[index - 1] ?? 0]?.midi ?? 0),
-    );
-    if (gap >= 6) wide = true;
+  for (let form = 0; form + 1 < count; form++) {
+    if (hits.every((list) => list.includes(form) || list.includes(form + 1)))
+      return hits.map((list) => (list.includes(form) ? form : form + 1));
   }
-  if (!wide) return null;
-  return { tones, spots, frets };
+  return null;
 }
 
 /**
@@ -2534,28 +2526,11 @@ function skipFitsRun(
   );
 }
 
-function nearbyForms(
-  forms: readonly Pattern[],
-  ladder: readonly LadderTone[],
-  anchor: number,
-): { form: Pattern; index: number }[] {
-  const midis = new Set(ladder.map((tone) => tone.midi));
-  return forms
-    .map((form, index) => ({
-      form,
-      index,
-      dist: Math.abs((form.min + form.max) / 2 - anchor),
-      hit: form.positions.some((position) => midis.has(position.midi)),
-    }))
-    .filter((item) => item.hit)
-    .sort((a, b) => a.dist - b.dist || a.index - b.index)
-    .slice(0, 4)
-    .map((item) => ({ form: item.form, index: item.index }));
-}
-
 /**
- * One skip on this eighth run, or nothing. Draws `P_SKIP`, then the family,
- * then a shape, from the walk's own `random`. No forms, no draw.
+ * One skip on this eighth, or nothing. Draws `P_SKIP`, then the family,
+ * then a cell, from the walk's own `random`. The cells come from the hand:
+ * the box the fingerer has the previous note in, and the scale tones already
+ * under the fingers on two strings two apart. No forms, no draw.
  */
 function chooseSkip(
   ladder: readonly LadderTone[],
@@ -2574,7 +2549,8 @@ function chooseSkip(
   rng: { get: () => number; set: (state: number) => void },
   salt: number,
 ): SkipBuilt | null {
-  if (!forms.length || !eighthRunStarts(events, index)) return null;
+  // Any eighth of a run may start a skip, not only the run's first.
+  if (!forms.length || !isEighthEvent(events[index])) return null;
   const event = events[index];
   if (!event) return null;
   if (plan.contour === 'wave') {
@@ -2586,6 +2562,7 @@ function chooseSkip(
   if (eighthRunLength(events, index) < 2) return null;
   if (!skipFitsRun(events, index, 2, claimed, groupingBars, skipWindows))
     return null;
+  skipSites += 1;
   // A failed roll must not move the walk's stream, or later lines miss
   // contour and the search multiplies. Only a placed atom keeps the draws.
   const mark = rng.get();
@@ -2593,26 +2570,11 @@ function chooseSkip(
     rng.set(mark);
     return null;
   }
+  skipRollPassed += 1;
   const anchor = REGISTER_ANCHOR[plan.register];
-  const formsHere = nearbyForms(forms, ladder, anchor);
-  if (!formsHere.length) {
-    rng.set(mark);
-    return null;
-  }
   const prev = notes.length ? notes[notes.length - 1] : null;
-  // Position the previous note can already use nearest the anchor. The
-  // fingerer will not shift an eighth to chase a hint outside that box.
-  let hand = anchor;
-  if (prev) {
-    let best = Infinity;
-    for (const spot of spotsFor(prev.midi)) {
-      const dist = Math.abs(spot.position - anchor);
-      if (dist < best) {
-        best = dist;
-        hand = spot.position;
-      }
-    }
-  }
+  const hand = prefixHand(notes, events, forms, anchor);
+  const shapes = formLookupFor(forms);
   const down = contourDown(
     plan,
     bars,
@@ -2620,84 +2582,55 @@ function chooseSkip(
     prev ? prev.midi : contourGoal(plan, event.beat, bars),
   );
   const found = new Map<SkipId, SkipBuilt[]>();
-  for (const { form, index: formIndex } of formsHere) {
-    const nps = notesPerString(form);
-    if (!nps) continue;
-    for (let base = 0; base <= 3; base++) {
-      const shapes: { id: SkipId; steps: SlotStep[] | null }[] = [
-        { id: 's-sixth', steps: shiftSteps(sixthSteps(nps) ?? [], base) },
-        { id: 's-octave', steps: octaveSteps(form, nps, base) },
-        { id: 's-pedal', steps: pedalSteps(form, nps, base) },
-        { id: 's-arp', steps: shiftSteps(arpSteps(nps) ?? [], base) },
-      ];
-      for (const shape of shapes) {
-        if (!shape.steps) continue;
-        if (
-          !skipFitsRun(
-            events,
-            index,
-            shape.steps.length,
-            claimed,
-            groupingBars,
-            skipWindows,
-          )
-        )
-          continue;
-        const played = realizeSteps(
-          form,
-          formIndex,
-          nps,
-          shape.steps,
-          ladder,
-        );
-        if (!played) continue;
-        const tones = played.tones.slice();
-        const spots = played.spots.slice();
-        if (down) {
-          tones.reverse();
-          spots.reverse();
-        }
-        const start = tones[0] ?? -1;
-        if (start < 0 || !ladder[start]) continue;
-        if (event.strong && !ladder[start].chordTone) continue;
-        if (prev && Math.abs(start - prev.index) > 2) continue;
-        if (prev) {
-          const low = Math.min(...played.frets);
-          const high = Math.max(...played.frets);
-          if (!midiInWindow(prev.midi, low, high)) continue;
-        }
-        const home = notes[0]?.midi ?? ladder[tones[0] ?? 0]?.midi ?? 0;
-        const endMidi = ladder[tones[tones.length - 1] ?? 0]?.midi ?? home;
-        if (
-          !tailCanClose(
-            events,
-            index,
-            tones.length,
-            endMidi,
-            home,
-            cadenceMidi,
-            ladder,
-          )
-        )
-          continue;
-        if (played.frets.some((fret) => fret < hand || fret > hand + 3))
-          continue;
-        const slots = tones.map((_, step) => index + step);
-        const pins = pinsForCandidate(
-          notes,
-          events,
-          slots,
-          ladder,
-          tones,
-          spots,
-        );
-        if (!blockAllowed(ladder, alive, events, notes, slots, tones, pins))
-          continue;
-        const list = found.get(shape.id) ?? [];
-        list.push({ id: shape.id, tones, spots });
-        found.set(shape.id, list);
-      }
+  for (const cell of handCells(hand, shapes, ladder)) {
+    if (
+      !skipFitsRun(
+        events,
+        index,
+        cell.steps.length,
+        claimed,
+        groupingBars,
+        skipWindows,
+      )
+    )
+      continue;
+    const formIndexes = cellForms(cell.steps, shapes, forms.length);
+    if (!formIndexes) continue;
+    const tones = cell.steps.map((step) => step.tone);
+    const spots: SkipSpot[] = cell.steps.map((step, at) => ({
+      string: step.string,
+      formIndex: formIndexes[at] ?? 0,
+      atom: index,
+    }));
+    if (down) {
+      tones.reverse();
+      spots.reverse();
     }
+    const start = tones[0] ?? -1;
+    if (start < 0 || !ladder[start]) continue;
+    if (event.strong && !ladder[start].chordTone) continue;
+    if (prev && Math.abs(start - prev.index) > 2) continue;
+    const home = notes[0]?.midi ?? ladder[start].midi;
+    const endMidi = ladder[tones[tones.length - 1] ?? 0]?.midi ?? home;
+    if (
+      !tailCanClose(
+        events,
+        index,
+        tones.length,
+        endMidi,
+        home,
+        cadenceMidi,
+        ladder,
+      )
+    )
+      continue;
+    const slots = tones.map((_, step) => index + step);
+    const pins = pinsForCandidate(notes, events, slots, ladder, tones, spots);
+    if (!blockAllowed(ladder, alive, events, notes, slots, tones, pins))
+      continue;
+    const list = found.get(cell.id) ?? [];
+    list.push({ id: cell.id, tones, spots });
+    found.set(cell.id, list);
   }
   const available = SKIP_IDS.filter((id) => (found.get(id)?.length ?? 0) > 0);
   if (!available.length) {
@@ -2732,6 +2665,13 @@ function chooseSkip(
  * three-pitch cell, and a fifth scale step in the same direction are refused
  * when another tone is legal.
  */
+type WalkResult = {
+  notes: Pitched[] | null;
+  groupings: number;
+  skips: number;
+  groupingBars: number[];
+};
+
 function walkScored(
   ladder: readonly LadderTone[],
   events: readonly GridEvent[],
@@ -2746,7 +2686,7 @@ function walkScored(
   allowSkip: boolean,
   salt: number,
   forms: readonly Pattern[],
-): { notes: Pitched[] | null; groupings: number; skips: number } | null {
+): WalkResult | null {
   const centre = REGISTER_LOW[plan.register] + PHRASE_RANGE / 2;
   const cadenceMidi = ladder[cadenceAt]?.midi ?? 0;
   const notes: Pitched[] = [];
@@ -2779,10 +2719,11 @@ function walkScored(
   const skipBars = new Set<number>();
   const skipWindows = new Set<number>();
   let pullChordAt = -1;
-  const giveUp = (): { notes: null; groupings: number; skips: number } => ({
+  const giveUp = (): WalkResult => ({
     notes: null,
     groupings: placed,
     skips,
+    groupingBars: [...groupingBars],
   });
   for (let index = 0; index < events.length; index++) {
     if (countSearchStep()) return null;
@@ -3074,7 +3015,7 @@ function walkScored(
     notes.push(pitchedFromLadder(ladder, chosen));
   }
   if (!lineIsLegal(notes, events, cadenceMidi)) return giveUp();
-  return { notes, groupings: placed, skips };
+  return { notes, groupings: placed, skips, groupingBars: [...groupingBars] };
 }
 
 function walkPitches(
@@ -3090,7 +3031,7 @@ function walkPitches(
   allowSkip: boolean,
   salt: number,
   forms: readonly Pattern[],
-): { notes: Pitched[] | null; groupings: number; skips: number } | null {
+): WalkResult | null {
   const alive = reachable(ladder, events, cadenceAt);
   if (!alive[0].some(Boolean)) return null;
   return walkScored(
@@ -3461,24 +3402,44 @@ type LaneResult = {
   score: number;
   exact: boolean;
   lane: number;
+  groupingBars: number[];
 };
+
+/**
+ * Why the final fingering does not play the atoms as built, or '' when it
+ * does. Every atom note is on its pinned string, the whole atom sits in one
+ * position, and an eighth entering or leaving the atom does not move the
+ * hand. The position does not have to be the one the atom was built in.
+ */
+function skipMiss(
+  notes: readonly FingeredNote[],
+  spots: readonly (SkipSpot | null)[],
+): '' | 'string' | 'shift' | 'edge' {
+  for (let index = 0; index < notes.length; index++) {
+    const hint = spots[index];
+    const note = notes[index];
+    if (!hint || !note) continue;
+    if (note.string !== hint.string) return 'string';
+    const before = notes[index - 1];
+    if (!before) continue;
+    const inside = spots[index - 1]?.atom === hint.atom && !!spots[index - 1];
+    if (note.position !== before.position) return inside ? 'shift' : 'edge';
+  }
+  for (let index = 1; index < notes.length; index++) {
+    const note = notes[index];
+    const before = notes[index - 1];
+    if (!note || !before || spots[index] || !spots[index - 1]) continue;
+    if (note.duration <= 0.5 && note.position !== before.position)
+      return 'edge';
+  }
+  return '';
+}
 
 function skipRealized(
   notes: readonly FingeredNote[],
   spots: readonly (SkipSpot | null)[],
 ): boolean {
-  for (let index = 0; index < notes.length; index++) {
-    const hint = spots[index];
-    const note = notes[index];
-    if (!hint || !note) continue;
-    if (note.string !== hint.string) return false;
-    if (index === 0) continue;
-    const prev = spots[index - 1];
-    const before = notes[index - 1];
-    if (!prev || !before || !isSkipPair(prev, hint)) continue;
-    if (Math.abs(note.position - before.position) >= SHIFT_FRETS) return false;
-  }
-  return true;
+  return skipMiss(notes, spots) === '';
 }
 
 const skipFailReason: Record<string, number> = {};
@@ -3505,26 +3466,7 @@ function atomLineFails(
       spots,
     );
     if (!handAccepts(fingered)) reason = 'hand';
-    else if (spots.some(Boolean) && !skipRealized(fingered, spots)) {
-      let stringMiss = 0;
-      let shiftMiss = 0;
-      for (let index = 0; index < fingered.length; index++) {
-        const hint = spots[index];
-        const note = fingered[index];
-        if (!hint || !note) continue;
-        if (note.string !== hint.string) stringMiss += 1;
-        else if (
-          index > 0 &&
-          spots[index - 1] &&
-          isSkipPair(spots[index - 1], hint) &&
-          Math.abs(
-            note.position - (fingered[index - 1]?.position ?? note.position),
-          ) >= SHIFT_FRETS
-        )
-          shiftMiss += 1;
-      }
-      reason = stringMiss ? 'string' : shiftMiss ? 'shift' : 'finger';
-    }
+    else if (spots.some(Boolean)) reason = skipMiss(fingered, spots);
   }
   if (reason && spots.some(Boolean))
     skipFailReason[reason] = (skipFailReason[reason] ?? 0) + 1;
@@ -3646,6 +3588,7 @@ function sampleLane(
     const events = eventsForCells(patterns, input.bars);
     const mark = rng.get();
     let pitches: Pitched[] | null = null;
+    let groupingBars: number[] = [];
     let tried = false;
     // Three cell rotations of the same walk. Each one that passes
     // blockAllowed is its own attempt: kept or dropped, never both.
@@ -3675,6 +3618,7 @@ function sampleLane(
       }
       if (!walked.groupings && !walked.skips) {
         pitches = walked.notes;
+        groupingBars = walked.groupingBars;
         break;
       }
       tried = true;
@@ -3690,6 +3634,7 @@ function sampleLane(
       );
       if (!failed) {
         pitches = walked.notes;
+        groupingBars = walked.groupingBars;
         groupingAtomsKept += walked.groupings;
         skipAtomsKept += walked.skips;
         break;
@@ -3726,6 +3671,7 @@ function sampleLane(
           )
         ) {
           pitches = grouped.notes;
+          groupingBars = grouped.groupingBars;
           groupingAtomsKept += grouped.groupings;
           break;
         }
@@ -3752,6 +3698,7 @@ function sampleLane(
         forms,
       );
       pitches = again?.notes ?? null;
+      groupingBars = again?.groupingBars ?? [];
     }
     if (!pitches) continue;
     const notes = notesFromPitches(pitches, events);
@@ -3768,6 +3715,7 @@ function sampleLane(
       score: criticScore(notes, nextPlan, input.bars, scalePcs),
       exact,
       lane: lane + attempt * lanes,
+      groupingBars,
     };
   }
   return null;
@@ -3841,6 +3789,7 @@ function composePhrase(
     plan: PhrasePlan;
     score: number;
     spots: readonly (SkipSpot | null)[];
+    groupingBars: number[];
   } | null = null;
   for (const item of ranked) {
     if (best && item.score <= best.score) break;
@@ -3862,9 +3811,28 @@ function composePhrase(
         plan: item.plan,
         score,
         spots: item.spots,
+        groupingBars: item.groupingBars,
       };
   }
-  if (best) recordPlayedSkips(best.notes, best.spots);
+  skipWitness = null;
+  if (best) {
+    recordPlayedSkips(best.notes, best.spots);
+    const played = best.notes;
+    skipWitness = {
+      spots: best.spots.map((spot, index) =>
+        spot && played[index]
+          ? {
+              string: played[index].string,
+              fret: played[index].fret,
+              position: played[index].position,
+              formIndex: spot.formIndex,
+              atom: spot.atom ?? index,
+            }
+          : null,
+      ),
+      groupingBars: best.groupingBars,
+    };
+  }
   return best ? { notes: best.notes, plan: best.plan } : null;
 }
 
