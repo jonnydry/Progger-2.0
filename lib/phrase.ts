@@ -4018,25 +4018,29 @@ function fingerRow(
   const prevSpots = parent.spots;
   const prevCosts = parent.cost;
   for (const to of spots) {
-    // What a spot costs on its own (anchor pull, form loyalty, open-string
-    // discount, pin bonus) does not depend on where the line came from, so
-    // it is priced once per spot. The pair price in the inner loop is the
-    // shift, the jump term, and the pitch-direction term.
-    let base =
-      Math.abs(to.position - anchor) * 0.02 +
-      shapeCost(shapes, to, shaped, active);
-    if (to.fret === 0) base -= 0.15;
-    if (hint) base += spotHintBonus(to, hint, shapes);
+    // Terms must be added in the original moveCost order. 7d46fce regrouped
+    // them into a pre-summed spot base plus a pair price, which changes
+    // rounding on exact-cost ties and flipped seed 147379's fingering.
+    const bonus = hint ? spotHintBonus(to, hint, shapes) : 0;
     let best = Number.POSITIVE_INFINITY;
     let from = -1;
     for (let previous = 0; previous < prevSpots.length; previous++) {
       const fromSpot = prevSpots[previous];
-      let pair =
-        handShiftCost(to.position - fromSpot.position, fast) +
-        jumps[fromSpot.string * 6 + to.string];
-      if (pitch > 0 && to.string < fromSpot.string) pair += 0.35;
-      if (pitch < 0 && to.string > fromSpot.string) pair += 0.35;
-      const next = prevCosts[previous] + pair + base;
+      const parts = jumps[fromSpot.string * 6 + to.string];
+      const next =
+        prevCosts[previous] +
+        moveCost(
+          fromSpot,
+          to,
+          pitch,
+          shapes,
+          shaped,
+          active,
+          fast,
+          anchor,
+          parts,
+        ) +
+        bonus;
       if (next < best) {
         best = next;
         from = previous;
@@ -4189,20 +4193,22 @@ function shapeCost(
 }
 
 /**
- * The string-jump and form-distance price of a move. It depends only on the
- * two frets, so it is kept per forms array and pair of pitches, as one
- * number per pair of strings (`from * 6 + to`).
+ * The string-jump and form-distance prices of a move, kept separate so
+ * moveCost can add them in the original order. Cached per forms array and
+ * pair of pitches, one entry per pair of strings (`from * 6 + to`).
  */
+type JumpParts = { jump: number; formDist: number };
+
 const jumpTermCache = new WeakMap<
   readonly Pattern[],
-  Map<number, number[]>
+  Map<number, JumpParts[]>
 >();
 
 function jumpTermsFor(
   forms: readonly Pattern[],
   fromMidi: number,
   toMidi: number,
-): number[] {
+): JumpParts[] {
   let byPair = jumpTermCache.get(forms);
   if (!byPair) {
     byPair = new Map();
@@ -4220,8 +4226,8 @@ function jumpTermsFor(
         const toFret = toMidi - TUNING[to];
         terms.push(
           onNeck(fromFret) && onNeck(toFret)
-            ? jumpTerm(shapes, forms.length > 0, from, fromFret, to, toFret)
-            : 0,
+            ? jumpParts(shapes, forms.length > 0, from, fromFret, to, toFret)
+            : { jump: 0, formDist: 0 },
         );
       }
     }
@@ -4230,34 +4236,57 @@ function jumpTermsFor(
   return terms;
 }
 
-function jumpTerm(
+function jumpParts(
   shapes: ReadonlyMap<number, number[]>,
   shaped: boolean,
   fromString: number,
   fromFret: number,
   toString: number,
   toFret: number,
-): number {
-  let cost = 0;
-  const jump = Math.abs(fromString - toString);
+): JumpParts {
+  let jump = 0;
+  const distance = Math.abs(fromString - toString);
   const fromShapes = shapes.get(shapeKey(fromString, fromFret));
   const toShapes = shapes.get(shapeKey(toString, toFret));
   const sameShape =
     !!fromShapes &&
     !!toShapes &&
     fromShapes.some((index) => toShapes.includes(index));
-  if (jump === 1) cost += 0.7;
-  else if ((jump === 2 || jump === 3) && sameShape) cost += 0.4;
-  else if (jump === 2) cost += 2.4;
-  else if (jump > 2) cost += 5 + jump;
+  if (distance === 1) jump = 0.7;
+  else if ((distance === 2 || distance === 3) && sameShape) jump = 0.4;
+  else if (distance === 2) jump = 2.4;
+  else if (distance > 2) jump = 5 + distance;
+  let formDist = 0;
   if (shaped && fromShapes && toShapes) {
     let nearest = Infinity;
     for (const left of fromShapes) {
       for (const right of toShapes)
         nearest = Math.min(nearest, Math.abs(left - right));
     }
-    if (nearest >= 2) cost += 6;
+    if (nearest >= 2) formDist = 6;
   }
+  return { jump, formDist };
+}
+
+function moveCost(
+  from: Spot,
+  to: Spot,
+  pitch: number,
+  shapes: ReadonlyMap<number, number[]>,
+  shaped: boolean,
+  active: number,
+  fast: boolean,
+  anchor: number,
+  parts: JumpParts,
+): number {
+  let cost = Math.abs(to.position - anchor) * 0.02;
+  cost += handShiftCost(to.position - from.position, fast);
+  if (parts.jump !== 0) cost += parts.jump;
+  if (parts.formDist !== 0) cost += parts.formDist;
+  cost += shapeCost(shapes, to, shaped, active);
+  if (pitch > 0 && to.string < from.string) cost += 0.35;
+  if (pitch < 0 && to.string > from.string) cost += 0.35;
+  if (to.fret === 0) cost -= 0.15;
   return cost;
 }
 
