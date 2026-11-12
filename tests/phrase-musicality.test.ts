@@ -459,11 +459,24 @@ void test('a sentence returns the opening figure, shifted more often than copied
         strong += report.strong;
         strongChord += report.strongChord;
         const midis = phrase.notes.map((note) => note.midi);
+        const wideInBar = new Map<number, number>();
         for (let index = 1; index < midis.length; index++) {
           const gap = Math.abs((midis[index] ?? 0) - (midis[index - 1] ?? 0));
           assert.ok(gap > 0 && gap <= 12);
           const duration = phrase.notes[index]?.duration ?? 1;
-          if (duration <= 0.5) assert.ok(gap <= 5);
+          // Option B: an eighth may leap 6–12 semitones only as a 2-string
+          // skip the hand does not shift for, and at most four times a bar.
+          if (duration <= 0.5 && gap > 5) {
+            const from = phrase.notes[index - 1];
+            const to = phrase.notes[index];
+            assert.ok(from && to);
+            assert.equal(Math.abs(from.string - to.string), 2);
+            assert.ok(Math.abs(from.position - to.position) < 4);
+            const bar = Math.floor(to.beat / 4);
+            const count = (wideInBar.get(bar) ?? 0) + 1;
+            wideInBar.set(bar, count);
+            assert.ok(count <= 4);
+          }
           if (gap > 12) wide += 1;
         }
         if (pitchCycle(midis, 3, 2, cover)) period3 += 1;

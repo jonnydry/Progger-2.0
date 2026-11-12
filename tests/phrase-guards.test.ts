@@ -323,8 +323,10 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     four.notes.map((note) => note.midi),
     [
-      60, 59, 62, 64, 60, 64, 65, 64, 62, 65, 67, 64, 67, 62, 60, 64, 62, 60,
-      65, 64, 60, 62, 65, 62, 64,
+      // Re-pinned for hand-first skip cells (S0): the tail figure is now an
+      // in-box sixth (64–55) instead of the old template octave (62–72).
+      60, 59, 62, 64, 60, 64, 65, 64, 62, 65, 67, 64, 67, 62, 60, 64, 62, 64,
+      55, 57, 60, 64, 67, 65, 64,
     ],
   );
 });
@@ -344,13 +346,15 @@ void test('these cadence tails stay on the weighted pitches', () => {
     // Re-pinned with the register-anchored hand and the contour-true wave.
     // A later pitch change has to update these rows on purpose.
     ['C', 'major', 'C', 7, 2, [72, 76, 72, 67, 76, 79, 76, 71, 69, 67]],
+    // Re-pinned for hand-first skip cells (S0): 60–69 is an in-box sixth
+    // starting on the fourth attack; the answered first four are unchanged.
     [
       'C',
       'major',
       'C',
       46,
       2,
-      [60, 57, 59, 60, 64, 67, 64, 60, 62, 64, 65, 57, 55],
+      [60, 57, 59, 60, 69, 67, 64, 60, 62, 64, 65, 57, 55],
     ],
     [
       'C',
