@@ -2360,10 +2360,12 @@ function isSixth(low: BoxTone, high: BoxTone): boolean {
 }
 
 /**
- * Every skip lick the hand can play without moving: a zigzag between two
- * strings two apart, all frets inside one four-fret box, every move 6–12
- * semitones. Cells start on the lower string; the caller reverses them when
- * the contour falls.
+ * Every skip lick the hand can play without moving, on two strings two
+ * apart, all frets inside one four-fret box, every move 6–12 semitones.
+ * An octave is two notes, the low tone and its octave, and it stops on
+ * the arrival. The walk continues from that note, as it does after a lone
+ * sixth. Sixths, pedals and arps keep their shapes. Cells start on the
+ * lower string; the caller reverses them when the contour falls.
  */
 function handCells(
   hand: number,
@@ -2396,9 +2398,10 @@ function handCells(
       const above = lows[at + 1];
       highs.forEach((high, over) => {
         const next = highs[over + 1];
-        // Octave shape, then the next scale tone on the low string.
-        if (high.midi - low.midi === 12)
-          push('s-octave', above ? [low, high, above] : [low, high]);
+        // Stop on the octave. The old third note hopped straight back to
+        // the next scale tone on the low string, so the top was one eighth
+        // that nothing answered.
+        if (high.midi - low.midi === 12) push('s-octave', [low, high]);
         // One sixth, or two parallel sixths a scale step apart.
         if (isSixth(low, high)) {
           push('s-sixth', [low, high]);
