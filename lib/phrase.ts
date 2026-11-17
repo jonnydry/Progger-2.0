@@ -1424,11 +1424,12 @@ const RANGE_VAR = 29;
 const CONTOUR_VAR = 36;
 
 /**
- * Most phrases answer bar 1. Every eighth seed is a free line, so the
- * sentence is not the only skeleton.
+ * Most phrases answer bar 1. One seed in four is a free line, so the
+ * sentence is not the only skeleton and a quarter of presses give a line
+ * that develops instead of answering.
  */
 function answersOpening(seed: number): boolean {
-  return seed % 8 !== 0;
+  return seed % 4 !== 0;
 }
 
 function pitchedFromLadder(

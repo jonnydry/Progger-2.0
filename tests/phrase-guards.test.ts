@@ -214,7 +214,7 @@ void test('sentence guards stay visible in the notes', () => {
         }
         if (barsCount === 4) {
           four += 1;
-          const free = seed % 8 === 0;
+          const free = seed % 4 === 0;
           if (free) freeFour += 1;
           const head = groups[0] ?? [];
           const fragment = groups[2] ?? [];
@@ -283,24 +283,30 @@ void test('sentence guards stay visible in the notes', () => {
     }
   }
   assert.equal(phrases, 400);
-  assert.equal(freeFour, 24);
+  // One seed in four is a free line: 24 of the 96 four-bar phrases per
+  // context, so 48 of the 200 four-bar phrases in this sweep.
+  assert.equal(freeFour, 48);
   assert.ok(leap / phrases <= 0.5, `leap close ${leap}/${phrases}`);
-  // Answering seeds still sequence bar 3. This sweep is 167/176, the
-  // same count as tip 79f060c. Free seeds are counted apart, below.
+  // Answering seeds still sequence bar 3: 139 of 152 here. Free seeds skip
+  // the bar-3 fragment chooser, so only 5 of 48 land on the same two
+  // intervals by accident. The two rates are what separate the paths now
+  // that there are twice as many free seeds as before (S5).
   assert.ok(
     (sequenced - freeSequenced) / (four - freeFour) >= 0.6,
     `answering fragment ${sequenced - freeSequenced}/${four - freeFour}`,
   );
-  // Free seeds skip the bar-3 fragment chooser. Tip sequenced 23/24 of
-  // these lines. One scored walk still lands on the same two intervals:
-  // F# major, F#maj7, seed 8.
-  assert.ok(freeSequenced <= 1, `free fragment ${freeSequenced}/${freeFour}`);
+  assert.ok(
+    freeSequenced / freeFour <= 0.2,
+    `free fragment ${freeSequenced}/${freeFour}`,
+  );
   assert.ok(
     heldOpen / nonEighthOpen >= 0.9,
     `held opening outside the eighths lane ${heldOpen}/${nonEighthOpen}`,
   );
   assert.ok(silent / bars <= 0.02, `no on-beat ${silent}/${bars}`);
-  assert.ok(returned / phrases >= 0.8, `return ${returned}/${phrases}`);
+  // One seed in four is now a free line, so the bar-2 return is 74.8% of
+  // phrases. The floor sits at 70%.
+  assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);
   assert.ok(
     monotonePhrases / phrases <= 0.02,
     `monotone ${monotonePhrases}/${phrases}`,
@@ -400,7 +406,7 @@ void test('these cadence tails stay on the weighted pitches', () => {
       4,
       [72, 74, 76, 72, 76, 77, 79, 76, 77, 69, 71, 67, 69, 72, 71, 69, 65, 67],
     ],
-    // Free 4-bar seed (24 % 8 === 0). Bar 3 is the scored walk, not the
+    // Free 4-bar seed (24 % 4 === 0). Bar 3 is the scored walk, not the
     // two-note fragment.
     [
       'F#',
@@ -424,15 +430,15 @@ void test('these cadence tails stay on the weighted pitches', () => {
       [61, 59, 58, 63, 65, 58, 56, 54, 59, 58, 56, 58],
     ],
     // A low wave. Its cadence still lands on the bottom C.
-    // Re-pinned for the scale-step settle (S4): the climb now turns back a
-    // ladder tone instead of running on.
+    // Re-pinned for the free line one seed in four (S5): seed 4 no longer
+    // answers bar 1, so bar 2 is a new idea.
     [
       'C',
       'major',
       'C',
       4,
       2,
-      [55, 57, 62, 64, 60, 55, 57, 53, 55, 60, 62, 55, 50, 48],
+      [52, 55, 53, 57, 55, 52, 48, 53, 52, 55, 53, 50, 48],
     ],
     [
       'C',
@@ -441,8 +447,8 @@ void test('these cadence tails stay on the weighted pitches', () => {
       20,
       4,
       [
-        60, 62, 65, 64, 69, 65, 64, 65, 69, 67, 62, 57, 59, 55, 57, 59, 60, 72,
-        71, 67, 64, 62, 60,
+        60, 72, 67, 65, 64, 62, 64, 65, 62, 60, 57, 59, 64, 62, 57, 59, 64, 65,
+        60, 62, 65, 67, 65, 62, 59, 60,
       ],
     ],
     // Re-pinned with grouping cells. Still a 1-semitone step into the C
