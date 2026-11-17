@@ -1,0 +1,326 @@
+{
+ "tree": "main 4a24e4a (timings from the executor machine)",
+ "failures": 0,
+ "REVIEW": {
+  "label": "REVIEW 6720",
+  "phrases": 6720,
+  "rhythm": {
+   "eighthsLaneShare": 63.8,
+   "eighthsOpen_q_ee_ee_ee": 80.4,
+   "allOpen_q_ee_ee_ee": 51.3,
+   "bar1Top3": [
+    "q ee ee ee 51.3%",
+    "ee ant ee ant 9%",
+    "q ee q ee 7.7%"
+   ],
+   "bar1EighthsLane": [
+    "q ee ee ee 80.4%",
+    "q ee q ee 12.1%",
+    "q ee zr q 7.4%",
+    "ee zr ee zr 0%"
+   ],
+   "bar1ByLane": {
+    "quarters": [
+     "q zr zr q 65.7%",
+     "q q zr q 18.5%",
+     "q q q q 15.9%"
+    ],
+    "long-short": [
+     "dq qd 53.4%",
+     "dq zr q 30%",
+     "dq q q 16.6%"
+    ],
+    "push": [
+     "ee ant ee ant 73.4%",
+     "q ant ee zr 11.3%",
+     "q ant zr q 11.2%",
+     "q ee ant zr 4.1%"
+    ]
+   },
+   "twoBar_distinctRhythms": 107,
+   "twoBar_top1": 24.1,
+   "twoBar_top5": 58.6,
+   "twoBar_sameRhythmTwiceInARow": 10,
+   "firstNoteHeld": 91,
+   "firstOnDownbeat": 100,
+   "lastBodyNoteHeld": 30.3,
+   "onsetsPerBar": 5.7,
+   "eighthMotionShare": 64.8,
+   "longestEighthRunMean": 4.94,
+   "phrasesWithRunOf6": 56.6,
+   "restsPerPhrase": 2.37,
+   "syncPerPhrase": 2.29,
+   "heldMidPhrasePerPhrase": 2.88,
+   "adjacentBarsSameRhythm": 0.3
+  },
+  "pitch": {
+   "steps": 49.5,
+   "thirds": 34.1,
+   "wide": 16.4,
+   "unisons": 0,
+   "wideSettled": 32.3,
+   "wideSettledCount": "6062/18741",
+   "wideSettledByScaleStep": 40,
+   "wideKeepsGoingSameDirection": 37,
+   "topHeavy_gt45": 42.1,
+   "topHeavyCount": "2830/6720",
+   "meanTop2": 0.443,
+   "distinctPitchRatio": 0.441,
+   "abaShare": 11.6,
+   "literalSequencePhrases": 43.1,
+   "literalSequenceNoteShare": 16.1,
+   "bar2AnswersBar1": 86.3,
+   "identicalLinesAcrossSeeds": 33
+  },
+  "figures": {
+   "withSkip": 17,
+   "withGrouping": 42.8,
+   "withEither": 50.2,
+   "withEither2bar": 43.8,
+   "withEither4bar": 56.5,
+   "skipKinds": {
+    "sixth": 803,
+    "octave": 211,
+    "arp": 146,
+    "pedal": 45,
+    "sixth-pair": 29
+   }
+  },
+  "landing": {
+   "firstNoteChordTone": 97.4,
+   "strongBeatChordTone": 81,
+   "stepsIntoCadence": 88.9,
+   "wrapStep": 48.1,
+   "wrapStepOntoChordTone": 47.7,
+   "wrapFourthOrWider": 33.6
+  },
+  "hand": {
+   "shiftOntoEighth": 0,
+   "reachOntoEighth": 13,
+   "phrasesWithShift": 0.4,
+   "wideOntoEighth": 1640,
+   "wideOntoEighthAsTwoStringSkip": 1640,
+   "sameFingerNewFretOnEighth": 0,
+   "sameFingertipRollShare": 12.4,
+   "fretSpanP50": 3,
+   "fretSpanP90": 4,
+   "fretSpanMax": 12
+  },
+  "health": {
+   "seedDrift": 7,
+   "msP50": 1.48,
+   "msP99": 10.97,
+   "msMax": 38.9
+  }
+ },
+ "REVIEW_eighths": {
+  "label": "REVIEW eighths lane",
+  "phrases": 4289,
+  "rhythm": {
+   "eighthsLaneShare": 100,
+   "eighthsOpen_q_ee_ee_ee": 80.4,
+   "allOpen_q_ee_ee_ee": 80.4,
+   "bar1Top3": [
+    "q ee ee ee 80.4%",
+    "q ee q ee 12.1%",
+    "q ee zr q 7.4%"
+   ],
+   "bar1EighthsLane": [
+    "q ee ee ee 80.4%",
+    "q ee q ee 12.1%",
+    "q ee zr q 7.4%",
+    "ee zr ee zr 0%"
+   ],
+   "bar1ByLane": {
+    "quarters": [],
+    "long-short": [],
+    "push": []
+   },
+   "twoBar_distinctRhythms": 33,
+   "twoBar_top1": 37.8,
+   "twoBar_top5": 80.9,
+   "twoBar_sameRhythmTwiceInARow": 20.9,
+   "firstNoteHeld": 100,
+   "firstOnDownbeat": 100,
+   "lastBodyNoteHeld": 22.4,
+   "onsetsPerBar": 6.19,
+   "eighthMotionShare": 70.3,
+   "longestEighthRunMean": 5.87,
+   "phrasesWithRunOf6": 84.4,
+   "restsPerPhrase": 1.72,
+   "syncPerPhrase": 2.14,
+   "heldMidPhrasePerPhrase": 2.6,
+   "adjacentBarsSameRhythm": 0.4
+  },
+  "pitch": {
+   "steps": 50.8,
+   "thirds": 33.6,
+   "wide": 15.6,
+   "unisons": 0,
+   "wideSettled": 35.3,
+   "wideSettledCount": "4366/12374",
+   "wideSettledByScaleStep": 43.2,
+   "wideKeepsGoingSameDirection": 36.8,
+   "topHeavy_gt45": 37.6,
+   "topHeavyCount": "1612/4289",
+   "meanTop2": 0.433,
+   "distinctPitchRatio": 0.413,
+   "abaShare": 12.2,
+   "literalSequencePhrases": 67.4,
+   "literalSequenceNoteShare": 23.1,
+   "bar2AnswersBar1": 87.5,
+   "identicalLinesAcrossSeeds": 29
+  },
+  "figures": {
+   "withSkip": 21.1,
+   "withGrouping": 67,
+   "withEither": 73,
+   "withEither2bar": 66.1,
+   "withEither4bar": 80,
+   "skipKinds": {
+    "sixth": 616,
+    "octave": 154,
+    "arp": 126,
+    "pedal": 40,
+    "sixth-pair": 26
+   }
+  },
+  "landing": {
+   "firstNoteChordTone": 100,
+   "strongBeatChordTone": 81.5,
+   "stepsIntoCadence": 89.8,
+   "wrapStep": 47.7,
+   "wrapStepOntoChordTone": 47.7,
+   "wrapFourthOrWider": 33.3
+  },
+  "hand": {
+   "shiftOntoEighth": 0,
+   "reachOntoEighth": 6,
+   "phrasesWithShift": 0.6,
+   "wideOntoEighth": 1319,
+   "wideOntoEighthAsTwoStringSkip": 1319,
+   "sameFingerNewFretOnEighth": 0,
+   "sameFingertipRollShare": 11.8,
+   "fretSpanP50": 3,
+   "fretSpanP90": 4,
+   "fretSpanMax": 12
+  },
+  "health": {
+   "seedDrift": 5,
+   "msP50": 2.29,
+   "msP99": 11.76,
+   "msMax": 38.9
+  }
+ },
+ "SWEEP": {
+  "label": "SWEEP 800 (test set)",
+  "phrases": 800,
+  "rhythm": {
+   "eighthsLaneShare": 50,
+   "eighthsOpen_q_ee_ee_ee": 76.3,
+   "allOpen_q_ee_ee_ee": 38.1,
+   "bar1Top3": [
+    "q ee ee ee 38.1%",
+    "q zr zr q 13.4%",
+    "dq qd 12.5%"
+   ],
+   "bar1EighthsLane": [
+    "q ee ee ee 76.3%",
+    "q ee q ee 15.5%",
+    "q ee zr q 8.3%"
+   ],
+   "bar1ByLane": {
+    "quarters": [
+     "q zr zr q 74.3%",
+     "q q zr q 16.7%",
+     "q q q q 9%"
+    ],
+    "long-short": [
+     "dq qd 62.5%",
+     "dq zr q 24.4%",
+     "dq q q 13.1%"
+    ],
+    "push": [
+     "ee ant ee ant 75%",
+     "q ant ee zr 12.5%",
+     "q ant zr q 8.3%",
+     "q ee ant zr 4.2%"
+    ]
+   },
+   "twoBar_distinctRhythms": 41,
+   "twoBar_top1": 25,
+   "twoBar_top5": 59.5,
+   "twoBar_sameRhythmTwiceInARow": 11.2,
+   "firstNoteHeld": 91,
+   "firstOnDownbeat": 100,
+   "lastBodyNoteHeld": 33.6,
+   "onsetsPerBar": 5.44,
+   "eighthMotionShare": 61.5,
+   "longestEighthRunMean": 4.43,
+   "phrasesWithRunOf6": 43,
+   "restsPerPhrase": 2.53,
+   "syncPerPhrase": 2.33,
+   "heldMidPhrasePerPhrase": 3.13,
+   "adjacentBarsSameRhythm": 0.3
+  },
+  "pitch": {
+   "steps": 51.1,
+   "thirds": 34.2,
+   "wide": 14.6,
+   "unisons": 0,
+   "wideSettled": 33.9,
+   "wideSettledCount": "643/1899",
+   "wideSettledByScaleStep": 35.1,
+   "wideKeepsGoingSameDirection": 36.2,
+   "topHeavy_gt45": 35.6,
+   "topHeavyCount": "285/800",
+   "meanTop2": 0.433,
+   "distinctPitchRatio": 0.467,
+   "abaShare": 10.1,
+   "literalSequencePhrases": 33,
+   "literalSequenceNoteShare": 13,
+   "bar2AnswersBar1": 87.9,
+   "identicalLinesAcrossSeeds": 8
+  },
+  "figures": {
+   "withSkip": 22.5,
+   "withGrouping": 32.8,
+   "withEither": 45.1,
+   "withEither2bar": 38,
+   "withEither4bar": 52.3,
+   "skipKinds": {
+    "sixth": 140,
+    "octave": 37,
+    "arp": 19,
+    "pedal": 4,
+    "sixth-pair": 4
+   }
+  },
+  "landing": {
+   "firstNoteChordTone": 97.5,
+   "strongBeatChordTone": 84.4,
+   "stepsIntoCadence": 93.6,
+   "wrapStep": 40.4,
+   "wrapStepOntoChordTone": 39.8,
+   "wrapFourthOrWider": 39.1
+  },
+  "hand": {
+   "shiftOntoEighth": 0,
+   "reachOntoEighth": 0,
+   "phrasesWithShift": 0,
+   "wideOntoEighth": 252,
+   "wideOntoEighthAsTwoStringSkip": 252,
+   "sameFingerNewFretOnEighth": 0,
+   "sameFingertipRollShare": 10.3,
+   "fretSpanP50": 3,
+   "fretSpanP90": 3,
+   "fretSpanMax": 6
+  },
+  "health": {
+   "seedDrift": 0,
+   "msP50": 1.4,
+   "msP99": 15.51,
+   "msMax": 23.3
+  }
+ }
+}
