@@ -2419,6 +2419,14 @@ function handCells(
       for (const second of highChord) {
         for (const third of lowChord) {
           if (third === first) continue;
+          // Pitch classes, not objects: E–E'–G is an octave bounce, not an
+          // arpeggio the hand can shape as three different chord tones.
+          const classes = new Set([
+            mod(first.midi),
+            mod(second.midi),
+            mod(third.midi),
+          ]);
+          if (classes.size < 3) continue;
           push('s-arp', [first, second, third]);
           for (const fourth of highChord) {
             if (fourth === second) continue;
