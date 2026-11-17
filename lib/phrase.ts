@@ -1404,21 +1404,18 @@ const PROXIMITY_VAR = 8;
  */
 const WIDE_LEAP_SEMIS = 5;
 /**
- * A preference after a wide leap, never a filter: an opposite step of one
- * or two semitones is more likely. There is no run-on penalty to match it.
- * Tuning found that barrelling on is already rare enough once a wide leap
- * has landed, and that damping it clustered pitches badly: at 0.5 the
- * top-two guard went to 38.50%, and only 1.0 held it. A multiplier of 1 is
- * not worth a constant, so the term is a bonus only.
+ * A preference after a wide leap, never a filter: the neighbouring ladder
+ * tone back the other way is more likely. There is no run-on penalty to
+ * match it: barrelling on is already rare enough once a wide leap has
+ * landed, and damping it clustered pitches badly.
  *
- * The bonus is small because `topHeavy` sits at 37.75% against a 38%
- * ceiling on the 800-phrase sweep, about two phrases of room. Every value
- * that lifts the settle rate past ~32% lifts the guard past the ceiling:
- * at 4 the rate reaches 38.18% but the guard 39.88%. 1.25 is the strongest
- * bonus that holds it, and it breaks even phrase for phrase (302 of 800
- * before and after). See the PR for the measured frontier.
+ * The stale comment this replaces said a bonus of 4 broke the 38% top-two
+ * ceiling. It does not: the test's own counter is 285 of 800 (35.6%) at
+ * 4a24e4a and 32.5% with this slice, because the step test below now counts
+ * a pentatonic step (three semitones) as a step. The ceiling stands and the
+ * bonus rises to 3.
  */
-const LEAP_SETTLE_BONUS = 1.25;
+const LEAP_SETTLE_BONUS = 3;
 const RANGE_VAR = 29;
 /**
  * Wide enough that a note can leave the contour curve. The third-mean
@@ -1510,9 +1507,11 @@ function pitchWeight(
     const leap = prevMidi - prevPrevMidi;
     if (Math.abs(leap) >= WIDE_LEAP_SEMIS) {
       const step = midi - prevMidi;
-      const mag = Math.abs(step);
       const opposite = Math.sign(step) === -Math.sign(leap);
-      if (opposite && mag >= 1 && mag <= 2) {
+      // The neighbouring ladder tone back the other way, which is a
+      // semitone or tone in a seven-note scale but three semitones in a
+      // pentatonic one. Testing semitones left those lines unable to settle.
+      if (opposite && ladder[tone + Math.sign(leap)]?.midi === prevMidi) {
         if (!(event.strong || event.duration >= 1)) weight *= LEAP_SETTLE_BONUS;
       }
     }

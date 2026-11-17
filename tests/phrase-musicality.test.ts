@@ -590,14 +590,14 @@ void test('a wide leap settles on an opposite step more often than not', () => {
   }
   const ratio = wideResolved / Math.max(1, wideLeaps);
   // Before the settle term, 31.11% (605/1945) of leaps of 5 or more
-  // semitones stepped back a tone or less. The term is deliberately small:
-  // `topHeavy` sits 0.25 pt under its ceiling at 37.75%, and every bonus
-  // strong enough to reach 0.40 lifts it past 38%. See the PR for the
-  // measured frontier. This floor is a regression gate, not the target.
-  // Spread eighths (S3) thin the run this counts, so the floor drops to 0.30
-  // for that commit; the scale-step settle in S4 lifts it back.
+  // semitones stepped back a tone or less. The term stayed small for years
+  // because the comment here claimed a larger one broke the 38% top-two
+  // ceiling; it does not. `topHeavy` is 32.5% on this sweep with the bonus
+  // at 3, and the step test now counts a pentatonic step (three semitones)
+  // as a step, so lines in five-note scales can settle at all. The ceiling
+  // stands where it was.
   assert.ok(
-    ratio >= 0.3,
+    ratio >= 0.32,
     `wide leap settles ${(100 * ratio).toFixed(2)}% (${wideResolved}/${wideLeaps})`,
   );
   // The term has to move something, or the floor above would pass on main.

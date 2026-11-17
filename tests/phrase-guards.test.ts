@@ -424,13 +424,15 @@ void test('these cadence tails stay on the weighted pitches', () => {
       [61, 59, 58, 63, 65, 58, 56, 54, 59, 58, 56, 58],
     ],
     // A low wave. Its cadence still lands on the bottom C.
+    // Re-pinned for the scale-step settle (S4): the climb now turns back a
+    // ladder tone instead of running on.
     [
       'C',
       'major',
       'C',
       4,
       2,
-      [52, 57, 60, 59, 55, 57, 53, 55, 60, 64, 62, 60, 55, 50, 48],
+      [55, 57, 62, 64, 60, 55, 57, 53, 55, 60, 62, 55, 50, 48],
     ],
     [
       'C',
@@ -439,8 +441,8 @@ void test('these cadence tails stay on the weighted pitches', () => {
       20,
       4,
       [
-        60, 62, 59, 62, 64, 60, 67, 64, 65, 62, 65, 64, 60, 57, 62, 64, 65, 62,
-        64, 67, 65, 62, 67, 69, 72, 67, 62, 60,
+        60, 62, 65, 64, 69, 65, 64, 65, 69, 67, 62, 57, 59, 55, 57, 59, 60, 72,
+        71, 67, 64, 62, 60,
       ],
     ],
     // Re-pinned with grouping cells. Still a 1-semitone step into the C
@@ -451,7 +453,9 @@ void test('these cadence tails stay on the weighted pitches', () => {
       'C',
       5,
       4,
-      [60, 62, 59, 60, 64, 65, 62, 64, 65, 57, 59, 55, 57, 52, 55, 60, 53, 52],
+      [
+        60, 62, 59, 60, 64, 65, 62, 64, 65, 57, 59, 55, 57, 52, 53, 55, 53, 52,
+      ],
     ],
     ['A', 'dorian', 'Am', 7, 2, [69, 72, 71, 69, 72, 76, 74, 72, 67, 64]],
   ];
