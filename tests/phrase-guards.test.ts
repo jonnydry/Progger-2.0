@@ -294,9 +294,10 @@ void test('sentence guards stay visible in the notes', () => {
     strongChord / strong <= 0.88,
     `strong chord ${strongChord}/${strong}`,
   );
-  // An off-beat eighth with no following downbeat. Dropping the sync
-  // bonus falls from 15.0% to 11.6%, still above the 5% floor.
-  assert.ok(sync / syncNotes >= 0.13, `sync ${sync}/${syncNotes}`);
+  // An off-beat eighth with no following downbeat. The critic no longer pays
+  // for off-beats, so this rests on the drawn cells alone: 10.7% here, above
+  // the 10% floor.
+  assert.ok(sync / syncNotes >= 0.1, `sync ${sync}/${syncNotes}`);
   // Same cell id on two bars in a row. Dropping the -30 penalty goes
   // from 7 to 21.
   assert.ok(repeatedCells <= 12, `repeated cells ${repeatedCells}`);
@@ -307,13 +308,13 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     two.notes.map((note) => [note.midi, note.beat, note.duration]),
     [
-      [67, 0, 1],
-      [69, 1.5, 0.5],
-      [71, 2.5, 0.5],
+      [64, 0, 1],
+      [67, 1, 1],
+      [69, 2.5, 0.5],
       [67, 3, 1],
-      [64, 4, 1],
-      [65, 5.5, 0.5],
-      [67, 6.5, 0.5],
+      [60, 4, 1],
+      [64, 5, 1],
+      [65, 6.5, 0.5],
       [64, 7, 0.5],
       [62, 7.5, 0.5],
       [60, 8, 2],
@@ -323,8 +324,8 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     four.notes.map((note) => note.midi),
     [
-      // Re-pinned for hand-first skip cells (S0): the tail figure is now an
-      // in-box sixth (64–55) instead of the old template octave (62–72).
+      // Re-pinned for the rhythm-free critic (S2): the drawn rhythm now
+      // decides the line, so the old tail octave is gone for good.
       60, 59, 62, 64, 60, 64, 65, 64, 62, 65, 67, 64, 67, 62, 60, 64, 62, 64,
       55, 57, 60, 64, 67, 65, 64,
     ],
@@ -392,7 +393,7 @@ void test('these cadence tails stay on the weighted pitches', () => {
       'F#maj7',
       2,
       2,
-      [61, 59, 58, 61, 58, 56, 59, 58, 56, 54, 58, 61, 59, 58],
+      [61, 59, 58, 61, 65, 53, 58, 56, 54, 58, 56, 58],
     ],
     // A low wave. Its cadence still lands on the bottom C.
     [

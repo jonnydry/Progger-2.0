@@ -178,8 +178,11 @@ function skipAtoms(
 void test('an Fmaj7 octave stops on the top Bb and the line steps from there', () => {
   const scale = SCALES.find((item) => item.id === 'major');
   assert.ok(scale);
+  // Seed 993 replaces 1160, which no longer draws a skip now that the critic
+  // leaves rhythm to the seed. Same property: a rising octave onto the top
+  // Bb, then a step down and two more notes inside a fourth.
   const result = generatePhrase({
-    seed: 1160,
+    seed: 993,
     bars: 2,
     scaleNotes: spell('F', scale.formula),
     chordNotes: parseChord('Fmaj7').notes,
@@ -198,7 +201,7 @@ void test('an Fmaj7 octave stops on the top Bb and the line steps from there', (
     const high = cell.notes[1]?.midi ?? 0;
     return Math.abs(high - low) === 12;
   });
-  assert.ok(octave, 'seed 1160 placed no octave');
+  assert.ok(octave, 'seed 993 placed no octave');
   if (!octave) return;
   assert.equal(octave.notes.length, 2);
   assert.deepEqual(
@@ -213,7 +216,7 @@ void test('an Fmaj7 octave stops on the top Bb and the line steps from there', (
   const follow = notes.slice(octave.end + 1, octave.end + 4);
   assert.deepEqual(
     follow.map((note) => note.midi),
-    [69, 67, 65],
+    [69, 65, 67],
   );
   // A step down from the arrival, then two more notes still within a fourth.
   // The old cell hopped a minor seventh back to C on the low string.

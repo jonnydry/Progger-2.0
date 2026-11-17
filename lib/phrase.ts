@@ -3232,6 +3232,14 @@ function sentenceCover(
   return [from, to];
 }
 
+/**
+ * Best-of-N selection among candidate lines for one drawn plan. The rhythm is
+ * already drawn from the seed and the cells it selects, so the critic judges
+ * pitch only: chord tones on strong beats, bar-to-bar variety, the contour,
+ * and the pitch penalties below. Paying for strong-beat notes, rests or
+ * off-beats here overrode the draw and made one bar win in every lane, which
+ * is the sameness this file is trying to lose.
+ */
 function criticScore(
   notes: readonly PhraseNote[],
   plan: PhrasePlan,
@@ -3240,8 +3248,6 @@ function criticScore(
 ): number {
   let strong = 0;
   let strongChord = 0;
-  let rests = 0;
-  let sync = 0;
   let fit = 0;
   const signatures: string[] = [];
   for (let bar = 0; bar < bars; bar++) {
@@ -3256,16 +3262,6 @@ function criticScore(
       strong += 1;
       if (note.chordTone) strongChord += 1;
     }
-    const next = notes[index + 1];
-    if (next && note.duration + 1e-6 < next.beat - note.beat) rests += 1;
-    const fraction = note.beat - Math.floor(note.beat + 1e-9);
-    if (Math.abs(fraction - 0.5) < 0.01) {
-      const following = Math.floor(note.beat) + 1;
-      const struck = notes.some(
-        (item) => Math.abs(item.beat - following) < 0.01,
-      );
-      if (!struck) sync += 1;
-    }
     const goal = contourMidi(plan, index / Math.max(1, notes.length - 1));
     fit += Math.max(0, PHRASE_RANGE - Math.abs(note.midi - goal));
   }
@@ -3279,10 +3275,7 @@ function criticScore(
     notes.slice(0, -1).every((note) => Math.abs(note.duration - 1) < 0.01);
   const ratio = strong ? strongChord / strong : 0;
   let score = Math.round(90 * (1 - Math.abs(ratio - 0.65)));
-  score += strong * 12;
   score += distinct * 18;
-  score += Math.min(rests, 6) * 7;
-  score += Math.min(sync, 6) * 8;
   // A light nudge. The third-mean gate already enforces the lock.
   score += Math.round(fit / notes.length / 4);
   score += Math.min(range, 12);
