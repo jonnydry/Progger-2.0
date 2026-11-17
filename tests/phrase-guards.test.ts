@@ -56,6 +56,16 @@ function eighth(beat: number): number {
   return Math.round((beat - bar * 4) * 2);
 }
 
+/** The attacks inside one bar, as eighths from its downbeat. */
+function barOnsets(line: Phrase, bar: number): string {
+  return line.notes
+    .filter(
+      (note) => Math.floor(note.beat / 4) === bar && note.beat < line.bars * 4,
+    )
+    .map((note) => eighth(note.beat))
+    .join(',');
+}
+
 function monotone(midis: readonly number[], pcs: ReadonlySet<number>): number {
   let best = 1;
   let run = 1;
@@ -135,6 +145,7 @@ void test('sentence guards stay visible in the notes', () => {
   let freeFour = 0;
   let freeSequenced = 0;
   let heldOpen = 0;
+  let nonEighthOpen = 0;
   let bars = 0;
   let silent = 0;
   let returned = 0;
@@ -157,7 +168,12 @@ void test('sentence guards stay visible in the notes', () => {
         const before = notes.at(-2);
         if (closing && before && Math.abs(closing.midi - before.midi) >= 3)
           leap += 1;
-        if ((notes[0]?.duration ?? 0) >= 1) heldOpen += 1;
+        // The eighths lane no longer forces a held first note, so a run can
+        // start on beat 1. Every other lane still opens held.
+        if (line.plan.rhythm !== 'eighths') {
+          nonEighthOpen += 1;
+          if ((notes[0]?.duration ?? 0) >= 1) heldOpen += 1;
+        }
         for (const note of notes) {
           if (note.shift) assert.ok(note.duration > 0.5);
         }
@@ -257,9 +273,11 @@ void test('sentence guards stay visible in the notes', () => {
           );
           if (!struck) sync += 1;
         }
-        const cells = line.plan.cells ?? [];
-        for (let index = 1; index < cells.length; index++) {
-          if (cells[index] === cells[index - 1]) repeatedCells += 1;
+        // Compare what sounds, not the cell labels: two bars can share a
+        // label ("ans 0,1,2,3") and still attack at different places.
+        for (let index = 1; index < barsCount; index++) {
+          if (barOnsets(line, index) === barOnsets(line, index - 1))
+            repeatedCells += 1;
         }
       }
     }
@@ -277,7 +295,10 @@ void test('sentence guards stay visible in the notes', () => {
   // these lines. One scored walk still lands on the same two intervals:
   // F# major, F#maj7, seed 8.
   assert.ok(freeSequenced <= 1, `free fragment ${freeSequenced}/${freeFour}`);
-  assert.ok(heldOpen / phrases >= 0.7, `held opening ${heldOpen}/${phrases}`);
+  assert.ok(
+    heldOpen / nonEighthOpen >= 0.9,
+    `held opening outside the eighths lane ${heldOpen}/${nonEighthOpen}`,
+  );
   assert.ok(silent / bars <= 0.02, `no on-beat ${silent}/${bars}`);
   assert.ok(returned / phrases >= 0.8, `return ${returned}/${phrases}`);
   assert.ok(
@@ -298,9 +319,14 @@ void test('sentence guards stay visible in the notes', () => {
   // for off-beats, so this rests on the drawn cells alone: 10.7% here, above
   // the 10% floor.
   assert.ok(sync / syncNotes >= 0.1, `sync ${sync}/${syncNotes}`);
-  // Same cell id on two bars in a row. Dropping the -30 penalty goes
-  // from 7 to 21.
-  assert.ok(repeatedCells <= 12, `repeated cells ${repeatedCells}`);
+  // Adjacent bars with the same onsets. Counting cell ids instead gave 20
+  // once the opening spread, because two answered bars often share the label
+  // "ans 0,1,2,3" while attacking differently. What a listener hears is the
+  // onsets: 3 of 400 here.
+  assert.ok(
+    repeatedCells <= 4,
+    `repeated bar rhythm ${repeatedCells}/${phrases}`,
+  );
 });
 
 void test('score order and the lane tie-break pick a fixed line', () => {
@@ -324,10 +350,11 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     four.notes.map((note) => note.midi),
     [
-      // Re-pinned for the rhythm-free critic (S2): the drawn rhythm now
-      // decides the line, so the old tail octave is gone for good.
-      60, 59, 62, 64, 60, 64, 65, 64, 62, 65, 67, 64, 67, 62, 60, 64, 62, 64,
-      55, 57, 60, 64, 67, 65, 64,
+      // Re-pinned for the spread eighths opening (S3). Seed 15 still returns
+      // its opening figure; the line is shorter now that the lane can start
+      // on beat 1.
+      64, 62, 65, 67, 65, 62, 67, 65, 69, 71, 72, 67, 65, 69, 67, 64, 62, 67,
+      65, 64, 60, 62, 64,
     ],
   );
 });
@@ -387,13 +414,14 @@ void test('these cadence tails stay on the weighted pitches', () => {
       ],
     ],
     ['C', 'major', 'C', 1, 2, [64, 67, 69, 67, 60, 64, 65, 64, 62, 55]],
+    // Re-pinned for the spread eighths opening (S3).
     [
       'F#',
       'major',
       'F#maj7',
       2,
       2,
-      [61, 59, 58, 61, 65, 53, 58, 56, 54, 58, 56, 58],
+      [61, 59, 58, 63, 65, 58, 56, 54, 59, 58, 56, 58],
     ],
     // A low wave. Its cadence still lands on the bottom C.
     [
@@ -402,7 +430,7 @@ void test('these cadence tails stay on the weighted pitches', () => {
       'C',
       4,
       2,
-      [52, 57, 60, 59, 55, 57, 53, 48, 53, 57, 55, 53, 50, 48],
+      [52, 57, 60, 59, 55, 57, 53, 55, 60, 64, 62, 60, 55, 50, 48],
     ],
     [
       'C',
@@ -411,8 +439,8 @@ void test('these cadence tails stay on the weighted pitches', () => {
       20,
       4,
       [
-        64, 62, 65, 67, 64, 67, 69, 60, 59, 62, 64, 62, 59, 65, 64, 67, 65, 62,
-        67, 69, 71, 69, 67, 62, 60,
+        60, 62, 59, 62, 64, 60, 67, 64, 65, 62, 65, 64, 60, 57, 62, 64, 65, 62,
+        64, 67, 65, 62, 67, 69, 72, 67, 62, 60,
       ],
     ],
     // Re-pinned with grouping cells. Still a 1-semitone step into the C

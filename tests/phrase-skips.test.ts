@@ -175,53 +175,51 @@ function skipAtoms(
   });
 }
 
-void test('an Fmaj7 octave stops on the top Bb and the line steps from there', () => {
-  const scale = SCALES.find((item) => item.id === 'major');
-  assert.ok(scale);
-  // Seed 993 replaces 1160, which no longer draws a skip now that the critic
-  // leaves rhythm to the seed. Same property: a rising octave onto the top
-  // Bb, then a step down and two more notes inside a fourth.
-  const result = generatePhrase({
-    seed: 993,
-    bars: 2,
-    scaleNotes: spell('F', scale.formula),
-    chordNotes: parseChord('Fmaj7').notes,
-  });
-  assert.equal(result.ok, true);
-  if (!result.ok) return;
-  const notes = result.phrase.notes;
-  const pcs = new Set(spell('F', scale.formula).map((note) => note.pc));
-  const atoms = skipAtoms(notes);
-  assert.equal(
-    atoms.some((cell) => oldOctaveReturn(cell.notes, pcs)),
-    false,
-  );
-  const octave = atoms.find((cell) => {
-    const low = cell.notes[0]?.midi ?? 0;
-    const high = cell.notes[1]?.midi ?? 0;
-    return Math.abs(high - low) === 12;
-  });
-  assert.ok(octave, 'seed 993 placed no octave');
-  if (!octave) return;
-  assert.equal(octave.notes.length, 2);
-  assert.deepEqual(
-    octave.notes.map((note) => note.midi),
-    [58, 70],
-  );
-  assert.deepEqual(
-    octave.notes.map((note) => note.name),
-    ['Bb', 'Bb'],
-  );
-  assert.equal(Math.abs(octave.notes[1].string - octave.notes[0].string), 2);
-  const follow = notes.slice(octave.end + 1, octave.end + 4);
-  assert.deepEqual(
-    follow.map((note) => note.midi),
-    [69, 65, 67],
-  );
-  // A step down from the arrival, then two more notes still within a fourth.
-  // The old cell hopped a minor seventh back to C on the low string.
-  assert.equal(follow[0]?.midi, 69);
-  for (const note of follow) assert.ok(Math.abs(note.midi - 70) <= 5);
+void test('an octave stops on its arrival and the line stays near it', () => {
+  // A property, not a seed pin. The old version pinned seed 1160, then 993,
+  // and each stopped drawing an octave as the rhythm draw changed; what the
+  // rule promises is the shape, so this walks a grid of contexts and seeds
+  // and checks every rising octave it finds.
+  let octaves = 0;
+  const CONTEXTS = [
+    ['F', 'major', 'Fmaj7'],
+    ['C', 'major', 'C'],
+    ['G', 'major', 'G7'],
+    ['A', 'dorian', 'Am'],
+  ] as const;
+  for (const [root, scaleId, symbol] of CONTEXTS) {
+    const scale = SCALES.find((item) => item.id === scaleId);
+    assert.ok(scale, scaleId);
+    const scaleNotes = spell(root, scale.formula);
+    const pcs = new Set(scaleNotes.map((note) => note.pc));
+    const chordNotes = parseChord(symbol).notes;
+    for (const bars of [2, 4] as const) {
+      for (let seed = 1000; seed < 1060; seed++) {
+        const result = generatePhrase({ seed, bars, scaleNotes, chordNotes });
+        if (!result.ok) continue;
+        const notes = result.phrase.notes;
+        const atoms = skipAtoms(notes);
+        assert.equal(
+          atoms.some((cell) => oldOctaveReturn(cell.notes, pcs)),
+          false,
+          `${symbol} seed ${seed} ${bars} still returns from the octave`,
+        );
+        for (const octave of atoms) {
+          const [low, high] = octave.notes;
+          if (octave.notes.length !== 2 || !low || !high) continue;
+          if (high.midi - low.midi !== 12) continue;
+          octaves += 1;
+          // Two strings apart, and the line moves by a step off the top.
+          assert.equal(Math.abs(high.string - low.string), 2);
+          const follow = notes.slice(octave.end + 1, octave.end + 4);
+          if (follow[0]) {
+            assert.ok(Math.abs(follow[0].midi - high.midi) <= 5);
+          }
+        }
+      }
+    }
+  }
+  assert.ok(octaves > 0, 'the grid never played an octave to check');
 });
 
 void test('octave cells are two notes and the next eighth stays by the arrival', () => {

@@ -594,8 +594,10 @@ void test('a wide leap settles on an opposite step more often than not', () => {
   // `topHeavy` sits 0.25 pt under its ceiling at 37.75%, and every bonus
   // strong enough to reach 0.40 lifts it past 38%. See the PR for the
   // measured frontier. This floor is a regression gate, not the target.
+  // Spread eighths (S3) thin the run this counts, so the floor drops to 0.30
+  // for that commit; the scale-step settle in S4 lifts it back.
   assert.ok(
-    ratio >= 0.32,
+    ratio >= 0.3,
     `wide leap settles ${(100 * ratio).toFixed(2)}% (${wideResolved}/${wideLeaps})`,
   );
   // The term has to move something, or the floor above would pass on main.

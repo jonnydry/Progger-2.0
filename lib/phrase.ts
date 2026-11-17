@@ -982,6 +982,14 @@ function compileBars(): Record<RhythmId, BarPattern[]> {
 
 const BAR_PATTERNS = compileBars();
 
+/**
+ * Eighths-lane opening bars that carry a six-eighth run: hold then run, run
+ * then a kick, and run into a held note. A grouping needs six eighths in a
+ * row, so these are the bars it can sit on. `pickPatterns` repeats them so
+ * the lane opens on any of the three instead of holding the first note.
+ */
+const EIGHTH_RUN_BARS = ['q ee ee ee', 'ee ee ee zr', 'ee ee ee q'];
+
 type Pitched = {
   midi: number;
   name: string;
@@ -1332,33 +1340,22 @@ function pickPatterns(
       if (down.length) options = down;
       if (!exact) {
         // The answer leaps back to this opening. A quarter or longer
-        // can take that leap; an eighth cannot pass a fourth.
+        // can take that leap; an eighth cannot pass a fourth. The eighths
+        // lane drops the hold below so its run can start on beat 1.
         const held = options.filter(
           (pattern) => (pattern.hits[0]?.dur ?? 0) >= 2,
         );
-        if (held.length) options = held;
+        if (held.length && rhythm !== 'eighths') options = held;
         const ready = options.filter(answerable);
         if (ready.length) options = ready;
-        // The held quarter leaves six eighths on beat 2. That is the run
-        // a grouping can actually sit on.
+        // A six-eighth run can sit anywhere in the bar, so the eighths lane
+        // draws from the three bars that carry one instead of holding the
+        // first note. Repeating them is a weight, not an extra rule.
         if (rhythm === 'eighths' && contour !== 'wave') {
-          const quarter = options.filter(
-            (pattern) => pattern.ids === 'q ee ee ee',
+          const runs = options.filter((pattern) =>
+            EIGHTH_RUN_BARS.includes(pattern.ids),
           );
-          if (quarter.length)
-            options = [
-              ...options,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-            ];
+          options = [...options, ...runs, ...runs, ...runs, ...runs];
         }
       }
       if (exact) {
@@ -2936,8 +2933,10 @@ function walkScored(
     }
     // A held note is a chord tone when one can still be reached. The
     // approach is exempt: it has to be a step into the cadence. Opening
-    // held notes also keep a shift that lands on a chord tone.
-    if (event.duration >= 1 && index < events.length - 2) {
+    // notes also keep a shift that lands on a chord tone: under Loop note 1
+    // is the landing, so it can be an eighth but still has to be a chord
+    // tone (Jonny, Oct 17).
+    if ((event.duration >= 1 || index === 0) && index < events.length - 2) {
       let chordTones = candidates.filter((tone) => ladder[tone].chordTone);
       const openingSlot = byBar[0]?.indexOf(index) ?? -1;
       if (
