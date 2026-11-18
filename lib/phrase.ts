@@ -2679,13 +2679,12 @@ function chooseSkip(
  * and stays on the scored walk. A qualifying eighth run may open on one
  * grouping cell per two bars. A skip atom may start on any eighth of a run,
  * at most one per two bars when the scale has a form, never in a bar that
- * already has the
- * other, and never across the answered head. Both draw from the same
- * `random` stream. A held note is a chord tone when one is still legal. The
- * approach is not: it stays a step from the cadence. The free tail walks to
- * that step when one is still legal. A second two-pitch return, a repeated
- * three-pitch cell, and a fifth scale step in the same direction are refused
- * when another tone is legal.
+ * already has the other, and never across the answered head. Both draw from
+ * the same `random` stream. A held note is a chord tone when one is still
+ * legal. The approach is not: it stays a step from the cadence. The free
+ * tail walks to that step when one is still legal. A second two-pitch
+ * return, a repeated three-pitch cell, and a fifth scale step in the same
+ * direction are refused when another tone is legal.
  */
 type WalkResult = {
   notes: Pitched[] | null;
