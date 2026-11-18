@@ -146,6 +146,11 @@ void test('sentence guards stay visible in the notes', () => {
   let freeSequenced = 0;
   let heldOpen = 0;
   let nonEighthOpen = 0;
+  const OPEN_GUARD: Record<string, { held: number; total: number }> = {
+    quarters: { held: 0, total: 0 },
+    'long-short': { held: 0, total: 0 },
+    push: { held: 0, total: 0 },
+  };
   let bars = 0;
   let silent = 0;
   let returned = 0;
@@ -169,10 +174,17 @@ void test('sentence guards stay visible in the notes', () => {
         if (closing && before && Math.abs(closing.midi - before.midi) >= 3)
           leap += 1;
         // The eighths lane no longer forces a held first note, so a run can
-        // start on beat 1. Every other lane still opens held.
+        // start on beat 1. The other lanes keep the hold in their patterns,
+        // but not at one rate: quarters and long-short open held every time,
+        // while the push lane's anticipations open on an eighth about two
+        // times in five. Counted per lane, so the check below can hold each
+        // one to its own rate instead of an average that hides the push lane.
         if (line.plan.rhythm !== 'eighths') {
           nonEighthOpen += 1;
           if ((notes[0]?.duration ?? 0) >= 1) heldOpen += 1;
+          const lane = OPEN_GUARD[line.plan.rhythm];
+          lane.total += 1;
+          if ((notes[0]?.duration ?? 0) >= 1) lane.held += 1;
         }
         for (const note of notes) {
           if (note.shift) assert.ok(note.duration > 0.5);
@@ -283,8 +295,8 @@ void test('sentence guards stay visible in the notes', () => {
     }
   }
   assert.equal(phrases, 400);
-  // One seed in four is a free line: 24 of the 96 four-bar phrases per
-  // context, so 48 of the 200 four-bar phrases in this sweep.
+  // One seed in four is a free line: seeds 4, 8, 12, 16, 20 and 24 are free,
+  // so 6 of the 25 four-bar phrases in each of the 8 contexts, 48 of 200.
   assert.equal(freeFour, 48);
   assert.ok(leap / phrases <= 0.5, `leap close ${leap}/${phrases}`);
   // Answering seeds still sequence bar 3: 139 of 152 here. Free seeds skip
@@ -300,9 +312,24 @@ void test('sentence guards stay visible in the notes', () => {
     `free fragment ${freeSequenced}/${freeFour}`,
   );
   assert.ok(
-    heldOpen / nonEighthOpen >= 0.9,
+    heldOpen / nonEighthOpen >= 0.8,
     `held opening outside the eighths lane ${heldOpen}/${nonEighthOpen}`,
   );
+  // Per lane, because the aggregate above hides the push lane: at seeds 1-300
+  // quarters and long-short hold 512/512 and 464/464, while push holds
+  // 433/720 (60.1%). Each floor sits about 5 points under its measured rate.
+  for (const [lane, floor] of [
+    ['quarters', 0.95],
+    ['long-short', 0.95],
+    ['push', 0.5],
+  ] as const) {
+    const row = OPEN_GUARD[lane];
+    assert.ok(row && row.total > 0, `no ${lane} phrases`);
+    assert.ok(
+      row.held / row.total >= floor,
+      `${lane} held opening ${row.held}/${row.total}`,
+    );
+  }
   assert.ok(silent / bars <= 0.02, `no on-beat ${silent}/${bars}`);
   // One seed in four is now a free line, so the bar-2 return is 74.8% of
   // phrases. The floor sits at 70%.
@@ -322,9 +349,11 @@ void test('sentence guards stay visible in the notes', () => {
     `strong chord ${strongChord}/${strong}`,
   );
   // An off-beat eighth with no following downbeat. The critic no longer pays
-  // for off-beats, so this rests on the drawn cells alone: 10.7% here, above
-  // the 10% floor.
-  assert.ok(sync / syncNotes >= 0.1, `sync ${sync}/${syncNotes}`);
+  // for off-beats, and slice 2 was the low point at 10.7%; by this head the
+  // drawn cells put it back. The 400-phrase sweep measures 13.03%
+  // (908/6969) and a 4,800-phrase run of the same contexts measures 13.56%.
+  // The floor sits at 12%, above slice 2's dip and under both.
+  assert.ok(sync / syncNotes >= 0.12, `sync ${sync}/${syncNotes}`);
   // Adjacent bars with the same onsets. Counting cell ids instead gave 20
   // once the opening spread, because two answered bars often share the label
   // "ans 0,1,2,3" while attacking differently. What a listener hears is the

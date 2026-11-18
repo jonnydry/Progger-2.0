@@ -542,10 +542,11 @@ void test('a sentence returns the opening figure, shifted more often than copied
   // Held notes of a beat or longer, excluding the approach and the closing
   // chord tone. The approach stays a step into the cadence, so it is often
   // not a chord tone; counting it made this ceiling move with the rhythm
-  // draw rather than with pitch. With the approach exempt the body sits
-  // near 7%, well under 12%.
+  // draw rather than with pitch. With the approach exempt this sweep measures
+  // 5.35% (194/3629) here and 4.80% at seeds 1-300, so the ceiling sits at
+  // 8%: tight enough to catch a real rise, with about 3 points of room.
   assert.ok(
-    heldNonChord / heldNotes <= 0.12,
+    heldNonChord / heldNotes <= 0.08,
     `held non-chord ${heldNonChord}/${heldNotes}`,
   );
   assert.ok(shifted / returned >= 0.4, `shifted ${shifted}/${returned}`);
