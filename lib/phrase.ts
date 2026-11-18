@@ -3467,6 +3467,15 @@ type LaneResult = {
   groupingBars: number[];
 };
 
+/** One lane with its fingering settled, ready to be the phrase. */
+type PlayedLane = {
+  notes: FingeredNote[];
+  plan: PhrasePlan;
+  score: number;
+  spots: readonly (SkipSpot | null)[];
+  groupingBars: number[];
+};
+
 /**
  * Why the final fingering does not play the atoms as built, or '' when it
  * does. Every atom note is on its pinned string, the whole atom sits in one
@@ -3835,49 +3844,101 @@ function composePhrase(
     if (!seamless.length) seamless = found;
   }
   if (!fitting.length) return null;
-  // Every lane here already re-rolled its wrap, so this is belt and braces
-  // for a ladder too narrow to offer a legal one. A phrase still beats no
-  // phrase: when nothing legal exists, the best illegal wrap is used.
-  const legal = fitting.filter(
-    (item) => !seamIsIllegal(item.notes, input.bars),
-  );
-  const pool = legal.length ? legal : fitting.length ? fitting : seamless;
-  // A shift only lowers a score, so a weaker pitch line cannot catch up.
-  const ranked = pool
-    .slice()
-    .sort((a, b) => b.score - a.score || a.lane - b.lane);
-  let best: {
-    notes: FingeredNote[];
-    plan: PhrasePlan;
-    score: number;
-    spots: readonly (SkipSpot | null)[];
-    groupingBars: number[];
-  } | null = null;
-  for (const item of ranked) {
-    if (best && item.score <= best.score) break;
-    const fingered = fingerNotes(
-      item.notes,
-      forms,
-      REGISTER_ANCHOR[plan.register],
-      item.spots,
+  /**
+   * Pick the best lane that passes every check, keeping the best seam-illegal
+   * one aside. The seam test needs the fingering, so it can only be applied
+   * here; a lane that fails it is not thrown away, because it is the only
+   * evidence that this draw had candidates at all.
+   */
+  const pick = (
+    candidates: readonly LaneResult[],
+  ): { best: PlayedLane | null; seamOnly: PlayedLane | null } => {
+    const legal = candidates.filter(
+      (item) => !seamIsIllegal(item.notes, input.bars),
     );
-    if (!handAccepts(fingered)) continue;
-    if (item.spots.some(Boolean) && !skipRealized(fingered, item.spots))
-      continue;
-    // The pitch stage cannot see strings, so a wide wrap onto an eighth is
-    // re-judged here where a pinned two-string skip can excuse it.
-    if (seamIsIllegalFingered(fingered, input.bars)) continue;
-    let shifts = 0;
-    for (const note of fingered) if (note.shift) shifts += 1;
-    const score = item.score - shifts * 8;
-    if (!best || score > best.score)
-      best = {
+    const pool = legal.length ? legal : candidates;
+    // A shift only lowers a score, so a weaker pitch line cannot catch up.
+    const ranked = pool
+      .slice()
+      .sort((a, b) => b.score - a.score || a.lane - b.lane);
+    let best: PlayedLane | null = null;
+    let seamOnly: PlayedLane | null = null;
+    for (const item of ranked) {
+      if (best && item.score <= best.score) break;
+      const fingered = fingerNotes(
+        item.notes,
+        forms,
+        REGISTER_ANCHOR[plan.register],
+        item.spots,
+      );
+      if (!handAccepts(fingered)) continue;
+      if (item.spots.some(Boolean) && !skipRealized(fingered, item.spots))
+        continue;
+      let shifts = 0;
+      for (const note of fingered) if (note.shift) shifts += 1;
+      const candidate: PlayedLane = {
         notes: fingered,
         plan: item.plan,
-        score,
+        score: item.score - shifts * 8,
         spots: item.spots,
         groupingBars: item.groupingBars,
       };
+      // The pitch stage cannot see strings, so a wide wrap onto an eighth is
+      // judged here, where a pinned two-string skip can excuse it.
+      if (seamIsIllegalFingered(fingered, input.bars)) {
+        if (!seamOnly || candidate.score > seamOnly.score)
+          seamOnly = candidate;
+        continue;
+      }
+      if (!best || candidate.score > best.score) best = candidate;
+    }
+    return { best, seamOnly };
+  };
+
+  const first = pick(fitting.length ? fitting : seamless);
+  let best = first.best;
+  const { seamOnly } = first;
+  /**
+   * A lane whose only fault is the seam is worth re-rolling rather than
+   * shipping or dropping. Refusing it outright leaves the plan with nothing
+   * and the caller advances to the next seed, so the phrase the seed was
+   * asked for silently plays as a different one. Rolling fresh lane draws for
+   * the same seed usually finds a wrap the hand can play; only when none
+   * turns up does the phrase fail, as before.
+   *
+   * The extra attempts continue the lane numbering past the contour passes
+   * above, so each one draws different sub-streams rather than repeating a
+   * roll that already failed. `nextSearchAttempt` keeps the step count honest
+   * across the two phases instead of letting the second phase hide the first.
+   */
+  const extraAttempts = 8;
+  if (!best && seamOnly) {
+    nextSearchAttempt();
+    for (
+      let attempt = attempts;
+      attempt < attempts + extraAttempts && !best;
+      attempt++
+    ) {
+      if (searchAtCap() || phraseSearchRefused) break;
+      const found = sampleLanes(
+        input,
+        plan,
+        ladder,
+        cadenceAt,
+        scalePcs,
+        lanes,
+        attempt,
+        forms,
+      );
+      if (!found.length) continue;
+      const varied = found.filter((item) => !item.exact);
+      const source = varied.length ? varied : found;
+      const fit = source.filter((item) =>
+        contourFits(item.notes, item.plan.contour, input.bars),
+      );
+      if (!fit.length) continue;
+      best = pick(fit).best;
+    }
   }
   skipWitness = null;
   if (best) {

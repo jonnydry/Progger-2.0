@@ -521,3 +521,59 @@ void test('these cadence tails stay on the weighted pitches', () => {
     );
   }
 });
+
+void test('the loop wrap never refuses a move the phrase allows, and seeds replay', () => {
+  // The wrap a looping pass makes is the only resolution a loop ever hears, so
+  // it has to obey the same arrival rule as any move inside the phrase: no
+  // unison, no more than an octave, and no more than a fourth onto an eighth
+  // unless a two-string skip pins it. This walks the 800-phrase sweep and
+  // checks it on the finished fingering, where the strings exist.
+  //
+  // It also pins seed drift. When every candidate failed the seam check alone
+  // the plan came back unplayable and the caller advanced to the next seed,
+  // so a seed silently played a different phrase. The re-roll in
+  // `composePhrase` fixes that; this catches it coming back.
+  let phrases = 0;
+  let illegal = 0;
+  let drift = 0;
+  let wideOntoEighth = 0;
+  for (const [root, scaleId, symbol] of SWEEP) {
+    for (const bars of [2, 4] as const) {
+      for (let seed = 1; seed <= 50; seed++) {
+        const line = phrase(root, scaleId, symbol, seed, bars);
+        phrases += 1;
+        if (line.seed !== seed) drift += 1;
+        const body = line.notes.filter((note) => note.beat < bars * 4);
+        const last = body[body.length - 1];
+        const first = line.notes[0];
+        assert.ok(last && first, `${symbol} ${seed} ${bars}`);
+        const gap = Math.abs(first.midi - last.midi);
+        const twoStringSkip = Math.abs(first.string - last.string) === 2;
+        const fast = first.duration <= 0.5;
+        if (fast && gap > 5) wideOntoEighth += 1;
+        // A wide move onto an eighth is allowed only as a two-string skip,
+        // which is the excuse `arrivalOk` takes inside the phrase too.
+        const legal =
+          gap > 0 &&
+          gap <= 12 &&
+          !(fast && gap > 5 && !twoStringSkip);
+        if (!legal) {
+          illegal += 1;
+          assert.fail(
+            `${symbol} seed ${seed} ${bars}: wrap ${last.midi} -> ${first.midi} (gap ${gap}, first ${first.duration}, strings ${last.string} -> ${first.string})`,
+          );
+        }
+      }
+    }
+  }
+  assert.equal(phrases, 800);
+  assert.equal(illegal, 0, `illegal wraps ${illegal}`);
+  // The branch is exercised, not vacuous: 17 phrases here wrap wide onto an
+  // eighth, and every one is a two-string skip.
+  assert.ok(wideOntoEighth >= 10, `wide wraps onto an eighth ${wideOntoEighth}`);
+  // Seed drift here was 3 before the loop-wrap rule and 3 again with it; the
+  // re-roll takes it to 0 on this sweep. Allow a little room for a future
+  // change that trades a seed for a musical fix, but not the 45 the old
+  // fall-through produced.
+  assert.ok(drift <= 2, `seed drift ${drift}/${phrases}`);
+});
