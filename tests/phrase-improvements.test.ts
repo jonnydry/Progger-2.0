@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { parseChord } from '../lib/harmony.ts';
-import { SCALES, spell, type Note } from '../lib/music.ts';
+import { SCALES, patterns, spell, type Note } from '../lib/music.ts';
 import {
   cadenceDegrees,
   cadenceLabel,
@@ -32,6 +32,39 @@ function phraseOf(root: string, scaleId: string, symbol: string, seed: number, b
   assert.equal(result.ok, true, `${symbol} ${seed} ${bars}`);
   if (!result.ok) throw new Error(symbol);
   return result.phrase;
+}
+
+type Shapes = ReadonlyMap<number, number[]>;
+
+/** Form lookup in the engine's own keying, rebuilt here so the test is independent. */
+function formLookup(forms: readonly { positions: readonly { string: number; fret: number }[] }[]): Shapes {
+  const map = new Map<number, number[]>();
+  forms.forEach((form, index) => {
+    for (const position of form.positions) {
+      const key = position.string * 32 + position.fret;
+      const list = map.get(key);
+      if (list) list.push(index);
+      else map.set(key, [index]);
+    }
+  });
+  return map;
+}
+
+function formIndexes(shapes: Shapes, string: number, fret: number): number[] {
+  return shapes.get(string * 32 + fret) ?? [];
+}
+
+/** Two strings apart, and their forms within one of each other. */
+function skipOneFormApart(
+  shapes: Shapes,
+  from: { string: number; fret: number },
+  to: { string: number; fret: number },
+): boolean {
+  if (Math.abs(from.string - to.string) !== 2) return false;
+  const left = formIndexes(shapes, from.string, from.fret);
+  const right = formIndexes(shapes, to.string, to.fret);
+  if (!left.length || !right.length) return false;
+  return left.some((a) => right.some((b) => Math.abs(a - b) <= 1));
 }
 
 void test('a cadence degree keeps its accidental instead of reducing to a number', () => {
@@ -139,9 +172,16 @@ void test('the loop wrap obeys the arrival rule the phrase obeys inside', () => 
     ['Bb', 'mixolydian', 'Bb7'],
     ['E', 'minor', 'Em'],
   ] as const;
+  // The forms a skip must sit in, from the same `patterns` the engine uses.
+  const shapesFor = (root: string, scaleId: string) => {
+    const scale = SCALES.find((item) => item.id === scaleId);
+    assert.ok(scale, scaleId);
+    return formLookup(patterns(spell(root, scale.formula)));
+  };
   let eighthOpens = 0;
   let total = 0;
   for (const [root, scaleId, symbol] of contexts) {
+    const shapes = shapesFor(root, scaleId);
     for (const bars of [2, 4] as const) {
       for (let seed = 1; seed <= 24; seed++) {
         const phrase = phraseOf(root, scaleId, symbol, seed, bars);
@@ -153,23 +193,21 @@ void test('the loop wrap obeys the arrival rule the phrase obeys inside', () => 
         const label = `${symbol} seed ${seed} ${bars}: ${last.midi} -> ${first.midi}`;
         // No unison and no more than an octave, whatever the lengths.
         assert.ok(gap > 0 && gap <= 12, `wrap size ${label}`);
-        // A wide move is legal only when the arriving note is longer than
-        // an eighth (or is a pinned two-string skip, which this rule does
-        // not attempt to re-derive).
+        // A wide move is legal only when the arriving note is longer than an
+        // eighth, or the two notes are a skip one form apart. This test
+        // derives the forms itself rather than trusting the engine's answer,
+        // so it can disagree. A scale with no forms has nothing to vouch for
+        // the move, so a wide wrap onto an eighth there is never legal.
         if (first.duration <= 0.5 && gap > 5) {
-          const twoStringSkip = Math.abs(first.string - last.string) === 2;
-          assert.ok(twoStringSkip, `wide wrap onto an eighth ${label}`);
+          const twoString = Math.abs(first.string - last.string) === 2;
+          assert.ok(
+            twoString && skipOneFormApart(shapes, last, first),
+            `wide wrap onto an eighth ${label} (strings ${last.string} -> ${first.string}, forms ${String(formIndexes(shapes, last.string, last.fret))} / ${String(formIndexes(shapes, first.string, first.fret))})`,
+          );
         }
-        // And the same must hold for the engine's own helper, which takes
-        // the arriving note's length and both strings.
+        // And the engine's own helper must agree.
         assert.equal(
-          loopSeamLegal(
-            last.midi,
-            first.duration,
-            first.midi,
-            last.string,
-            first.string,
-          ),
+          loopSeamLegal(last, first, shapes),
           true,
           `helper ${label}`,
         );

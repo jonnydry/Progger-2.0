@@ -3343,13 +3343,16 @@ function seamIsIllegal(notes: readonly PhraseNote[], bars: 2 | 4): boolean {
 
 /**
  * The rest of the wrap rule, once the strings exist: a wide move onto an
- * eighth is legal only as the pinned two-string skip `arrivalOk` accepts
- * everywhere else. Judging this at the pitch stage dropped whole skip
- * figures over a wrap the hand can actually play.
+ * eighth is legal only as the two-string skip `arrivalOk` accepts everywhere
+ * else. That means the same hand excuse a skip inside a phrase gets: two
+ * strings apart *and* the two notes within one form of each other. A scale
+ * with no forms has no excuse at all, because `patterns` returns nothing to
+ * vouch for it, and neither has a note that sits in no form.
  */
 function seamIsIllegalFingered(
   notes: readonly FingeredNote[],
   bars: 2 | 4,
+  shapes: ReadonlyMap<number, number[]> | null,
 ): boolean {
   const first = notes.find((note) => note.beat === 0);
   let last: FingeredNote | undefined;
@@ -3358,7 +3361,26 @@ function seamIsIllegalFingered(
   const gap = Math.abs(first.midi - last.midi);
   if (gap > 12 || gap === 0) return true;
   if (!(first.duration <= 0.5 && gap > 5)) return false;
-  return Math.abs(first.string - last.string) !== 2;
+  return !seamIsSkipPair(last, first, shapes);
+}
+
+/**
+ * Would the phrase itself allow this wrap as a skip? Both notes have to be
+ * in a form, two strings apart, and within one form index of each other —
+ * exactly what `isSkipPair` asks of a pinned arrival.
+ */
+function seamIsSkipPair(
+  from: { string: number; fret: number },
+  to: { string: number; fret: number },
+  shapes: ReadonlyMap<number, number[]> | null,
+): boolean {
+  if (!shapes) return false;
+  if (Math.abs(from.string - to.string) !== 2) return false;
+  const left = shapes.get(shapeKey(from.string, from.fret));
+  const right = shapes.get(shapeKey(to.string, to.fret));
+  if (!left?.length || !right?.length) return false;
+  for (const a of left) for (const b of right) if (Math.abs(a - b) <= 1) return true;
+  return false;
 }
 
 /**
@@ -3368,21 +3390,19 @@ function seamIsIllegalFingered(
  * limits `arrivalOk` puts on any other one: no unison, no more than an
  * octave, and no more than a fourth onto an eighth. The eighth that matters
  * is the one being arrived at, exactly as inside the phrase, and a wide move
- * onto one is allowed only as a two-string skip, which needs the fingering.
- * {@link seamIsIllegalFingered} is the engine's check; this takes the strings
- * so a test can ask the same question of a finished phrase.
+ * onto one is allowed only as a skip, which needs both notes' forms.
+ * {@link seamIsIllegalFingered} is the engine's check; this is the same rule
+ * for a finished phrase, so a test can ask it without reaching inside.
  */
 export function loopSeamLegal(
-  lastMidi: number,
-  firstDuration: number,
-  firstMidi: number,
-  lastString: number,
-  firstString: number,
+  last: { midi: number; string: number; fret: number },
+  first: { midi: number; duration: number; string: number; fret: number },
+  shapes: ReadonlyMap<number, number[]> | null,
 ): boolean {
-  const gap = Math.abs(firstMidi - lastMidi);
+  const gap = Math.abs(first.midi - last.midi);
   if (gap === 0 || gap > 12) return false;
-  if (!(firstDuration <= 0.5 && gap > 5)) return true;
-  return Math.abs(firstString - lastString) === 2;
+  if (!(first.duration <= 0.5 && gap > 5)) return true;
+  return seamIsSkipPair(last, first, shapes);
 }
 
 const PHRASE_CANDIDATES = 4;
@@ -3810,6 +3830,10 @@ function composePhrase(
   const cadenceAt = cadenceIndexOf(ladder, cadencePcs, plan, input.bars);
   if (cadenceAt < 0) return null;
   const lanes = PHRASE_CANDIDATES * 2;
+  // The seam's skip excuse has to consult the same forms the phrase does, so
+  // it can tell a pair of notes one form apart from two strings that merely
+  // happen to be two courses apart. Cached, so this is a lookup not a rebuild.
+  const shapes = forms.length ? formLookupFor(forms) : null;
   /**
    * A locked contour is judged on the finished line, so one pass of lanes can
    * miss it. Each retry re-rolls all of them. Eight passes clear every arch
@@ -3884,8 +3908,8 @@ function composePhrase(
         groupingBars: item.groupingBars,
       };
       // The pitch stage cannot see strings, so a wide wrap onto an eighth is
-      // judged here, where a pinned two-string skip can excuse it.
-      if (seamIsIllegalFingered(fingered, input.bars)) {
+      // judged here, where a skip one form apart can excuse it.
+      if (seamIsIllegalFingered(fingered, input.bars, shapes)) {
         if (!seamOnly || candidate.score > seamOnly.score)
           seamOnly = candidate;
         continue;
