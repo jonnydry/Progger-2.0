@@ -56,6 +56,16 @@ function eighth(beat: number): number {
   return Math.round((beat - bar * 4) * 2);
 }
 
+/** The attacks inside one bar, as eighths from its downbeat. */
+function barOnsets(line: Phrase, bar: number): string {
+  return line.notes
+    .filter(
+      (note) => Math.floor(note.beat / 4) === bar && note.beat < line.bars * 4,
+    )
+    .map((note) => eighth(note.beat))
+    .join(',');
+}
+
 function monotone(midis: readonly number[], pcs: ReadonlySet<number>): number {
   let best = 1;
   let run = 1;
@@ -135,6 +145,12 @@ void test('sentence guards stay visible in the notes', () => {
   let freeFour = 0;
   let freeSequenced = 0;
   let heldOpen = 0;
+  let nonEighthOpen = 0;
+  const OPEN_GUARD: Record<string, { held: number; total: number }> = {
+    quarters: { held: 0, total: 0 },
+    'long-short': { held: 0, total: 0 },
+    push: { held: 0, total: 0 },
+  };
   let bars = 0;
   let silent = 0;
   let returned = 0;
@@ -157,7 +173,19 @@ void test('sentence guards stay visible in the notes', () => {
         const before = notes.at(-2);
         if (closing && before && Math.abs(closing.midi - before.midi) >= 3)
           leap += 1;
-        if ((notes[0]?.duration ?? 0) >= 1) heldOpen += 1;
+        // The eighths lane no longer forces a held first note, so a run can
+        // start on beat 1. The other lanes keep the hold in their patterns,
+        // but not at one rate: quarters and long-short open held every time,
+        // while the push lane's anticipations open on an eighth about two
+        // times in five. Counted per lane, so the check below can hold each
+        // one to its own rate instead of an average that hides the push lane.
+        if (line.plan.rhythm !== 'eighths') {
+          nonEighthOpen += 1;
+          if ((notes[0]?.duration ?? 0) >= 1) heldOpen += 1;
+          const lane = OPEN_GUARD[line.plan.rhythm];
+          lane.total += 1;
+          if ((notes[0]?.duration ?? 0) >= 1) lane.held += 1;
+        }
         for (const note of notes) {
           if (note.shift) assert.ok(note.duration > 0.5);
         }
@@ -198,7 +226,7 @@ void test('sentence guards stay visible in the notes', () => {
         }
         if (barsCount === 4) {
           four += 1;
-          const free = seed % 8 === 0;
+          const free = seed % 4 === 0;
           if (free) freeFour += 1;
           const head = groups[0] ?? [];
           const fragment = groups[2] ?? [];
@@ -257,29 +285,55 @@ void test('sentence guards stay visible in the notes', () => {
           );
           if (!struck) sync += 1;
         }
-        const cells = line.plan.cells ?? [];
-        for (let index = 1; index < cells.length; index++) {
-          if (cells[index] === cells[index - 1]) repeatedCells += 1;
+        // Compare what sounds, not the cell labels: two bars can share a
+        // label ("ans 0,1,2,3") and still attack at different places.
+        for (let index = 1; index < barsCount; index++) {
+          if (barOnsets(line, index) === barOnsets(line, index - 1))
+            repeatedCells += 1;
         }
       }
     }
   }
   assert.equal(phrases, 400);
-  assert.equal(freeFour, 24);
+  // One seed in four is a free line: seeds 4, 8, 12, 16, 20 and 24 are free,
+  // so 6 of the 25 four-bar phrases in each of the 8 contexts, 48 of 200.
+  assert.equal(freeFour, 48);
   assert.ok(leap / phrases <= 0.5, `leap close ${leap}/${phrases}`);
-  // Answering seeds still sequence bar 3. This sweep is 167/176, the
-  // same count as tip 79f060c. Free seeds are counted apart, below.
+  // Answering seeds still sequence bar 3: 139 of 152 here. Free seeds skip
+  // the bar-3 fragment chooser, so only 5 of 48 land on the same two
+  // intervals by accident. The two rates are what separate the paths now
+  // that there are twice as many free seeds as before (S5).
   assert.ok(
     (sequenced - freeSequenced) / (four - freeFour) >= 0.6,
     `answering fragment ${sequenced - freeSequenced}/${four - freeFour}`,
   );
-  // Free seeds skip the bar-3 fragment chooser. Tip sequenced 23/24 of
-  // these lines. One scored walk still lands on the same two intervals:
-  // F# major, F#maj7, seed 8.
-  assert.ok(freeSequenced <= 1, `free fragment ${freeSequenced}/${freeFour}`);
-  assert.ok(heldOpen / phrases >= 0.7, `held opening ${heldOpen}/${phrases}`);
+  assert.ok(
+    freeSequenced / freeFour <= 0.2,
+    `free fragment ${freeSequenced}/${freeFour}`,
+  );
+  assert.ok(
+    heldOpen / nonEighthOpen >= 0.8,
+    `held opening outside the eighths lane ${heldOpen}/${nonEighthOpen}`,
+  );
+  // Per lane, because the aggregate above hides the push lane: at seeds 1-300
+  // quarters and long-short hold 512/512 and 464/464, while push holds
+  // 433/720 (60.1%). Each floor sits about 5 points under its measured rate.
+  for (const [lane, floor] of [
+    ['quarters', 0.95],
+    ['long-short', 0.95],
+    ['push', 0.5],
+  ] as const) {
+    const row = OPEN_GUARD[lane];
+    assert.ok(row && row.total > 0, `no ${lane} phrases`);
+    assert.ok(
+      row.held / row.total >= floor,
+      `${lane} held opening ${row.held}/${row.total}`,
+    );
+  }
   assert.ok(silent / bars <= 0.02, `no on-beat ${silent}/${bars}`);
-  assert.ok(returned / phrases >= 0.8, `return ${returned}/${phrases}`);
+  // One seed in four is now a free line, so the bar-2 return is 74.8% of
+  // phrases. The floor sits at 70%.
+  assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);
   assert.ok(
     monotonePhrases / phrases <= 0.02,
     `monotone ${monotonePhrases}/${phrases}`,
@@ -294,12 +348,20 @@ void test('sentence guards stay visible in the notes', () => {
     strongChord / strong <= 0.88,
     `strong chord ${strongChord}/${strong}`,
   );
-  // An off-beat eighth with no following downbeat. Dropping the sync
-  // bonus falls from 15.0% to 11.6%, still above the 5% floor.
-  assert.ok(sync / syncNotes >= 0.13, `sync ${sync}/${syncNotes}`);
-  // Same cell id on two bars in a row. Dropping the -30 penalty goes
-  // from 7 to 21.
-  assert.ok(repeatedCells <= 12, `repeated cells ${repeatedCells}`);
+  // An off-beat eighth with no following downbeat. The critic no longer pays
+  // for off-beats, and slice 2 was the low point at 10.7%; by this head the
+  // drawn cells put it back. The 400-phrase sweep measures 13.03%
+  // (908/6969) and a 4,800-phrase run of the same contexts measures 13.56%.
+  // The floor sits at 12%, above slice 2's dip and under both.
+  assert.ok(sync / syncNotes >= 0.12, `sync ${sync}/${syncNotes}`);
+  // Adjacent bars with the same onsets. Counting cell ids instead gave 20
+  // once the opening spread, because two answered bars often share the label
+  // "ans 0,1,2,3" while attacking differently. What a listener hears is the
+  // onsets: 3 of 400 here.
+  assert.ok(
+    repeatedCells <= 4,
+    `repeated bar rhythm ${repeatedCells}/${phrases}`,
+  );
 });
 
 void test('score order and the lane tie-break pick a fixed line', () => {
@@ -307,13 +369,13 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     two.notes.map((note) => [note.midi, note.beat, note.duration]),
     [
-      [67, 0, 1],
-      [69, 1.5, 0.5],
-      [71, 2.5, 0.5],
+      [64, 0, 1],
+      [67, 1, 1],
+      [69, 2.5, 0.5],
       [67, 3, 1],
-      [64, 4, 1],
-      [65, 5.5, 0.5],
-      [67, 6.5, 0.5],
+      [60, 4, 1],
+      [64, 5, 1],
+      [65, 6.5, 0.5],
       [64, 7, 0.5],
       [62, 7.5, 0.5],
       [60, 8, 2],
@@ -323,10 +385,11 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     four.notes.map((note) => note.midi),
     [
-      // Re-pinned for hand-first skip cells (S0): the tail figure is now an
-      // in-box sixth (64–55) instead of the old template octave (62–72).
-      60, 59, 62, 64, 60, 64, 65, 64, 62, 65, 67, 64, 67, 62, 60, 64, 62, 64,
-      55, 57, 60, 64, 67, 65, 64,
+      // Re-pinned for the spread eighths opening (S3). Seed 15 still returns
+      // its opening figure; the line is shorter now that the lane can start
+      // on beat 1.
+      64, 62, 65, 67, 65, 62, 67, 65, 69, 71, 72, 67, 65, 69, 67, 64, 62, 67,
+      65, 64, 60, 62, 64,
     ],
   );
 });
@@ -372,7 +435,7 @@ void test('these cadence tails stay on the weighted pitches', () => {
       4,
       [72, 74, 76, 72, 76, 77, 79, 76, 77, 69, 71, 67, 69, 72, 71, 69, 65, 67],
     ],
-    // Free 4-bar seed (24 % 8 === 0). Bar 3 is the scored walk, not the
+    // Free 4-bar seed (24 % 4 === 0). Bar 3 is the scored walk, not the
     // two-note fragment.
     [
       'F#',
@@ -386,22 +449,25 @@ void test('these cadence tails stay on the weighted pitches', () => {
       ],
     ],
     ['C', 'major', 'C', 1, 2, [64, 67, 69, 67, 60, 64, 65, 64, 62, 55]],
+    // Re-pinned for the spread eighths opening (S3).
     [
       'F#',
       'major',
       'F#maj7',
       2,
       2,
-      [61, 59, 58, 61, 58, 56, 59, 58, 56, 54, 58, 61, 59, 58],
+      [61, 59, 58, 63, 65, 58, 56, 54, 59, 58, 56, 58],
     ],
     // A low wave. Its cadence still lands on the bottom C.
+    // Re-pinned for the free line one seed in four (S5): seed 4 no longer
+    // answers bar 1, so bar 2 is a new idea.
     [
       'C',
       'major',
       'C',
       4,
       2,
-      [52, 57, 60, 59, 55, 57, 53, 48, 53, 57, 55, 53, 50, 48],
+      [52, 55, 53, 57, 55, 52, 48, 53, 52, 55, 53, 50, 48],
     ],
     [
       'C',
@@ -410,8 +476,8 @@ void test('these cadence tails stay on the weighted pitches', () => {
       20,
       4,
       [
-        64, 62, 65, 67, 64, 67, 69, 60, 59, 62, 64, 62, 59, 65, 64, 67, 65, 62,
-        67, 69, 71, 69, 67, 62, 60,
+        60, 72, 67, 65, 64, 62, 64, 65, 62, 60, 57, 59, 64, 62, 57, 59, 64, 65,
+        60, 62, 65, 67, 65, 62, 59, 60,
       ],
     ],
     // Re-pinned with grouping cells. Still a 1-semitone step into the C
@@ -422,7 +488,9 @@ void test('these cadence tails stay on the weighted pitches', () => {
       'C',
       5,
       4,
-      [60, 62, 59, 60, 64, 65, 62, 64, 65, 57, 59, 55, 57, 52, 55, 60, 53, 52],
+      [
+        60, 62, 59, 60, 64, 65, 62, 64, 65, 57, 59, 55, 57, 52, 53, 55, 53, 52,
+      ],
     ],
     ['A', 'dorian', 'Am', 7, 2, [69, 72, 71, 69, 72, 76, 74, 72, 67, 64]],
   ];

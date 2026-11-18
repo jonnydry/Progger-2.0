@@ -208,23 +208,24 @@ void test('major blues at 4 bars stays under the search step cap', () => {
 });
 
 void test('an unplayable plan retries once with the next seed', () => {
-  // A two-pitch ladder has no room for most contours. The eighths-weighted
-  // rhythm draw moved the narrow miss from seed 74 to seed 3. Seed 2 still
-  // plays, and a miss retries once as the next seed.
+  // A two-pitch ladder has no room for most contours. The eighths draw of
+  // the rhythm lock moved the narrow miss from seed 74 to seed 3, and the
+  // spread opening moved it again to seed 6. Seed 5 still plays, and a miss
+  // retries once as the next seed.
   const scaleNotes: Note[] = [
     { name: 'C', pc: 0, degree: '1' },
     { name: 'E', pc: 4, degree: '3' },
   ];
   const chordNotes = scaleNotes;
   const failed = generatePhrase({
-    seed: 3,
+    seed: 6,
     bars: 2,
     scaleNotes,
     chordNotes,
   });
   assert.deepEqual(failed, { ok: false, reason: 'unplayable' });
   const retried = generatePhrase({
-    seed: 2,
+    seed: 5,
     bars: 2,
     scaleNotes,
     chordNotes,
@@ -235,7 +236,7 @@ void test('an unplayable plan retries once with the next seed', () => {
     assert.equal(retried.phrase.notes.at(-1)?.duration, 2);
   }
   const again = generatePhrase({
-    seed: 2,
+    seed: 5,
     bars: 2,
     scaleNotes,
     chordNotes,

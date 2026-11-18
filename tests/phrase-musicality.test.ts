@@ -500,8 +500,13 @@ void test('a sentence returns the opening figure, shifted more often than copied
         }
         assert.equal(phrase.notes.at(-1)?.beat, barsCount * 4);
         assert.equal(phrase.notes.at(-1)?.duration, 2);
-        for (const note of phrase.notes) {
+        for (const [index, note] of phrase.notes.entries()) {
           if (note.duration + 1e-9 < 1) continue;
+          // The approach is a step into the cadence by design, so it is
+          // exempt: with the critic no longer paying for rhythm it is the
+          // only held non-chord tone that climbs. Everything else is at
+          // 5.4% here, well under the 12% ceiling.
+          if (index === phrase.notes.length - 2) continue;
           heldNotes += 1;
           if (!note.chordTone) heldNonChord += 1;
         }
@@ -528,18 +533,20 @@ void test('a sentence returns the opening figure, shifted more often than copied
   );
   assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);
   // #63's same skeleton: 98.85% of phrases opened bar 2 on bar 1's figure.
-  // Every eighth seed is a free line, so the return stays and is not universal.
+  // One seed in four is a free line, so the return stays and is not universal.
   // Skipping the free bar-3 fragment left this at 85.25% (682/800).
   assert.ok(
     returned / phrases <= 0.92,
     `same skeleton ${returned}/${phrases}`,
   );
-  // Held notes of a beat or longer, including the closing chord tone.
-  // Tip was 32% before chord-tone holds. The approach stays a step, so it
-  // is often not a chord tone. The free bar-3 skip moved this sweep from
-  // 11.05% (464/4199) to 10.47% (438/4185).
+  // Held notes of a beat or longer, excluding the approach and the closing
+  // chord tone. The approach stays a step into the cadence, so it is often
+  // not a chord tone; counting it made this ceiling move with the rhythm
+  // draw rather than with pitch. With the approach exempt this sweep measures
+  // 5.35% (194/3629) here and 4.80% at seeds 1-300, so the ceiling sits at
+  // 8%: tight enough to catch a real rise, with about 3 points of room.
   assert.ok(
-    heldNonChord / heldNotes <= 0.12,
+    heldNonChord / heldNotes <= 0.08,
     `held non-chord ${heldNonChord}/${heldNotes}`,
   );
   assert.ok(shifted / returned >= 0.4, `shifted ${shifted}/${returned}`);
@@ -584,10 +591,12 @@ void test('a wide leap settles on an opposite step more often than not', () => {
   }
   const ratio = wideResolved / Math.max(1, wideLeaps);
   // Before the settle term, 31.11% (605/1945) of leaps of 5 or more
-  // semitones stepped back a tone or less. The term is deliberately small:
-  // `topHeavy` sits 0.25 pt under its ceiling at 37.75%, and every bonus
-  // strong enough to reach 0.40 lifts it past 38%. See the PR for the
-  // measured frontier. This floor is a regression gate, not the target.
+  // semitones stepped back a tone or less. The term stayed small for years
+  // because the comment here claimed a larger one broke the 38% top-two
+  // ceiling; it does not. `topHeavy` is 32.5% on this sweep with the bonus
+  // at 3, and the step test now counts a pentatonic step (three semitones)
+  // as a step, so lines in five-note scales can settle at all. The ceiling
+  // stands where it was.
   assert.ok(
     ratio >= 0.32,
     `wide leap settles ${(100 * ratio).toFixed(2)}% (${wideResolved}/${wideLeaps})`,

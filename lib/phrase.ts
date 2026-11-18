@@ -982,6 +982,14 @@ function compileBars(): Record<RhythmId, BarPattern[]> {
 
 const BAR_PATTERNS = compileBars();
 
+/**
+ * Eighths-lane opening bars that carry a six-eighth run: hold then run, run
+ * then a kick, and run into a held note. A grouping needs six eighths in a
+ * row, so these are the bars it can sit on. `pickPatterns` repeats them so
+ * the lane opens on any of the three instead of holding the first note.
+ */
+const EIGHTH_RUN_BARS = ['q ee ee ee', 'ee ee ee zr', 'ee ee ee q'];
+
 type Pitched = {
   midi: number;
   name: string;
@@ -1332,33 +1340,22 @@ function pickPatterns(
       if (down.length) options = down;
       if (!exact) {
         // The answer leaps back to this opening. A quarter or longer
-        // can take that leap; an eighth cannot pass a fourth.
+        // can take that leap; an eighth cannot pass a fourth. The eighths
+        // lane drops the hold below so its run can start on beat 1.
         const held = options.filter(
           (pattern) => (pattern.hits[0]?.dur ?? 0) >= 2,
         );
-        if (held.length) options = held;
+        if (held.length && rhythm !== 'eighths') options = held;
         const ready = options.filter(answerable);
         if (ready.length) options = ready;
-        // The held quarter leaves six eighths on beat 2. That is the run
-        // a grouping can actually sit on.
+        // A six-eighth run can sit anywhere in the bar, so the eighths lane
+        // draws from the three bars that carry one instead of holding the
+        // first note. Repeating them is a weight, not an extra rule.
         if (rhythm === 'eighths' && contour !== 'wave') {
-          const quarter = options.filter(
-            (pattern) => pattern.ids === 'q ee ee ee',
+          const runs = options.filter((pattern) =>
+            EIGHTH_RUN_BARS.includes(pattern.ids),
           );
-          if (quarter.length)
-            options = [
-              ...options,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-              ...quarter,
-            ];
+          options = [...options, ...runs, ...runs, ...runs, ...runs];
         }
       }
       if (exact) {
@@ -1407,21 +1404,18 @@ const PROXIMITY_VAR = 8;
  */
 const WIDE_LEAP_SEMIS = 5;
 /**
- * A preference after a wide leap, never a filter: an opposite step of one
- * or two semitones is more likely. There is no run-on penalty to match it.
- * Tuning found that barrelling on is already rare enough once a wide leap
- * has landed, and that damping it clustered pitches badly: at 0.5 the
- * top-two guard went to 38.50%, and only 1.0 held it. A multiplier of 1 is
- * not worth a constant, so the term is a bonus only.
+ * A preference after a wide leap, never a filter: the neighbouring ladder
+ * tone back the other way is more likely. There is no run-on penalty to
+ * match it: barrelling on is already rare enough once a wide leap has
+ * landed, and damping it clustered pitches badly.
  *
- * The bonus is small because `topHeavy` sits at 37.75% against a 38%
- * ceiling on the 800-phrase sweep, about two phrases of room. Every value
- * that lifts the settle rate past ~32% lifts the guard past the ceiling:
- * at 4 the rate reaches 38.18% but the guard 39.88%. 1.25 is the strongest
- * bonus that holds it, and it breaks even phrase for phrase (302 of 800
- * before and after). See the PR for the measured frontier.
+ * The stale comment this replaces said a bonus of 4 broke the 38% top-two
+ * ceiling. It does not: the test's own counter is 285 of 800 (35.6%) at
+ * 4a24e4a and 32.5% with this slice, because the step test below now counts
+ * a pentatonic step (three semitones) as a step. The ceiling stands and the
+ * bonus rises to 3.
  */
-const LEAP_SETTLE_BONUS = 1.25;
+const LEAP_SETTLE_BONUS = 3;
 const RANGE_VAR = 29;
 /**
  * Wide enough that a note can leave the contour curve. The third-mean
@@ -1430,11 +1424,12 @@ const RANGE_VAR = 29;
 const CONTOUR_VAR = 36;
 
 /**
- * Most phrases answer bar 1. Every eighth seed is a free line, so the
- * sentence is not the only skeleton.
+ * Most phrases answer bar 1. One seed in four is a free line, so the
+ * sentence is not the only skeleton and a quarter of presses give a line
+ * that develops instead of answering.
  */
 function answersOpening(seed: number): boolean {
-  return seed % 8 !== 0;
+  return seed % 4 !== 0;
 }
 
 function pitchedFromLadder(
@@ -1513,9 +1508,11 @@ function pitchWeight(
     const leap = prevMidi - prevPrevMidi;
     if (Math.abs(leap) >= WIDE_LEAP_SEMIS) {
       const step = midi - prevMidi;
-      const mag = Math.abs(step);
       const opposite = Math.sign(step) === -Math.sign(leap);
-      if (opposite && mag >= 1 && mag <= 2) {
+      // The neighbouring ladder tone back the other way, which is a
+      // semitone or tone in a seven-note scale but three semitones in a
+      // pentatonic one. Testing semitones left those lines unable to settle.
+      if (opposite && ladder[tone + Math.sign(leap)]?.midi === prevMidi) {
         if (!(event.strong || event.duration >= 1)) weight *= LEAP_SETTLE_BONUS;
       }
     }
@@ -2419,6 +2416,14 @@ function handCells(
       for (const second of highChord) {
         for (const third of lowChord) {
           if (third === first) continue;
+          // Pitch classes, not objects: E–E'–G is an octave bounce, not an
+          // arpeggio the hand can shape as three different chord tones.
+          const classes = new Set([
+            mod(first.midi),
+            mod(second.midi),
+            mod(third.midi),
+          ]);
+          if (classes.size < 3) continue;
           push('s-arp', [first, second, third]);
           for (const fourth of highChord) {
             if (fourth === second) continue;
@@ -2665,9 +2670,10 @@ function chooseSkip(
  * Scored pitches, then a sentence. On most seeds bar 2 opens on bar 1's
  * first four attacks, transposed by one or two scale steps. A 4-bar phrase
  * that answers the opening sequences a two-note fragment twice in bar 3.
- * A free line, every eighth seed, skips that sequence and stays on the
- * scored walk. A qualifying eighth run may open on one grouping cell per
- * two bars. A skip atom may start on any eighth of a run, at most one per
+ * A free line (one seed in four, see `answersOpening`) skips that sequence
+ * and stays on the scored walk. A qualifying eighth run may open on one
+ * grouping cell per two bars. A skip atom may start on any eighth of a run,
+ * at most one per
  * two bars when the scale has a form, never in a bar that already has the
  * other, and never across the answered head. Both draw from the same
  * `random` stream. A held note is a chord tone when one is still legal. The
@@ -2928,8 +2934,10 @@ function walkScored(
     }
     // A held note is a chord tone when one can still be reached. The
     // approach is exempt: it has to be a step into the cadence. Opening
-    // held notes also keep a shift that lands on a chord tone.
-    if (event.duration >= 1 && index < events.length - 2) {
+    // notes also keep a shift that lands on a chord tone: under Loop note 1
+    // is the landing, so it can be an eighth but still has to be a chord
+    // tone (Jonny, Oct 17).
+    if ((event.duration >= 1 || index === 0) && index < events.length - 2) {
       let chordTones = candidates.filter((tone) => ladder[tone].chordTone);
       const openingSlot = byBar[0]?.indexOf(index) ?? -1;
       if (
@@ -3224,6 +3232,17 @@ function sentenceCover(
   return [from, to];
 }
 
+/**
+ * Best-of-N selection among candidate lines for one drawn plan. The rhythm is
+ * already drawn from the seed and the cells it selects, so no term here pays
+ * for a note being on the beat, for a rest, or for an off-beat: those three
+ * overrode the draw and made one bar win in every lane. What is left is pitch
+ * and shape: chord tones on strong beats, the contour, the pitch penalties,
+ * and `distinct * 18`, which penalises a line whose bars repeat one onset
+ * signature. That last one is a rhythm term, kept on purpose: it is the only
+ * thing stopping the draw from picking the same bar twice, and the plan's
+ * repeated-bar guard depends on it.
+ */
 function criticScore(
   notes: readonly PhraseNote[],
   plan: PhrasePlan,
@@ -3232,8 +3251,6 @@ function criticScore(
 ): number {
   let strong = 0;
   let strongChord = 0;
-  let rests = 0;
-  let sync = 0;
   let fit = 0;
   const signatures: string[] = [];
   for (let bar = 0; bar < bars; bar++) {
@@ -3248,16 +3265,6 @@ function criticScore(
       strong += 1;
       if (note.chordTone) strongChord += 1;
     }
-    const next = notes[index + 1];
-    if (next && note.duration + 1e-6 < next.beat - note.beat) rests += 1;
-    const fraction = note.beat - Math.floor(note.beat + 1e-9);
-    if (Math.abs(fraction - 0.5) < 0.01) {
-      const following = Math.floor(note.beat) + 1;
-      const struck = notes.some(
-        (item) => Math.abs(item.beat - following) < 0.01,
-      );
-      if (!struck) sync += 1;
-    }
     const goal = contourMidi(plan, index / Math.max(1, notes.length - 1));
     fit += Math.max(0, PHRASE_RANGE - Math.abs(note.midi - goal));
   }
@@ -3271,10 +3278,7 @@ function criticScore(
     notes.slice(0, -1).every((note) => Math.abs(note.duration - 1) < 0.01);
   const ratio = strong ? strongChord / strong : 0;
   let score = Math.round(90 * (1 - Math.abs(ratio - 0.65)));
-  score += strong * 12;
   score += distinct * 18;
-  score += Math.min(rests, 6) * 7;
-  score += Math.min(sync, 6) * 8;
   // A light nudge. The third-mean gate already enforces the lock.
   score += Math.round(fit / notes.length / 4);
   score += Math.min(range, 12);
