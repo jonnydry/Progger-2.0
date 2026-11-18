@@ -2922,17 +2922,20 @@ function walkScored(
       );
       if (stepped.length) candidates = stepped;
     }
-    // After a grouping or a skip, keep the loop wrap legal when a cadence
-    // step can still do it. A step wins when the two cannot both be had.
-    // Strings do not exist yet, so the wrap is only checked for size here;
-    // the "no wide move onto an eighth" half is judged on the fingering.
-    if (index === events.length - 2 && (placed || skips) && notes[0]) {
+    // The approach note also decides the loop wrap, and a wrap is heard on
+    // every loop pass. Prefer one whose wrap is legal while still stepping
+    // into the cadence; that is a preference here rather than only a final
+    // penalty, because a penalty cannot help when every candidate shares
+    // the same bad wrap. Strings do not exist yet, so this only rules out a
+    // wrap too wide to be excused by a two-string skip.
+    if (index === events.length - 2 && notes[0]) {
       const opening = notes[0].midi;
+      const maxWrap = (events[0]?.duration ?? 1) <= 0.5 ? 5 : 12;
       const ready = candidates.filter((tone) => {
         const midi = ladder[tone]?.midi ?? 0;
         const gap = Math.abs(midi - cadenceMidi);
         const seam = Math.abs(midi - opening);
-        return gap > 0 && gap <= 2 && seam > 0 && seam <= 12;
+        return gap > 0 && gap <= 2 && seam > 0 && seam <= maxWrap;
       });
       if (ready.length) candidates = ready;
     }
@@ -3877,11 +3880,16 @@ function composePhrase(
     if (item.spots.some(Boolean) && !skipRealized(fingered, item.spots))
       continue;
     // The pitch stage cannot see strings, so a wide wrap onto an eighth is
-    // re-judged here where a pinned two-string skip can excuse it.
-    if (seamIsIllegalFingered(fingered, input.bars)) continue;
+    // judged here. It costs the line rather than disqualifying it: a wrap is
+    // only heard when the phrase loops, and dropping every candidate that
+    // has one made whole seeds unplayable, which moves the line to the next
+    // seed and breaks the promise that a seed replays itself.
     let shifts = 0;
     for (const note of fingered) if (note.shift) shifts += 1;
-    const score = item.score - shifts * 8;
+    let score = item.score - shifts * 8;
+    // Strong enough to beat any pitch gain: a legal wrap is worth more than
+    // a better chord-tone balance, but a rejected line would move the seed.
+    if (seamIsIllegalFingered(fingered, input.bars)) score -= 400;
     if (!best || score > best.score)
       best = {
         notes: fingered,
