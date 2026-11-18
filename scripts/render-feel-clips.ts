@@ -43,6 +43,15 @@ type PairSpec = {
   bars: 2 | 4;
   listen: string;
   changed: string;
+  /** Rendering tempo. Defaults to 132. */
+  tempo?: number;
+  /**
+   * Loop passes to render. 1 is a single pass through the phrase including
+   * its closing cadence, the way Loop off plays. More than 1 follows the
+   * app's loop: each repeat skips the closing cadence and wraps to the
+   * opening note, so the seam is audible between passes.
+   */
+  loopPasses?: number;
 };
 
 type Note = {
@@ -109,13 +118,48 @@ function generate(engine: Engine, pair: PairSpec): Generated {
   };
 }
 
-async function render(notes: readonly Note[]): Promise<Float32Array> {
+/**
+ * The notes a render actually plays. Loop off is one pass through the phrase,
+ * cadence included. With Loop on the app drops the closing cadence on *every*
+ * pass -- the scheduler skips any onset at or after `loopBeats`, first pass
+ * included -- and wraps to the opening note on the bar line, so the seam is
+ * heard once per repeat. Laying the passes end to end on that period
+ * reproduces both, and `schedulePhrase` then damps each note at the next
+ * onset, including across the seam.
+ */
+async function loopNotes(
+  notes: readonly Note[],
+  loopPasses = 1,
+): Promise<{ notes: Note[]; loopBeats: number; closing: number }> {
+  const { phraseClosingIndex, phraseLoopBeats } =
+    await import('../lib/phrase-audio.ts');
+  const closing = phraseClosingIndex(notes);
+  const loopBeats = phraseLoopBeats(notes);
+  const looping = loopPasses > 1;
+  const body =
+    looping && closing >= 0
+      ? notes.filter((_, index) => index !== closing)
+      : [...notes];
+  const passes: Note[] = [];
+  for (let pass = 0; pass < Math.max(1, loopPasses); pass += 1) {
+    const shift = pass * loopBeats;
+    for (const note of body) passes.push({ ...note, beat: note.beat + shift });
+  }
+  return { notes: passes, loopBeats, closing };
+}
+
+async function render(
+  notes: readonly Note[],
+  tempo: number,
+  loopPasses = 1,
+): Promise<Float32Array> {
   const { schedulePhrase } = await import('../lib/phrase-audio.ts');
-  const last = notes.at(-1);
+  const { notes: played } = await loopNotes(notes, loopPasses);
+  const last = played.at(-1);
   const beats = last ? last.beat + last.duration : 8;
-  const seconds = (beats * 60) / TEMPO + TAIL_SEC;
+  const seconds = (beats * 60) / tempo + TAIL_SEC;
   const context = new OfflineAudioContext(1, Math.ceil(RATE * seconds), RATE);
-  schedulePhrase(context, context.destination, notes, TEMPO, SWING, 0);
+  schedulePhrase(context, context.destination, played, tempo, SWING, 0);
   const rendered = await context.startRendering();
   return rendered.getChannelData(0).slice();
 }
@@ -290,6 +334,9 @@ function readout(
   side: Side,
   label: string,
   generated: Generated,
+  played: readonly Note[],
+  loopBeats: number,
+  closing: number,
 ): string {
   const plan = generated.plan as {
     rhythm?: string;
@@ -301,18 +348,19 @@ function readout(
   const lines = [
     `Pair ${pair.id} — side ${side} (${label})`,
     `Seed ${pair.seed}, ${pair.root} ${pair.scaleId}${pair.chord ? ` over ${pair.chord}` : ' (tonic chord)'}, ${pair.bars} bars`,
-    `${TEMPO} bpm, straight (swing amount ${SWING})`,
+    `${pair.tempo ?? TEMPO} bpm, straight (swing amount ${SWING}), ${(pair.loopPasses ?? 1) > 1 ? `Loop on (${pair.loopPasses} passes)` : 'Loop off'}`,
     `Plan: ${plan.rhythm} rhythm, ${plan.contour} contour, ${plan.register} register, cadence ${plan.cadence}`,
     `Cells: ${(plan.cells ?? []).join(' | ')}`,
     `Figures: ${figures(engine, generated.notes)}`,
     '',
+    `Played notes (${played.length}):${(pair.loopPasses ?? 1) > 1 ? ` loop period ${loopBeats} beats, closing cadence ${closing >= 0 ? `index ${closing} dropped on every pass` : 'none found'}` : ''}`,
     'String fret finger (chord tone *, held _):',
-    ...generated.notes.map((note) => {
+    ...played.map((note) => {
       const octave = String(Math.floor(note.midi / 12) - 1);
       return `  ${note.name}${octave.padEnd(2)} ${String(note.midi).padStart(3)}  string ${note.string} fret ${String(note.fret).padStart(2)} finger ${note.finger}  beat ${String(note.beat).padStart(4)} dur ${note.duration}${note.chordTone ? ' *' : ''}${note.duration >= 1 ? ' _' : ''}`;
     }),
     '',
-    'Tab:',
+    'Tab (first pass only):',
     tab(generated.notes, pair.bars),
     '',
   ];
@@ -342,9 +390,13 @@ for (const pair of spec.pairs) {
   const lineB = spellLine(generatedB.notes);
   if (lineA === lineB) throw new Error(`${pair.id}: A and B are the same line`);
 
+  const tempo = pair.tempo ?? TEMPO;
+  const loopPasses = pair.loopPasses ?? 1;
+  const playedA = await loopNotes(generatedA.notes, loopPasses);
+  const playedB = await loopNotes(generatedB.notes, loopPasses);
   const rendered = {
-    A: await render(generatedA.notes),
-    B: await render(generatedB.notes),
+    A: await render(generatedA.notes, tempo, loopPasses),
+    B: await render(generatedB.notes, tempo, loopPasses),
   };
   const rawPeak = Math.max(samplePeak(rendered.A), samplePeak(rendered.B));
   if (rawPeak <= 0) throw new Error(`${pair.id} is silent`);
@@ -387,11 +439,29 @@ for (const pair of spec.pairs) {
 
   writeFileSync(
     join(outDir, `${pair.stem}_A.txt`),
-    readout(fromEngine, pair, 'A', pair.fromLabel, generatedA),
+    readout(
+      fromEngine,
+      pair,
+      'A',
+      pair.fromLabel,
+      generatedA,
+      playedA.notes,
+      playedA.loopBeats,
+      playedA.closing,
+    ),
   );
   writeFileSync(
     join(outDir, `${pair.stem}_B.txt`),
-    readout(toEngine, pair, 'B', pair.toLabel, generatedB),
+    readout(
+      toEngine,
+      pair,
+      'B',
+      pair.toLabel,
+      generatedB,
+      playedB.notes,
+      playedB.loopBeats,
+      playedB.closing,
+    ),
   );
 
   const gap = Math.abs(measured.A.lufs - measured.B.lufs);
@@ -406,7 +476,7 @@ for (const pair of spec.pairs) {
       '',
       pair.listen,
       '',
-      `- Settings: ${pair.root} ${pair.scaleId}${pair.chord ? ` over ${pair.chord}` : ' on the tonic chord'}, ${pair.bars} bars, seed ${pair.seed}, ${TEMPO} bpm straight, Loop off, no locks`,
+      `- Settings: ${pair.root} ${pair.scaleId}${pair.chord ? ` over ${pair.chord}` : ' on the tonic chord'}, ${pair.bars} bars, seed ${pair.seed}, ${tempo} bpm straight, ${loopPasses > 1 ? `Loop on (${loopPasses} passes, closing cadence dropped and the next pass wrapping onto the opening note)` : 'Loop off'}, no locks`,
       `- What changed: ${pair.changed}`,
       `- Plan (B): ${plan.rhythm} rhythm, ${plan.contour} contour, cadence reached on the bar line; cells ${(plan.cells ?? []).join(' | ')}`,
       `- A ${measured.A.seconds.toFixed(2)}s ${measured.A.lufs.toFixed(1)} LUFS, B ${measured.B.seconds.toFixed(2)}s ${measured.B.lufs.toFixed(1)} LUFS, shared gain ${gain.toFixed(4)}, loudness gap ${gap.toFixed(2)} LU`,
@@ -426,7 +496,7 @@ writeFileSync(
   [
     '# Phrase-feel listen pack',
     '',
-    `Rendered at ${TEMPO} bpm, straight (swing amount ${SWING}), Loop off, no locks.`,
+    `Rendered straight (swing amount ${SWING}) at each pair's own tempo, Loop off unless the pair says otherwise, no locks.`,
     'Every side is generated by the engine at its own commit and rendered through the app path:',
     '`schedulePhrase` → `scheduleVoicing` + `dampPhraseNote`, so each note rings to the next onset with the soft release and rests stay audible.',
     'OfflineAudioContext, 44100 Hz mono. Both sides of a pair share one gain aimed at -16 LUFS.',
