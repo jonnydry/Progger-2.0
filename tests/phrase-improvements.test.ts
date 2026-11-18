@@ -127,7 +127,11 @@ void test('every cadence lands on the pitch its label names', () => {
 void test('the loop wrap obeys the arrival rule the phrase obeys inside', () => {
   // A looping pass skips the closing cadence, so the interval from the last
   // body note to the next pass's first note is a real sounding move. It gets
-  // the same size limits as any other move.
+  // the same size limits as any other move, and the limit for a wide move
+  // depends on the length of the note being *arrived at*: an eighth cannot
+  // receive a leap wider than a fourth, exactly as `arrivalOk` says inside
+  // the phrase. This test recomputes the rule from the notes rather than
+  // calling the engine's own helper, so it can actually disagree.
   const contexts = [
     ['C', 'major', 'C'],
     ['A', 'dorian', 'Am'],
@@ -135,7 +139,7 @@ void test('the loop wrap obeys the arrival rule the phrase obeys inside', () => 
     ['Bb', 'mixolydian', 'Bb7'],
     ['E', 'minor', 'Em'],
   ] as const;
-  let illegal = 0;
+  let eighthOpens = 0;
   let total = 0;
   for (const [root, scaleId, symbol] of contexts) {
     for (const bars of [2, 4] as const) {
@@ -145,18 +149,39 @@ void test('the loop wrap obeys the arrival rule the phrase obeys inside', () => 
         const last = body[body.length - 1];
         const first = phrase.notes[0];
         assert.ok(last && first);
+        const gap = Math.abs(first.midi - last.midi);
+        const label = `${symbol} seed ${seed} ${bars}: ${last.midi} -> ${first.midi}`;
+        // No unison and no more than an octave, whatever the lengths.
+        assert.ok(gap > 0 && gap <= 12, `wrap size ${label}`);
+        // A wide move is legal only when the arriving note is longer than
+        // an eighth (or is a pinned two-string skip, which this rule does
+        // not attempt to re-derive).
+        if (first.duration <= 0.5 && gap > 5) {
+          const twoStringSkip = Math.abs(first.string - last.string) === 2;
+          assert.ok(twoStringSkip, `wide wrap onto an eighth ${label}`);
+        }
+        // And the same must hold for the engine's own helper, which takes
+        // the arriving note's length and both strings.
         assert.equal(
-          loopSeamLegal(last.midi, last.duration, first.midi),
+          loopSeamLegal(
+            last.midi,
+            first.duration,
+            first.midi,
+            last.string,
+            first.string,
+          ),
           true,
-          `${symbol} seed ${seed} ${bars}: ${last.midi} -> ${first.midi}`,
+          `helper ${label}`,
         );
+        if (first.duration <= 0.5) eighthOpens += 1;
         total += 1;
-        if (!loopSeamLegal(last.midi, last.duration, first.midi)) illegal += 1;
       }
     }
   }
-  assert.equal(illegal, 0);
   assert.ok(total > 0);
+  // The eighths lane really does open on an eighth now, so the branch above
+  // is exercised rather than vacuous.
+  assert.ok(eighthOpens > 20, `eighth openings ${eighthOpens}/${total}`);
 });
 
 void test('the loop period still lands on the downbeat after the cadence', () => {

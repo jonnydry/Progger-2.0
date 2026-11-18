@@ -211,6 +211,10 @@ void test('an octave stops on its arrival and the line stays near it', () => {
           octaves += 1;
           // Two strings apart, and the line moves by a step off the top.
           assert.equal(Math.abs(high.string - low.string), 2);
+          // An octave is one letter name: the top note keeps the bottom
+          // note's spelling, which is what "preserve note spelling" means
+          // for a shape that doubles a pitch class.
+          assert.equal(high.name, low.name);
           const follow = notes.slice(octave.end + 1, octave.end + 4);
           if (follow[0]) {
             assert.ok(Math.abs(follow[0].midi - high.midi) <= 5);
