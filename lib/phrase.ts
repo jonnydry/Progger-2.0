@@ -2427,6 +2427,9 @@ function handCells(
           push('s-arp', [first, second, third]);
           for (const fourth of highChord) {
             if (fourth === second) continue;
+            // The same test for the four-note arm: an octave between the
+            // two high notes is the same bounce, one note later.
+            if (mod(fourth.midi) === mod(second.midi)) continue;
             push('s-arp', [first, second, third, fourth]);
           }
         }
@@ -2673,8 +2676,8 @@ function chooseSkip(
  * A free line (one seed in four, see `answersOpening`) skips that sequence
  * and stays on the scored walk. A qualifying eighth run may open on one
  * grouping cell per two bars. A skip atom may start on any eighth of a run,
- * at most one per
- * two bars when the scale has a form, never in a bar that already has the
+ * at most one per two bars when the scale has a form, never in a bar that
+ * already has the
  * other, and never across the answered head. Both draw from the same
  * `random` stream. A held note is a chord tone when one is still legal. The
  * approach is not: it stays a step from the cadence. The free tail walks to
@@ -2919,16 +2922,15 @@ function walkScored(
     }
     // After a grouping or a skip, keep the loop wrap legal when a cadence
     // step can still do it. A step wins when the two cannot both be had.
+    // Strings do not exist yet, so the wrap is only checked for size here;
+    // the "no wide move onto an eighth" half is judged on the fingering.
     if (index === events.length - 2 && (placed || skips) && notes[0]) {
       const opening = notes[0].midi;
-      const fast = event.duration <= 0.5;
       const ready = candidates.filter((tone) => {
         const midi = ladder[tone]?.midi ?? 0;
         const gap = Math.abs(midi - cadenceMidi);
         const seam = Math.abs(midi - opening);
-        return (
-          gap > 0 && gap <= 2 && seam > 0 && seam <= 12 && !(fast && seam > 5)
-        );
+        return gap > 0 && gap <= 2 && seam > 0 && seam <= 12;
       });
       if (ready.length) candidates = ready;
     }
@@ -3301,6 +3303,13 @@ function criticScore(
  * chord-tone terms: a smooth wrap is worth having, but not by filling the
  * line with repeats and wrong notes on the beat.
  */
+/**
+ * The wrap a looping pass makes from the last body note into the next pass's
+ * first note. `fast` follows `arrivalOk`: the rule is about the note being
+ * arrived at, so it is the *first* note's length that decides it. Keying it
+ * on the departing note let a held body note wrap a wide interval onto an
+ * eighth once slice 3 let the eighths lane open on one.
+ */
 function loopSeamGap(
   notes: readonly PhraseNote[],
   bars: 2 | 4,
@@ -3309,7 +3318,7 @@ function loopSeamGap(
   let last: PhraseNote | undefined;
   for (const note of notes) if (note.beat < bars * 4) last = note;
   if (!first || !last) return null;
-  return { gap: Math.abs(first.midi - last.midi), fast: last.duration <= 0.5 };
+  return { gap: Math.abs(first.midi - last.midi), fast: first.duration <= 0.5 };
 }
 
 function loopSeamPenalty(notes: readonly PhraseNote[], bars: 2 | 4): number {
@@ -3323,12 +3332,36 @@ function loopSeamPenalty(notes: readonly PhraseNote[], bars: 2 | 4): number {
   return 0;
 }
 
-/** A wrap the engine's own arrival rule would refuse. */
+/**
+ * A wrap the engine's own arrival rule would refuse. At the pitch stage the
+ * strings are not chosen yet, so this checks only what a wrap can never be:
+ * a unison or wider than an octave. The "no wide move onto an eighth" half
+ * needs the fingering, and {@link seamIsIllegalFingered} finishes it.
+ */
 function seamIsIllegal(notes: readonly PhraseNote[], bars: 2 | 4): boolean {
   const seam = loopSeamGap(notes, bars);
   if (!seam) return false;
-  if (seam.gap > 12 || seam.gap === 0) return true;
-  return seam.fast && seam.gap > 5;
+  return seam.gap > 12 || seam.gap === 0;
+}
+
+/**
+ * The rest of the wrap rule, once the strings exist: a wide move onto an
+ * eighth is legal only as the pinned two-string skip `arrivalOk` accepts
+ * everywhere else. Judging this at the pitch stage dropped whole skip
+ * figures over a wrap the hand can actually play.
+ */
+function seamIsIllegalFingered(
+  notes: readonly FingeredNote[],
+  bars: 2 | 4,
+): boolean {
+  const first = notes.find((note) => note.beat === 0);
+  let last: FingeredNote | undefined;
+  for (const note of notes) if (note.beat < bars * 4) last = note;
+  if (!first || !last) return false;
+  const gap = Math.abs(first.midi - last.midi);
+  if (gap > 12 || gap === 0) return true;
+  if (!(first.duration <= 0.5 && gap > 5)) return false;
+  return Math.abs(first.string - last.string) !== 2;
 }
 
 /**
@@ -3336,16 +3369,23 @@ function seamIsIllegal(notes: readonly PhraseNote[], bars: 2 | 4): boolean {
  * the phrase itself would be allowed to make? A looping pass skips the
  * closing cadence, so this interval is a real sounding move and gets the same
  * limits `arrivalOk` puts on any other one: no unison, no more than an
- * octave, and no more than a fourth onto an eighth.
+ * octave, and no more than a fourth onto an eighth. The eighth that matters
+ * is the one being arrived at, exactly as inside the phrase, and a wide move
+ * onto one is allowed only as a two-string skip, which needs the fingering.
+ * {@link seamIsIllegalFingered} is the engine's check; this takes the strings
+ * so a test can ask the same question of a finished phrase.
  */
 export function loopSeamLegal(
   lastMidi: number,
-  lastDuration: number,
+  firstDuration: number,
   firstMidi: number,
+  lastString: number,
+  firstString: number,
 ): boolean {
   const gap = Math.abs(firstMidi - lastMidi);
   if (gap === 0 || gap > 12) return false;
-  return !(lastDuration <= 0.5 && gap > 5);
+  if (!(firstDuration <= 0.5 && gap > 5)) return true;
+  return Math.abs(firstString - lastString) === 2;
 }
 
 const PHRASE_CANDIDATES = 4;
@@ -3827,6 +3867,9 @@ function composePhrase(
     if (!handAccepts(fingered)) continue;
     if (item.spots.some(Boolean) && !skipRealized(fingered, item.spots))
       continue;
+    // The pitch stage cannot see strings, so a wide wrap onto an eighth is
+    // re-judged here where a pinned two-string skip can excuse it.
+    if (seamIsIllegalFingered(fingered, input.bars)) continue;
     let shifts = 0;
     for (const note of fingered) if (note.shift) shifts += 1;
     const score = item.score - shifts * 8;

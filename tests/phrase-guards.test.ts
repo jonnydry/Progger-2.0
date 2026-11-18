@@ -156,6 +156,7 @@ void test('sentence guards stay visible in the notes', () => {
   let sync = 0;
   let syncNotes = 0;
   let repeatedCells = 0;
+  let repeatedOnsets = 0;
   for (const [root, scaleId, symbol] of SWEEP) {
     const scaleNotes = scaleOf(root, scaleId);
     const pcs = new Set(scaleNotes.map((note) => note.pc));
@@ -273,11 +274,15 @@ void test('sentence guards stay visible in the notes', () => {
           );
           if (!struck) sync += 1;
         }
-        // Compare what sounds, not the cell labels: two bars can share a
-        // label ("ans 0,1,2,3") and still attack at different places.
+        const cells = line.plan.cells ?? [];
+        for (let index = 1; index < cells.length; index++) {
+          if (cells[index] === cells[index - 1]) repeatedCells += 1;
+        }
+        // Compare what sounds: two bars can share a label ("ans 0,1,2,3")
+        // and still attack at different places.
         for (let index = 1; index < barsCount; index++) {
           if (barOnsets(line, index) === barOnsets(line, index - 1))
-            repeatedCells += 1;
+            repeatedOnsets += 1;
         }
       }
     }
@@ -295,9 +300,16 @@ void test('sentence guards stay visible in the notes', () => {
     (sequenced - freeSequenced) / (four - freeFour) >= 0.6,
     `answering fragment ${sequenced - freeSequenced}/${four - freeFour}`,
   );
+  // Free lines must stay far below the answering path: 5 of 48 (10.4%)
+  // against 143 of 152 (94.1%) here. The gap is the property; an absolute
+  // count would only re-encode how many free seeds the sweep happens to have.
   assert.ok(
     freeSequenced / freeFour <= 0.2,
     `free fragment ${freeSequenced}/${freeFour}`,
+  );
+  assert.ok(
+    freeSequenced / freeFour <= 0.25 * ((sequenced - freeSequenced) / (four - freeFour)),
+    `free fragment rate against answering ${freeSequenced}/${freeFour}`,
   );
   assert.ok(
     heldOpen / nonEighthOpen >= 0.9,
@@ -322,16 +334,22 @@ void test('sentence guards stay visible in the notes', () => {
     `strong chord ${strongChord}/${strong}`,
   );
   // An off-beat eighth with no following downbeat. The critic no longer pays
-  // for off-beats, so this rests on the drawn cells alone: 10.7% here, above
-  // the 10% floor.
-  assert.ok(sync / syncNotes >= 0.1, `sync ${sync}/${syncNotes}`);
-  // Adjacent bars with the same onsets. Counting cell ids instead gave 20
-  // once the opening spread, because two answered bars often share the label
-  // "ans 0,1,2,3" while attacking differently. What a listener hears is the
-  // onsets: 3 of 400 here.
+  // for off-beats, so this now rests on the drawn cells alone. The plan
+  // allows the floor to drop for that reason: 12.97% here, so the floor sits
+  // at 12% and still catches a real loss.
+  assert.ok(sync / syncNotes >= 0.12, `sync ${sync}/${syncNotes}`);
+  // Two separate guards, because they catch different things. Cell ids can
+  // repeat once the opening spreads -- two answered bars often share the
+  // label "ans 0,1,2,3" -- so the label count is bounded rather than pinned.
   assert.ok(
-    repeatedCells <= 4,
-    `repeated bar rhythm ${repeatedCells}/${phrases}`,
+    repeatedCells <= 20,
+    `repeated cell labels ${repeatedCells}/${phrases}`,
+  );
+  // What a listener actually hears is the onsets, and those may not repeat
+  // adjacent at all beyond a handful of accented echoes.
+  assert.ok(
+    repeatedOnsets <= 4,
+    `repeated bar rhythm ${repeatedOnsets}/${phrases}`,
   );
 });
 
@@ -407,17 +425,15 @@ void test('these cadence tails stay on the weighted pitches', () => {
       [72, 74, 76, 72, 76, 77, 79, 76, 77, 69, 71, 67, 69, 72, 71, 69, 65, 67],
     ],
     // Free 4-bar seed (24 % 4 === 0). Bar 3 is the scored walk, not the
-    // two-note fragment.
+    // two-note fragment. Re-pinned when the loop wrap began judging the
+    // arriving note's length, which re-rolls some lanes.
     [
       'F#',
       'major',
       'F#maj7',
       24,
       4,
-      [
-        54, 56, 53, 54, 49, 51, 54, 56, 59, 58, 61, 59, 58, 56, 59, 61, 63, 65,
-        61, 58, 56, 54, 58, 56, 66,
-      ],
+      [53, 54, 51, 56, 54, 53, 56, 58, 61, 58, 56, 53, 54, 56, 58, 61, 65, 63, 65, 66],
     ],
     ['C', 'major', 'C', 1, 2, [64, 67, 69, 67, 60, 64, 65, 64, 62, 55]],
     // Re-pinned for the spread eighths opening (S3).
@@ -431,14 +447,15 @@ void test('these cadence tails stay on the weighted pitches', () => {
     ],
     // A low wave. Its cadence still lands on the bottom C.
     // Re-pinned for the free line one seed in four (S5): seed 4 no longer
-    // answers bar 1, so bar 2 is a new idea.
+    // answers bar 1, so bar 2 is a new idea. Re-pinned again with the wrap
+    // rule, which changed which lane wins.
     [
       'C',
       'major',
       'C',
       4,
       2,
-      [52, 55, 53, 57, 55, 52, 48, 53, 52, 55, 53, 50, 48],
+      [55, 57, 60, 62, 65, 60, 55, 52, 53, 62, 64, 65, 60, 48],
     ],
     [
       'C',
