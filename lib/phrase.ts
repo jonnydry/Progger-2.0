@@ -2670,9 +2670,10 @@ function chooseSkip(
  * Scored pitches, then a sentence. On most seeds bar 2 opens on bar 1's
  * first four attacks, transposed by one or two scale steps. A 4-bar phrase
  * that answers the opening sequences a two-note fragment twice in bar 3.
- * A free line, every eighth seed, skips that sequence and stays on the
- * scored walk. A qualifying eighth run may open on one grouping cell per
- * two bars. A skip atom may start on any eighth of a run, at most one per
+ * A free line (one seed in four, see `answersOpening`) skips that sequence
+ * and stays on the scored walk. A qualifying eighth run may open on one
+ * grouping cell per two bars. A skip atom may start on any eighth of a run,
+ * at most one per
  * two bars when the scale has a form, never in a bar that already has the
  * other, and never across the answered head. Both draw from the same
  * `random` stream. A held note is a chord tone when one is still legal. The
@@ -3233,11 +3234,14 @@ function sentenceCover(
 
 /**
  * Best-of-N selection among candidate lines for one drawn plan. The rhythm is
- * already drawn from the seed and the cells it selects, so the critic judges
- * pitch only: chord tones on strong beats, bar-to-bar variety, the contour,
- * and the pitch penalties below. Paying for strong-beat notes, rests or
- * off-beats here overrode the draw and made one bar win in every lane, which
- * is the sameness this file is trying to lose.
+ * already drawn from the seed and the cells it selects, so no term here pays
+ * for a note being on the beat, for a rest, or for an off-beat: those three
+ * overrode the draw and made one bar win in every lane. What is left is pitch
+ * and shape: chord tones on strong beats, the contour, the pitch penalties,
+ * and `distinct * 18`, which penalises a line whose bars repeat one onset
+ * signature. That last one is a rhythm term, kept on purpose: it is the only
+ * thing stopping the draw from picking the same bar twice, and the plan's
+ * repeated-bar guard depends on it.
  */
 function criticScore(
   notes: readonly PhraseNote[],

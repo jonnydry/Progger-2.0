@@ -505,7 +505,7 @@ void test('a sentence returns the opening figure, shifted more often than copied
           // The approach is a step into the cadence by design, so it is
           // exempt: with the critic no longer paying for rhythm it is the
           // only held non-chord tone that climbs. Everything else is at
-          // 7.1% here, well under the 12% ceiling.
+          // 5.4% here, well under the 12% ceiling.
           if (index === phrase.notes.length - 2) continue;
           heldNotes += 1;
           if (!note.chordTone) heldNonChord += 1;
@@ -533,7 +533,7 @@ void test('a sentence returns the opening figure, shifted more often than copied
   );
   assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);
   // #63's same skeleton: 98.85% of phrases opened bar 2 on bar 1's figure.
-  // Every eighth seed is a free line, so the return stays and is not universal.
+  // One seed in four is a free line, so the return stays and is not universal.
   // Skipping the free bar-3 fragment left this at 85.25% (682/800).
   assert.ok(
     returned / phrases <= 0.92,
