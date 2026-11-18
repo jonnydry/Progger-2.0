@@ -157,6 +157,8 @@ void test('sentence guards stay visible in the notes', () => {
   let syncNotes = 0;
   let repeatedCells = 0;
   let repeatedOnsets = 0;
+  let answerDownbeats = 0;
+  let answerDownbeatsOnChord = 0;
   for (const [root, scaleId, symbol] of SWEEP) {
     const scaleNotes = scaleOf(root, scaleId);
     const pcs = new Set(scaleNotes.map((note) => note.pc));
@@ -190,6 +192,16 @@ void test('sentence guards stay visible in the notes', () => {
             )
           )
             silent += 1;
+        }
+        // The second landing: bar 2's first attack, whether or not it is
+        // held. A non-chord tone here on a strong beat is the sour landing
+        // an ear hears as an exercise, so it is guarded like the opening.
+        const downbeat = groups[1]?.find(
+          (note) => Math.abs(note.beat - 4) < 1e-6,
+        );
+        if (downbeat) {
+          answerDownbeats += 1;
+          if (downbeat.chordTone) answerDownbeatsOnChord += 1;
         }
         const opening = groups[0] ?? [];
         const answer = groups[1] ?? [];
@@ -316,6 +328,13 @@ void test('sentence guards stay visible in the notes', () => {
     `held opening outside the eighths lane ${heldOpen}/${nonEighthOpen}`,
   );
   assert.ok(silent / bars <= 0.02, `no on-beat ${silent}/${bars}`);
+  // Bar 2's downbeat on the chord, when bar 2 attacks on it at all: 93.8%
+  // here, 89.7% inside the eighths lane. Before the answer downbeat was made
+  // a chord tone it was 90.6% overall.
+  assert.ok(
+    answerDownbeatsOnChord / answerDownbeats >= 0.9,
+    `bar-2 downbeat on the chord ${answerDownbeatsOnChord}/${answerDownbeats}`,
+  );
   // One seed in four is now a free line, so the bar-2 return is 74.8% of
   // phrases. The floor sits at 70%.
   assert.ok(returned / phrases >= 0.7, `return ${returned}/${phrases}`);

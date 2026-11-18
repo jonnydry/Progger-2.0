@@ -2409,7 +2409,12 @@ function handCells(
         if (next) push('s-pedal', [low, high, low, next]);
       });
     });
-    // Chord tones only, three or four different ones.
+    // Chord tones only, three different pitch classes. The test below is what
+    // stops a low chord tone and its own octave two strings up counting as an
+    // arpeggio. The four-note arm inherits that check through its first three
+    // notes; a few four-note cell candidates can still put an octave between
+    // their third and fourth notes, and no realised atom in the metric sample
+    // does, so it is reported rather than guarded.
     const lowChord = lows.filter((item) => ladder[item.tone]?.chordTone);
     const highChord = highs.filter((item) => ladder[item.tone]?.chordTone);
     for (const first of lowChord) {
@@ -2427,9 +2432,6 @@ function handCells(
           push('s-arp', [first, second, third]);
           for (const fourth of highChord) {
             if (fourth === second) continue;
-            // The same test for the four-note arm: an octave between the
-            // two high notes is the same bounce, one note later.
-            if (mod(fourth.midi) === mod(second.midi)) continue;
             push('s-arp', [first, second, third, fourth]);
           }
         }
@@ -2938,8 +2940,15 @@ function walkScored(
     // approach is exempt: it has to be a step into the cadence. Opening
     // notes also keep a shift that lands on a chord tone: under Loop note 1
     // is the landing, so it can be an eighth but still has to be a chord
-    // tone (Jonny, Oct 17).
-    if ((event.duration >= 1 || index === 0) && index < events.length - 2) {
+    // tone (Jonny, Oct 17). Bar 2's first attack gets the same treatment for
+    // the same reason: it is the second landing, and once the eighths lane
+    // could open on an eighth it too became an eighth on a strong beat.
+    const answerOpen =
+      bar === 1 && (byBar[1]?.indexOf(index) ?? -1) === 0;
+    if (
+      (event.duration >= 1 || index === 0 || answerOpen) &&
+      index < events.length - 2
+    ) {
       let chordTones = candidates.filter((tone) => ladder[tone].chordTone);
       const openingSlot = byBar[0]?.indexOf(index) ?? -1;
       if (
