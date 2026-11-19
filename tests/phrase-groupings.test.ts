@@ -182,8 +182,8 @@ void test('listen seeds play a grouping on this head', () => {
   }
 });
 
-void test('eighths are five of the eight rhythm draws', () => {
-  assert.deepEqual([...RHYTHM_DRAW_WEIGHTS], [1, 5, 1, 1]);
+void test('rhythm draws stay balanced with a mild lead for eighths', () => {
+  assert.deepEqual([...RHYTHM_DRAW_WEIGHTS], [2, 3, 2, 2]);
   const scale = SCALES.find((item) => item.id === 'major');
   assert.ok(scale);
   const scaleNotes = spell('C', scale.formula);
@@ -201,9 +201,9 @@ void test('eighths are five of the eight rhythm draws', () => {
     if (!result.ok) continue;
     if (result.phrase.plan.rhythm === 'eighths') eighths++;
   }
-  // Five of eight draws. The band leaves room for the integer weights.
-  assert.ok(eighths / draws > 0.5, String(eighths));
-  assert.ok(eighths / draws < 0.75, String(eighths));
+  // Three of nine draws (~33%), leaving generous room for quarters, long-short, and push.
+  assert.ok(eighths / draws > 0.25, String(eighths));
+  assert.ok(eighths / draws < 0.45, String(eighths));
 });
 
 void test('the three extra eighth bars are drawable', () => {

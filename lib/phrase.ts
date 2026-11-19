@@ -241,11 +241,10 @@ export type PhraseResult =
 const CONTOURS = ['arch', 'rise', 'fall', 'wave'] as const;
 const RHYTHMS = ['quarters', 'eighths', 'long-short', 'push'] as const;
 /**
- * Rhythm draw, in `RHYTHMS` order. Eighths are five of eight draws so a
- * six-eighth run exists often enough for a grouping cell. Cells on the
- * old uniform catalog are about 0.6% of notes.
+ * Rhythm draw, in `RHYTHMS` order. Balanced across quarters, eighths,
+ * long-short pairs, and offbeat pushes, with a mild lead for eighth runs.
  */
-export const RHYTHM_DRAW_WEIGHTS: readonly number[] = [1, 5, 1, 1];
+export const RHYTHM_DRAW_WEIGHTS: readonly number[] = [2, 3, 2, 2];
 const REGISTERS = ['low', 'mid', 'high'] as const;
 const CADENCES = ['root', 'third', 'fifth'] as const;
 const REGISTER_LOW: Record<RegisterName, number> = {
@@ -911,6 +910,7 @@ const CELLS: Record<string, CellDef> = {
   },
   zr: { span: 2, hits: [[1, 1]] },
   rz: { span: 2, hits: [[0, 1]] },
+  qr: { span: 2, hits: [] },
   dq: {
     span: 4,
     hits: [
@@ -927,6 +927,22 @@ const CELLS: Record<string, CellDef> = {
   },
   h: { span: 4, hits: [[0, 4]] },
   ant: { span: 2, hits: [[1, 1]] },
+  push2: { span: 4, hits: [[1, 3]] },
+  sync: {
+    span: 4,
+    hits: [
+      [0, 1],
+      [1, 2],
+      [3, 1],
+    ],
+  },
+  antq: {
+    span: 4,
+    hits: [
+      [1, 2],
+      [3, 1],
+    ],
+  },
 };
 
 /**
@@ -938,10 +954,14 @@ const RAW_BARS: Record<RhythmId, readonly (readonly string[])[]> = {
   quarters: [
     ['q', 'q', 'q', 'q'],
     ['q', 'q', 'zr', 'q'],
+    ['q', 'q', 'qr', 'q'],
+    ['q', 'rz', 'qr', 'q'],
+    ['q', 'qr', 'zr', 'q'],
     ['zr', 'q', 'zr', 'q'],
     ['q', 'zr', 'zr', 'q'],
     ['h', 'zr', 'q'],
     ['q', 'h', 'zr'],
+    ['q', 'h', 'rz'],
     ['zr', 'zr', 'q', 'q'],
     ['q', 'zr', 'q', 'zr'],
     ['zr', 'zr', 'zr', 'q'],
@@ -953,6 +973,9 @@ const RAW_BARS: Record<RhythmId, readonly (readonly string[])[]> = {
     ['ee', 'ee', 'ee', 'zr'],
     ['q', 'ee', 'ee', 'ee'],
     ['ee', 'ee', 'ee', 'q'],
+    ['ee', 'ee', 'qr', 'ee'],
+    ['q', 'ee', 'qr', 'ee'],
+    ['ee', 'ee', 'rz', 'ee'],
     ['ee', 'zr', 'ee', 'zr'],
     ['q', 'ee', 'q', 'ee'],
     ['zr', 'ee', 'zr', 'ee'],
@@ -969,21 +992,29 @@ const RAW_BARS: Record<RhythmId, readonly (readonly string[])[]> = {
     ['dq', 'q', 'q'],
     ['q', 'q', 'dq'],
     ['dq', 'zr', 'q'],
+    ['dq', 'qr', 'ee'],
+    ['dq', 'rz', 'q'],
+    ['q', 'push2', 'q'],
     ['qd', 'ee', 'q'],
     ['q', 'dq', 'zr'],
     ['zr', 'qd', 'q'],
   ],
   push: [
+    ['sync', 'sync'],
+    ['q', 'rz', 'push2'],
+    ['q', 'push2', 'zr'],
+    ['q', 'push2', 'q'],
+    ['ee', 'qr', 'antq'],
+    ['q', 'zr', 'sync'],
+    ['sync', 'qr', 'ee'],
+    ['sync', 'qr', 'q'],
+    ['q', 'antq', 'zr'],
     ['q', 'ant', 'q', 'ant'],
     ['ee', 'ant', 'q', 'ant'],
     ['q', 'ant', 'ee', 'zr'],
-    ['ant', 'q', 'ant', 'q'],
     ['q', 'ee', 'ant', 'zr'],
-    ['zr', 'ant', 'q', 'ant'],
     ['ee', 'ant', 'ee', 'ant'],
     ['q', 'ant', 'zr', 'q'],
-    ['zr', 'ant', 'zr', 'ant'],
-    ['ant', 'zr', 'ant', 'q'],
   ],
 };
 
@@ -1250,19 +1281,26 @@ function asPattern(
 function enumerateTails(from: number): { at: number; dur: number }[][] {
   if (from >= 8) return [[]];
   const found: { at: number; dur: number }[][] = [];
-  const walk = (pos: number, acc: { at: number; dur: number }[]) => {
+  const walk = (
+    pos: number,
+    acc: { at: number; dur: number }[],
+    usedQuarterRest: boolean,
+  ) => {
     if (pos === 8) {
       found.push(acc);
       return;
     }
     if (pos > 8) return;
-    walk(pos + 1, [...acc, { at: pos, dur: 1 }]);
+    walk(pos + 1, [...acc, { at: pos, dur: 1 }], usedQuarterRest);
     if (pos + 2 <= 8) {
-      walk(pos + 2, [...acc, { at: pos, dur: 2 }]);
-      walk(pos + 2, [...acc, { at: pos + 1, dur: 1 }]);
+      walk(pos + 2, [...acc, { at: pos, dur: 2 }], usedQuarterRest);
+      walk(pos + 2, [...acc, { at: pos + 1, dur: 1 }], usedQuarterRest);
+      if (!usedQuarterRest && pos <= 4) {
+        walk(pos + 2, acc, true);
+      }
     }
   };
-  walk(from, []);
+  walk(from, [], false);
   found.sort((a, b) => {
     const left = a.map((hit) => hit.at).join(',');
     const right = b.map((hit) => hit.at).join(',');
@@ -1299,18 +1337,19 @@ function answerPattern(
   head: BarPattern,
   random: () => number,
 ): BarPattern | null {
-  if (head.hits.length < 4) return null;
-  const prefix = head.hits.slice(0, 4).map((hit) => ({ ...hit }));
-  const fourth = prefix[3];
-  if (!fourth) return null;
-  const end = fourth.at + fourth.dur;
+  if (head.hits.length < 3) return null;
+  const count = Math.min(4, head.hits.length);
+  const prefix = head.hits.slice(0, count).map((hit) => ({ ...hit }));
+  const last = prefix[count - 1];
+  if (!last) return null;
+  const end = last.at + last.dur;
   if (end < 8) {
     const built = withTail(prefix, end, head.onset, random);
     if (built) return built;
   }
-  if (fourth.at >= 7) return null;
-  const shrunk = prefix.slice(0, 3).concat([{ at: fourth.at, dur: 1 }]);
-  return withTail(shrunk, fourth.at + 1, head.onset, random);
+  if (last.at >= 7) return null;
+  const shrunk = prefix.slice(0, count - 1).concat([{ at: last.at, dur: 1 }]);
+  return withTail(shrunk, last.at + 1, head.onset, random);
 }
 
 /** Two statements of bar 1's opening two attacks. */
@@ -1433,7 +1472,7 @@ function pickPatterns(
           const runs = options.filter((pattern) =>
             EIGHTH_RUN_BARS.includes(pattern.ids),
           );
-          options = [...options, ...runs, ...runs, ...runs, ...runs];
+          options = [...options, ...runs];
         }
       }
       if (exact) {
@@ -1609,12 +1648,12 @@ function pitchWeight(
     } else if (current.avoidTone) {
       weight *= 0.45;
     } else if (current.colorTone) {
-      weight *= 1.1;
+      weight *= 1.25;
     } else {
       weight *= 0.72;
     }
   } else {
-    if (current.colorTone) weight *= 1.65;
+    if (current.colorTone) weight *= 1.85;
     else if (current.avoidTone) weight *= 0.85;
   }
   // Tendency-tone voice leading: leading tones, Phrygian b2, blues b5, and chord b7.
@@ -2010,7 +2049,7 @@ export const GROUPING_CELLS: readonly GroupingCell[] = [
 /** First draw at a qualifying eighth run. 0.5 under-shot the band: most
  * phrases never grow a six-eighth run, so a run that does appear should
  * usually take the cell. Tuned against the 800-phrase set. */
-const P_GROUP = 1;
+const P_GROUP = 0.8;
 
 function groupingRelative(
   offsets: readonly number[],
@@ -2188,18 +2227,14 @@ function chooseGrouping(
     if (!blocked) fitting.push({ cell, repeats });
   }
   if (!fitting.length) return null;
-  fitting.sort(
-    (a, b) =>
-      b.repeats * b.cell.k - a.repeats * a.cell.k || a.cell.k - b.cell.k,
-  );
-  const longest = fitting[0]?.repeats * (fitting[0]?.cell.k ?? 1);
-  const family = fitting.filter(
-    (item) => item.repeats * item.cell.k === longest,
-  );
   if (random() >= P_GROUP) return null;
+  // Draw across all fitting cell lengths rather than forcing only the longest
+  // run, avoiding mechanical 12-note drills while keeping 6- and 8-note cells lively.
+  const pool = fitting.flatMap((item) =>
+    item.repeats * item.cell.k <= 8 ? [item, item] : [item],
+  );
   const pick =
-    family[(Math.floor(random() * family.length) + salt) % family.length] ??
-    family[0];
+    pool[(Math.floor(random() * pool.length) + salt) % pool.length] ?? pool[0];
   if (!pick) return null;
   const here = contourGoal(plan, event.beat, bars);
   const ahead = contourGoal(plan, Math.min(bars * 4, event.beat + 1.5), bars);
@@ -2842,18 +2877,22 @@ function walkScored(
   const claimed = new Set<number>();
   const headSlots = byBar[0] ?? [];
   const answerSlots = byBar[1] ?? [];
-  const answered = sameOpening(events, headSlots, answerSlots, 4);
+  const answerCount = sameOpening(events, headSlots, answerSlots, 4)
+    ? 4
+    : sameOpening(events, headSlots, answerSlots, 3)
+      ? 3
+      : 0;
+  const answered = answerCount > 0;
   if (answered) {
-    for (const slot of answerSlots.slice(0, 4)) claimed.add(slot);
+    for (const slot of answerSlots.slice(0, answerCount)) claimed.add(slot);
   }
-  // Skips also stay off the head's first three attacks when bar 2 answers
-  // bar 1. A wide eighth among the answered four cannot be copied (the copy
+  // Skips also stay off the head's opening attacks when bar 2 answers
+  // bar 1. A wide eighth among the answered head cannot be copied (the copy
   // carries no pin), so the sequence chooser fails and the answer is lost.
-  // An atom starting on the fourth attack is fine: it enters by step and its
-  // wide arrival lands outside the answered four.
   const skipClaimed = new Set(claimed);
   if (answered) {
-    for (const slot of headSlots.slice(0, 3)) skipClaimed.add(slot);
+    for (const slot of headSlots.slice(0, Math.max(2, answerCount - 1)))
+      skipClaimed.add(slot);
   }
   if (
     answersOpening(seed) &&
@@ -2893,9 +2932,9 @@ function walkScored(
     const bar = Math.floor(event.beat / 4);
     const head = byBar[0] ?? [];
     const here = byBar[bar] ?? [];
-    if (bar === 1 && here[0] === index && sameOpening(events, head, here, 4)) {
-      const idea = head.slice(0, 4).map((at) => notes[at]?.index ?? -1);
-      const slots = here.slice(0, 4);
+    if (bar === 1 && here[0] === index && answerCount > 0) {
+      const idea = head.slice(0, answerCount).map((at) => notes[at]?.index ?? -1);
+      const slots = here.slice(0, answerCount);
       const tones = chooseSequence(
         order,
         idea,
@@ -3420,7 +3459,7 @@ function criticScore(
   // A light nudge. The third-mean gate already enforces the lock.
   score += Math.round(fit / notes.length / 4);
   score += Math.min(range, 12);
-  if (colorDegrees?.size && hasColorTone) score += 22;
+  if (colorDegrees?.size && hasColorTone) score += 28;
   if (notes.length >= 2) {
     const cadenceLeap = Math.abs(
       notes[notes.length - 1].midi - notes[notes.length - 2].midi,

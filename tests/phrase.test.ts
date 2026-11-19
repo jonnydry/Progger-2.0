@@ -833,7 +833,6 @@ void test('a cadence lock lands on the chord root', () => {
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.phrase.plan.cadence, 'root');
-  assert.equal(result.phrase.plan.rhythm, 'eighths');
   const notes = result.phrase.notes;
   assert.equal(notes.at(-1)?.pc, 9);
   assert.equal(notes.at(-1)?.beat, 8);
@@ -967,5 +966,38 @@ void test('modal scales feature their characteristic color tone and pentatonic s
   assert.ok(
     stepCadences >= 34,
     `A minor pentatonic resolved by scale step only ${stepCadences}/40 times`,
+  );
+});
+
+void test('phrases breathe with quarter rests and true beat-crossing offbeat pushes', () => {
+  const scaleNotes = scaleOf('C', 'major');
+  const chordNotes = parseChord('C').notes;
+  let quarterRestPhrases = 0;
+  let pushSustainedPhrases = 0;
+  for (let seed = 1; seed <= 80; seed++) {
+    const result = generatePhrase({ seed, bars: 2, scaleNotes, chordNotes });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    const notes = result.phrase.notes;
+    let hasQuarterRest = false;
+    let hasOffbeatPush = false;
+    for (let i = 0; i < notes.length - 1; i++) {
+      const note = notes[i];
+      const next = notes[i + 1];
+      if (next.beat - (note.beat + note.duration) >= 1 - 1e-6)
+        hasQuarterRest = true;
+      if (Math.abs((note.beat % 1) - 0.5) < 0.01 && note.duration > 0.5 + 1e-6)
+        hasOffbeatPush = true;
+    }
+    if (hasQuarterRest) quarterRestPhrases += 1;
+    if (hasOffbeatPush) pushSustainedPhrases += 1;
+  }
+  assert.ok(
+    quarterRestPhrases >= 10,
+    `expected >= 10 phrases with quarter-or-longer rests, got ${quarterRestPhrases}`,
+  );
+  assert.ok(
+    pushSustainedPhrases >= 10,
+    `expected >= 10 phrases with beat-crossing offbeat pushes, got ${pushSustainedPhrases}`,
   );
 });
