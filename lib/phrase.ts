@@ -310,7 +310,15 @@ export const CADENCE_LABEL: Record<CadenceTarget, string> = {
   fifth: '5th',
 };
 
-type LadderTone = { midi: number; note: Note; chordTone: boolean };
+type LadderTone = {
+  midi: number;
+  note: Note;
+  chordTone: boolean;
+  chordDegree?: string | null;
+  colorTone?: boolean;
+  avoidTone?: boolean;
+  blueNote?: boolean;
+};
 type Spot = { string: number; fret: number; position: number; finger: number };
 
 /**
@@ -773,8 +781,7 @@ export function phraseRuleReport(
         const step = next.midi - note.midi;
         if (
           Math.sign(step) === -Math.sign(note.midi - previous.midi) &&
-          Math.abs(step) >= 1 &&
-          Math.abs(step) <= 2
+          melodicMotion(note.midi, next.midi, scalePcs) === 'step'
         )
           wideResolved += 1;
       }
@@ -814,18 +821,76 @@ function noteByPc(notes: readonly Note[]): Map<number, Note> {
   return map;
 }
 
+function modalColorDegrees(scaleNotes: readonly Note[]): ReadonlySet<string> {
+  const degrees = new Set(scaleNotes.map((note) => note.degree));
+  const colors = new Set<string>();
+  const hasMinor3 = degrees.has('b3');
+  const hasMajor3 = degrees.has('3');
+  if (hasMinor3 && !hasMajor3) {
+    if (degrees.has('6') && !degrees.has('b2')) colors.add('6');
+    if (degrees.has('7') && !degrees.has('b2')) colors.add('7');
+    if (degrees.has('b2')) colors.add('b2');
+    if (degrees.has('b5')) colors.add('b5');
+  } else if (hasMajor3 && !hasMinor3) {
+    if (degrees.has('#4')) colors.add('#4');
+    if (degrees.has('b7') && !degrees.has('#4') && !degrees.has('b2'))
+      colors.add('b7');
+    if (degrees.has('b2')) colors.add('b2');
+  }
+  if (degrees.has('#5')) colors.add('#5');
+  if (degrees.has('#2')) colors.add('#2');
+  return colors;
+}
+
+function avoidPitchClasses(
+  scaleNotes: readonly Note[],
+  chordNotes: readonly Note[],
+  chordPcs: ReadonlySet<number>,
+): ReadonlySet<number> {
+  const scaleByPc = noteByPc(scaleNotes);
+  const avoid = new Set<number>();
+  for (const chordNote of chordNotes) {
+    const match = /^([b#]*)(\d+)$/.exec(chordNote.degree);
+    if (!match) continue;
+    const simple = ((Number(match[2]) - 1) % 7) + 1;
+    if (simple !== 3 && simple !== 5) continue;
+    const halfAbove = mod(chordNote.pc + 1);
+    if (chordPcs.has(halfAbove)) continue;
+    const scaleHit = scaleByPc.get(halfAbove);
+    if (!scaleHit) continue;
+    if (scaleHit.degree === 'b2') continue;
+    avoid.add(halfAbove);
+  }
+  return avoid;
+}
+
 function buildLadder(
   scaleNotes: readonly Note[],
+  chordNotes: readonly Note[],
   chordPcs: ReadonlySet<number>,
   register: RegisterName,
 ): LadderTone[] {
   const spelled = noteByPc(scaleNotes);
+  const chordByPc = noteByPc(chordNotes);
+  const colors = modalColorDegrees(scaleNotes);
+  const avoids = avoidPitchClasses(scaleNotes, chordNotes, chordPcs);
+  const hasNatural5 = scaleNotes.some((note) => note.degree === '5');
   const low = REGISTER_LOW[register];
   const ladder: LadderTone[] = [];
   for (let midi = low; midi <= low + PHRASE_RANGE; midi++) {
     const note = spelled.get(mod(midi));
     if (!note) continue;
-    ladder.push({ midi, note, chordTone: chordPcs.has(note.pc) });
+    const chordMatch = chordByPc.get(note.pc);
+    const blueNote = note.degree === 'b5' && hasNatural5;
+    ladder.push({
+      midi,
+      note,
+      chordTone: chordPcs.has(note.pc),
+      chordDegree: chordMatch ? chordMatch.degree : null,
+      colorTone: colors.has(note.degree),
+      avoidTone: avoids.has(note.pc),
+      blueNote,
+    });
   }
   return ladder;
 }
@@ -1065,6 +1130,18 @@ export function arrivalOk(
   return pin.arrivalsInBar < 4;
 }
 
+function isLadderScaleStep(
+  ladder: readonly LadderTone[],
+  midi: number,
+  targetMidi: number,
+): boolean {
+  if (midi === targetMidi) return false;
+  const gap = Math.abs(midi - targetMidi);
+  if (gap <= 2) return true;
+  const pcs = new Set(ladder.map((tone) => tone.note.pc));
+  return Math.abs(scaleStepCount(midi, targetMidi, pcs)) === 1;
+}
+
 /** The note before the cadence still has a scale tone a step away after the history guards. */
 function cadenceApproach(
   ladder: readonly LadderTone[],
@@ -1091,12 +1168,13 @@ function cadenceApproach(
     placed,
   );
   return candidates.some((tone) => {
-    const gap = Math.abs((ladder[tone]?.midi ?? 0) - cadenceMidi);
-    return gap > 0 && gap <= 2;
+    const midi = ladder[tone]?.midi;
+    return midi !== undefined && isLadderScaleStep(ladder, midi, cadenceMidi);
   });
 }
 
-function guideTone(degree: string): boolean {
+function guideTone(degree: string | null | undefined): boolean {
+  if (!degree) return false;
   const match = /^([b#]*)(\d+)$/.exec(degree);
   if (!match) return false;
   const simple = ((Number(match[2]) - 1) % 7) + 1;
@@ -1517,14 +1595,58 @@ function pitchWeight(
       }
     }
   }
+  const current = ladder[tone];
+  const prevTone =
+    prevMidi !== null
+      ? ladder.find((item) => item.midi === prevMidi) ?? null
+      : null;
   if (event.strong || event.duration >= 1) {
-    weight *= ladder[tone].chordTone ? 2.15 : 0.72;
-    if (ladder[tone].chordTone && guideTone(ladder[tone].note.degree))
-      weight *= 1.12;
+    if (current.chordTone) {
+      weight *= 2.15;
+      if (guideTone(current.chordDegree)) weight *= 1.25;
+    } else if (current.blueNote) {
+      weight *= 0.55;
+    } else if (current.avoidTone) {
+      weight *= 0.45;
+    } else if (current.colorTone) {
+      weight *= 1.1;
+    } else {
+      weight *= 0.72;
+    }
+  } else {
+    if (current.colorTone) weight *= 1.65;
+    else if (current.avoidTone) weight *= 0.85;
+  }
+  // Tendency-tone voice leading: leading tones, Phrygian b2, blues b5, and chord b7.
+  if (prevTone && prevMidi !== null) {
+    if (
+      prevTone.note.degree === '7' &&
+      current.note.degree === '1' &&
+      midi === prevMidi + 1
+    ) {
+      weight *= 1.55;
+    } else if (
+      prevTone.note.degree === 'b2' &&
+      current.note.degree === '1' &&
+      midi === prevMidi - 1
+    ) {
+      weight *= 1.55;
+    } else if (
+      prevTone.blueNote &&
+      (current.note.degree === '5' || current.note.degree === '4') &&
+      Math.abs(midi - prevMidi) <= 2
+    ) {
+      weight *= 1.65;
+    } else if (
+      prevTone.chordDegree === 'b7' &&
+      (current.chordDegree === '3' || current.chordDegree === 'b3')
+    ) {
+      weight *= 1.35;
+    }
   }
   if (cadenceMidi !== null) {
     const fromCadence = Math.abs(midi - cadenceMidi);
-    if (fromCadence > 0 && fromCadence <= 2) weight *= 8;
+    if (isLadderScaleStep(ladder, midi, cadenceMidi)) weight *= 8;
     else if (fromCadence >= 5) weight *= 0.35;
   }
   return weight > 1e-9 ? weight : 1e-9;
@@ -1796,11 +1918,10 @@ function chooseSequence(
     let step = false;
     if (ending) {
       const tone = tones[tones.length - 1] ?? -1;
-      const gap =
-        tone >= 0 && tone < ladder.length
-          ? Math.abs(ladder[tone].midi - cadenceMidi)
-          : 99;
-      step = gap > 0 && gap <= 2;
+      step =
+        tone >= 0 &&
+        tone < ladder.length &&
+        isLadderScaleStep(ladder, ladder[tone].midi, cadenceMidi);
     }
     options.push({ tones, miss, strongMiss, shift, step });
   }
@@ -2486,13 +2607,16 @@ function tailCanClose(
   const fast = (approach?.duration ?? 1) <= 0.5;
   const hop = fast ? 5 : 12;
   const seam = fast ? 5 : 12;
-  const lo = Math.max(low - hop, homeMidi - seam, cadenceMidi - 2);
-  const hi = Math.min(high + hop, homeMidi + seam, cadenceMidi + 2);
+  const lo = Math.max(low - hop, homeMidi - seam, cadenceMidi - 4);
+  const hi = Math.min(high + hop, homeMidi + seam, cadenceMidi + 4);
   return ladder.some((tone) => {
     const midi = tone.midi;
     if (midi < lo || midi > hi) return false;
     if (midi === homeMidi || midi === cadenceMidi) return false;
-    return Math.abs(midi - cadenceMidi) <= 2 && Math.abs(midi - homeMidi) <= seam;
+    return (
+      isLadderScaleStep(ladder, midi, cadenceMidi) &&
+      Math.abs(midi - homeMidi) <= seam
+    );
   });
 }
 
@@ -2924,10 +3048,12 @@ function walkScored(
       const fast = event.duration <= 0.5;
       const ready = candidates.filter((tone) => {
         const midi = ladder[tone]?.midi ?? 0;
-        const gap = Math.abs(midi - cadenceMidi);
         const seam = Math.abs(midi - opening);
         return (
-          gap > 0 && gap <= 2 && seam > 0 && seam <= 12 && !(fast && seam > 5)
+          isLadderScaleStep(ladder, midi, cadenceMidi) &&
+          seam > 0 &&
+          seam <= 12 &&
+          !(fast && seam > 5)
         );
       });
       if (ready.length) candidates = ready;
@@ -3022,8 +3148,11 @@ function walkScored(
           )
         : index === events.length - 2
           ? chosenTone((tone) => {
-              const gap = Math.abs((ladder[tone]?.midi ?? 0) - cadenceMidi);
-              return gap > 0 && gap <= 2;
+              const midi = ladder[tone]?.midi;
+              return (
+                midi !== undefined &&
+                isLadderScaleStep(ladder, midi, cadenceMidi)
+              );
             })
           : chosenTone();
     if (chosen === undefined) return giveUp();
@@ -3248,10 +3377,12 @@ function criticScore(
   plan: PhrasePlan,
   bars: 2 | 4,
   scalePcs: ReadonlySet<number>,
+  colorDegrees?: ReadonlySet<string>,
 ): number {
   let strong = 0;
   let strongChord = 0;
   let fit = 0;
+  let hasColorTone = false;
   const signatures: string[] = [];
   for (let bar = 0; bar < bars; bar++) {
     const onsets = notes
@@ -3264,6 +3395,13 @@ function criticScore(
     if (note.strong) {
       strong += 1;
       if (note.chordTone) strongChord += 1;
+    }
+    if (
+      index < notes.length - 1 &&
+      colorDegrees?.size &&
+      colorDegrees.has(note.degree)
+    ) {
+      hasColorTone = true;
     }
     const goal = contourMidi(plan, index / Math.max(1, notes.length - 1));
     fit += Math.max(0, PHRASE_RANGE - Math.abs(note.midi - goal));
@@ -3282,6 +3420,13 @@ function criticScore(
   // A light nudge. The third-mean gate already enforces the lock.
   score += Math.round(fit / notes.length / 4);
   score += Math.min(range, 12);
+  if (colorDegrees?.size && hasColorTone) score += 22;
+  if (notes.length >= 2) {
+    const cadenceLeap = Math.abs(
+      notes[notes.length - 1].midi - notes[notes.length - 2].midi,
+    );
+    if (cadenceLeap >= 6) score -= 18;
+  }
   if (same) score -= 80;
   if (quarter) score -= 24;
   score -= pitchCriticPenalty(notes, midis, bars, scalePcs);
@@ -3544,12 +3689,13 @@ function atomLineFails(
   forms: readonly Pattern[],
   register: RegisterName,
   requireStep: boolean,
+  scalePcs?: ReadonlySet<number>,
 ): boolean {
   const probed = notesFromPitches(walked, events);
   const spots = walked.map((note) => note.spot);
   let reason = '';
   if (seamIsIllegal(probed, bars)) reason = 'seam';
-  else if (requireStep && !stepsIntoCadence(walked)) reason = 'step';
+  else if (requireStep && !stepsIntoCadence(walked, scalePcs)) reason = 'step';
   else if (repeatsFour(walked)) reason = 'cycle';
   else {
     const fingered = fingerNotes(
@@ -3632,12 +3778,17 @@ function repeatsFour(notes: readonly { midi: number }[]): boolean {
   return false;
 }
 
-function stepsIntoCadence(notes: readonly { midi: number }[]): boolean {
+function stepsIntoCadence(
+  notes: readonly { midi: number }[],
+  scalePcs?: ReadonlySet<number>,
+): boolean {
   if (notes.length < 2) return true;
-  const gap = Math.abs(
-    notes[notes.length - 1].midi - notes[notes.length - 2].midi,
-  );
-  return gap === 1 || gap === 2;
+  const from = notes[notes.length - 2].midi;
+  const to = notes[notes.length - 1].midi;
+  const gap = Math.abs(to - from);
+  if (gap === 1 || gap === 2) return true;
+  if (!scalePcs) return false;
+  return Math.abs(scaleStepCount(from, to, scalePcs)) === 1;
 }
 
 function sampleLane(
@@ -3724,6 +3875,7 @@ function sampleLane(
         forms,
         plan.register,
         input.bars === 4,
+        scalePcs,
       );
       if (!failed) {
         pitches = walked.notes;
@@ -3761,6 +3913,7 @@ function sampleLane(
             forms,
             plan.register,
             input.bars === 4,
+            scalePcs,
           )
         ) {
           pitches = grouped.notes;
@@ -3805,7 +3958,13 @@ function sampleLane(
       notes,
       spots: pitches.map((note) => note.spot),
       plan: nextPlan,
-      score: criticScore(notes, nextPlan, input.bars, scalePcs),
+      score: criticScore(
+        notes,
+        nextPlan,
+        input.bars,
+        scalePcs,
+        modalColorDegrees(input.scaleNotes),
+      ),
       exact,
       lane: lane + attempt * lanes,
       groupingBars,
@@ -4467,7 +4626,12 @@ function assemble(
 ): PhraseResult {
   const chordPcs = landingPitchClasses(input.chordNotes, input.scaleNotes);
   if (!chordPcs.size) return { ok: false, reason: 'no-shared-tones' };
-  const ladder = buildLadder(input.scaleNotes, chordPcs, plan.register);
+  const ladder = buildLadder(
+    input.scaleNotes,
+    input.chordNotes,
+    chordPcs,
+    plan.register,
+  );
   if (ladder.length < 2) return { ok: false, reason: 'unplayable' };
   const forms = patterns([...input.scaleNotes]);
   const composed = composePhrase(input, plan, ladder, forms);

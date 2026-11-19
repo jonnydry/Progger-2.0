@@ -920,3 +920,52 @@ void test('middle and high registers avoid stray open strings', () => {
     `mid register leaked open strings in ${midOpen}/${midTotal} phrases`,
   );
 });
+
+void test('modal scales feature their characteristic color tone and pentatonic scales resolve by scale step', () => {
+  const modalCases = [
+    ['D', 'dorian', 'Dm', '6'],
+    ['F', 'lydian', 'F', '#4'],
+    ['E', 'phrygian', 'Em', 'b2'],
+    ['G', 'mixolydian', 'G7', 'b7'],
+  ] as const;
+  for (const [root, scaleId, chord, color] of modalCases) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(chord).notes;
+    let hits = 0;
+    const total = 40;
+    for (let seed = 1; seed <= total; seed++) {
+      const result = generatePhrase({ seed, bars: 2, scaleNotes, chordNotes });
+      assert.equal(result.ok, true);
+      if (!result.ok) continue;
+      if (result.phrase.notes.slice(0, -1).some((note) => note.degree === color))
+        hits += 1;
+    }
+    assert.ok(
+      hits / total >= 0.85,
+      `${root} ${scaleId} omitted color ${color}: only ${hits}/${total}`,
+    );
+  }
+  const pentNotes = scaleOf('A', 'minor-pentatonic');
+  const pentPcs = new Set(pentNotes.map((note) => note.pc));
+  const amNotes = parseChord('Am').notes;
+  let stepCadences = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: pentNotes,
+      chordNotes: amNotes,
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    const notes = result.phrase.notes;
+    const prev = notes[notes.length - 2];
+    const last = notes[notes.length - 1];
+    if (prev && last && melodicMotion(prev.midi, last.midi, pentPcs) === 'step')
+      stepCadences += 1;
+  }
+  assert.ok(
+    stepCadences >= 34,
+    `A minor pentatonic resolved by scale step only ${stepCadences}/40 times`,
+  );
+});
