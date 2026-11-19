@@ -877,3 +877,46 @@ void test('Bb minor seed 4 keeps the low wave plan', () => {
     assert.ok(Math.abs(note.beat * 2 - Math.round(note.beat * 2)) < 1e-6);
   }
 });
+
+void test('middle and high registers avoid stray open strings', () => {
+  const contexts = [
+    ['C', 'major', 'C'],
+    ['A', 'dorian', 'Am'],
+    ['E', 'minor', 'Em'],
+    ['G', 'mixolydian', 'G7'],
+  ] as const;
+  let midTotal = 0;
+  let midOpen = 0;
+  let highTotal = 0;
+  let highOpen = 0;
+  for (const [root, scaleId, chord] of contexts) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(chord).notes;
+    for (let seed = 1; seed <= 30; seed++) {
+      for (const register of ['mid', 'high'] as const) {
+        const result = generatePhrase({
+          seed,
+          bars: 2,
+          scaleNotes,
+          chordNotes,
+          locks: { register },
+        });
+        assert.equal(result.ok, true);
+        if (!result.ok) continue;
+        const hasOpen = result.phrase.notes.some((note) => note.fret === 0);
+        if (register === 'mid') {
+          midTotal += 1;
+          if (hasOpen) midOpen += 1;
+        } else {
+          highTotal += 1;
+          if (hasOpen) highOpen += 1;
+        }
+      }
+    }
+  }
+  assert.equal(highOpen, 0, `high register leaked open strings in ${highOpen}/${highTotal} phrases`);
+  assert.ok(
+    midOpen / midTotal < 0.03,
+    `mid register leaked open strings in ${midOpen}/${midTotal} phrases`,
+  );
+});

@@ -4051,21 +4051,23 @@ function shapeCover(
   if (!forms.length) return -1;
   const distinct = new Set(midis);
   let best = 0;
-  let bestHit = -1;
+  let bestScore = -Infinity;
   let bestDist = Infinity;
   forms.forEach((form, index) => {
     const have = new Set(form.positions.map((position) => position.midi));
     let hit = 0;
     for (const midi of distinct) if (have.has(midi)) hit += 1;
-    // Coverage first, then the form nearest the register's hand position.
     const dist = Math.abs((form.min + form.max) / 2 - anchor);
+    // Balance pitch coverage against register anchor so a low-position form
+    // catching one extra edge note does not pull middle register down to fret 2.
+    const score = hit * 1.5 - dist * 0.45;
     if (
-      hit > bestHit ||
-      (hit === bestHit &&
+      score > bestScore + 1e-9 ||
+      (Math.abs(score - bestScore) <= 1e-9 &&
         (dist < bestDist || (dist === bestDist && index < best)))
     ) {
       best = index;
-      bestHit = hit;
+      bestScore = score;
       bestDist = dist;
     }
   });
@@ -4138,7 +4140,8 @@ function fingerRow(
   if (!parent) {
     for (const spot of spots) {
       cost.push(
-        Math.abs(spot.position - anchor) * 0.05 +
+        Math.abs(spot.position - anchor) * 0.14 +
+          (anchor >= 5 && spot.fret === 0 ? 12 : 0) +
           shapeCost(shapes, spot, shaped, active) +
           (hint ? spotHintBonus(spot, hint, shapes) : 0),
       );
@@ -4281,7 +4284,7 @@ function spotsFor(midi: number): Spot[] {
     const fret = midi - TUNING[string];
     if (fret < 0 || fret > 24) continue;
     if (fret === 0) {
-      for (let position = 0; position <= 17; position++)
+      for (let position = 0; position <= 3; position++)
         spots.push({ string, fret, position, finger: 0 });
       continue;
     }
@@ -4386,8 +4389,9 @@ function jumpParts(
     !!fromShapes &&
     !!toShapes &&
     fromShapes.some((index) => toShapes.includes(index));
-  if (distance === 1) jump = 0.7;
-  else if ((distance === 2 || distance === 3) && sameShape) jump = 0.4;
+  if (distance === 1) jump = 0.45;
+  else if (distance === 2 && sameShape) jump = 0.95;
+  else if (distance === 3 && sameShape) jump = 1.8;
   else if (distance === 2) jump = 2.4;
   else if (distance > 2) jump = 5 + distance;
   let formDist = 0;
@@ -4402,6 +4406,19 @@ function jumpParts(
   return { jump, formDist };
 }
 
+function fingerRollCost(from: Spot, to: Spot, fast: boolean): number {
+  if (from.finger <= 0 || from.finger !== to.finger || from.string === to.string)
+    return 0;
+  const strDist = Math.abs(from.string - to.string);
+  if (from.fret === to.fret) {
+    if (strDist >= 2) return fast ? 6.5 : 5.0;
+    const base =
+      from.finger === 1 ? 1.2 : from.finger === 4 ? 6.5 : 3.0;
+    return base + (fast ? 2.0 : 0);
+  }
+  return fast ? 160 : 3.5;
+}
+
 function moveCost(
   from: Spot,
   to: Spot,
@@ -4413,14 +4430,29 @@ function moveCost(
   anchor: number,
   parts: JumpParts,
 ): number {
-  let cost = Math.abs(to.position - anchor) * 0.02;
-  cost += handShiftCost(to.position - from.position, fast);
+  let cost = Math.abs(to.position - anchor) * 0.12;
+  const moved = Math.abs(to.position - from.position);
+  const toShapeCost = shapeCost(shapes, to, shaped, active);
+  if (
+    moved === 1 &&
+    !fast &&
+    shaped &&
+    active >= 0 &&
+    toShapeCost === 0 &&
+    shapeCost(shapes, from, shaped, active) === 0
+  ) {
+    // A 1-fret stretch inside the active 3NPS form is a natural reach, not a shift.
+    cost += 4;
+  } else {
+    cost += handShiftCost(to.position - from.position, fast);
+  }
   if (parts.jump !== 0) cost += parts.jump;
   if (parts.formDist !== 0) cost += parts.formDist;
-  cost += shapeCost(shapes, to, shaped, active);
+  cost += toShapeCost;
+  cost += fingerRollCost(from, to, fast);
   if (pitch > 0 && to.string < from.string) cost += 0.35;
   if (pitch < 0 && to.string > from.string) cost += 0.35;
-  if (to.fret === 0) cost -= 0.15;
+  if (to.fret === 0) cost += anchor <= 3 ? -0.15 : 12;
   return cost;
 }
 
