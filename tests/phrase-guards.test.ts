@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseChord } from '../lib/harmony.ts';
-import { SCALES, spell, type Note } from '../lib/music.ts';
+import { patterns, SCALES, spell, type Note } from '../lib/music.ts';
 import { generatePhrase, type Phrase } from '../lib/phrase.ts';
 
 const SWEEP: readonly (readonly [string, string, string])[] = [
@@ -19,6 +19,33 @@ function scaleOf(root: string, id: string): Note[] {
   const scale = SCALES.find((item) => item.id === id);
   assert.ok(scale, id);
   return spell(root, scale.formula);
+}
+
+/** Form lookup in the engine's keying, rebuilt here so a test can disagree. */
+function formLookupFor(forms: readonly { positions: readonly { string: number; fret: number }[] }[]): ReadonlyMap<number, number[]> {
+  const map = new Map<number, number[]>();
+  forms.forEach((form, index) => {
+    for (const position of form.positions) {
+      const key = position.string * 32 + position.fret;
+      const list = map.get(key);
+      if (list) list.push(index);
+      else map.set(key, [index]);
+    }
+  });
+  return map;
+}
+
+/** Two strings apart, both in a form, and those forms within one of each other. */
+function skipOneFormApart(
+  shapes: ReadonlyMap<number, number[]>,
+  from: { string: number; fret: number },
+  to: { string: number; fret: number },
+): boolean {
+  if (Math.abs(from.string - to.string) !== 2) return false;
+  const left = shapes.get(from.string * 32 + from.fret) ?? [];
+  const right = shapes.get(to.string * 32 + to.fret) ?? [];
+  if (!left.length || !right.length) return false;
+  return left.some((a) => right.some((b) => Math.abs(a - b) <= 1));
 }
 
 function phrase(
@@ -161,6 +188,7 @@ void test('sentence guards stay visible in the notes', () => {
   let sync = 0;
   let syncNotes = 0;
   let repeatedCells = 0;
+  let repeatedOnsets = 0;
   for (const [root, scaleId, symbol] of SWEEP) {
     const scaleNotes = scaleOf(root, scaleId);
     const pcs = new Set(scaleNotes.map((note) => note.pc));
@@ -285,11 +313,15 @@ void test('sentence guards stay visible in the notes', () => {
           );
           if (!struck) sync += 1;
         }
-        // Compare what sounds, not the cell labels: two bars can share a
-        // label ("ans 0,1,2,3") and still attack at different places.
+        const cells = line.plan.cells ?? [];
+        for (let index = 1; index < cells.length; index++) {
+          if (cells[index] === cells[index - 1]) repeatedCells += 1;
+        }
+        // Compare what sounds: two bars can share a label ("ans 0,1,2,3")
+        // and still attack at different places.
         for (let index = 1; index < barsCount; index++) {
           if (barOnsets(line, index) === barOnsets(line, index - 1))
-            repeatedCells += 1;
+            repeatedOnsets += 1;
         }
       }
     }
@@ -307,9 +339,18 @@ void test('sentence guards stay visible in the notes', () => {
     (sequenced - freeSequenced) / (four - freeFour) >= 0.6,
     `answering fragment ${sequenced - freeSequenced}/${four - freeFour}`,
   );
+  // Free lines must stay far below the answering path: 5 of 48 (10.4%)
+  // against 143 of 152 (94.1%) here. The gap is the property; an absolute
+  // count would only re-encode how many free seeds the sweep happens to have.
   assert.ok(
     freeSequenced / freeFour <= 0.2,
     `free fragment ${freeSequenced}/${freeFour}`,
+  );
+  // The rate against the answering path comes from the loop-wrap commit;
+  // the 0.8 aggregate floor is main's (Rev's tightening), kept as-is.
+  assert.ok(
+    freeSequenced / freeFour <= 0.25 * ((sequenced - freeSequenced) / (four - freeFour)),
+    `free fragment rate against answering ${freeSequenced}/${freeFour}`,
   );
   assert.ok(
     heldOpen / nonEighthOpen >= 0.8,
@@ -354,13 +395,18 @@ void test('sentence guards stay visible in the notes', () => {
   // (908/6969) and a 4,800-phrase run of the same contexts measures 13.56%.
   // The floor sits at 12%, above slice 2's dip and under both.
   assert.ok(sync / syncNotes >= 0.12, `sync ${sync}/${syncNotes}`);
-  // Adjacent bars with the same onsets. Counting cell ids instead gave 20
-  // once the opening spread, because two answered bars often share the label
-  // "ans 0,1,2,3" while attacking differently. What a listener hears is the
-  // onsets: 3 of 400 here.
+  // Two separate guards, because they catch different things. Cell ids can
+  // repeat once the opening spreads -- two answered bars often share the
+  // label "ans 0,1,2,3" -- so the label count is bounded rather than pinned.
   assert.ok(
-    repeatedCells <= 4,
-    `repeated bar rhythm ${repeatedCells}/${phrases}`,
+    repeatedCells <= 20,
+    `repeated cell labels ${repeatedCells}/${phrases}`,
+  );
+  // What a listener actually hears is the onsets, and those may not repeat
+  // adjacent at all beyond a handful of accented echoes.
+  assert.ok(
+    repeatedOnsets <= 4,
+    `repeated bar rhythm ${repeatedOnsets}/${phrases}`,
   );
 });
 
@@ -502,4 +548,89 @@ void test('these cadence tails stay on the weighted pitches', () => {
       `${symbol} seed ${seed} ${bars}`,
     );
   }
+});
+
+void test('the loop wrap never refuses a move the phrase allows, and seeds replay', () => {
+  // The wrap a looping pass makes is the only resolution a loop ever hears, so
+  // it has to obey the same arrival rule as any move inside the phrase: no
+  // unison, no more than an octave, and no more than a fourth onto an eighth
+  // unless it is a skip one form apart. The form half matters: a scale with no
+  // forms (`patterns` returns nothing for 6- and 8-note scales) can never
+  // excuse a wide move onto an eighth, because inside a phrase the engine
+  // makes none there either. So the sweep below includes those scales on
+  // purpose; without them this test passed while 70 REVIEW phrases broke the
+  // rule.
+  //
+  // It also pins seed drift. When every candidate failed the seam check alone
+  // the plan came back unplayable and the caller advanced to the next seed,
+  // so a seed silently played a different phrase. The re-roll in
+  // `composePhrase` fixes that; this catches it coming back.
+  //
+  // `shapes` is rebuilt here from `patterns`, the same lookup the engine uses,
+  // so this test can disagree with the engine rather than echo it.
+  const CONTEXTS: readonly (readonly [string, string, string])[] = [
+    ...SWEEP,
+    // No-form scales, 6 and 8 notes, where `patterns` returns []. They need
+    // more seeds: a wide wrap onto an eighth is rarer in them, and seeds 1-50
+    // never reach one.
+    ['C', 'whole-tone', 'C7'],
+    ['A', 'whole-tone', 'A7'],
+    ['C', 'minor-blues', 'C7'],
+    ['E', 'minor-blues', 'E7'],
+    ['C', 'half-whole-diminished', 'C7'],
+    ['A', 'half-whole-diminished', 'A7'],
+  ];
+  let phrases = 0;
+  let illegal = 0;
+  let drift = 0;
+  let wideOntoEighth = 0;
+  let noFormWide = 0;
+  for (const [root, scaleId, symbol] of CONTEXTS) {
+    const shapes = formLookupFor(patterns(scaleOf(root, scaleId)));
+    const formless = shapes.size === 0;
+    const seeds = formless ? 200 : 50;
+    for (const bars of [2, 4] as const) {
+      for (let seed = 1; seed <= seeds; seed++) {
+        const line = phrase(root, scaleId, symbol, seed, bars);
+        phrases += 1;
+        if (line.seed !== seed) drift += 1;
+        const body = line.notes.filter((note) => note.beat < bars * 4);
+        const last = body[body.length - 1];
+        const first = line.notes[0];
+        assert.ok(last && first, `${symbol} seed ${seed} ${bars}`);
+        const gap = Math.abs(first.midi - last.midi);
+        const fast = first.duration <= 0.5;
+        if (fast && gap > 5) {
+          wideOntoEighth += 1;
+          if (formless) noFormWide += 1;
+        }
+        const excuse =
+          fast && gap > 5 ? skipOneFormApart(shapes, last, first) : true;
+        const legal = gap > 0 && gap <= 12 && excuse;
+        if (!legal) {
+          illegal += 1;
+          assert.fail(
+            `${symbol} seed ${seed} ${bars}: wrap ${last.midi} -> ${first.midi} (gap ${gap}, first ${first.duration}, strings ${last.string} -> ${first.string}, formless ${formless})`,
+          );
+        }
+      }
+    }
+  }
+  // 8 sweep contexts at 50 seeds and 6 formless ones at 200, both 2 and 4 bars.
+  assert.equal(phrases, (8 * 50 + 6 * 200) * 2);
+  assert.equal(illegal, 0, `illegal wraps ${illegal}`);
+  // The branch is exercised, not vacuous: phrases really do wrap wide onto an
+  // eighth where a form exists to excuse them.
+  assert.ok(wideOntoEighth >= 10, `wide wraps onto an eighth ${wideOntoEighth}`);
+  // In a scale with no forms there is nothing to excuse a wide move onto an
+  // eighth, and the engine makes none inside such a phrase either, so the
+  // count here must be zero. On main it was 605 across the same contexts;
+  // asserting zero is what catches a return of the string-only excuse, which
+  // is the bug that let 67 REVIEW phrases through.
+  assert.equal(noFormWide, 0, `wide wraps onto an eighth in formless scales ${noFormWide}`);
+  // Seed drift is 0 on this sweep on main and 0 here; the loop-wrap rule
+  // briefly took it to 3 before the same-seed re-roll, and the old
+  // fall-through reached 45 on the wider REVIEW grid. Allow a little room for
+  // a future change that trades a seed for a musical fix, not that return.
+  assert.ok(drift <= 2, `seed drift ${drift}/${phrases}`);
 });

@@ -71,9 +71,10 @@ export function playedGroupingAtoms(
 }
 
 /**
- * Verified on this head against main 4a24e4a. Not the retired pack. The first
- * list (1001, 1051, 1105, 1154, 1206) was regenerated for the spread eighths
- * opening: those seeds no longer play a grouping, or main now plays one too.
+ * Verified on this head against main 4a24e4a. Not the retired pack. The list
+ * has been regenerated for each change that moved which seeds play a grouping;
+ * this one is for the form-aware seam excuse, which re-rolls lanes where a wrap
+ * used to be waved through.
  */
 export const LISTEN_SEEDS: readonly {
   seed: number;
@@ -82,11 +83,11 @@ export const LISTEN_SEEDS: readonly {
   scale: string;
   chord: string;
 }[] = [
-  { seed: 1074, bars: 2, key: 'A', scale: 'dorian', chord: 'Am' },
-  { seed: 1103, bars: 2, key: 'C', scale: 'major', chord: 'G7' },
-  { seed: 1150, bars: 2, key: 'F', scale: 'major', chord: 'Fmaj7' },
-  { seed: 1200, bars: 2, key: 'E', scale: 'minor', chord: 'Em' },
-  { seed: 1255, bars: 2, key: 'D', scale: 'dorian', chord: 'Dm7' },
+  { seed: 1041, bars: 2, key: 'C', scale: 'major', chord: 'C' },
+  { seed: 1071, bars: 2, key: 'A', scale: 'dorian', chord: 'Am' },
+  { seed: 1118, bars: 2, key: 'C', scale: 'major', chord: 'G7' },
+  { seed: 1258, bars: 2, key: 'D', scale: 'dorian', chord: 'Dm7' },
+  { seed: 1363, bars: 2, key: 'A', scale: 'minor-pentatonic', chord: 'Am7' },
 ];
 
 export type ListenSeed = {
