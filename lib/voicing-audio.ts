@@ -21,6 +21,50 @@ export type AuditionState = 'idle' | 'starting' | 'playing' | 'error';
 const STRUM_GAP = 0.045;
 const DECAY = 2.5;
 
+export type PhraseVoiceOptions = {
+  /** Velocity multiplier in (0, 1]; never above 1 so drone headroom is preserved. */
+  velocity?: number;
+  /** Pluck attack ramp in seconds (default 0.006; softer for same-string legato). */
+  attackSec?: number;
+  /** Multiplier on initial lowpass cutoff (default 1). */
+  cutoffScale?: number;
+  /** Minimum decay tail in seconds when a slow tempo note outlasts DECAY (2.5 s). */
+  minTailSec?: number;
+  /** Neck-position warmth: higher frets gently soften upper brilliance. */
+  fret?: number;
+  /** String index 0 (low E) to 5 (high E) for subtle neck-position warmth. */
+  string?: number;
+};
+
+const waveCache = new WeakMap<BaseAudioContext, Map<number, PeriodicWave>>();
+
+function pluckWave(
+  context: BaseAudioContext,
+  frequency: number,
+): PeriodicWave {
+  const nyquist = context.sampleRate / 2;
+  let maxHarmonic = 0;
+  for (let harmonic = 1; harmonic < 25; harmonic += 1) {
+    if (frequency * harmonic < nyquist) maxHarmonic = harmonic;
+  }
+  let byContext = waveCache.get(context);
+  if (!byContext) {
+    byContext = new Map();
+    waveCache.set(context, byContext);
+  }
+  const cached = byContext.get(maxHarmonic);
+  if (cached) return cached;
+  const real = new Float32Array(25);
+  const imaginary = new Float32Array(25);
+  for (let harmonic = 1; harmonic <= maxHarmonic; harmonic += 1) {
+    imaginary[harmonic] =
+      Math.sin(harmonic * Math.PI * 0.23) / harmonic ** 1.35;
+  }
+  const wave = context.createPeriodicWave(real, imaginary);
+  byContext.set(maxHarmonic, wave);
+  return wave;
+}
+
 export type ScheduledVoicing = {
   bus: GainNode;
   voices: {
@@ -40,6 +84,7 @@ export function scheduleVoicing(
     bus: GainNode,
     voices: ScheduledVoicing['voices'],
   ) => void,
+  options?: PhraseVoiceOptions,
 ): ScheduledVoicing {
   const pitches = voicingMidi(frets);
   const bus = context.createGain();
@@ -54,36 +99,66 @@ export function scheduleVoicing(
     const envelope = context.createGain();
     const filter = context.createBiquadFilter();
     const frequency = 440 * 2 ** ((midi - 69) / 12);
-    const real = new Float32Array(25);
-    const imaginary = new Float32Array(25);
-    for (let harmonic = 1; harmonic < imaginary.length; harmonic += 1) {
-      if (frequency * harmonic < context.sampleRate / 2) {
-        imaginary[harmonic] =
-          Math.sin(harmonic * Math.PI * 0.23) / harmonic ** 1.35;
-      }
-    }
     // Plucking away from a string's center leaves a rounded, uneven spectrum.
-    oscillator.setPeriodicWave(context.createPeriodicWave(real, imaginary));
+    oscillator.setPeriodicWave(pluckWave(context, frequency));
     oscillator.frequency.value = frequency;
     const at = when + index * STRUM_GAP;
     filter.type = 'lowpass';
     filter.Q.value = 0.45;
-    filter.frequency.setValueAtTime(Math.min(5500, frequency * 12), at);
-    filter.frequency.exponentialRampToValueAtTime(
-      Math.max(600, frequency * 2),
-      at + 1.3,
-    );
-    envelope.gain.setValueAtTime(0, at);
-    envelope.gain.linearRampToValueAtTime(0.85, at + 0.006);
-    envelope.gain.exponentialRampToValueAtTime(0.12, at + 0.65);
-    envelope.gain.exponentialRampToValueAtTime(0.0001, at + DECAY);
-    envelope.gain.linearRampToValueAtTime(0, at + DECAY + 0.02);
-    oscillator.connect(filter);
-    filter.connect(envelope);
-    envelope.connect(bus);
-    oscillator.start(at);
-    oscillator.stop(at + DECAY + 0.025);
-    voices.push({ oscillator, envelope, filter });
+    if (!options) {
+      filter.frequency.setValueAtTime(Math.min(5500, frequency * 12), at);
+      filter.frequency.exponentialRampToValueAtTime(
+        Math.max(600, frequency * 2),
+        at + 1.3,
+      );
+      envelope.gain.setValueAtTime(0, at);
+      envelope.gain.linearRampToValueAtTime(0.85, at + 0.006);
+      envelope.gain.exponentialRampToValueAtTime(0.12, at + 0.65);
+      envelope.gain.exponentialRampToValueAtTime(0.0001, at + DECAY);
+      envelope.gain.linearRampToValueAtTime(0, at + DECAY + 0.02);
+      oscillator.connect(filter);
+      filter.connect(envelope);
+      envelope.connect(bus);
+      oscillator.start(at);
+      oscillator.stop(at + DECAY + 0.025);
+      voices.push({ oscillator, envelope, filter });
+    } else {
+      const velocity = Math.min(1, Math.max(0.2, options.velocity ?? 1));
+      const attack = Math.max(0.004, options.attackSec ?? 0.006);
+      const cutoffScale = Math.min(1.15, Math.max(0.55, options.cutoffScale ?? 1));
+      const fretWarmth =
+        options.fret !== undefined && options.fret > 5
+          ? Math.max(0.84, 1 - (options.fret - 5) * 0.008)
+          : 1;
+      const decaySec = Math.max(DECAY, options.minTailSec ?? DECAY);
+      const bodySec = 0.65 * (decaySec / DECAY);
+      const peakLevel = 0.85 * velocity;
+      const bodyLevel = Math.max(0.0002, 0.12 * velocity);
+      const startCutoff = Math.min(
+        5500,
+        Math.max(1500, frequency * 12) * cutoffScale * fretWarmth,
+      );
+      const endCutoff = Math.max(
+        600,
+        Math.min(startCutoff, frequency * 2 * fretWarmth),
+      );
+      filter.frequency.setValueAtTime(startCutoff, at);
+      filter.frequency.exponentialRampToValueAtTime(
+        endCutoff,
+        at + 1.3 * (decaySec / DECAY),
+      );
+      envelope.gain.setValueAtTime(0, at);
+      envelope.gain.linearRampToValueAtTime(peakLevel, at + attack);
+      envelope.gain.exponentialRampToValueAtTime(bodyLevel, at + bodySec);
+      envelope.gain.exponentialRampToValueAtTime(0.0001, at + decaySec);
+      envelope.gain.linearRampToValueAtTime(0, at + decaySec + 0.02);
+      oscillator.connect(filter);
+      filter.connect(envelope);
+      envelope.connect(bus);
+      oscillator.start(at);
+      oscillator.stop(at + decaySec + 0.025);
+      voices.push({ oscillator, envelope, filter });
+    }
   }
   return { bus, voices };
 }
