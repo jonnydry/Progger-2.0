@@ -3301,6 +3301,18 @@ function criticScore(
  * chord-tone terms: a smooth wrap is worth having, but not by filling the
  * line with repeats and wrong notes on the beat.
  */
+/**
+ * The wrap a looping pass makes from the last body note into the next pass's
+ * first note.
+ *
+ * `fast` is the *departing* note's length, which is main's rule and the one
+ * `loopSeamPenalty` and `seamIsIllegal` are tuned to. Note that this is a
+ * different question from the one `arrivalOk` asks: there the length that
+ * matters is the arriving note's, because the limit is about what the hand is
+ * asked to land on. This function feeds the pitch-stage screens, so it keeps
+ * the departing reading. The arriving-note rule lives where the strings exist,
+ * in `seamIsIllegalFingered`.
+ */
 function loopSeamGap(
   notes: readonly PhraseNote[],
   bars: 2 | 4,
@@ -3332,20 +3344,67 @@ function seamIsIllegal(notes: readonly PhraseNote[], bars: 2 | 4): boolean {
 }
 
 /**
+ * The rest of the wrap rule, once the strings exist: a wide move onto an
+ * eighth is legal only as the two-string skip `arrivalOk` accepts everywhere
+ * else. That means the same hand excuse a skip inside a phrase gets: two
+ * strings apart *and* the two notes within one form of each other. A scale
+ * with no forms has no excuse at all, because `patterns` returns nothing to
+ * vouch for it, and neither has a note that sits in no form.
+ */
+function seamIsIllegalFingered(
+  notes: readonly FingeredNote[],
+  bars: 2 | 4,
+  shapes: ReadonlyMap<number, number[]> | null,
+): boolean {
+  const first = notes.find((note) => note.beat === 0);
+  let last: FingeredNote | undefined;
+  for (const note of notes) if (note.beat < bars * 4) last = note;
+  if (!first || !last) return false;
+  const gap = Math.abs(first.midi - last.midi);
+  if (gap > 12 || gap === 0) return true;
+  if (!(first.duration <= 0.5 && gap > 5)) return false;
+  return !seamIsSkipPair(last, first, shapes);
+}
+
+/**
+ * Would the phrase itself allow this wrap as a skip? Both notes have to be
+ * in a form, two strings apart, and within one form index of each other —
+ * exactly what `isSkipPair` asks of a pinned arrival.
+ */
+function seamIsSkipPair(
+  from: { string: number; fret: number },
+  to: { string: number; fret: number },
+  shapes: ReadonlyMap<number, number[]> | null,
+): boolean {
+  if (!shapes) return false;
+  if (Math.abs(from.string - to.string) !== 2) return false;
+  const left = shapes.get(shapeKey(from.string, from.fret));
+  const right = shapes.get(shapeKey(to.string, to.fret));
+  if (!left?.length || !right?.length) return false;
+  for (const a of left) for (const b of right) if (Math.abs(a - b) <= 1) return true;
+  return false;
+}
+
+/**
  * Is the wrap from the last body note to the next pass's first note a move
  * the phrase itself would be allowed to make? A looping pass skips the
  * closing cadence, so this interval is a real sounding move and gets the same
  * limits `arrivalOk` puts on any other one: no unison, no more than an
- * octave, and no more than a fourth onto an eighth.
+ * octave, and no more than a fourth onto an eighth. The eighth that matters
+ * is the one being arrived at, exactly as inside the phrase, and a wide move
+ * onto one is allowed only as a skip, which needs both notes' forms.
+ * {@link seamIsIllegalFingered} is the engine's check; this is the same rule
+ * for a finished phrase, so a test can ask it without reaching inside.
  */
 export function loopSeamLegal(
-  lastMidi: number,
-  lastDuration: number,
-  firstMidi: number,
+  last: { midi: number; string: number; fret: number },
+  first: { midi: number; duration: number; string: number; fret: number },
+  shapes: ReadonlyMap<number, number[]> | null,
 ): boolean {
-  const gap = Math.abs(firstMidi - lastMidi);
+  const gap = Math.abs(first.midi - last.midi);
   if (gap === 0 || gap > 12) return false;
-  return !(lastDuration <= 0.5 && gap > 5);
+  if (!(first.duration <= 0.5 && gap > 5)) return true;
+  return seamIsSkipPair(last, first, shapes);
 }
 
 const PHRASE_CANDIDATES = 4;
@@ -3427,6 +3486,15 @@ type LaneResult = {
   score: number;
   exact: boolean;
   lane: number;
+  groupingBars: number[];
+};
+
+/** One lane with its fingering settled, ready to be the phrase. */
+type PlayedLane = {
+  notes: FingeredNote[];
+  plan: PhrasePlan;
+  score: number;
+  spots: readonly (SkipSpot | null)[];
   groupingBars: number[];
 };
 
@@ -3764,6 +3832,10 @@ function composePhrase(
   const cadenceAt = cadenceIndexOf(ladder, cadencePcs, plan, input.bars);
   if (cadenceAt < 0) return null;
   const lanes = PHRASE_CANDIDATES * 2;
+  // The seam's skip excuse has to consult the same forms the phrase does, so
+  // it can tell a pair of notes one form apart from two strings that merely
+  // happen to be two courses apart. Cached, so this is a lookup not a rebuild.
+  const shapes = forms.length ? formLookupFor(forms) : null;
   /**
    * A locked contour is judged on the finished line, so one pass of lanes can
    * miss it. Each retry re-rolls all of them. Eight passes clear every arch
@@ -3798,46 +3870,101 @@ function composePhrase(
     if (!seamless.length) seamless = found;
   }
   if (!fitting.length) return null;
-  // Every lane here already re-rolled its wrap, so this is belt and braces
-  // for a ladder too narrow to offer a legal one. A phrase still beats no
-  // phrase: when nothing legal exists, the best illegal wrap is used.
-  const legal = fitting.filter(
-    (item) => !seamIsIllegal(item.notes, input.bars),
-  );
-  const pool = legal.length ? legal : fitting.length ? fitting : seamless;
-  // A shift only lowers a score, so a weaker pitch line cannot catch up.
-  const ranked = pool
-    .slice()
-    .sort((a, b) => b.score - a.score || a.lane - b.lane);
-  let best: {
-    notes: FingeredNote[];
-    plan: PhrasePlan;
-    score: number;
-    spots: readonly (SkipSpot | null)[];
-    groupingBars: number[];
-  } | null = null;
-  for (const item of ranked) {
-    if (best && item.score <= best.score) break;
-    const fingered = fingerNotes(
-      item.notes,
-      forms,
-      REGISTER_ANCHOR[plan.register],
-      item.spots,
+  /**
+   * Pick the best lane that passes every check, keeping the best seam-illegal
+   * one aside. The seam test needs the fingering, so it can only be applied
+   * here; a lane that fails it is not thrown away, because it is the only
+   * evidence that this draw had candidates at all.
+   */
+  const pick = (
+    candidates: readonly LaneResult[],
+  ): { best: PlayedLane | null; seamOnly: PlayedLane | null } => {
+    const legal = candidates.filter(
+      (item) => !seamIsIllegal(item.notes, input.bars),
     );
-    if (!handAccepts(fingered)) continue;
-    if (item.spots.some(Boolean) && !skipRealized(fingered, item.spots))
-      continue;
-    let shifts = 0;
-    for (const note of fingered) if (note.shift) shifts += 1;
-    const score = item.score - shifts * 8;
-    if (!best || score > best.score)
-      best = {
+    const pool = legal.length ? legal : candidates;
+    // A shift only lowers a score, so a weaker pitch line cannot catch up.
+    const ranked = pool
+      .slice()
+      .sort((a, b) => b.score - a.score || a.lane - b.lane);
+    let best: PlayedLane | null = null;
+    let seamOnly: PlayedLane | null = null;
+    for (const item of ranked) {
+      if (best && item.score <= best.score) break;
+      const fingered = fingerNotes(
+        item.notes,
+        forms,
+        REGISTER_ANCHOR[plan.register],
+        item.spots,
+      );
+      if (!handAccepts(fingered)) continue;
+      if (item.spots.some(Boolean) && !skipRealized(fingered, item.spots))
+        continue;
+      let shifts = 0;
+      for (const note of fingered) if (note.shift) shifts += 1;
+      const candidate: PlayedLane = {
         notes: fingered,
         plan: item.plan,
-        score,
+        score: item.score - shifts * 8,
         spots: item.spots,
         groupingBars: item.groupingBars,
       };
+      // The pitch stage cannot see strings, so a wide wrap onto an eighth is
+      // judged here, where a skip one form apart can excuse it.
+      if (seamIsIllegalFingered(fingered, input.bars, shapes)) {
+        if (!seamOnly || candidate.score > seamOnly.score)
+          seamOnly = candidate;
+        continue;
+      }
+      if (!best || candidate.score > best.score) best = candidate;
+    }
+    return { best, seamOnly };
+  };
+
+  const first = pick(fitting.length ? fitting : seamless);
+  let best = first.best;
+  const { seamOnly } = first;
+  /**
+   * A lane whose only fault is the seam is worth re-rolling rather than
+   * shipping or dropping. Refusing it outright leaves the plan with nothing
+   * and the caller advances to the next seed, so the phrase the seed was
+   * asked for silently plays as a different one. Rolling fresh lane draws for
+   * the same seed usually finds a wrap the hand can play; only when none
+   * turns up does the phrase fail, as before.
+   *
+   * The extra attempts continue the lane numbering past the contour passes
+   * above, so each one draws different sub-streams rather than repeating a
+   * roll that already failed. `nextSearchAttempt` keeps the step count honest
+   * across the two phases instead of letting the second phase hide the first.
+   */
+  const extraAttempts = 8;
+  if (!best && seamOnly) {
+    nextSearchAttempt();
+    for (
+      let attempt = attempts;
+      attempt < attempts + extraAttempts && !best;
+      attempt++
+    ) {
+      if (searchAtCap() || phraseSearchRefused) break;
+      const found = sampleLanes(
+        input,
+        plan,
+        ladder,
+        cadenceAt,
+        scalePcs,
+        lanes,
+        attempt,
+        forms,
+      );
+      if (!found.length) continue;
+      const varied = found.filter((item) => !item.exact);
+      const source = varied.length ? varied : found;
+      const fit = source.filter((item) =>
+        contourFits(item.notes, item.plan.contour, input.bars),
+      );
+      if (!fit.length) continue;
+      best = pick(fit).best;
+    }
   }
   skipWitness = null;
   if (best) {
