@@ -81,7 +81,9 @@ function phraseMeta(item: TrayPhrase): string {
     ? pretty(item.chord.symbol)
     : `${pretty(item.key)} tonic`;
   const speed = item.slow ? ' · half speed' : '';
-  return `${pretty(item.key)} ${item.scaleName} · ${chord} · ${item.bars} bars · ${tempo} BPM${speed}`;
+  const swing =
+    item.swing > 0 ? ` · swing ${Math.round(item.swing * 100)}%` : '';
+  return `${pretty(item.key)} ${item.scaleName} · ${chord} · ${item.bars} bars · ${tempo} BPM${speed}${swing}`;
 }
 
 function downloadBlob(filename: string, blob: Blob) {

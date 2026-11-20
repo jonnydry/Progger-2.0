@@ -247,8 +247,8 @@ const RHYTHMS = ['quarters', 'eighths', 'long-short', 'push'] as const;
 export const RHYTHM_DRAW_WEIGHTS: readonly number[] = [2, 3, 2, 2];
 const REGISTERS = ['low', 'mid', 'high'] as const;
 const CADENCES = ['root', 'third', 'fifth'] as const;
-const REGISTER_LOW: Record<RegisterName, number> = {
-  low: 48,
+export const REGISTER_LOW: Record<RegisterName, number> = {
+  low: 40,
   mid: 55,
   high: 64,
 };
@@ -4300,6 +4300,9 @@ function composePhrase(
    * here; a lane that fails it is not thrown away, because it is the only
    * evidence that this draw had candidates at all.
    */
+  const fingeringForms = forms.length
+    ? forms
+    : boxFormsForScale(input.scaleNotes);
   const pick = (
     candidates: readonly LaneResult[],
   ): { best: PlayedLane | null; seamOnly: PlayedLane | null } => {
@@ -4317,7 +4320,7 @@ function composePhrase(
       if (best && item.score <= best.score) break;
       const fingered = fingerNotes(
         item.notes,
-        forms,
+        fingeringForms,
         REGISTER_ANCHOR[plan.register],
         item.spots,
       );
@@ -4467,6 +4470,41 @@ export const REGISTER_ANCHOR: Record<RegisterName, number> = {
  * on the anchor is what puts the hand there. Scale sizes that produce no
  * forms (pentatonic, blues, whole tone, diminished) keep the old fallback.
  */
+/**
+ * Five-fret box forms for 6- and 8-note scales (blues, whole-tone, diminished)
+ * where 3NPS/2NPS `patterns()` returns empty. Keeps fingering anchored in a
+ * single neck box without altering Explore's pattern UI or formless skip rules.
+ */
+function boxFormsForScale(scaleNotes: readonly Note[]): Pattern[] {
+  const pcs = new Set(scaleNotes.map((note) => note.pc));
+  if (pcs.size < 5) return [];
+  const anchors = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19];
+  const boxes: Pattern[] = [];
+  for (const start of anchors) {
+    const positions: Pattern['positions'] = [];
+    const covered = new Set<number>();
+    const end = Math.min(24, start + 4);
+    for (let string = 0; string < 6; string++) {
+      for (let fret = start; fret <= end; fret++) {
+        const midi = (TUNING[string] ?? 0) + fret;
+        const pc = mod(midi);
+        if (!pcs.has(pc)) continue;
+        positions.push({ string, fret, midi });
+        covered.add(pc);
+      }
+    }
+    if (positions.length && covered.size === pcs.size) {
+      boxes.push({
+        start,
+        min: start,
+        max: end,
+        positions,
+      });
+    }
+  }
+  return boxes;
+}
+
 function shapeCover(
   forms: readonly Pattern[],
   midis: readonly number[],

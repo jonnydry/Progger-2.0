@@ -83,8 +83,8 @@ export const LISTEN_SEEDS: readonly {
   scale: string;
   chord: string;
 }[] = [
-  { seed: 1071, bars: 2, key: 'C', scale: 'major', chord: 'C' },
-  { seed: 1051, bars: 2, key: 'A', scale: 'dorian', chord: 'Am' },
+  { seed: 1001, bars: 2, key: 'C', scale: 'major', chord: 'C' },
+  { seed: 1065, bars: 2, key: 'A', scale: 'dorian', chord: 'Am' },
   { seed: 1105, bars: 2, key: 'C', scale: 'major', chord: 'G7' },
   { seed: 1157, bars: 2, key: 'D', scale: 'dorian', chord: 'Dm7' },
   { seed: 1223, bars: 2, key: 'A', scale: 'minor-pentatonic', chord: 'Am7' },

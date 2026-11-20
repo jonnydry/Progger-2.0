@@ -414,7 +414,7 @@ function assertPhraseReach(phrase: {
   plan: { register: 'low' | 'mid' | 'high' };
   notes: { midi: number }[];
 }): void {
-  const low = { low: 48, mid: 55, high: 64 }[phrase.plan.register];
+  const low = { low: 40, mid: 55, high: 64 }[phrase.plan.register];
   for (const note of phrase.notes) assertNoteWindow(note.midi, low);
 }
 
@@ -467,7 +467,7 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
       ratios.push(report.steps / (report.steps + report.leaps));
 
     const names = new Set(scaleNotes.map((note) => note.name));
-    const low = { low: 48, mid: 55, high: 64 }[phrase.plan.register];
+    const low = { low: 40, mid: 55, high: 64 }[phrase.plan.register];
     const high = low + PHRASE_RANGE;
     const midis = phrase.notes.map((note) => note.midi);
     const inside = midis.filter((midi) => midi >= low && midi <= high);
@@ -999,5 +999,56 @@ void test('phrases breathe with quarter rests and true beat-crossing offbeat pus
   assert.ok(
     pushSustainedPhrases >= 10,
     `expected >= 10 phrases with beat-crossing offbeat pushes, got ${pushSustainedPhrases}`,
+  );
+});
+
+void test('low register reaches open low E2 and 6/8-note box forms keep spans compact', () => {
+  const eMinor = scaleOf('E', 'minor');
+  const emChord = parseChord('Em').notes;
+  let belowC3 = 0;
+  let openLowE = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: eMinor,
+      chordNotes: emChord,
+      locks: { register: 'low' },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    for (const note of result.phrase.notes) {
+      if (note.midi < 48) belowC3 += 1;
+      if (note.midi === 40 && note.string === 0 && note.fret === 0) {
+        openLowE += 1;
+      }
+    }
+  }
+  assert.ok(belowC3 > 20, `low register barely reached below C3: ${belowC3}`);
+  assert.ok(openLowE > 0, 'low register never used open low E2');
+
+  const blues = scaleOf('A', 'minor-blues');
+  const am7 = parseChord('Am7').notes;
+  let wideSpan = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: blues,
+      chordNotes: am7,
+      locks: { register: 'mid' },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    const fretted = result.phrase.notes
+      .map((note) => note.fret)
+      .filter((fret) => fret > 0);
+    if (fretted.length && Math.max(...fretted) - Math.min(...fretted) > 5) {
+      wideSpan += 1;
+    }
+  }
+  assert.ok(
+    wideSpan <= 3,
+    `blues mid-register box forms exceeded 5-fret span too often: ${wideSpan}/30`,
   );
 });
