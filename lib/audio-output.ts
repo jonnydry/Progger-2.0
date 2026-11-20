@@ -393,6 +393,7 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
   pointPhrase(context.destination);
   const speaker = track(context.createGain());
   speaker.gain.value = 0;
+  let phraseAttached = false;
   let phraseSegment = { from: 1, to: 1, start: 0, end: 0 };
   const dry = track(context.createGain());
   const wet = track(context.createGain());
@@ -699,7 +700,10 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     limiter,
     droneInput: stage.input,
     chordInput: stage.chordInput,
-    phraseInput: phraseSend,
+    get phraseInput() {
+      phraseAttached = true;
+      return phraseSend;
+    },
     get duckReady() {
       return stage.duckReady;
     },
@@ -745,6 +749,12 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
         clearTimers();
         speaker.gain.cancelScheduledValues(time);
         speaker.gain.setValueAtTime(0, time);
+        if (!phraseAttached) {
+          routeLimited();
+          speaker.gain.linearRampToValueAtTime(1, time + seconds);
+          segment = { from: 0, to: 1, start: time, end: time + seconds };
+          return;
+        }
         segment = { from: 0, to: 0, start: time, end: time };
         schedulePhraseFade(time, 0, seconds);
         const silence = time + seconds;
