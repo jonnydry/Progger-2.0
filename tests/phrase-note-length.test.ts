@@ -918,3 +918,22 @@ void test('the note before a loop wrap holds its written end and uses the soft r
     'the loop-wrap note rang past the soft release',
   );
 });
+
+void test('a connected same-string note across a loop wrap damps cleanly at the wrap', async () => {
+  const tempo = 240;
+  const quarter = 60 / tempo;
+  const lead = PHRASE_START_LEAD_SEC;
+  const loopAt = lead + 4 * quarter;
+  const live = await renderPlayerNote(
+    [played(0, 0, 4), played(3, 4, 2)],
+    tempo,
+    0,
+    1.6,
+    true,
+  );
+  const reached = silenceAt(live, lead + 2 * quarter);
+  assert.ok(
+    Math.abs(reached - (loopAt + PHRASE_SAME_STRING_RELEASE_SEC)) < 0.012,
+    `connected same-string loop wrap settled at ${reached}s`,
+  );
+});

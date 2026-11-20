@@ -279,7 +279,9 @@ function noteTail(
         note.string === other.string;
     }
   }
-  // When looping, the last body note wraps into the next pass's opening note.
+  // When looping, if the last body note connects right up to the loop wrap
+  // on the same string, choke it cleanly at the wrap; a written gap before
+  // the wrap keeps its soft release.
   if (!Number.isFinite(next) && Number.isFinite(playBeforeBeat)) {
     let wrapFirst: PhraseNoteTime | null = null;
     for (const candidate of notes) {
@@ -292,12 +294,15 @@ function noteTail(
         bpm,
         swing,
       );
-      if (wrapAt > start + 1e-4) {
+      if (
+        wrapAt > start + 1e-4 &&
+        wrapAt <= writtenEnd + 1e-4 &&
+        note.string !== undefined &&
+        wrapFirst.string !== undefined &&
+        note.string === wrapFirst.string
+      ) {
         next = wrapAt;
-        nextSameString =
-          note.string !== undefined &&
-          wrapFirst.string !== undefined &&
-          note.string === wrapFirst.string;
+        nextSameString = true;
       }
     }
   }
