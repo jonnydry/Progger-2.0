@@ -459,6 +459,13 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
 
   function phraseLevelAt(time: number): number {
     if (
+      pendingRestoreEnd >= 0 &&
+      time >= pendingRestoreEnd &&
+      phraseSegment.end <= pendingRestoreEnd
+    ) {
+      return 1;
+    }
+    if (
       !(phraseSegment.end > phraseSegment.start) ||
       time <= phraseSegment.start
     )
@@ -578,7 +585,6 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
         routeLimited();
       }
       if (anchor) {
-        phraseSend.gain.cancelScheduledValues(start);
         phraseSend.gain.setValueAtTime(0, start);
         phraseSend.gain.linearRampToValueAtTime(1, start + restoreSeconds);
         phraseSegment = {
@@ -736,16 +742,18 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
       if (active && route === 'limited' && pendingSilence < 0) return;
       if (!active && route === 'off') {
         if (pendingSilence < 0) return;
-        epoch += 1;
-        pendingSilence = -1;
-        pendingRestoreEnd = -1;
-        clearTimers();
-        schedulePhraseFade(time, 1, seconds);
-        return;
+        if (time < pendingSilence) {
+          epoch += 1;
+          pendingSilence = -1;
+          pendingRestoreEnd = -1;
+          clearTimers();
+          schedulePhraseFade(time, 1, seconds);
+          return;
+        }
       }
       if (!active && route === 'open' && pendingSilence < 0) return;
       if (active && route === 'off') {
-        epoch += 1;
+        if (pendingSilence > time) epoch += 1;
         clearTimers();
         speaker.gain.cancelScheduledValues(time);
         speaker.gain.setValueAtTime(0, time);
@@ -762,8 +770,10 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
         atSilence(silence, seconds, true);
         return;
       }
-      epoch += 1;
-      clearTimers();
+      if (pendingSilence > time) {
+        epoch += 1;
+        clearTimers();
+      }
       scheduleFade(time, 0, seconds);
       schedulePhraseFade(time, 0, seconds);
       const silence = time + seconds;
