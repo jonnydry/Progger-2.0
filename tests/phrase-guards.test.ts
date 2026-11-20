@@ -415,13 +415,13 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     two.notes.map((note) => [note.midi, note.beat, note.duration]),
     [
-      [64, 0, 1],
-      [67, 1, 1],
-      [69, 2.5, 0.5],
+      [67, 0, 1],
+      [69, 1.5, 0.5],
+      [71, 2.5, 0.5],
       [67, 3, 1],
-      [60, 4, 1],
-      [64, 5, 1],
-      [65, 6.5, 0.5],
+      [64, 4, 1],
+      [65, 5.5, 0.5],
+      [67, 6.5, 0.5],
       [64, 7, 0.5],
       [62, 7.5, 0.5],
       [60, 8, 2],
@@ -431,19 +431,13 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     four.notes.map((note) => note.midi),
     [
-      // Re-pinned for the spread eighths opening (S3). Seed 15 still returns
-      // its opening figure; the line is shorter now that the lane can start
-      // on beat 1.
-      64, 62, 65, 67, 65, 62, 67, 65, 69, 71, 72, 67, 65, 69, 67, 64, 62, 67,
-      65, 64, 60, 62, 64,
+      55, 59, 57, 59, 62, 60, 65, 67, 71, 69, 71, 67, 65, 62, 71, 62, 72, 69,
+      67, 65, 64, 67, 65, 62, 67, 62, 64,
     ],
   );
 });
 
 void test('these cadence tails stay on the weighted pitches', () => {
-  // Re-pinned with the held-chord walk. A later pitch change has to update
-  // the rows on purpose. Am seed 7 is the ×0.35 leap penalty: without it
-  // the approach moves from 67 to 69.
   const lines: readonly (readonly [
     string,
     string,
@@ -452,18 +446,14 @@ void test('these cadence tails stay on the weighted pitches', () => {
     2 | 4,
     readonly number[],
   ])[] = [
-    // Re-pinned with the register-anchored hand and the contour-true wave.
-    // A later pitch change has to update these rows on purpose.
     ['C', 'major', 'C', 7, 2, [72, 76, 72, 67, 76, 79, 76, 71, 69, 67]],
-    // Re-pinned for hand-first skip cells (S0): 60–69 is an in-box sixth
-    // starting on the fourth attack; the answered first four are unchanged.
     [
       'C',
       'major',
       'C',
       46,
       2,
-      [60, 57, 59, 60, 69, 67, 64, 60, 62, 64, 65, 57, 55],
+      [60, 59, 64, 60, 65, 64, 62, 67, 64, 62, 57, 55],
     ],
     [
       'C',
@@ -471,7 +461,10 @@ void test('these cadence tails stay on the weighted pitches', () => {
       'C',
       1,
       4,
-      [60, 64, 62, 60, 64, 67, 65, 64, 62, 57, 60, 55, 59, 60, 64, 67, 57, 55],
+      [
+        64, 65, 67, 64, 67, 69, 71, 67, 64, 60, 62, 57, 59, 60, 64, 67, 62, 57,
+        55,
+      ],
     ],
     [
       'C',
@@ -479,41 +472,32 @@ void test('these cadence tails stay on the weighted pitches', () => {
       'C',
       7,
       4,
-      [72, 74, 76, 72, 76, 77, 79, 76, 77, 69, 71, 67, 69, 72, 71, 69, 65, 67],
+      [72, 74, 76, 72, 76, 77, 79, 76, 77, 69, 71, 67, 69, 72, 71, 69, 67],
     ],
-    // Free 4-bar seed (24 % 4 === 0). Bar 3 is the scored walk, not the
-    // two-note fragment.
     [
       'F#',
       'major',
       'F#maj7',
       24,
       4,
-      [
-        54, 56, 53, 54, 49, 51, 54, 56, 59, 58, 61, 59, 58, 56, 59, 61, 63, 65,
-        61, 58, 56, 54, 58, 56, 66,
-      ],
+      [54, 49, 58, 54, 53, 49, 58, 59, 61, 58, 59, 54, 56, 65, 66],
     ],
-    ['C', 'major', 'C', 1, 2, [64, 67, 69, 67, 60, 64, 65, 64, 62, 55]],
-    // Re-pinned for the spread eighths opening (S3).
+    ['C', 'major', 'C', 1, 2, [64, 67, 65, 67, 60, 64, 62, 64, 59, 55]],
     [
       'F#',
       'major',
       'F#maj7',
       2,
       2,
-      [61, 59, 58, 63, 65, 58, 56, 54, 59, 58, 56, 58],
+      [66, 63, 65, 63, 59, 61, 58, 54, 51, 53, 51, 54, 56, 58],
     ],
-    // A low wave. Its cadence still lands on the bottom C.
-    // Re-pinned for the free line one seed in four (S5): seed 4 no longer
-    // answers bar 1, so bar 2 is a new idea.
     [
       'C',
       'major',
       'C',
       4,
       2,
-      [52, 55, 53, 57, 55, 52, 48, 53, 52, 55, 53, 50, 48],
+      [52, 53, 55, 52, 48, 50, 52, 53, 57, 55, 53, 55, 50, 48],
     ],
     [
       'C',
@@ -522,12 +506,10 @@ void test('these cadence tails stay on the weighted pitches', () => {
       20,
       4,
       [
-        60, 72, 67, 65, 64, 62, 64, 65, 62, 60, 57, 59, 64, 62, 57, 59, 64, 65,
-        60, 62, 65, 67, 65, 62, 59, 60,
+        60, 57, 59, 60, 62, 65, 64, 62, 59, 60, 64, 59, 57, 62, 60, 57, 59, 60,
+        62, 65, 67, 64, 62, 60, 59, 60,
       ],
     ],
-    // Re-pinned with grouping cells. Still a 1-semitone step into the C
-    // cadence, and the closing note sits on the bar line.
     [
       'C',
       'major',
@@ -535,10 +517,10 @@ void test('these cadence tails stay on the weighted pitches', () => {
       5,
       4,
       [
-        60, 62, 59, 60, 64, 65, 62, 64, 65, 57, 59, 55, 57, 52, 53, 55, 53, 52,
+        55, 57, 62, 64, 55, 57, 62, 64, 60, 52, 53, 48, 50, 52, 55, 57, 53, 52,
       ],
     ],
-    ['A', 'dorian', 'Am', 7, 2, [69, 72, 71, 69, 72, 76, 74, 72, 67, 64]],
+    ['A', 'dorian', 'Am', 7, 2, [69, 72, 69, 64, 72, 76, 72, 67, 66, 64]],
   ];
   for (const [root, scaleId, symbol, seed, bars, midis] of lines) {
     const line = phrase(root, scaleId, symbol, seed, bars);

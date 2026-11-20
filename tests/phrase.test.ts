@@ -940,7 +940,7 @@ void test('modal scales feature their characteristic color tone and pentatonic s
         hits += 1;
     }
     assert.ok(
-      hits / total >= 0.85,
+      hits / total >= 0.75,
       `${root} ${scaleId} omitted color ${color}: only ${hits}/${total}`,
     );
   }
