@@ -629,7 +629,7 @@ void test('hidden dots, snapshots, and a chord outside the scale', () => {
   );
 
   const snapshot: PhraseSnapshot = {
-    version: 1,
+    version: 2,
     seed: 9,
     bars: 2,
     feel: 'swing',
@@ -641,7 +641,7 @@ void test('hidden dots, snapshots, and a chord outside the scale', () => {
     plan: result.phrase.plan,
     locks: { rhythm: 'quarters' },
   };
-  assert.equal(snapshot.version, 1);
+  assert.equal(snapshot.version, 2);
   assert.equal(snapshot.locks.rhythm, 'quarters');
 
   const outside = generatePhrase({

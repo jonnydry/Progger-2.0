@@ -2,13 +2,13 @@ import { QUALITIES } from './harmony.ts';
 import { ROOTS, SCALES } from './music.ts';
 
 /**
- * Phrase history, version 1.
+ * Phrase history, version 2.
  * One localStorage key. A missing key is an empty history. A blob this
  * version cannot read stays in storage and this tab does not write.
  * An entry this version does not understand is ignored. This module does
  * not import the phrase generator.
  */
-export const PHRASE_HISTORY_KEY = 'progger.phrase-history.v1';
+export const PHRASE_HISTORY_KEY = 'progger.phrase-history.v2';
 export const PHRASE_HISTORY_LIMIT = 3;
 
 const SCALE_IDS = new Set(SCALES.map((scale) => scale.id));
@@ -66,7 +66,7 @@ export type PhraseHistoryEntry = {
 };
 
 export type PhraseHistoryState = {
-  version: 1;
+  version: 2;
   entries: PhraseHistoryEntry[];
   index: number;
 };
@@ -86,7 +86,7 @@ export type PhraseHistoryContext = {
 };
 
 const EMPTY_PHRASE_HISTORY: PhraseHistoryState = {
-  version: 1,
+  version: 2,
   entries: [],
   index: -1,
 };
@@ -422,7 +422,7 @@ export function pushPhraseHistory(
     if (kept.length === state.entries.length && index === state.index) {
       return state;
     }
-    return { version: 1, entries: kept, index: kept.length - 1 };
+    return { version: 2, entries: kept, index: kept.length - 1 };
   }
   const withoutRepeat = kept.filter(
     (item) => !samePhraseHistoryEntry(item, clean),
@@ -431,7 +431,7 @@ export function pushPhraseHistory(
   if (entries.length > PHRASE_HISTORY_LIMIT) {
     entries.splice(0, entries.length - PHRASE_HISTORY_LIMIT);
   }
-  return { version: 1, entries, index: entries.length - 1 };
+  return { version: 2, entries, index: entries.length - 1 };
 }
 
 export type PhraseHistoryStepFocus = 'previous' | 'next' | 'new';
@@ -461,9 +461,9 @@ export function stepPhraseHistory(
   const next = index + direction;
   if (next < 0 || next >= state.entries.length) {
     if (index === state.index) return state;
-    return { version: 1, entries: state.entries, index };
+    return { version: 2, entries: state.entries, index };
   }
-  return { version: 1, entries: state.entries, index: next };
+  return { version: 2, entries: state.entries, index: next };
 }
 
 /**
@@ -541,7 +541,7 @@ function project(raw: string | null, failedRead = false): HistoryDoc {
     const parsed: unknown = JSON.parse(raw);
     if (
       !isRecord(parsed) ||
-      parsed.version !== 1 ||
+      parsed.version !== 2 ||
       !Array.isArray(parsed.entries)
     ) {
       return { writable: false, state: EMPTY_PHRASE_HISTORY };
@@ -591,7 +591,7 @@ export function writePhraseHistory(
   storage.setItem(
     PHRASE_HISTORY_KEY,
     JSON.stringify({
-      version: 1,
+      version: 2,
       entries: state.entries,
       index: state.index,
     }),
@@ -685,10 +685,10 @@ function capLoadedHistory(
   const overflow = Math.max(0, entries.length - PHRASE_HISTORY_LIMIT);
   const kept = overflow > 0 ? entries.slice(overflow) : entries;
   return {
-    version: 1,
+    version: 2,
     entries: kept,
     index: clampedIndex({
-      version: 1,
+      version: 2,
       entries: kept,
       index: index - overflow,
     }),
@@ -701,7 +701,7 @@ function commit(state: PhraseHistoryState): boolean {
   const storage = browserStorage();
   if (!storage) return false;
   const payload = JSON.stringify({
-    version: 1,
+    version: 2,
     entries: state.entries,
     index: state.index,
   });

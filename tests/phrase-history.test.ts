@@ -240,7 +240,7 @@ void test('storage round-trips the phrase and leaves tempo and swing out', () =>
   const raw = store.raw() ?? '';
   assert.equal(raw.includes('tempo'), false);
   assert.equal(raw.includes('swing'), false);
-  assert.equal(raw.includes('"version":1'), true);
+  assert.equal(raw.includes('"version":2'), true);
   assert.deepEqual(parsePhraseHistory(null), {
     state: emptyPhraseHistory(),
     writable: true,
@@ -287,10 +287,11 @@ void test('corrupt storage is ignored and left untouched', () => {
     'null',
     '"history"',
     '',
-    JSON.stringify({ version: 2, entries: [entry(1)], index: 0 }),
+    JSON.stringify({ version: 3, entries: [entry(1)], index: 0 }),
+    JSON.stringify({ version: 1, entries: [entry(1)], index: 0 }),
     JSON.stringify({ version: 0, entries: [] }),
-    JSON.stringify({ version: 1 }),
-    JSON.stringify({ version: 1, entries: { seed: 1 } }),
+    JSON.stringify({ version: 2 }),
+    JSON.stringify({ version: 2, entries: { seed: 1 } }),
     JSON.stringify({ entries: [entry(1)] }),
   ];
   for (const raw of blobs) {
@@ -314,7 +315,7 @@ void test('a corrupt entry is ignored and the phrases around it remain', () => {
   const first = entry(3);
   const second = entry(8, { bars: 4, locks: { cadence: 'fifth' } });
   const raw = JSON.stringify({
-    version: 1,
+    version: 2,
     index: 0,
     entries: [first, { seed: 'nope' }, second],
   });
@@ -332,7 +333,7 @@ void test('a corrupt entry is ignored and the phrases around it remain', () => {
   assert.equal(store.raw(), raw);
   assert.equal(parsePhraseHistory(raw).writable, true);
   const missingIndex = JSON.stringify({
-    version: 1,
+    version: 2,
     entries: [first, { bars: 2 }, second],
   });
   assert.equal(parsePhraseHistory(missingIndex).state.index, 1);
@@ -341,7 +342,7 @@ void test('a corrupt entry is ignored and the phrases around it remain', () => {
 
 void test('a stored list longer than 3 loads only the newest 3', () => {
   const entries = Array.from({ length: 50 }, (_, index) => entry(index + 1));
-  const raw = JSON.stringify({ version: 1, index: 49, entries });
+  const raw = JSON.stringify({ version: 2, index: 49, entries });
   const loaded = parsePhraseHistory(raw);
   assert.equal(loaded.writable, true);
   assert.deepEqual(
@@ -350,7 +351,7 @@ void test('a stored list longer than 3 loads only the newest 3', () => {
   );
   assert.equal(loaded.state.index, 2);
   const earlier = parsePhraseHistory(
-    JSON.stringify({ version: 1, index: 48, entries }),
+    JSON.stringify({ version: 2, index: 48, entries }),
   );
   assert.equal(earlier.state.entries[earlier.state.index]?.seed, 49);
   const store = memory(raw);
@@ -365,7 +366,7 @@ void test('a stored list longer than 3 loads only the newest 3', () => {
     { bars: 2 },
   ];
   const ignored = parsePhraseHistory(
-    JSON.stringify({ version: 1, index: 5, entries: stale }),
+    JSON.stringify({ version: 2, index: 5, entries: stale }),
   );
   assert.equal(ignored.writable, true);
   assert.deepEqual(ignored.state.entries, []);
@@ -429,7 +430,7 @@ void test('an older saved phrase without a chord control is dropped', () => {
     locks: {},
   };
   const raw = JSON.stringify({
-    version: 1,
+    version: 2,
     index: 0,
     entries: [legacy, entry(9)],
   });
@@ -611,7 +612,7 @@ void test('a stored entry regenerates the same spelled phrase', () => {
 });
 
 void test('the panel stores history beside the stash and not in the component', () => {
-  assert.equal(PHRASE_HISTORY_KEY, 'progger.phrase-history.v1');
+  assert.equal(PHRASE_HISTORY_KEY, 'progger.phrase-history.v2');
   const history = readFileSync(
     new URL('../lib/phrase-history.ts', import.meta.url),
     'utf8',

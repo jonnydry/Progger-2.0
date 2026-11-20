@@ -232,7 +232,7 @@ export type Phrase = {
 };
 
 export type PhraseSnapshot = {
-  version: 1;
+  version: 2;
   seed: number;
   bars: 2 | 4;
   feel: Feel;
@@ -253,10 +253,10 @@ export type PhraseResult =
 const CONTOURS = ['arch', 'rise', 'fall', 'wave'] as const;
 const RHYTHMS = ['quarters', 'eighths', 'long-short', 'push'] as const;
 /**
- * Rhythm draw, in `RHYTHMS` order. Balanced across quarters, eighths,
- * long-short pairs, and offbeat pushes, with a mild lead for eighth runs.
+ * Rhythm draw, in `RHYTHMS` order. Five parts eighths to one part each for
+ * the slower and pushed lanes, as signed off in #102.
  */
-export const RHYTHM_DRAW_WEIGHTS: readonly number[] = [2, 3, 2, 2];
+export const RHYTHM_DRAW_WEIGHTS: readonly number[] = [1, 5, 1, 1];
 const REGISTERS = ['low', 'mid', 'high'] as const;
 const CADENCES = ['root', 'third', 'fifth'] as const;
 export const REGISTER_LOW: Record<RegisterName, number> = {
@@ -1228,9 +1228,16 @@ function cadenceApproach(
     ),
     placed,
   );
+  const hasRealNeighbor = ladder.some((tone) => {
+    const gap = Math.abs(tone.midi - cadenceMidi);
+    return gap === 1 || gap === 2;
+  });
   return candidates.some((tone) => {
     const midi = ladder[tone]?.midi;
-    return midi !== undefined && isLadderScaleStep(ladder, midi, cadenceMidi);
+    if (midi === undefined) return false;
+    const gap = Math.abs(midi - cadenceMidi);
+    if (gap === 1 || gap === 2) return true;
+    return !hasRealNeighbor && isLadderScaleStep(ladder, midi, cadenceMidi);
   });
 }
 
@@ -1534,7 +1541,7 @@ function pickPatterns(
           const runs = options.filter((pattern) =>
             EIGHTH_RUN_BARS.includes(pattern.ids),
           );
-          options = [...options, ...runs];
+          options = [...options, ...runs, ...runs, ...runs, ...runs];
         }
       }
       if (exact) {
@@ -1763,8 +1770,19 @@ function pitchWeight(
   }
   if (cadenceMidi !== null) {
     const fromCadence = Math.abs(midi - cadenceMidi);
-    if (isLadderScaleStep(ladder, midi, cadenceMidi)) weight *= 8;
-    else if (fromCadence >= 5) weight *= 0.35;
+    if (fromCadence === 1 || fromCadence === 2) {
+      weight *= 12;
+    } else if (
+      isLadderScaleStep(ladder, midi, cadenceMidi) &&
+      !ladder.some((item) => {
+        const gap = Math.abs(item.midi - cadenceMidi);
+        return gap === 1 || gap === 2;
+      })
+    ) {
+      weight *= 3;
+    } else if (fromCadence >= 5) {
+      weight *= 0.35;
+    }
   }
   return weight > 1e-9 ? weight : 1e-9;
 }
@@ -2030,6 +2048,7 @@ function chooseSequence(
     strongMiss: number;
     shift: number;
     step: boolean;
+    scaleStep: boolean;
     contourDist: number;
   }[] = [];
   for (const shift of shifts) {
@@ -2056,12 +2075,14 @@ function chooseSequence(
       }
     }
     let step = false;
+    let scaleStep = false;
     if (ending) {
       const tone = tones[tones.length - 1] ?? -1;
-      step =
-        tone >= 0 &&
-        tone < ladder.length &&
-        isLadderScaleStep(ladder, ladder[tone].midi, cadenceMidi);
+      if (tone >= 0 && tone < ladder.length) {
+        const gap = Math.abs(ladder[tone].midi - cadenceMidi);
+        step = gap === 1 || gap === 2;
+        scaleStep = step || isLadderScaleStep(ladder, ladder[tone].midi, cadenceMidi);
+      }
     }
     options.push({
       tones,
@@ -2069,11 +2090,19 @@ function chooseSequence(
       strongMiss,
       shift,
       step,
+      scaleStep,
       contourDist: tones.length ? contourDist / tones.length : 0,
     });
   }
   const stepping = options.filter((item) => item.step);
-  const pool = ending && stepping.length ? stepping : options;
+  const scaleStepping = options.filter((item) => item.scaleStep);
+  const pool = ending
+    ? stepping.length
+      ? stepping
+      : scaleStepping.length
+        ? scaleStepping
+        : options
+    : options;
   pool.sort(
     (a, b) =>
       a.miss - b.miss ||
@@ -2284,7 +2313,7 @@ export const GROUPING_CELLS: readonly GroupingCell[] = [
 /** First draw at a qualifying eighth run. 0.5 under-shot the band: most
  * phrases never grow a six-eighth run, so a run that does appear should
  * usually take the cell. Tuned against the 800-phrase set. */
-const P_GROUP = 0.8;
+const P_GROUP = 1;
 
 function groupingRelative(
   offsets: readonly number[],
@@ -2719,7 +2748,7 @@ function prefixHand(
   return fingered[fingered.length - 1]?.position ?? anchor;
 }
 
-/** Scale tones under the four fingers on one string: frets `hand..hand+3`. */
+/** Scale tones under the four fingers on one string: frets `hand..hand+3` plus open string `0` when `1 <= hand <= 3`. */
 function boxTones(
   string: number,
   hand: number,
@@ -2727,7 +2756,12 @@ function boxTones(
   midiIndex: ReadonlyMap<number, number>,
 ): BoxTone[] {
   const found: BoxTone[] = [];
+  const frets: number[] = [];
+  if (hand > 0 && hand <= 3) frets.push(0);
   for (let fret = Math.max(0, hand); fret <= hand + 3 && fret <= 24; fret++) {
+    frets.push(fret);
+  }
+  for (const fret of frets) {
     if (!shapes.has(shapeKey(string, fret))) continue;
     const midi = (TUNING[string] ?? 0) + fret;
     const tone = midiIndex.get(midi);
@@ -2877,16 +2911,13 @@ function tailCanClose(
   const fast = (approach?.duration ?? 1) <= 0.5;
   const hop = fast ? 5 : 12;
   const seam = fast ? 5 : 12;
-  const lo = Math.max(low - hop, homeMidi - seam, cadenceMidi - 4);
-  const hi = Math.min(high + hop, homeMidi + seam, cadenceMidi + 4);
+  const lo = Math.max(low - hop, homeMidi - seam, cadenceMidi - 2);
+  const hi = Math.min(high + hop, homeMidi + seam, cadenceMidi + 2);
   return ladder.some((tone) => {
     const midi = tone.midi;
     if (midi < lo || midi > hi) return false;
     if (midi === homeMidi || midi === cadenceMidi) return false;
-    return (
-      isLadderScaleStep(ladder, midi, cadenceMidi) &&
-      Math.abs(midi - homeMidi) <= seam
-    );
+    return Math.abs(midi - cadenceMidi) <= 2 && Math.abs(midi - homeMidi) <= seam;
   });
 }
 
@@ -3320,7 +3351,14 @@ function walkScored(
         continue;
       }
     }
-    if (!groupingBars.has(bar) && !skipBars.has(bar) && !afterOctave(notes)) {
+    const runHere = eighthRunLength(events, index);
+    if (
+      !groupingBars.has(bar) &&
+      !skipBars.has(bar) &&
+      !afterOctave(notes) &&
+      (!allowSkip || !forms.length || skipWindows.has(Math.floor(bar / 2)) || runHere < 4)
+    ) {
+      const idiomMark = rng.get();
       const enclosureTargetBeat = events[index + 2]?.beat ?? event.beat;
       const enclosureTargetLadder = activeLadder(
         ladder,
@@ -3344,6 +3382,7 @@ function walkScored(
         notes.push(pitchedFromLadder(stepLadder, enclosure[0] ?? 0));
         continue;
       }
+      rng.set(idiomMark);
       const arp = chooseArp(
         stepLadder,
         alive,
@@ -3365,6 +3404,7 @@ function walkScored(
         notes.push(pitchedFromLadder(stepLadder, arp[0] ?? 0));
         continue;
       }
+      rng.set(idiomMark);
     }
     let candidates = withoutMonotone(
       ladder,
@@ -3399,17 +3439,33 @@ function walkScored(
     if (index === events.length - 2 && (placed || skips) && notes[0]) {
       const opening = notes[0].midi;
       const fast = event.duration <= 0.5;
-      const ready = candidates.filter((tone) => {
+      const readyReal = candidates.filter((tone) => {
         const midi = ladder[tone]?.midi ?? 0;
+        const gap = Math.abs(midi - cadenceMidi);
         const seam = Math.abs(midi - opening);
         return (
-          isLadderScaleStep(ladder, midi, cadenceMidi) &&
+          gap > 0 &&
+          gap <= 2 &&
           seam > 0 &&
           seam <= 12 &&
           !(fast && seam > 5)
         );
       });
-      if (ready.length) candidates = ready;
+      if (readyReal.length) {
+        candidates = readyReal;
+      } else {
+        const readyScale = candidates.filter((tone) => {
+          const midi = ladder[tone]?.midi ?? 0;
+          const seam = Math.abs(midi - opening);
+          return (
+            isLadderScaleStep(ladder, midi, cadenceMidi) &&
+            seam > 0 &&
+            seam <= 12 &&
+            !(fast && seam > 5)
+          );
+        });
+        if (readyScale.length) candidates = readyScale;
+      }
     }
     // A held note is a chord tone when one can still be reached. The
     // approach is exempt: it has to be a step into the cadence. Opening
@@ -3519,13 +3575,23 @@ function walkScored(
             ),
           )
         : index === events.length - 2
-          ? chosenTone((tone) => {
-              const midi = stepLadder[tone]?.midi;
-              return (
-                midi !== undefined &&
-                isLadderScaleStep(stepLadder, midi, cadenceMidi)
-              );
-            })
+          ? (() => {
+              const hasRealStep = candidates.some((tone) => {
+                const midi = stepLadder[tone]?.midi;
+                if (midi === undefined) return false;
+                const gap = Math.abs(midi - cadenceMidi);
+                return gap === 1 || gap === 2;
+              });
+              return chosenTone((tone) => {
+                const midi = stepLadder[tone]?.midi;
+                if (midi === undefined) return false;
+                if (hasRealStep) {
+                  const gap = Math.abs(midi - cadenceMidi);
+                  return gap === 1 || gap === 2;
+                }
+                return isLadderScaleStep(stepLadder, midi, cadenceMidi);
+              });
+            })()
           : chosenTone();
     if (chosen === undefined) return giveUp();
     const openingSlot = byBar[0]?.indexOf(index) ?? -1;
@@ -4185,6 +4251,13 @@ function stepsIntoCadence(
   const gap = Math.abs(to - from);
   if (gap === 1 || gap === 2) return true;
   if (!scalePcs) return false;
+  // Only fall back to a wider scale step when no 1-2 semitone neighbor exists in the scale.
+  const hasRealNeighbor =
+    scalePcs.has((((to - 1) % 12) + 12) % 12) ||
+    scalePcs.has((((to - 2) % 12) + 12) % 12) ||
+    scalePcs.has((((to + 1) % 12) + 12) % 12) ||
+    scalePcs.has((((to + 2) % 12) + 12) % 12);
+  if (hasRealNeighbor) return false;
   return Math.abs(scaleStepCount(from, to, scalePcs)) === 1;
 }
 
@@ -4624,14 +4697,11 @@ function composePhrase(
   }
   if (!fitting.length) return null;
   /**
-   * Pick the best lane that passes every check, keeping the best seam-illegal
-   * one aside. The seam test needs the fingering, so it can only be applied
-   * here; a lane that fails it is not thrown away, because it is the only
-   * evidence that this draw had candidates at all.
+   * Pick the best lane that passes hand legality, skip realization, and the
+   * form-aware loop-seam check. The seam test needs the fingering, so it runs
+   * here after `fingerNotes`.
    */
-  const pick = (
-    candidates: readonly LaneResult[],
-  ): { best: PlayedLane | null; seamOnly: PlayedLane | null } => {
+  const pick = (candidates: readonly LaneResult[]): PlayedLane | null => {
     const legal = candidates.filter(
       (item) => !seamIsIllegal(item.notes, input.bars),
     );
@@ -4641,7 +4711,6 @@ function composePhrase(
       .slice()
       .sort((a, b) => b.score - a.score || a.lane - b.lane);
     let best: PlayedLane | null = null;
-    let seamOnly: PlayedLane | null = null;
     for (const item of ranked) {
       if (best && item.score <= best.score) break;
       const fingered = fingerNotes(
@@ -4664,34 +4733,26 @@ function composePhrase(
       };
       // The pitch stage cannot see strings, so a wide wrap onto an eighth is
       // judged here, where a skip one form apart can excuse it.
-      if (seamIsIllegalFingered(fingered, input.bars, shapes)) {
-        if (!seamOnly || candidate.score > seamOnly.score)
-          seamOnly = candidate;
-        continue;
-      }
+      if (seamIsIllegalFingered(fingered, input.bars, shapes)) continue;
       if (!best || candidate.score > best.score) best = candidate;
     }
-    return { best, seamOnly };
+    return best;
   };
 
-  const first = pick(fitting.length ? fitting : seamless);
-  let best = first.best;
-  const { seamOnly } = first;
+  let best = pick(fitting.length ? fitting : seamless);
   /**
-   * A lane whose only fault is the seam is worth re-rolling rather than
-   * shipping or dropping. Refusing it outright leaves the plan with nothing
-   * and the caller advances to the next seed, so the phrase the seed was
-   * asked for silently plays as a different one. Rolling fresh lane draws for
-   * the same seed usually finds a wrap the hand can play; only when none
-   * turns up does the phrase fail, as before.
+   * When Phase 1 found contour-fitting lanes but every one failed fingering
+   * (`handAccepts`, `skipRealized`, or `seamIsIllegalFingered`), re-roll fresh
+   * lane draws for the same seed rather than drifting to `seed + 1`. Skip the
+   * re-roll if Phase 1 already reached the search-step cap.
    *
    * The extra attempts continue the lane numbering past the contour passes
    * above, so each one draws different sub-streams rather than repeating a
-   * roll that already failed. `nextSearchAttempt` keeps the step count honest
-   * across the two phases instead of letting the second phase hide the first.
+   * roll that already failed. `nextSearchAttempt` keeps the per-phase step
+   * budget separate once Phase 1 finished within cap.
    */
   const extraAttempts = 8;
-  if (!best && seamOnly) {
+  if (!best && !phraseSearchRefused && !searchAtCap()) {
     nextSearchAttempt();
     for (
       let attempt = attempts;
@@ -4718,7 +4779,7 @@ function composePhrase(
         contourFits(item.notes, item.plan.contour, input.bars),
       );
       if (!fit.length) continue;
-      best = pick(fit).best;
+      best = pick(fit);
     }
   }
   skipWitness = null;
@@ -4867,9 +4928,11 @@ function shapeCover(
     let hit = 0;
     for (const midi of distinct) if (have.has(midi)) hit += 1;
     const dist = Math.abs((form.min + form.max) / 2 - anchor);
-    // Balance pitch coverage against register anchor so a low-position form
-    // catching one extra edge note does not pull middle register down to fret 2.
-    const score = hit * 1.5 - dist * 0.45;
+    // Keep pitch coverage primary so high-register phrases never drop top notes
+    // and force a hand shift, while discouraging mid register from collapsing
+    // into open/low forms (`form.min < 3`) for a single edge note.
+    const lowCollapse = anchor >= 5 && form.min < 3 ? 2.5 : 0;
+    const score = hit * 4 - dist * 0.35 - lowCollapse;
     const tieWins = anchor >= 5 ? index > best : index < best;
     if (
       score > bestScore + 1e-9 ||

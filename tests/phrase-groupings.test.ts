@@ -182,8 +182,8 @@ void test('listen seeds play a grouping on this head', () => {
   }
 });
 
-void test('rhythm draws stay balanced with a mild lead for eighths', () => {
-  assert.deepEqual([...RHYTHM_DRAW_WEIGHTS], [2, 3, 2, 2]);
+void test('rhythm draws favour the eighths lane without starving the others', () => {
+  assert.deepEqual([...RHYTHM_DRAW_WEIGHTS], [1, 5, 1, 1]);
   const scale = SCALES.find((item) => item.id === 'major');
   assert.ok(scale);
   const scaleNotes = spell('C', scale.formula);
@@ -201,9 +201,9 @@ void test('rhythm draws stay balanced with a mild lead for eighths', () => {
     if (!result.ok) continue;
     if (result.phrase.plan.rhythm === 'eighths') eighths++;
   }
-  // Three of nine draws (~33%), leaving generous room for quarters, long-short, and push.
-  assert.ok(eighths / draws > 0.25, String(eighths));
-  assert.ok(eighths / draws < 0.45, String(eighths));
+  // Five of eight draws (62.5%) — wide band so the check catches a reset, not seed noise.
+  assert.ok(eighths / draws > 0.5, String(eighths));
+  assert.ok(eighths / draws < 0.75, String(eighths));
 });
 
 void test('the three extra eighth bars are drawable', () => {
