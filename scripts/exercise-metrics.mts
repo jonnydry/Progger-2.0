@@ -240,6 +240,9 @@ function measure(set: readonly Row[], label: string) {
   let firstHeld = 0;
   let firstOnDown = 0;
   let rests = 0;
+  let maxRestBeats = 0;
+  let quarterOrLongerRests = 0;
+  let offbeatSustained = 0;
   let sync = 0;
   let eighthOnsets = 0;
   let onsets = 0;
@@ -260,7 +263,15 @@ function measure(set: readonly Row[], label: string) {
       onsets++;
       const next = row.notes[row.notes.indexOf(note) + 1];
       const gap = next ? next.beat - note.beat : note.duration;
-      if (next && note.beat + note.duration < next.beat - 1e-6) rests++;
+      if (next && note.beat + note.duration < next.beat - 1e-6) {
+        const rest = +(next.beat - (note.beat + note.duration)).toFixed(4);
+        rests++;
+        if (rest > maxRestBeats) maxRestBeats = rest;
+        if (rest >= 1 - 1e-6) quarterOrLongerRests++;
+      }
+      if (Math.abs((note.beat % 1) - 0.5) < 0.01 && note.duration > 0.5 + 1e-6) {
+        offbeatSustained++;
+      }
       if (
         Math.abs((note.beat % 1) - 0.5) < 0.01 &&
         !row.notes.some(
@@ -316,10 +327,63 @@ function measure(set: readonly Row[], label: string) {
   let withShift = 0;
   let sameFingerNewFretOnEighth = 0;
   let rolls = 0;
+  let fastSameFingerRolls = 0;
+  let fastNonAdjFingerRolls = 0;
+  let unnecessaryMultiStringJumps = 0;
+  let midPhrases = 0;
+  let openStringInMid = 0;
+  let midCollapsedLow = 0;
+  let highPhrases = 0;
+  let openStringInHigh = 0;
+  let consecWideLeaps = 0;
+  let exactBar2Copy = 0;
+  let modalColorTotal = 0;
+  let modalColorHits = 0;
+  let modalColorStrongHits = 0;
   const spans: number[] = [];
   const skipKinds = new Map<string, number>();
 
+  const MODAL_COLOR_DEGREES: Record<string, readonly string[]> = {
+    dorian: ['6'],
+    lydian: ['#4'],
+    phrygian: ['b2'],
+    mixolydian: ['b7'],
+    'harmonic-minor': ['7'],
+    'melodic-minor': ['6', '7'],
+    'minor-blues': ['b5'],
+  };
+
   for (const row of set) {
+    const colorDegrees = MODAL_COLOR_DEGREES[row.scale];
+    if (colorDegrees) {
+      modalColorTotal++;
+      const bodyNotes = body(row);
+      if (bodyNotes.some((note) => colorDegrees.includes(note.degree)))
+        modalColorHits++;
+      if (
+        bodyNotes.some(
+          (note) => note.strong && colorDegrees.includes(note.degree),
+        )
+      )
+        modalColorStrongHits++;
+    }
+    if (row.plan.register === 'mid') {
+      midPhrases++;
+      if (row.notes.some((note) => note.fret === 0)) openStringInMid++;
+      const frettedPositions = row.notes
+        .filter((note) => note.fret > 0)
+        .map((note) => note.position);
+      if (
+        frettedPositions.length > 0 &&
+        Math.min(...frettedPositions) <= 2
+      ) {
+        midCollapsedLow++;
+      }
+    }
+    if (row.plan.register === 'high') {
+      highPhrases++;
+      if (row.notes.some((note) => note.fret === 0)) openStringInHigh++;
+    }
     const midis = row.notes.map((note) => note.midi);
     const counts = new Map<number, number>();
     for (const midi of midis) counts.set(midi, (counts.get(midi) ?? 0) + 1);
@@ -356,6 +420,7 @@ function measure(set: readonly Row[], label: string) {
           if (opposite && Math.abs(steps(note.midi, next.midi, row.pcs)) === 1)
             settledStep++;
           if (Math.sign(after) === Math.sign(gap)) sameDirection++;
+          if (Math.abs(after) >= 5) consecWideLeaps++;
         }
       }
       if (index >= 2) {
@@ -385,8 +450,21 @@ function measure(set: readonly Row[], label: string) {
         note.finger === previous.finger &&
         note.fret === previous.fret &&
         note.string !== previous.string
-      )
+      ) {
         rolls++;
+        if (fast) {
+          fastSameFingerRolls++;
+          if (Math.abs(note.string - previous.string) >= 2) {
+            fastNonAdjFingerRolls++;
+          }
+        }
+      }
+      const stringDist = Math.abs(note.string - previous.string);
+      const inSkip =
+        Boolean(row.skipSpots?.[index]) || Boolean(row.skipSpots?.[index - 1]);
+      if (stringDist >= 2 && distance <= 5 && !inSkip) {
+        unnecessaryMultiStringJumps++;
+      }
     }
 
     if (row.notes.some((note) => note.shift)) withShift++;
@@ -417,6 +495,13 @@ function measure(set: readonly Row[], label: string) {
           )
           .join(',');
       if (shape(opening) === shape(answerBar)) answered++;
+      if (
+        opening.every(
+          (note, index) => note.midi === answerBar[index]?.midi,
+        )
+      ) {
+        exactBar2Copy++;
+      }
     }
 
     if (row.skip && row.skipSpots) {
@@ -452,6 +537,8 @@ function measure(set: readonly Row[], label: string) {
   let wrapStepOntoChordTone = 0;
   let wrapFourthOrWider = 0;
   let stepIntoCadence = 0;
+  let scaleStepIntoCadence = 0;
+  let cadenceLeaps6Plus = 0;
   let firstChordTone = 0;
   let strong = 0;
   let strongChord = 0;
@@ -472,6 +559,9 @@ function measure(set: readonly Row[], label: string) {
     if (cadence && approach) {
       const close = Math.abs(cadence.midi - approach.midi);
       if (close === 1 || close === 2) stepIntoCadence++;
+      if (Math.abs(steps(approach.midi, cadence.midi, row.pcs)) === 1)
+        scaleStepIntoCadence++;
+      if (close >= 6) cadenceLeaps6Plus++;
     }
     if (first?.chordTone) firstChordTone++;
     for (const note of row.notes) {
@@ -536,6 +626,9 @@ function measure(set: readonly Row[], label: string) {
       longestEighthRunMean: mean(longestRun, phrases),
       phrasesWithRunOf6: pct(hasRun6, phrases),
       restsPerPhrase: mean(rests, phrases),
+      maxRestBeats,
+      quarterOrLongerRestsPerPhrase: mean(quarterOrLongerRests, phrases),
+      offbeatSustainedShare: pct(offbeatSustained, onsets),
       syncPerPhrase: mean(sync, phrases),
       heldMidPhrasePerPhrase: mean(midHeld, phrases),
       adjacentBarsSameRhythm: pct(adjacentSame, barsTotal),
@@ -549,6 +642,7 @@ function measure(set: readonly Row[], label: string) {
       wideSettledCount: `${settled}/${wide}`,
       wideSettledByScaleStep: pct(settledStep, wideWithNext),
       wideKeepsGoingSameDirection: pct(sameDirection, wideWithNext),
+      consecWideLeapShare: pct(consecWideLeaps, wideWithNext),
       topHeavy_gt45: pct(topHeavy, phrases),
       topHeavyCount: `${topHeavy}/${phrases}`,
       meanTop2: +(top2 / phrases).toFixed(3),
@@ -560,6 +654,9 @@ function measure(set: readonly Row[], label: string) {
         set.reduce((sum, row) => sum + body(row).length, 0),
       ),
       bar2AnswersBar1: pct(answered, phrases),
+      exactBar2CopyPct: pct(exactBar2Copy, phrases),
+      characteristicColorPhrasesPct: pct(modalColorHits, modalColorTotal),
+      characteristicColorStrongPct: pct(modalColorStrongHits, modalColorTotal),
       identicalLinesAcrossSeeds: phrases - lines.size,
     },
     figures: {
@@ -586,6 +683,8 @@ function measure(set: readonly Row[], label: string) {
       firstNoteChordTone: pct(firstChordTone, phrases),
       strongBeatChordTone: pct(strongChord, strong),
       stepsIntoCadence: pct(stepIntoCadence, phrases),
+      scaleStepIntoCadence: pct(scaleStepIntoCadence, phrases),
+      cadenceLeaps6Plus: pct(cadenceLeaps6Plus, phrases),
       wrapStep: pct(wrapStep, phrases),
       wrapStepOntoChordTone: pct(wrapStepOntoChordTone, phrases),
       wrapFourthOrWider: pct(wrapFourthOrWider, phrases),
@@ -598,6 +697,12 @@ function measure(set: readonly Row[], label: string) {
       wideOntoEighthAsTwoStringSkip,
       sameFingerNewFretOnEighth,
       sameFingertipRollShare: pct(rolls, moves),
+      fastSameFingerRolls,
+      fastNonAdjFingerRolls,
+      unnecessaryMultiStringJumps,
+      openStringInMidPct: pct(openStringInMid, midPhrases),
+      openStringInHighPct: pct(openStringInHigh, highPhrases),
+      midCollapsedLowPct: pct(midCollapsedLow, midPhrases),
       fretSpanP50: spans[Math.floor(spans.length * 0.5)] ?? 0,
       fretSpanP90: spans[Math.floor(spans.length * 0.9)] ?? 0,
       fretSpanMax: spans[spans.length - 1] ?? 0,

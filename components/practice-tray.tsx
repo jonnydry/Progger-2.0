@@ -77,11 +77,16 @@ function chordMeta(item: TrayChordBookmark): string {
 
 function phraseMeta(item: TrayPhrase): string {
   const tempo = Math.round(traySoundingTempo(item.tempo, item.slow));
-  const chord = item.chord
+  const baseChord = item.chord
     ? pretty(item.chord.symbol)
     : `${pretty(item.key)} tonic`;
+  const chord = item.plan.turnaround
+    ? `${baseChord} → ${pretty(item.plan.turnaround)}`
+    : baseChord;
   const speed = item.slow ? ' · half speed' : '';
-  return `${pretty(item.key)} ${item.scaleName} · ${chord} · ${item.bars} bars · ${tempo} BPM${speed}`;
+  const swing =
+    item.swing > 0 ? ` · swing ${Math.round(item.swing * 100)}%` : '';
+  return `${pretty(item.key)} ${item.scaleName} · ${chord} · ${item.bars} bars · ${tempo} BPM${speed}${swing}`;
 }
 
 function downloadBlob(filename: string, blob: Blob) {

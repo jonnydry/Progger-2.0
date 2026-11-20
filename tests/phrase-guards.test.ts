@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseChord } from '../lib/harmony.ts';
 import { patterns, SCALES, spell, type Note } from '../lib/music.ts';
-import { generatePhrase, type Phrase } from '../lib/phrase.ts';
+import {
+  defaultChordNotes,
+  generatePhrase,
+  loopSeamLegal,
+  type Phrase,
+} from '../lib/phrase.ts';
 
 const SWEEP: readonly (readonly [string, string, string])[] = [
   ['C', 'major', 'C'],
@@ -415,13 +420,13 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     two.notes.map((note) => [note.midi, note.beat, note.duration]),
     [
-      [64, 0, 1],
-      [67, 1, 1],
-      [69, 2.5, 0.5],
+      [67, 0, 1],
+      [69, 1.5, 0.5],
+      [71, 2.5, 0.5],
       [67, 3, 1],
-      [60, 4, 1],
-      [64, 5, 1],
-      [65, 6.5, 0.5],
+      [64, 4, 1],
+      [65, 5.5, 0.5],
+      [67, 6.5, 0.5],
       [64, 7, 0.5],
       [62, 7.5, 0.5],
       [60, 8, 2],
@@ -431,19 +436,18 @@ void test('score order and the lane tie-break pick a fixed line', () => {
   assert.deepEqual(
     four.notes.map((note) => note.midi),
     [
-      // Re-pinned for the spread eighths opening (S3). Seed 15 still returns
-      // its opening figure; the line is shorter now that the lane can start
-      // on beat 1.
-      64, 62, 65, 67, 65, 62, 67, 65, 69, 71, 72, 67, 65, 69, 67, 64, 62, 67,
-      65, 64, 60, 62, 64,
+      // Re-pinned for the phrase generation updates. Seed 15 still returns
+      // its opening figure.
+      60, 62, 59, 60, 64, 65, 62, 60, 62, 59, 60, 67, 64, 65, 67, 69, 67, 65,
+      64, 60, 59, 57, 55, 57, 62, 64,
     ],
   );
 });
 
 void test('these cadence tails stay on the weighted pitches', () => {
-  // Re-pinned with the held-chord walk. A later pitch change has to update
-  // the rows on purpose. Am seed 7 is the ×0.35 leap penalty: without it
-  // the approach moves from 67 to 69.
+  // Re-pinned with the held-chord walk and phrase generation updates. A later
+  // pitch change has to update these rows on purpose. Am seed 7 exercises the
+  // cadence-leap penalty.
   const lines: readonly (readonly [
     string,
     string,
@@ -452,18 +456,16 @@ void test('these cadence tails stay on the weighted pitches', () => {
     2 | 4,
     readonly number[],
   ])[] = [
-    // Re-pinned with the register-anchored hand and the contour-true wave.
-    // A later pitch change has to update these rows on purpose.
+    // Register-anchored hand and contour-true wave.
     ['C', 'major', 'C', 7, 2, [72, 76, 72, 67, 76, 79, 76, 71, 69, 67]],
-    // Re-pinned for hand-first skip cells (S0): 60–69 is an in-box sixth
-    // starting on the fourth attack; the answered first four are unchanged.
+    // Hand-first skip cells; answered opening four stay intact.
     [
       'C',
       'major',
       'C',
       46,
       2,
-      [60, 57, 59, 60, 69, 67, 64, 60, 62, 64, 65, 57, 55],
+      [60, 59, 64, 60, 65, 64, 62, 67, 64, 62, 57, 55],
     ],
     [
       'C',
@@ -471,7 +473,10 @@ void test('these cadence tails stay on the weighted pitches', () => {
       'C',
       1,
       4,
-      [60, 64, 62, 60, 64, 67, 65, 64, 62, 57, 60, 55, 59, 60, 64, 67, 57, 55],
+      [
+        64, 65, 67, 64, 67, 69, 71, 67, 64, 60, 62, 57, 59, 60, 64, 67, 62, 57,
+        55,
+      ],
     ],
     [
       'C',
@@ -479,7 +484,7 @@ void test('these cadence tails stay on the weighted pitches', () => {
       'C',
       7,
       4,
-      [72, 74, 76, 72, 76, 77, 79, 76, 77, 69, 71, 67, 69, 72, 71, 69, 65, 67],
+      [72, 74, 76, 72, 76, 77, 79, 76, 77, 69, 71, 67, 69, 72, 71, 69, 67],
     ],
     // Free 4-bar seed (24 % 4 === 0). Bar 3 is the scored walk, not the
     // two-note fragment.
@@ -490,30 +495,28 @@ void test('these cadence tails stay on the weighted pitches', () => {
       24,
       4,
       [
-        54, 56, 53, 54, 49, 51, 54, 56, 59, 58, 61, 59, 58, 56, 59, 61, 63, 65,
-        61, 58, 56, 54, 58, 56, 66,
+        49, 47, 46, 42, 46, 44, 49, 46, 53, 51, 49, 53, 54, 56, 58, 53, 54,
       ],
     ],
-    ['C', 'major', 'C', 1, 2, [64, 67, 69, 67, 60, 64, 65, 64, 62, 55]],
-    // Re-pinned for the spread eighths opening (S3).
+    ['C', 'major', 'C', 1, 2, [64, 67, 65, 67, 60, 64, 62, 64, 59, 55]],
+    // Spread eighths opening.
     [
       'F#',
       'major',
       'F#maj7',
       2,
       2,
-      [61, 59, 58, 63, 65, 58, 56, 54, 59, 58, 56, 58],
+      [54, 53, 49, 51, 49, 46, 47, 53, 51, 47, 49, 51, 47, 46],
     ],
-    // A low wave. Its cadence still lands on the bottom C.
-    // Re-pinned for the free line one seed in four (S5): seed 4 no longer
-    // answers bar 1, so bar 2 is a new idea.
+    // A low wave (low register now reaches E2=40). Free line one seed in four
+    // (4 % 4 === 0), so bar 2 is a new idea; cadence lands on C3.
     [
       'C',
       'major',
       'C',
       4,
       2,
-      [52, 55, 53, 57, 55, 52, 48, 53, 52, 55, 53, 50, 48],
+      [40, 43, 48, 47, 43, 41, 40, 43, 41, 45, 47, 50, 48],
     ],
     [
       'C',
@@ -522,12 +525,10 @@ void test('these cadence tails stay on the weighted pitches', () => {
       20,
       4,
       [
-        60, 72, 67, 65, 64, 62, 64, 65, 62, 60, 57, 59, 64, 62, 57, 59, 64, 65,
-        60, 62, 65, 67, 65, 62, 59, 60,
+        60, 62, 64, 65, 69, 64, 62, 60, 57, 59, 60, 59, 55, 57, 62, 60, 59, 64,
+        67, 71, 69, 67, 62, 59, 60,
       ],
     ],
-    // Re-pinned with grouping cells. Still a 1-semitone step into the C
-    // cadence, and the closing note sits on the bar line.
     [
       'C',
       'major',
@@ -535,10 +536,10 @@ void test('these cadence tails stay on the weighted pitches', () => {
       5,
       4,
       [
-        60, 62, 59, 60, 64, 65, 62, 64, 65, 57, 59, 55, 57, 52, 53, 55, 53, 52,
+        48, 52, 55, 52, 48, 52, 55, 52, 53, 50, 53, 52, 55, 48, 50, 47, 41, 40,
       ],
     ],
-    ['A', 'dorian', 'Am', 7, 2, [69, 72, 71, 69, 72, 76, 74, 72, 67, 64]],
+    ['A', 'dorian', 'Am', 7, 2, [69, 72, 69, 64, 72, 76, 72, 67, 66, 64]],
   ];
   for (const [root, scaleId, symbol, seed, bars, midis] of lines) {
     const line = phrase(root, scaleId, symbol, seed, bars);
@@ -605,12 +606,15 @@ void test('the loop wrap never refuses a move the phrase allows, and seeds repla
           if (formless) noFormWide += 1;
         }
         const excuse =
-          fast && gap > 5 ? skipOneFormApart(shapes, last, first) : true;
+          fast && gap > 5
+            ? skipOneFormApart(shapes, last, first) &&
+              Math.abs(last.position - first.position) <= 3
+            : true;
         const legal = gap > 0 && gap <= 12 && excuse;
         if (!legal) {
           illegal += 1;
           assert.fail(
-            `${symbol} seed ${seed} ${bars}: wrap ${last.midi} -> ${first.midi} (gap ${gap}, first ${first.duration}, strings ${last.string} -> ${first.string}, formless ${formless})`,
+            `${symbol} seed ${seed} ${bars}: wrap ${last.midi} -> ${first.midi} (gap ${gap}, first ${first.duration}, strings ${last.string} -> ${first.string}, pos ${last.position} -> ${first.position}, formless ${formless})`,
           );
         }
       }
@@ -633,4 +637,29 @@ void test('the loop wrap never refuses a move the phrase allows, and seeds repla
   // fall-through reached 45 on the wider REVIEW grid. Allow a little room for
   // a future change that trades a seed for a musical fix, not that return.
   assert.ok(drift <= 2, `seed drift ${drift}/${phrases}`);
+
+  // Regression: E Mixolydian 2-bar seed 121890 previously wrapped a fifth onto
+  // an eighth across a 4-fret hand shift (pos 13 -> pos 9), which arrivalOk
+  // refuses (shiftFrets > 3). Same-seed re-roll must keep seed 121890 legal.
+  const mixoNotes = scaleOf('E', 'mixolydian');
+  const mixoShapes = formLookupFor(patterns(mixoNotes));
+  const mixo = generatePhrase({
+    seed: 121890,
+    bars: 2,
+    scaleNotes: mixoNotes,
+    chordNotes: defaultChordNotes(mixoNotes),
+  });
+  assert.equal(mixo.ok, true);
+  if (mixo.ok) {
+    assert.equal(mixo.phrase.seed, 121890);
+    const body = mixo.phrase.notes.filter((note) => note.beat < 8);
+    const last = body[body.length - 1];
+    const first = mixo.phrase.notes[0];
+    assert.ok(last && first);
+    assert.equal(loopSeamLegal(last, first, mixoShapes), true);
+    const gap = Math.abs(first.midi - last.midi);
+    if (first.duration <= 0.5 && gap > 5) {
+      assert.ok(Math.abs(last.position - first.position) <= 3);
+    }
+  }
 });

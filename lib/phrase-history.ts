@@ -2,13 +2,13 @@ import { QUALITIES } from './harmony.ts';
 import { ROOTS, SCALES } from './music.ts';
 
 /**
- * Phrase history, version 1.
+ * Phrase history, version 2.
  * One localStorage key. A missing key is an empty history. A blob this
  * version cannot read stays in storage and this tab does not write.
  * An entry this version does not understand is ignored. This module does
  * not import the phrase generator.
  */
-export const PHRASE_HISTORY_KEY = 'progger.phrase-history.v1';
+export const PHRASE_HISTORY_KEY = 'progger.phrase-history.v2';
 export const PHRASE_HISTORY_LIMIT = 3;
 
 const SCALE_IDS = new Set(SCALES.map((scale) => scale.id));
@@ -24,6 +24,9 @@ export type PhraseHistoryLocks = {
   rhythm?: 'quarters' | 'eighths' | 'long-short' | 'push';
   register?: 'low' | 'mid' | 'high';
   cadence?: 'root' | 'third' | 'fifth';
+  chromatic?: boolean;
+  pickup?: boolean;
+  turnaround?: string;
 };
 
 export type PhraseHistoryNote = {
@@ -63,7 +66,7 @@ export type PhraseHistoryEntry = {
 };
 
 export type PhraseHistoryState = {
-  version: 1;
+  version: 2;
   entries: PhraseHistoryEntry[];
   index: number;
 };
@@ -83,7 +86,7 @@ export type PhraseHistoryContext = {
 };
 
 const EMPTY_PHRASE_HISTORY: PhraseHistoryState = {
-  version: 1,
+  version: 2,
   entries: [],
   index: -1,
 };
@@ -151,6 +154,19 @@ function locksOf(value: unknown): PhraseHistoryLocks | null {
     );
     if (!cadence) return null;
     locks.cadence = cadence;
+  }
+  if (value.chromatic !== undefined) {
+    if (typeof value.chromatic !== 'boolean') return null;
+    if (value.chromatic) locks.chromatic = true;
+  }
+  if (value.pickup !== undefined) {
+    if (typeof value.pickup !== 'boolean') return null;
+    if (value.pickup) locks.pickup = true;
+  }
+  if (value.turnaround !== undefined) {
+    const turnaround = text(value.turnaround, 24);
+    if (!turnaround) return null;
+    locks.turnaround = turnaround;
   }
   return locks;
 }
@@ -258,6 +274,9 @@ export function phraseHistoryEntry(input: {
   ) {
     return null;
   }
+  if (bars === 2 && locks.turnaround !== undefined) {
+    delete locks.turnaround;
+  }
   return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
 }
 
@@ -266,7 +285,10 @@ function sameLocks(a: PhraseHistoryLocks, b: PhraseHistoryLocks): boolean {
     a.contour === b.contour &&
     a.rhythm === b.rhythm &&
     a.register === b.register &&
-    a.cadence === b.cadence
+    a.cadence === b.cadence &&
+    Boolean(a.chromatic) === Boolean(b.chromatic) &&
+    Boolean(a.pickup) === Boolean(b.pickup) &&
+    a.turnaround === b.turnaround
   );
 }
 
@@ -400,7 +422,7 @@ export function pushPhraseHistory(
     if (kept.length === state.entries.length && index === state.index) {
       return state;
     }
-    return { version: 1, entries: kept, index: kept.length - 1 };
+    return { version: 2, entries: kept, index: kept.length - 1 };
   }
   const withoutRepeat = kept.filter(
     (item) => !samePhraseHistoryEntry(item, clean),
@@ -409,7 +431,7 @@ export function pushPhraseHistory(
   if (entries.length > PHRASE_HISTORY_LIMIT) {
     entries.splice(0, entries.length - PHRASE_HISTORY_LIMIT);
   }
-  return { version: 1, entries, index: entries.length - 1 };
+  return { version: 2, entries, index: entries.length - 1 };
 }
 
 export type PhraseHistoryStepFocus = 'previous' | 'next' | 'new';
@@ -439,9 +461,9 @@ export function stepPhraseHistory(
   const next = index + direction;
   if (next < 0 || next >= state.entries.length) {
     if (index === state.index) return state;
-    return { version: 1, entries: state.entries, index };
+    return { version: 2, entries: state.entries, index };
   }
-  return { version: 1, entries: state.entries, index: next };
+  return { version: 2, entries: state.entries, index: next };
 }
 
 /**
@@ -501,6 +523,9 @@ function entryOf(value: unknown): PhraseHistoryEntry | null {
   ) {
     return null;
   }
+  if (bars === 2 && locks.turnaround !== undefined) {
+    delete locks.turnaround;
+  }
   return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
 }
 
@@ -516,7 +541,7 @@ function project(raw: string | null, failedRead = false): HistoryDoc {
     const parsed: unknown = JSON.parse(raw);
     if (
       !isRecord(parsed) ||
-      parsed.version !== 1 ||
+      parsed.version !== 2 ||
       !Array.isArray(parsed.entries)
     ) {
       return { writable: false, state: EMPTY_PHRASE_HISTORY };
@@ -566,7 +591,7 @@ export function writePhraseHistory(
   storage.setItem(
     PHRASE_HISTORY_KEY,
     JSON.stringify({
-      version: 1,
+      version: 2,
       entries: state.entries,
       index: state.index,
     }),
@@ -660,10 +685,10 @@ function capLoadedHistory(
   const overflow = Math.max(0, entries.length - PHRASE_HISTORY_LIMIT);
   const kept = overflow > 0 ? entries.slice(overflow) : entries;
   return {
-    version: 1,
+    version: 2,
     entries: kept,
     index: clampedIndex({
-      version: 1,
+      version: 2,
       entries: kept,
       index: index - overflow,
     }),
@@ -676,7 +701,7 @@ function commit(state: PhraseHistoryState): boolean {
   const storage = browserStorage();
   if (!storage) return false;
   const payload = JSON.stringify({
-    version: 1,
+    version: 2,
     entries: state.entries,
     index: state.index,
   });

@@ -45,6 +45,10 @@ type PairSpec = {
   changed: string;
   /** Rendering tempo. Defaults to 132. */
   tempo?: number;
+  /** Swing amount in [0, 1]. Defaults to 0 (straight). */
+  swing?: number;
+  /** Allow A and B to have the same notes (for audio-engine comparisons). */
+  allowSameLine?: boolean;
   /**
    * Loop passes to render. 1 is a single pass through the phrase including
    * its closing cadence, the way Loop off plays. More than 1 follows the
@@ -151,15 +155,19 @@ async function loopNotes(
 async function render(
   notes: readonly Note[],
   tempo: number,
+  swing: number,
   loopPasses = 1,
+  tree?: string,
 ): Promise<Float32Array> {
-  const { schedulePhrase } = await import('../lib/phrase-audio.ts');
+  const { schedulePhrase } = tree
+    ? await import(pathToFileURL(join(tree, 'lib/phrase-audio.ts')).href)
+    : await import('../lib/phrase-audio.ts');
   const { notes: played } = await loopNotes(notes, loopPasses);
   const last = played.at(-1);
   const beats = last ? last.beat + last.duration : 8;
   const seconds = (beats * 60) / tempo + TAIL_SEC;
   const context = new OfflineAudioContext(1, Math.ceil(RATE * seconds), RATE);
-  schedulePhrase(context, context.destination, played, tempo, SWING, 0);
+  schedulePhrase(context, context.destination, played, tempo, swing, 0);
   const rendered = await context.startRendering();
   return rendered.getChannelData(0).slice();
 }
@@ -348,7 +356,7 @@ function readout(
   const lines = [
     `Pair ${pair.id} — side ${side} (${label})`,
     `Seed ${pair.seed}, ${pair.root} ${pair.scaleId}${pair.chord ? ` over ${pair.chord}` : ' (tonic chord)'}, ${pair.bars} bars`,
-    `${pair.tempo ?? TEMPO} bpm, straight (swing amount ${SWING}), ${(pair.loopPasses ?? 1) > 1 ? `Loop on (${pair.loopPasses} passes)` : 'Loop off'}`,
+    `${pair.tempo ?? TEMPO} bpm, ${(pair.swing ?? SWING) > 0 ? `swing ${Math.round((pair.swing ?? SWING) * 100)}%` : `straight (swing amount ${SWING})`}, ${(pair.loopPasses ?? 1) > 1 ? `Loop on (${pair.loopPasses} passes)` : 'Loop off'}`,
     `Plan: ${plan.rhythm} rhythm, ${plan.contour} contour, ${plan.register} register, cadence ${plan.cadence}`,
     `Cells: ${(plan.cells ?? []).join(' | ')}`,
     `Figures: ${figures(engine, generated.notes)}`,
@@ -388,15 +396,17 @@ for (const pair of spec.pairs) {
   const generatedB = generate(toEngine, pair);
   const lineA = spellLine(generatedA.notes);
   const lineB = spellLine(generatedB.notes);
-  if (lineA === lineB) throw new Error(`${pair.id}: A and B are the same line`);
+  if (!pair.allowSameLine && lineA === lineB)
+    throw new Error(`${pair.id}: A and B are the same line`);
 
   const tempo = pair.tempo ?? TEMPO;
+  const swing = pair.swing ?? SWING;
   const loopPasses = pair.loopPasses ?? 1;
   const playedA = await loopNotes(generatedA.notes, loopPasses);
   const playedB = await loopNotes(generatedB.notes, loopPasses);
   const rendered = {
-    A: await render(generatedA.notes, tempo, loopPasses),
-    B: await render(generatedB.notes, tempo, loopPasses),
+    A: await render(generatedA.notes, tempo, swing, loopPasses, pair.fromTree),
+    B: await render(generatedB.notes, tempo, swing, loopPasses, pair.toTree),
   };
   const rawPeak = Math.max(samplePeak(rendered.A), samplePeak(rendered.B));
   if (rawPeak <= 0) throw new Error(`${pair.id} is silent`);

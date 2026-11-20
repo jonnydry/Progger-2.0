@@ -48,6 +48,8 @@ export function phraseTabText(input: {
   const lastBeat = notes.reduce((max, note) => Math.max(max, note.beat), 0);
   const step = notes.length ? gridStep(notes.map((note) => note.beat)) : 0.5;
   const columns = Math.max(1, Math.round(lastBeat / step) + 1);
+  const barCols = Math.max(1, Math.round(4 / step));
+  const beatCols = Math.max(1, Math.round(1 / step));
   const width = 3;
   const placed = LINES.map(() => Array<number | null>(columns).fill(null));
   for (const note of notes) {
@@ -59,9 +61,25 @@ export function phraseTabText(input: {
     const row = placed[line];
     if (row) row[column] = note.fret;
   }
+  const rulerParts: string[] = [];
+  for (let col = 0; col < columns; col++) {
+    if (col > 0 && col % barCols === 0) rulerParts.push(' ');
+    if (col % beatCols === 0) {
+      const beatInBar = (Math.floor(col / beatCols) % 4) + 1;
+      rulerParts.push(String(beatInBar).padEnd(width, ' '));
+    } else {
+      rulerParts.push(' '.repeat(width));
+    }
+  }
+  const ruler = `  ${rulerParts.join('')}`.trimEnd();
   const body = LINES.map((line, index) => {
     const row = placed[index] ?? [];
-    return `${line.label}|${row.map((fret) => cell(fret, width)).join('')}|`;
+    const segments: string[] = [];
+    for (let col = 0; col < columns; col++) {
+      if (col > 0 && col % barCols === 0) segments.push('|');
+      segments.push(cell(row[col] ?? null, width));
+    }
+    return `${line.label}|${segments.join('')}|`;
   }).join('\n');
-  return `${input.title} · ${tempoLabel(input.tempo)} BPM\n\n${body}\n`;
+  return `${input.title} · ${tempoLabel(input.tempo)} BPM\n\n${ruler}\n${body}\n`;
 }

@@ -201,8 +201,10 @@ void test('the loop wrap obeys the arrival rule the phrase obeys inside', () => 
         if (first.duration <= 0.5 && gap > 5) {
           const twoString = Math.abs(first.string - last.string) === 2;
           assert.ok(
-            twoString && skipOneFormApart(shapes, last, first),
-            `wide wrap onto an eighth ${label} (strings ${last.string} -> ${first.string}, forms ${String(formIndexes(shapes, last.string, last.fret))} / ${String(formIndexes(shapes, first.string, first.fret))})`,
+            twoString &&
+              skipOneFormApart(shapes, last, first) &&
+              Math.abs(last.position - first.position) <= 3,
+            `wide wrap onto an eighth ${label} (strings ${last.string} -> ${first.string}, pos ${last.position} -> ${first.position}, forms ${String(formIndexes(shapes, last.string, last.fret))} / ${String(formIndexes(shapes, first.string, first.fret))})`,
           );
         }
         // And the engine's own helper must agree.
@@ -220,6 +222,25 @@ void test('the loop wrap obeys the arrival rule the phrase obeys inside', () => 
   // The eighths lane really does open on an eighth now, so the branch above
   // is exercised rather than vacuous.
   assert.ok(eighthOpens > 20, `eighth openings ${eighthOpens}/${total}`);
+
+  // loopSeamLegal enforces the same <= 3-fret hand shift limit as arrivalOk.
+  const mixoShapes = shapesFor('E', 'mixolydian');
+  assert.equal(
+    loopSeamLegal(
+      { midi: 69, string: 3, fret: 14, position: 13 },
+      { midi: 76, duration: 0.5, string: 5, fret: 12, position: 9 },
+      mixoShapes,
+    ),
+    false,
+  );
+  assert.equal(
+    loopSeamLegal(
+      { midi: 69, string: 3, fret: 14, position: 12 },
+      { midi: 76, duration: 0.5, string: 5, fret: 12, position: 9 },
+      mixoShapes,
+    ),
+    true,
+  );
 });
 
 void test('the loop period still lands on the downbeat after the cadence', () => {

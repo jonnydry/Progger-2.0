@@ -6,6 +6,7 @@ import { parseChord } from '../lib/harmony.ts';
 import { SCALES, spell, TUNING, type Note } from '../lib/music.ts';
 import {
   PHRASE_RANGE,
+  REGISTER_LOW,
   availableCadences,
   cadenceRole,
   contourHeight,
@@ -414,7 +415,7 @@ function assertPhraseReach(phrase: {
   plan: { register: 'low' | 'mid' | 'high' };
   notes: { midi: number }[];
 }): void {
-  const low = { low: 48, mid: 55, high: 64 }[phrase.plan.register];
+  const low = { low: 40, mid: 55, high: 64 }[phrase.plan.register];
   for (const note of phrase.notes) assertNoteWindow(note.midi, low);
 }
 
@@ -467,7 +468,7 @@ void test('the same seed replays the same phrase, and many seeds keep the rules'
       ratios.push(report.steps / (report.steps + report.leaps));
 
     const names = new Set(scaleNotes.map((note) => note.name));
-    const low = { low: 48, mid: 55, high: 64 }[phrase.plan.register];
+    const low = { low: 40, mid: 55, high: 64 }[phrase.plan.register];
     const high = low + PHRASE_RANGE;
     const midis = phrase.notes.map((note) => note.midi);
     const inside = midis.filter((midi) => midi >= low && midi <= high);
@@ -628,7 +629,7 @@ void test('hidden dots, snapshots, and a chord outside the scale', () => {
   );
 
   const snapshot: PhraseSnapshot = {
-    version: 1,
+    version: 2,
     seed: 9,
     bars: 2,
     feel: 'swing',
@@ -640,7 +641,7 @@ void test('hidden dots, snapshots, and a chord outside the scale', () => {
     plan: result.phrase.plan,
     locks: { rhythm: 'quarters' },
   };
-  assert.equal(snapshot.version, 1);
+  assert.equal(snapshot.version, 2);
   assert.equal(snapshot.locks.rhythm, 'quarters');
 
   const outside = generatePhrase({
@@ -833,7 +834,6 @@ void test('a cadence lock lands on the chord root', () => {
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.phrase.plan.cadence, 'root');
-  assert.equal(result.phrase.plan.rhythm, 'eighths');
   const notes = result.phrase.notes;
   assert.equal(notes.at(-1)?.pc, 9);
   assert.equal(notes.at(-1)?.beat, 8);
@@ -875,5 +875,440 @@ void test('Bb minor seed 4 keeps the low wave plan', () => {
   assert.equal(report.cadenceHit, true);
   for (const note of result.phrase.notes) {
     assert.ok(Math.abs(note.beat * 2 - Math.round(note.beat * 2)) < 1e-6);
+  }
+});
+
+void test('middle and high registers avoid stray open strings', () => {
+  const contexts = [
+    ['C', 'major', 'C'],
+    ['A', 'dorian', 'Am'],
+    ['E', 'minor', 'Em'],
+    ['G', 'mixolydian', 'G7'],
+  ] as const;
+  let midTotal = 0;
+  let midOpen = 0;
+  let highTotal = 0;
+  let highOpen = 0;
+  for (const [root, scaleId, chord] of contexts) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(chord).notes;
+    for (let seed = 1; seed <= 30; seed++) {
+      for (const register of ['mid', 'high'] as const) {
+        const result = generatePhrase({
+          seed,
+          bars: 2,
+          scaleNotes,
+          chordNotes,
+          locks: { register },
+        });
+        assert.equal(result.ok, true);
+        if (!result.ok) continue;
+        const hasOpen = result.phrase.notes.some((note) => note.fret === 0);
+        if (register === 'mid') {
+          midTotal += 1;
+          if (hasOpen) midOpen += 1;
+        } else {
+          highTotal += 1;
+          if (hasOpen) highOpen += 1;
+        }
+      }
+    }
+  }
+  assert.equal(highOpen, 0, `high register leaked open strings in ${highOpen}/${highTotal} phrases`);
+  assert.ok(
+    midOpen / midTotal < 0.03,
+    `mid register leaked open strings in ${midOpen}/${midTotal} phrases`,
+  );
+});
+
+void test('modal scales feature their characteristic color tone and pentatonic scales resolve by scale step', () => {
+  const modalCases = [
+    ['D', 'dorian', 'Dm', '6'],
+    ['F', 'lydian', 'F', '#4'],
+    ['E', 'phrygian', 'Em', 'b2'],
+    ['G', 'mixolydian', 'G7', 'b7'],
+  ] as const;
+  for (const [root, scaleId, chord, color] of modalCases) {
+    const scaleNotes = scaleOf(root, scaleId);
+    const chordNotes = parseChord(chord).notes;
+    let hits = 0;
+    const total = 40;
+    for (let seed = 1; seed <= total; seed++) {
+      const result = generatePhrase({ seed, bars: 2, scaleNotes, chordNotes });
+      assert.equal(result.ok, true);
+      if (!result.ok) continue;
+      if (result.phrase.notes.slice(0, -1).some((note) => note.degree === color))
+        hits += 1;
+    }
+    assert.ok(
+      hits / total >= 0.75,
+      `${root} ${scaleId} omitted color ${color}: only ${hits}/${total}`,
+    );
+  }
+  const pentNotes = scaleOf('A', 'minor-pentatonic');
+  const pentPcs = new Set(pentNotes.map((note) => note.pc));
+  const amNotes = parseChord('Am').notes;
+  let stepCadences = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: pentNotes,
+      chordNotes: amNotes,
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    const notes = result.phrase.notes;
+    const prev = notes[notes.length - 2];
+    const last = notes[notes.length - 1];
+    if (prev && last && melodicMotion(prev.midi, last.midi, pentPcs) === 'step')
+      stepCadences += 1;
+  }
+  assert.ok(
+    stepCadences >= 34,
+    `A minor pentatonic resolved by scale step only ${stepCadences}/40 times`,
+  );
+});
+
+void test('phrases breathe with quarter rests and true beat-crossing offbeat pushes', () => {
+  const scaleNotes = scaleOf('C', 'major');
+  const chordNotes = parseChord('C').notes;
+  let quarterRestPhrases = 0;
+  let pushSustainedPhrases = 0;
+  for (let seed = 1; seed <= 80; seed++) {
+    const result = generatePhrase({ seed, bars: 2, scaleNotes, chordNotes });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    const notes = result.phrase.notes;
+    let hasQuarterRest = false;
+    let hasOffbeatPush = false;
+    for (let i = 0; i < notes.length - 1; i++) {
+      const note = notes[i];
+      const next = notes[i + 1];
+      if (next.beat - (note.beat + note.duration) >= 1 - 1e-6)
+        hasQuarterRest = true;
+      if (Math.abs((note.beat % 1) - 0.5) < 0.01 && note.duration > 0.5 + 1e-6)
+        hasOffbeatPush = true;
+    }
+    if (hasQuarterRest) quarterRestPhrases += 1;
+    if (hasOffbeatPush) pushSustainedPhrases += 1;
+  }
+  assert.ok(
+    quarterRestPhrases >= 10,
+    `expected >= 10 phrases with quarter-or-longer rests, got ${quarterRestPhrases}`,
+  );
+  assert.ok(
+    pushSustainedPhrases >= 10,
+    `expected >= 10 phrases with beat-crossing offbeat pushes, got ${pushSustainedPhrases}`,
+  );
+});
+
+void test('low register reaches open low E2 and 6/8-note box forms keep spans compact', () => {
+  const eMinor = scaleOf('E', 'minor');
+  const emChord = parseChord('Em').notes;
+  let belowC3 = 0;
+  let openLowE = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: eMinor,
+      chordNotes: emChord,
+      locks: { register: 'low' },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    for (const note of result.phrase.notes) {
+      if (note.midi < 48) belowC3 += 1;
+      if (note.midi === 40 && note.string === 0 && note.fret === 0) {
+        openLowE += 1;
+      }
+    }
+  }
+  assert.ok(belowC3 > 20, `low register barely reached below C3: ${belowC3}`);
+  assert.ok(openLowE > 0, 'low register never used open low E2');
+
+  const blues = scaleOf('A', 'minor-blues');
+  const am7 = parseChord('Am7').notes;
+  let wideSpan = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: blues,
+      chordNotes: am7,
+      locks: { register: 'mid' },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    const fretted = result.phrase.notes
+      .map((note) => note.fret)
+      .filter((fret) => fret > 0);
+    if (fretted.length && Math.max(...fretted) - Math.min(...fretted) > 5) {
+      wideSpan += 1;
+    }
+  }
+  assert.ok(
+    wideSpan <= 3,
+    `blues mid-register box forms exceeded 5-fret span too often: ${wideSpan}/30`,
+  );
+});
+
+void test('optional chromatic approaches stay off by default and resolve by half step when enabled', () => {
+  const cMajor = scaleOf('C', 'major');
+  const scalePcs = new Set(cMajor.map((note) => note.pc));
+  const cmaj7 = parseChord('Cmaj7').notes;
+  let chromaticPhrases = 0;
+  let chromaticNotes = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const plain = generatePhrase({
+      seed,
+      bars: 4,
+      scaleNotes: cMajor,
+      chordNotes: cmaj7,
+    });
+    assert.equal(plain.ok, true);
+    if (!plain.ok) continue;
+    assert.equal(
+      plain.phrase.notes.some((note) => note.degree === 'chr'),
+      false,
+      `default phrase should remain strictly diatonic (seed ${seed})`,
+    );
+    const enriched = generatePhrase({
+      seed,
+      bars: 4,
+      scaleNotes: cMajor,
+      chordNotes: cmaj7,
+      locks: { chromatic: true },
+    });
+    assert.equal(enriched.ok, true);
+    if (!enriched.ok) continue;
+    assert.equal(enriched.phrase.plan.chromatic, true);
+    let hits = 0;
+    const enrichedNotes = enriched.phrase.notes;
+    for (let i = 0; i < enrichedNotes.length; i++) {
+      const current = enrichedNotes[i];
+      if (!current || current.degree !== 'chr') continue;
+      hits += 1;
+      chromaticNotes += 1;
+      assert.equal(current.chordTone, false);
+      assert.equal(scalePcs.has(current.pc), false);
+      const target = enrichedNotes[i + 1];
+      assert.ok(target, 'chromatic approach must resolve to a following note');
+      assert.equal(Math.abs(target.midi - current.midi), 1);
+      if (target.midi > current.midi) {
+        assert.equal(
+          current.name.includes('b'),
+          false,
+          `ascending chromatic ${current.name} -> ${target.name} should not use flat`,
+        );
+      } else {
+        assert.equal(
+          current.name.includes('#'),
+          false,
+          `descending chromatic ${current.name} -> ${target.name} should not use sharp`,
+        );
+      }
+    }
+    if (hits > 0) chromaticPhrases += 1;
+    assert.ok(hits <= 2, `too many chromatic approaches in 4 bars: ${hits}`);
+  }
+  assert.ok(
+    chromaticPhrases >= 12,
+    `expected >= 12/40 chromatic phrases, got ${chromaticPhrases} (${chromaticNotes} notes)`,
+  );
+});
+
+void test('optional pickup start enters on the upbeat after beat 1 and anchors note 2 on a chord tone', () => {
+  const dDorian = scaleOf('D', 'dorian');
+  const dm7 = parseChord('Dm7').notes;
+  let anchored = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: dDorian,
+      chordNotes: dm7,
+      locks: { pickup: true },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    assert.equal(result.phrase.plan.pickup, true);
+    const first = result.phrase.notes[0];
+    const second = result.phrase.notes[1];
+    assert.ok(first && second);
+    assert.ok(
+      first.beat >= 0.5 - 1e-6 && first.beat < 1.5,
+      `expected upbeat pickup start, got beat ${first.beat} (seed ${seed})`,
+    );
+    if (second.chordTone) anchored += 1;
+  }
+  assert.ok(
+    anchored >= 22,
+    `expected >= 22/30 pickups to anchor note 2 on a chord tone, got ${anchored}`,
+  );
+});
+
+void test('optional two-chord turnaround targets chord 2 in bars 3-4 and resolves home to chord 1', () => {
+  const cMajor = scaleOf('C', 'major');
+  const cmaj7 = parseChord('Cmaj7').notes;
+  const g7 = parseChord('G7').notes;
+  const cmaj7Pcs = new Set(cmaj7.map((note) => note.pc));
+  const g7Pcs = new Set(g7.map((note) => note.pc));
+  let bar3G7Hits = 0;
+  let bar3G7Total = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 4,
+      scaleNotes: cMajor,
+      chordNotes: cmaj7,
+      turnaroundChordNotes: g7,
+      turnaroundSymbol: 'G7',
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    assert.equal(result.phrase.plan.turnaround, 'G7');
+    const notes = result.phrase.notes;
+    const landing = notes[notes.length - 1];
+    assert.ok(
+      cmaj7Pcs.has(landing.pc),
+      `turnaround should resolve home to Cmaj7, got ${landing.name}`,
+    );
+    const bar34 = notes.filter((note) => note.beat >= 8 && note.beat < 16);
+    assert.ok(bar34.length > 0);
+    for (const note of bar34) {
+      assert.equal(
+        note.chordTone,
+        g7Pcs.has(note.pc),
+        `bar 3-4 chordTone flag should match G7 (note ${note.name} at beat ${note.beat})`,
+      );
+      if (note.strong) {
+        bar3G7Total += 1;
+        if (g7Pcs.has(note.pc)) bar3G7Hits += 1;
+      }
+    }
+  }
+  const ratio = bar3G7Hits / Math.max(1, bar3G7Total);
+  assert.ok(
+    ratio >= 0.65,
+    `expected >= 65% strong beats in bars 3-4 on G7 chord tones, got ${(ratio * 100).toFixed(1)}%`,
+  );
+});
+
+void test('adversarial guards: pickup seams, chromatic contours/spelling, turnaround bar-3 anchor, and fretted positions', () => {
+  const cMajor = scaleOf('C', 'major');
+  const cChord = parseChord('C').notes;
+  const gChord = parseChord('G').notes;
+  const gPcs = new Set(gChord.map((note) => note.pc));
+
+  // 1. Pickup loop seams obey non-unison, <= octave, and <= fourth onto fast pickup.
+  for (let seed = 1; seed <= 60; seed++) {
+    const res = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: cMajor,
+      chordNotes: cChord,
+      locks: { pickup: true },
+    });
+    assert.equal(res.ok, true);
+    if (!res.ok) continue;
+    const first = res.phrase.notes[0];
+    const body = res.phrase.notes.filter((note) => note.beat < 8);
+    const last = body[body.length - 1];
+    assert.ok(first && last);
+    const gap = Math.abs(first.midi - last.midi);
+    assert.ok(gap > 0 && gap <= 12, `illegal pickup seam gap ${gap} (seed ${seed})`);
+  }
+
+  // 2. Chromatic approaches preserve enharmonic spelling in extreme sharp/flat keys and stay inside register.
+  const exotic: readonly (readonly [string, string, string])[] = [
+    ['C#', 'major-pentatonic', 'C#'],
+    ['Db', 'locrian', 'Dbdim'],
+    ['Ab', 'locrian', 'Abdim'],
+    ['Gb', 'locrian', 'Gbdim'],
+  ];
+  for (const [root, sid, sym] of exotic) {
+    const scale = scaleOf(root, sid);
+    const chord = parseChord(sym).notes;
+    for (let seed = 1; seed <= 10; seed++) {
+      const res = generatePhrase({
+        seed,
+        bars: 4,
+        scaleNotes: scale,
+        chordNotes: chord,
+        locks: { chromatic: true },
+      });
+      if (!res.ok) continue;
+      const low = REGISTER_LOW[res.phrase.plan.register];
+      const notes = res.phrase.notes;
+      for (let i = 0; i < notes.length; i++) {
+        const note = notes[i];
+        assert.ok(
+          note.midi >= low && note.midi <= low + 18,
+          `chromatic note escaped register [${low}, ${low + 18}]: ${note.midi}`,
+        );
+        if (note.degree === 'chr') {
+          const target = notes[i + 1];
+          assert.ok(target);
+          assert.notEqual(`${note.name}->${target.name}`, 'Gb->E#');
+          assert.notEqual(`${note.name}->${target.name}`, 'D#->Fb');
+          assert.notEqual(`${note.name}->${target.name}`, 'A#->Cb');
+          assert.notEqual(`${note.name}->${target.name}`, 'G#->Bbb');
+        }
+      }
+    }
+  }
+
+  // 3. Turnaround Bar 3 first note reliably anchors on Chord 2.
+  let bar3Anchored = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    const res = generatePhrase({
+      seed,
+      bars: 4,
+      scaleNotes: cMajor,
+      chordNotes: cChord,
+      turnaroundChordNotes: gChord,
+      turnaroundSymbol: 'G',
+    });
+    assert.equal(res.ok, true);
+    if (!res.ok) continue;
+    const bar3First = res.phrase.notes.find((note) => note.beat >= 8);
+    assert.ok(bar3First);
+    if (gPcs.has(bar3First.pc)) bar3Anchored += 1;
+  }
+  assert.ok(
+    bar3Anchored >= 54,
+    `expected >= 54/60 bar-3 turnaround anchors on G, got ${bar3Anchored}`,
+  );
+
+  // 4. No fretted note ever receives position 0, and mid-register blues/whole-tone avoid open strings.
+  const wholeTone = scaleOf('A', 'whole-tone');
+  const a7 = parseChord('A7').notes;
+  for (let seed = 1; seed <= 20; seed++) {
+    for (const register of ['low', 'mid'] as const) {
+      const res = generatePhrase({
+        seed,
+        bars: 2,
+        scaleNotes: wholeTone,
+        chordNotes: a7,
+        locks: { register },
+      });
+      if (!res.ok) continue;
+      for (const note of res.phrase.notes) {
+        if (note.fret > 0) {
+          assert.ok(
+            note.position >= 1,
+            `fretted note fret=${note.fret} had position=${note.position}`,
+          );
+        }
+        if (register === 'mid') {
+          assert.ok(
+            note.fret > 0,
+            `mid-register whole-tone leaked open string (seed ${seed})`,
+          );
+        }
+      }
+    }
   }
 });

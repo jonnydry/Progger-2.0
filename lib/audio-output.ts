@@ -393,6 +393,8 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
   pointPhrase(context.destination);
   const speaker = track(context.createGain());
   speaker.gain.value = 0;
+  let phraseAttached = false;
+  let phraseSegment = { from: 1, to: 1, start: 0, end: 0 };
   const dry = track(context.createGain());
   const wet = track(context.createGain());
   dry.gain.value = 1;
@@ -453,6 +455,43 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     const end = time + seconds;
     speaker.gain.linearRampToValueAtTime(target, end);
     segment = { from, to: target, start: time, end };
+  }
+
+  function phraseLevelAt(time: number): number {
+    if (
+      pendingRestoreEnd >= 0 &&
+      time >= pendingRestoreEnd &&
+      phraseSegment.end <= pendingRestoreEnd
+    ) {
+      return 1;
+    }
+    if (
+      !(phraseSegment.end > phraseSegment.start) ||
+      time <= phraseSegment.start
+    )
+      return phraseSegment.from;
+    if (time >= phraseSegment.end) return phraseSegment.to;
+    const mix =
+      (time - phraseSegment.start) / (phraseSegment.end - phraseSegment.start);
+    return phraseSegment.from + (phraseSegment.to - phraseSegment.from) * mix;
+  }
+
+  function schedulePhraseFade(
+    time: number,
+    target: number,
+    seconds: number,
+  ): void {
+    const from = phraseLevelAt(time);
+    phraseSend.gain.cancelScheduledValues(time);
+    phraseSend.gain.setValueAtTime(from, time);
+    if (!(seconds > 0) || from === target) {
+      phraseSend.gain.setValueAtTime(target, time);
+      phraseSegment = { from: target, to: target, start: time, end: time };
+      return;
+    }
+    const end = time + seconds;
+    phraseSend.gain.linearRampToValueAtTime(target, end);
+    phraseSegment = { from, to: target, start: time, end };
   }
 
   function routeLimited(): void {
@@ -541,10 +580,34 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     const finish = (anchor: boolean) => {
       if (token !== epoch) return;
       if (pendingSilence === when) pendingSilence = -1;
-      if (active) routeLimited();
-      else routeOpen();
+      const start = anchor ? Math.max(when, context.currentTime) : when;
+      if (active) {
+        routeLimited();
+      }
       if (anchor) {
-        restore(when, restoreSeconds);
+        phraseSend.gain.setValueAtTime(0, start);
+        phraseSend.gain.linearRampToValueAtTime(1, start + restoreSeconds);
+        phraseSegment = {
+          from: 0,
+          to: 1,
+          start,
+          end: start + restoreSeconds,
+        };
+      } else {
+        phraseSend.gain.setValueAtTime(0, when);
+        phraseSend.gain.linearRampToValueAtTime(1, when + restoreSeconds);
+        phraseSegment = {
+          from: 0,
+          to: 1,
+          start: when,
+          end: when + restoreSeconds,
+        };
+      }
+      if (!active) {
+        routeOpen();
+      }
+      if (anchor) {
+        restore(start, restoreSeconds);
       } else {
         speaker.gain.linearRampToValueAtTime(1, when + restoreSeconds);
         segment = { from: 0, to: 1, start: when, end: when + restoreSeconds };
@@ -643,7 +706,10 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
     limiter,
     droneInput: stage.input,
     chordInput: stage.chordInput,
-    phraseInput: phraseSend,
+    get phraseInput() {
+      phraseAttached = true;
+      return phraseSend;
+    },
     get duckReady() {
       return stage.duckReady;
     },
@@ -663,6 +729,7 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
         pendingSilence = -1;
         pendingRestoreEnd = -1;
         clearTimers();
+        schedulePhraseFade(time, 1, 0);
         if (active) {
           scheduleFade(time, 1, 0);
           routeLimited();
@@ -673,19 +740,42 @@ export function createOutputChain(context: BaseAudioContext): OutputChain {
         return;
       }
       if (active && route === 'limited' && pendingSilence < 0) return;
-      if (!active && route === 'off') return;
+      if (!active && route === 'off') {
+        if (pendingSilence < 0) return;
+        if (time < pendingSilence) {
+          epoch += 1;
+          pendingSilence = -1;
+          pendingRestoreEnd = -1;
+          clearTimers();
+          schedulePhraseFade(time, 1, seconds);
+          return;
+        }
+      }
       if (!active && route === 'open' && pendingSilence < 0) return;
       if (active && route === 'off') {
+        if (pendingSilence > time) epoch += 1;
         clearTimers();
         speaker.gain.cancelScheduledValues(time);
         speaker.gain.setValueAtTime(0, time);
+        if (!phraseAttached) {
+          routeLimited();
+          speaker.gain.linearRampToValueAtTime(1, time + seconds);
+          segment = { from: 0, to: 1, start: time, end: time + seconds };
+          return;
+        }
         segment = { from: 0, to: 0, start: time, end: time };
-        routeLimited();
-        speaker.gain.linearRampToValueAtTime(1, time + seconds);
-        segment = { from: 0, to: 1, start: time, end: time + seconds };
+        schedulePhraseFade(time, 0, seconds);
+        const silence = time + seconds;
+        speaker.gain.setValueAtTime(0, silence);
+        atSilence(silence, seconds, true);
         return;
       }
+      if (pendingSilence > time) {
+        epoch += 1;
+        clearTimers();
+      }
       scheduleFade(time, 0, seconds);
+      schedulePhraseFade(time, 0, seconds);
       const silence = time + seconds;
       atSilence(silence, seconds, active);
       if (!active) armTail(seconds);

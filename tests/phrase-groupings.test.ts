@@ -182,7 +182,7 @@ void test('listen seeds play a grouping on this head', () => {
   }
 });
 
-void test('eighths are five of the eight rhythm draws', () => {
+void test('rhythm draws favour the eighths lane without starving the others', () => {
   assert.deepEqual([...RHYTHM_DRAW_WEIGHTS], [1, 5, 1, 1]);
   const scale = SCALES.find((item) => item.id === 'major');
   assert.ok(scale);
@@ -201,7 +201,7 @@ void test('eighths are five of the eight rhythm draws', () => {
     if (!result.ok) continue;
     if (result.phrase.plan.rhythm === 'eighths') eighths++;
   }
-  // Five of eight draws. The band leaves room for the integer weights.
+  // Five of eight draws (62.5%) — wide band so the check catches a reset, not seed noise.
   assert.ok(eighths / draws > 0.5, String(eighths));
   assert.ok(eighths / draws < 0.75, String(eighths));
 });

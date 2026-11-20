@@ -805,6 +805,12 @@
 .phrase-pin-row[data-options='3'] .phrase-pin-line {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+.phrase-pin-row[data-options='2'] .phrase-pin-line {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.phrase-pin-row[data-options='1'] .phrase-pin-line {
+  grid-template-columns: minmax(0, 1fr);
+}
 .phrase-pin {
   box-sizing: border-box;
   width: auto;
@@ -837,9 +843,13 @@
   border-color: var(--green);
   box-shadow: none;
 }
-.phrase-pin:hover:not([aria-pressed='true']) {
+.phrase-pin:hover:not([aria-pressed='true']):not(:disabled) {
   color: var(--foreground);
   border-color: var(--green);
+}
+.phrase-pin:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
 }
 .phrase-pin:focus-visible {
   outline: var(--focus-ring);
@@ -934,5 +944,8 @@
   }
   .deck-quiet > .deck-key-rec {
     grid-column: 1 / -1;
+  }
+  .phrase-pin {
+    padding: 0 2px;
   }
 }

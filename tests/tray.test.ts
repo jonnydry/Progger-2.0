@@ -935,7 +935,7 @@ function installTray(initial: string | null) {
   return storage as typeof storage & { value: string };
 }
 
-void test('tab text uses the known phrase fingering and onsets', () => {
+void test('tab text uses the known phrase fingering, barlines, and beat ruler', () => {
   const text = phraseTabText({
     title: 'Known phrase',
     tempo: 96,
@@ -946,6 +946,7 @@ void test('tab text uses the known phrase fingering and onsets', () => {
     [
       'Known phrase · 96 BPM',
       '',
+      '  1     2     3     4',
       'e|------------------12-|',
       'B|---------------------|',
       'G|---------------------|',
@@ -955,9 +956,19 @@ void test('tab text uses the known phrase fingering and onsets', () => {
       '',
     ].join('\n'),
   );
+  const twoBar = phraseTabText({
+    title: 'Two bars',
+    tempo: 96,
+    notes: [
+      { string: 0, fret: 5, beat: 0 },
+      { string: 1, fret: 7, beat: 4 },
+    ],
+  });
+  assert.match(twoBar, /\n  1     2     3     4      1\n/);
+  assert.match(twoBar, /\nA\|------------------------\|7--\|\n/);
 });
 
-void test('MIDI bytes carry a type-0 header, tempo, and note on/off deltas', () => {
+void test('MIDI bytes carry a type-0 header, tempo, 4/4 time signature, GM guitar program, and expressive velocities', () => {
   const bytes = encodePhraseMidi({ tempo: 120, notes: KNOWN_NOTES });
   const hex = Buffer.from(bytes).toString('hex');
   assert.equal(hex.slice(0, 8), '4d546864');
@@ -970,15 +981,17 @@ void test('MIDI bytes carry a type-0 header, tempo, and note on/off deltas', () 
     hex,
     [
       '4d546864000000060000000101e0',
-      '4d54726b0000002f',
+      '4d54726b0000003a',
       '00ff510307a120',
-      '00902d64',
+      '00ff580404021808',
+      '00c01b',
+      '00902d68',
       '8360802d00',
-      '00903464',
+      '0090345e',
       '8360803400',
-      '00903264',
+      '0090325e',
       '8360803200',
-      '00904c64',
+      '00904c5e',
       '8360804c00',
       '00ff2f00',
     ].join(''),

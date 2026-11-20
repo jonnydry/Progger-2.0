@@ -1,12 +1,20 @@
 /** Type-0 MIDI. One track, 480 ticks per quarter note. */
 export const MIDI_DIVISION = 480;
-const NOTE_ON_VELOCITY = 100;
+/** GM Electric Guitar (clean). */
+const MIDI_GUITAR_PROGRAM = 27;
 
 export type MidiNote = {
   midi: number;
   beat: number;
   duration: number;
 };
+
+function noteVelocity(beat: number): number {
+  const barPos = ((beat % 4) + 4) % 4;
+  if (Math.abs(barPos) < 1e-6 || Math.abs(barPos - 4) < 1e-6) return 104;
+  if (Math.abs(beat - Math.round(beat)) < 1e-6) return 94;
+  return 82;
+}
 
 function vlq(value: number): number[] {
   const safe = Math.max(0, Math.floor(value));
@@ -60,18 +68,28 @@ export function encodePhraseMidi(input: {
         microseconds & 0xff,
       ],
     },
+    {
+      tick: 0,
+      order: 0.25,
+      data: [0xff, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08],
+    },
+    {
+      tick: 0,
+      order: 0.5,
+      data: [0xc0, MIDI_GUITAR_PROGRAM],
+    },
   ];
   input.notes.forEach((note, index) => {
     const midi = Math.max(0, Math.min(127, Math.round(note.midi)));
     const on = Math.max(0, Math.round(note.beat * MIDI_DIVISION));
     const off = Math.max(
-      on,
+      on + 1,
       Math.round((note.beat + note.duration) * MIDI_DIVISION),
     );
     events.push({
       tick: on,
       order: 2 + index,
-      data: [0x90, midi, NOTE_ON_VELOCITY],
+      data: [0x90, midi, noteVelocity(note.beat)],
     });
     events.push({ tick: off, order: 1, data: [0x80, midi, 0] });
   });
