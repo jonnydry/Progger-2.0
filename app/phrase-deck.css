@@ -945,4 +945,7 @@
   .deck-quiet > .deck-key-rec {
     grid-column: 1 / -1;
   }
+  .phrase-pin {
+    padding: 0 2px;
+  }
 }

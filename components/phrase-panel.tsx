@@ -111,10 +111,13 @@ function turnaroundChoicesFor(
   scaleId: string,
   scaleNotes: readonly Note[],
   chordSymbol: string,
+  chordNotes: readonly Note[],
 ): TurnaroundOption[] {
   const scale = SCALES.find((entry) => entry.id === scaleId);
   if (!scale) return [];
   const scalePcs = new Set(scaleNotes.map((note) => note.pc));
+  const activeRootPc = chordNotes[0]?.pc ?? -1;
+  const activePcs = new Set(chordNotes.map((note) => note.pc));
   const raw = diatonicChords(scaleRoot, scale);
   // Prefer strong functional turnarounds: V, IV, ii, vi, III, vii.
   const order = [4, 3, 1, 5, 2, 6, 0];
@@ -127,6 +130,10 @@ function turnaroundChoicesFor(
       const parsed = parseChord(entry.symbol);
       const shared = parsed.notes.some((note) => scalePcs.has(note.pc));
       if (!shared) continue;
+      // Avoid offering a triad with the same root (e.g. G7 -> G) or whose
+      // tones are already a subset of the active chord.
+      if (parsed.notes[0]?.pc === activeRootPc) continue;
+      if (parsed.notes.every((note) => activePcs.has(note.pc))) continue;
       seen.add(entry.symbol);
       picked.push({ symbol: entry.symbol, notes: parsed.notes });
       if (picked.length >= 3) break;
@@ -353,21 +360,13 @@ export function PhrasePanel({
    * third for) is dropped by the generator rather than shown as a lie.
    */
   const [pins, setPins] = useState<PhraseLocks>(EMPTY_LOCKS);
-  const [clearedHistoryLocks, setClearedHistoryLocks] =
-    useState<PhraseLocks | null>(null);
+  const [suppressedHistory, setSuppressedHistory] = useState<
+    Partial<Record<keyof PhraseLocks, unknown>>
+  >({});
   const availableCadenceSet = useMemo(
     () => new Set(availableCadences(chordNotes, scaleNotes)),
     [chordNotes, scaleNotes],
   );
-  const pin = <K extends keyof PhraseLocks>(key: K, value: PhraseLocks[K]) => {
-    setClearedHistoryLocks(null);
-    setPins((current) => {
-      const next = { ...current };
-      if (next[key] === value) delete next[key];
-      else next[key] = value;
-      return next;
-    });
-  };
   const player = useRef<PhrasePlayer | null>(null);
   const seenHeld = useRef<{ id: string; key: string } | null>(null);
   const [heldCursor, setHeldCursor] = useState<string | null>(null);
@@ -392,6 +391,8 @@ export function PhrasePanel({
   if ((held?.id ?? null) !== heldCursor) {
     setHeldCursor(held?.id ?? null);
     if (held) {
+      setPins(EMPTY_LOCKS);
+      setSuppressedHistory({});
       setBars(held.bars);
       setTempo(held.tempo);
       setSwing(held.swing);
@@ -426,24 +427,74 @@ export function PhrasePanel({
       })
     : false;
   // Saved locks stay with that phrase; local pins are added on top. A cadence
-  // the chord cannot land is ignored by generatePhrase.
+  // the chord cannot land is ignored by generatePhrase. Per-key suppression
+  // lets the user toggle off individual history-restored locks without
+  // losing cross-tab updates when another tab writes a different value.
   const rawHistoryLocks = phraseHistoryActiveLocks(cursor, onHistory, locks);
-  const historyLocks =
-    clearedHistoryLocks && sameLocks(rawHistoryLocks, clearedHistoryLocks)
-      ? EMPTY_LOCKS
-      : rawHistoryLocks;
-  const generationLocks = {
+  const historyLocks: PhraseLocks = {};
+  for (const key of [
+    'contour',
+    'rhythm',
+    'register',
+    'cadence',
+    'chromatic',
+    'pickup',
+    'turnaround',
+  ] as const) {
+    const rawValue = rawHistoryLocks[key];
+    if (rawValue !== undefined && rawValue !== suppressedHistory[key]) {
+      (historyLocks as Record<string, unknown>)[key] = rawValue;
+    }
+  }
+  const turnaroundOptions = useMemo(
+    () =>
+      turnaroundChoicesFor(
+        scaleRoot,
+        scaleId,
+        scaleNotes,
+        chordSymbol,
+        chordNotes,
+      ),
+    [scaleRoot, scaleId, scaleNotes, chordSymbol, chordNotes],
+  );
+  const rawGenerationLocks: PhraseLocks = {
     ...historyLocks,
     ...pins,
+  };
+  const generationLocks: PhraseLocks =
+    bars === 4 &&
+    rawGenerationLocks.turnaround &&
+    turnaroundOptions.some(
+      (option) => option.symbol === rawGenerationLocks.turnaround,
+    )
+      ? rawGenerationLocks
+      : {
+          ...rawGenerationLocks,
+          turnaround: undefined,
+        };
+  const pin = <K extends keyof PhraseLocks>(key: K, value: PhraseLocks[K]) => {
+    onReleaseHeld?.();
+    const alreadyActive = generationLocks[key] === value;
+    setPins((current) => {
+      const next = { ...current };
+      if (alreadyActive) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+    setSuppressedHistory((current) => {
+      const next = { ...current };
+      if (alreadyActive && rawHistoryLocks[key] !== undefined) {
+        next[key] = rawHistoryLocks[key];
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
   };
   // A cross-tab read builds new lock objects for the same phrase. Keep
   // the previous object so playback does not see a new phrase.
   const [stableLocks, setStableLocks] = useState(generationLocks);
   if (!sameLocks(stableLocks, generationLocks)) setStableLocks(generationLocks);
-  const turnaroundOptions = useMemo(
-    () => turnaroundChoicesFor(scaleRoot, scaleId, scaleNotes, chordSymbol),
-    [scaleRoot, scaleId, scaleNotes, chordSymbol],
-  );
   const activeTurnaround = useMemo(() => {
     if (bars !== 4 || !stableLocks.turnaround) return null;
     return (
@@ -541,6 +592,7 @@ export function PhrasePanel({
    * playback stops.
    */
   const [finishingHold, setFinishingHold] = useState(false);
+  const [armingLoop, setArmingLoop] = useState(false);
   const [seenFrame, setSeenFrame] = useState(liveFrame);
   if (liveFrame !== seenFrame) {
     // A new selection arrived. While a looping or finishing pass is
@@ -589,6 +641,7 @@ export function PhrasePanel({
   const adoptQueued = useCallback(() => {
     setAwaitingHandoff(false);
     setFinishingHold(false);
+    setArmingLoop(false);
     // The queued pass is sounding now, so its feel becomes the sounding
     // feel in the same beat as the screen adopts its frame.
     if (queuedFeel.current) {
@@ -610,6 +663,7 @@ export function PhrasePanel({
   const dropQueued = useCallback(() => {
     setAwaitingHandoff(false);
     setFinishingHold(false);
+    setArmingLoop(false);
     queuedFeel.current = null;
   }, []);
   useEffect(() => {
@@ -619,6 +673,7 @@ export function PhrasePanel({
         // The finishing pass is over (or never started), so a later pass
         // must not be held as if its cadence were still sounding.
         setFinishingHold(false);
+        setArmingLoop(false);
         queuedFeel.current = null;
       }
       // 'starting' is the bar-line handoff: the queued frame begins to sound
@@ -766,7 +821,7 @@ export function PhrasePanel({
     queuedFeel.current = null;
     setAwaitingHandoff(false);
     void player.current?.start(next);
-  }, [active, phrase, bars, slow, loop, liveMusical, dropQueued]);
+  }, [active, phrase, bars, slow, loop]);
   const marks = useMemo(
     () => (sounding.ok ? phraseFretMarks(notes, dots) : null),
     [sounding.ok, notes, dots],
@@ -817,7 +872,7 @@ export function PhrasePanel({
       chord: entry.chord,
     });
     setPins(EMPTY_LOCKS);
-    setClearedHistoryLocks(null);
+    setSuppressedHistory({});
     setBars(entry.bars);
     setSeed(entry.seed);
     setSeedText(String(entry.seed));
@@ -825,7 +880,15 @@ export function PhrasePanel({
   }
   function regenerate() {
     const next = randomSeed();
-    const outgoing = historyEntry(seed, generationLocks);
+    const outgoingLocks: PhraseLocks = held
+      ? {
+          ...generationLocks,
+          ...(held.plan.chromatic ? { chromatic: true } : {}),
+          ...(held.plan.pickup ? { pickup: true } : {}),
+          ...(held.plan.turnaround ? { turnaround: held.plan.turnaround } : {}),
+        }
+      : generationLocks;
+    const outgoing = historyEntry(seed, outgoingLocks);
     const incoming = historyEntry(next, generationLocks);
     const drifted = Boolean(
       cursor &&
@@ -869,13 +932,21 @@ export function PhrasePanel({
   }, [history.index, seed, bars, scaleRoot, scaleId]);
   function chooseBars(next: 2 | 4) {
     onReleaseHeld?.();
+    if (next === 2) {
+      setPins((current) => {
+        if (current.turnaround === undefined) return current;
+        const copy = { ...current };
+        delete copy.turnaround;
+        return copy;
+      });
+    }
     setBars(next);
     setNotice('');
   }
   // The saved mark belongs to the phrase on screen. Keying it by the live
   // selection would leave "Saved ✓" lit for a queued phrase that was
   // never saved once the handoff lands.
-  const phraseKey = `${frame.scaleId}:${frame.scaleRoot}:${frame.chordSymbol}:${sounding.ok ? sounding.phrase.seed : seed}:${sounding.ok ? sounding.phrase.bars : bars}:${sounding.ok ? `${sounding.phrase.plan.contour}/${sounding.phrase.plan.rhythm}/${sounding.phrase.plan.register}/${sounding.phrase.plan.cadence}` : ''}`;
+  const phraseKey = `${frame.scaleId}:${frame.scaleRoot}:${frame.chordSymbol}:${sounding.ok ? sounding.phrase.seed : seed}:${sounding.ok ? sounding.phrase.bars : bars}:${sounding.ok ? `${sounding.phrase.plan.contour}/${sounding.phrase.plan.rhythm}/${sounding.phrase.plan.register}/${sounding.phrase.plan.cadence}/${sounding.phrase.plan.chromatic ? 'chr' : ''}/${sounding.phrase.plan.pickup ? 'pu' : ''}/${sounding.phrase.plan.turnaround ?? ''}` : ''}`;
   const [savedFor, setSavedFor] = useState<string | null>(null);
   const [saveAnnounce, setSaveAnnounce] = useState('');
   const [announcedFor, setAnnouncedFor] = useState(phraseKey);
@@ -996,7 +1067,10 @@ export function PhrasePanel({
     // Turning Loop off over a live pass sends that pass into its
     // cadence (or re-queues its armed replacement to play once). Hold
     // the screen on it until the player reports the next start.
+    // Turning Loop on over a live plain pass lets that pass finish its
+    // cadence before looping, so keep Lands active until the handoff.
     if (loop && live.current) setFinishingHold(true);
+    if (!loop && live.current) setArmingLoop(true);
     setLoop((current) => !current);
   }
   function togglePlay() {
@@ -1041,8 +1115,19 @@ export function PhrasePanel({
   // cadence is the fifth, so the readout must not say "5th" when it means
   // "the tritone" (or the reverse).
   const cadenceText = plan ? cadenceLabel(plan.cadence, frame.chordNotes) : '';
+  const planExtras = plan
+    ? [
+        plan.turnaround
+          ? `moving to ${pretty(plan.turnaround)} in bars 3 and 4`
+          : '',
+        plan.chromatic ? 'with chromatic approaches' : '',
+        plan.pickup ? 'starting on the pickup' : '',
+      ]
+        .filter(Boolean)
+        .join(', ')
+    : '';
   const planSentence = plan
-    ? `${CONTOUR_LABEL[plan.contour]} contour, ${RHYTHM_LABEL[plan.rhythm]}, ${REGISTER_LABEL[plan.register]} register, landing on the ${cadenceText}.`
+    ? `${CONTOUR_LABEL[plan.contour]} contour, ${RHYTHM_LABEL[plan.rhythm]}, ${REGISTER_LABEL[plan.register]} register, landing on the ${cadenceText}${planExtras ? `, ${planExtras}` : ''}.`
     : '';
   const playKey = (
     <button
@@ -1379,10 +1464,9 @@ export function PhrasePanel({
               turnaroundOptions={turnaroundOptions}
               onPin={pin}
               onClear={() => {
+                onReleaseHeld?.();
                 setPins(EMPTY_LOCKS);
-                setClearedHistoryLocks(
-                  Object.keys(rawHistoryLocks).length ? rawHistoryLocks : null,
-                );
+                setSuppressedHistory({ ...rawHistoryLocks });
               }}
             />
           </div>
@@ -1493,7 +1577,7 @@ export function PhrasePanel({
           notes={notes}
           bars={frame.bars}
           turnaround={plan?.turnaround}
-          looping={loop && !finishingHold}
+          looping={loop && !finishingHold && !armingLoop}
           swing={soundingSwing}
           playing={status === 'playing'}
           player={player}
@@ -1707,20 +1791,26 @@ function PhrasePins({
             <button
               type="button"
               aria-pressed={Boolean(locks.chromatic)}
-              className="phrase-pin"
+              className={`phrase-pin${plan?.chromatic && !locks.chromatic ? ' is-current' : ''}`}
               title="Allow half-step chromatic approaches into chord tones"
               onClick={() => onPin('chromatic', true)}
             >
               chromatic
+              {plan?.chromatic && !locks.chromatic ? (
+                <span className="sr-only"> (playing now)</span>
+              ) : null}
             </button>
             <button
               type="button"
               aria-pressed={Boolean(locks.pickup)}
-              className="phrase-pin"
+              className={`phrase-pin${plan?.pickup && !locks.pickup ? ' is-current' : ''}`}
               title="Start on the upbeat after beat 1"
               onClick={() => onPin('pickup', true)}
             >
               pickup
+              {plan?.pickup && !locks.pickup ? (
+                <span className="sr-only"> (playing now)</span>
+              ) : null}
             </button>
           </div>
         </fieldset>
@@ -1728,14 +1818,21 @@ function PhrasePins({
           <fieldset
             className="phrase-pin-row"
             aria-label="Pin bar 3–4 turnaround"
-            aria-describedby={hintId}
+            aria-describedby={bars !== 4 ? 'phrase-turnaround-hint' : hintId}
             data-options={turnaroundOptions.length}
           >
             <legend className="deck-legend">Bar 3–4</legend>
+            {bars !== 4 ? (
+              <span id="phrase-turnaround-hint" className="sr-only">
+                Switch to 4 bars in Feel to pick a turnaround chord.
+              </span>
+            ) : null}
             <div className="phrase-pin-line">
               {turnaroundOptions.map((option) => {
                 const disabled = bars !== 4;
                 const active = !disabled && locks.turnaround === option.symbol;
+                const current =
+                  !disabled && plan?.turnaround === option.symbol;
                 return (
                   <button
                     key={option.symbol}
@@ -1747,10 +1844,13 @@ function PhrasePins({
                         : `Move to ${pretty(option.symbol)} in bars 3–4`
                     }
                     aria-pressed={active}
-                    className="phrase-pin"
+                    className={`phrase-pin${current && !active ? ' is-current' : ''}`}
                     onClick={() => onPin('turnaround', option.symbol)}
                   >
                     {pretty(option.symbol)}
+                    {current && !active ? (
+                      <span className="sr-only"> (playing now)</span>
+                    ) : null}
                   </button>
                 );
               })}
@@ -1911,21 +2011,27 @@ function PhraseStaff({
           index = -1;
         }
       }
-      const rawBeat = media.matches
-        ? (notes[index]?.beat ?? 0)
-        : beatAtSeconds(elapsed, tempo, swingNow);
-      const beat = loopingNow ? Math.min(bars * 4 - 1e-4, rawBeat) : rawBeat;
-      const landing = !loopingNow && beat >= bars * 4;
-      const barId = landing
-        ? 'land'
-        : String(Math.min(bars, Math.max(1, Math.floor(beat / 4) + 1)));
-      const local = landing ? beat - bars * 4 : beat - (Number(barId) - 1) * 4;
-      const span = landing ? 2 : 4;
-      const x = `${Math.min(1, Math.max(0, local / span)) * 100}%`;
-      for (const { head, bar } of heads) {
-        const mine = bar === barId;
-        head.hidden = !mine;
-        if (mine) head.style.left = x;
+      if (media.matches && index < 0) {
+        for (const { head } of heads) head.hidden = true;
+      } else {
+        const rawBeat = media.matches
+          ? (notes[index]?.beat ?? 0)
+          : beatAtSeconds(elapsed, tempo, swingNow);
+        const beat = loopingNow ? Math.min(bars * 4 - 1e-4, rawBeat) : rawBeat;
+        const landing = !loopingNow && beat >= bars * 4;
+        const barId = landing
+          ? 'land'
+          : String(Math.min(bars, Math.max(1, Math.floor(beat / 4) + 1)));
+        const local = landing
+          ? beat - bars * 4
+          : beat - (Number(barId) - 1) * 4;
+        const span = landing ? 2 : 4;
+        const x = `${Math.min(1, Math.max(0, local / span)) * 100}%`;
+        for (const { head, bar } of heads) {
+          const mine = bar === barId;
+          head.hidden = !mine;
+          if (mine) head.style.left = x;
+        }
       }
       for (const { mark, note } of marks) {
         mark.classList.toggle('is-current', note === index);
@@ -1940,6 +2046,7 @@ function PhraseStaff({
     return () => {
       cancelAnimationFrame(frame);
       publishPhrasePlayhead(null);
+      for (const { head } of heads) head.hidden = true;
       for (const { mark } of marks) mark.classList.remove('is-current');
     };
   }, [playing, notes, bars, player, tempoRef, swing]);

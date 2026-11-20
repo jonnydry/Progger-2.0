@@ -274,6 +274,9 @@ export function phraseHistoryEntry(input: {
   ) {
     return null;
   }
+  if (bars === 2 && locks.turnaround !== undefined) {
+    delete locks.turnaround;
+  }
   return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
 }
 
@@ -519,6 +522,9 @@ function entryOf(value: unknown): PhraseHistoryEntry | null {
     !locks
   ) {
     return null;
+  }
+  if (bars === 2 && locks.turnaround !== undefined) {
+    delete locks.turnaround;
   }
   return { seed, bars, scaleRoot, scaleId, place, chord, chordNotes, locks };
 }
