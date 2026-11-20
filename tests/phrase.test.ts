@@ -1052,3 +1052,145 @@ void test('low register reaches open low E2 and 6/8-note box forms keep spans co
     `blues mid-register box forms exceeded 5-fret span too often: ${wideSpan}/30`,
   );
 });
+
+void test('optional chromatic approaches stay off by default and resolve by half step when enabled', () => {
+  const cMajor = scaleOf('C', 'major');
+  const scalePcs = new Set(cMajor.map((note) => note.pc));
+  const cmaj7 = parseChord('Cmaj7').notes;
+  let chromaticPhrases = 0;
+  let chromaticNotes = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const plain = generatePhrase({
+      seed,
+      bars: 4,
+      scaleNotes: cMajor,
+      chordNotes: cmaj7,
+    });
+    assert.equal(plain.ok, true);
+    if (!plain.ok) continue;
+    assert.equal(
+      plain.phrase.notes.some((note) => note.degree === 'chr'),
+      false,
+      `default phrase should remain strictly diatonic (seed ${seed})`,
+    );
+    const enriched = generatePhrase({
+      seed,
+      bars: 4,
+      scaleNotes: cMajor,
+      chordNotes: cmaj7,
+      locks: { chromatic: true },
+    });
+    assert.equal(enriched.ok, true);
+    if (!enriched.ok) continue;
+    assert.equal(enriched.phrase.plan.chromatic, true);
+    let hits = 0;
+    const enrichedNotes = enriched.phrase.notes;
+    for (let i = 0; i < enrichedNotes.length; i++) {
+      const current = enrichedNotes[i];
+      if (!current || current.degree !== 'chr') continue;
+      hits += 1;
+      chromaticNotes += 1;
+      assert.equal(current.chordTone, false);
+      assert.equal(scalePcs.has(current.pc), false);
+      const target = enrichedNotes[i + 1];
+      assert.ok(target, 'chromatic approach must resolve to a following note');
+      assert.equal(Math.abs(target.midi - current.midi), 1);
+      if (target.midi > current.midi) {
+        assert.equal(
+          current.name.includes('b'),
+          false,
+          `ascending chromatic ${current.name} -> ${target.name} should not use flat`,
+        );
+      } else {
+        assert.equal(
+          current.name.includes('#'),
+          false,
+          `descending chromatic ${current.name} -> ${target.name} should not use sharp`,
+        );
+      }
+    }
+    if (hits > 0) chromaticPhrases += 1;
+    assert.ok(hits <= 2, `too many chromatic approaches in 4 bars: ${hits}`);
+  }
+  assert.ok(
+    chromaticPhrases >= 12,
+    `expected >= 12/40 chromatic phrases, got ${chromaticPhrases} (${chromaticNotes} notes)`,
+  );
+});
+
+void test('optional pickup start enters on the upbeat after beat 1 and anchors note 2 on a chord tone', () => {
+  const dDorian = scaleOf('D', 'dorian');
+  const dm7 = parseChord('Dm7').notes;
+  let anchored = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: dDorian,
+      chordNotes: dm7,
+      locks: { pickup: true },
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    assert.equal(result.phrase.plan.pickup, true);
+    const first = result.phrase.notes[0];
+    const second = result.phrase.notes[1];
+    assert.ok(first && second);
+    assert.ok(
+      first.beat >= 0.5 - 1e-6 && first.beat < 1.5,
+      `expected upbeat pickup start, got beat ${first.beat} (seed ${seed})`,
+    );
+    if (second.chordTone) anchored += 1;
+  }
+  assert.ok(
+    anchored >= 22,
+    `expected >= 22/30 pickups to anchor note 2 on a chord tone, got ${anchored}`,
+  );
+});
+
+void test('optional two-chord turnaround targets chord 2 in bars 3-4 and resolves home to chord 1', () => {
+  const cMajor = scaleOf('C', 'major');
+  const cmaj7 = parseChord('Cmaj7').notes;
+  const g7 = parseChord('G7').notes;
+  const cmaj7Pcs = new Set(cmaj7.map((note) => note.pc));
+  const g7Pcs = new Set(g7.map((note) => note.pc));
+  let bar3G7Hits = 0;
+  let bar3G7Total = 0;
+  for (let seed = 1; seed <= 30; seed++) {
+    const result = generatePhrase({
+      seed,
+      bars: 4,
+      scaleNotes: cMajor,
+      chordNotes: cmaj7,
+      turnaroundChordNotes: g7,
+      turnaroundSymbol: 'G7',
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    assert.equal(result.phrase.plan.turnaround, 'G7');
+    const notes = result.phrase.notes;
+    const landing = notes[notes.length - 1];
+    assert.ok(
+      cmaj7Pcs.has(landing.pc),
+      `turnaround should resolve home to Cmaj7, got ${landing.name}`,
+    );
+    const bar34 = notes.filter((note) => note.beat >= 8 && note.beat < 16);
+    assert.ok(bar34.length > 0);
+    for (const note of bar34) {
+      assert.equal(
+        note.chordTone,
+        g7Pcs.has(note.pc),
+        `bar 3-4 chordTone flag should match G7 (note ${note.name} at beat ${note.beat})`,
+      );
+      if (note.strong) {
+        bar3G7Total += 1;
+        if (g7Pcs.has(note.pc)) bar3G7Hits += 1;
+      }
+    }
+  }
+  const ratio = bar3G7Hits / Math.max(1, bar3G7Total);
+  assert.ok(
+    ratio >= 0.65,
+    `expected >= 65% strong beats in bars 3-4 on G7 chord tones, got ${(ratio * 100).toFixed(1)}%`,
+  );
+});

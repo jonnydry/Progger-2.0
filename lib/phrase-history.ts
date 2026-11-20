@@ -24,6 +24,9 @@ export type PhraseHistoryLocks = {
   rhythm?: 'quarters' | 'eighths' | 'long-short' | 'push';
   register?: 'low' | 'mid' | 'high';
   cadence?: 'root' | 'third' | 'fifth';
+  chromatic?: boolean;
+  pickup?: boolean;
+  turnaround?: string;
 };
 
 export type PhraseHistoryNote = {
@@ -152,6 +155,19 @@ function locksOf(value: unknown): PhraseHistoryLocks | null {
     if (!cadence) return null;
     locks.cadence = cadence;
   }
+  if (value.chromatic !== undefined) {
+    if (typeof value.chromatic !== 'boolean') return null;
+    if (value.chromatic) locks.chromatic = true;
+  }
+  if (value.pickup !== undefined) {
+    if (typeof value.pickup !== 'boolean') return null;
+    if (value.pickup) locks.pickup = true;
+  }
+  if (value.turnaround !== undefined) {
+    const turnaround = text(value.turnaround, 24);
+    if (!turnaround) return null;
+    locks.turnaround = turnaround;
+  }
   return locks;
 }
 
@@ -266,7 +282,10 @@ function sameLocks(a: PhraseHistoryLocks, b: PhraseHistoryLocks): boolean {
     a.contour === b.contour &&
     a.rhythm === b.rhythm &&
     a.register === b.register &&
-    a.cadence === b.cadence
+    a.cadence === b.cadence &&
+    Boolean(a.chromatic) === Boolean(b.chromatic) &&
+    Boolean(a.pickup) === Boolean(b.pickup) &&
+    a.turnaround === b.turnaround
   );
 }
 

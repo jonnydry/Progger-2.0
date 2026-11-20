@@ -183,6 +183,12 @@ export type PhrasePlan = {
   form?: PhraseForm;
   /** One cell-id string per bar, in order. */
   cells?: readonly string[];
+  /** Present when optional chromatic approaches are enabled. */
+  chromatic?: boolean;
+  /** Present when optional upbeat pickup start is enabled. */
+  pickup?: boolean;
+  /** Present on 4-bar phrases when a turnaround chord shapes bars 3–4. */
+  turnaround?: string;
 };
 
 /** Songwriting locks: pin any of these and the rest is still seeded. */
@@ -191,6 +197,12 @@ export type PhraseLocks = {
   rhythm?: RhythmId;
   register?: RegisterName;
   cadence?: CadenceTarget;
+  /** Optional half-step chromatic approaches into strong chord tones / cadence. */
+  chromatic?: boolean;
+  /** Optional upbeat pickup entry on beat 0.5 ("and of 1"). */
+  pickup?: boolean;
+  /** Optional diatonic turnaround chord symbol for bars 3–4 of a 4-bar phrase. */
+  turnaround?: string;
 };
 
 export type PhraseNote = {
@@ -698,12 +710,15 @@ function applyLocks(
       : available.includes(plan.cadence)
         ? plan.cadence
         : (available[0] ?? 'root');
-  return {
+  const next: PhrasePlan = {
     contour: locks?.contour ?? plan.contour,
     rhythm: locks?.rhythm ?? plan.rhythm,
     register: locks?.register ?? plan.register,
     cadence,
   };
+  if (locks?.chromatic) next.chromatic = true;
+  if (locks?.pickup) next.pickup = true;
+  return next;
 }
 
 export function melodicMotion(
@@ -1236,6 +1251,34 @@ function contourMidi(plan: PhrasePlan, t: number): number {
 
 function contourGoal(plan: PhrasePlan, beat: number, bars: 2 | 4): number {
   return contourMidi(plan, beat / (bars * 4));
+}
+
+function withPickupStart(pattern: BarPattern): BarPattern {
+  const first = pattern.hits[0];
+  if (!first || first.at > 0) return pattern;
+  const rest = pattern.hits.slice(1);
+  let hits: { at: number; dur: number }[];
+  if (first.dur === 1 && rest[0]?.at === 1) {
+    hits = rest.map((hit) => ({ at: hit.at, dur: hit.dur }));
+  } else if (first.dur >= 4) {
+    hits = [
+      { at: 1, dur: 1 },
+      { at: 2, dur: first.dur - 2 },
+      ...rest.map((hit) => ({ at: hit.at, dur: hit.dur })),
+    ];
+  } else if (first.dur === 3) {
+    hits = [
+      { at: 1, dur: 2 },
+      ...rest.map((hit) => ({ at: hit.at, dur: hit.dur })),
+    ];
+  } else {
+    hits = [
+      { at: 1, dur: 1 },
+      ...rest.map((hit) => ({ at: hit.at, dur: hit.dur })),
+    ];
+  }
+  const built = asPattern(hits, `pu ${pattern.ids}`);
+  return built ?? pattern;
 }
 
 function eventsForCells(
@@ -3023,6 +3066,14 @@ type WalkResult = {
   groupingBars: number[];
 };
 
+function activeLadder(
+  ladder: readonly LadderTone[],
+  turnaroundLadder: readonly LadderTone[] | null,
+  beat: number,
+): readonly LadderTone[] {
+  return turnaroundLadder && beat >= 8 && beat < 16 ? turnaroundLadder : ladder;
+}
+
 function walkScored(
   ladder: readonly LadderTone[],
   events: readonly GridEvent[],
@@ -3037,6 +3088,7 @@ function walkScored(
   allowSkip: boolean,
   salt: number,
   forms: readonly Pattern[],
+  turnaroundLadder: readonly LadderTone[] | null = null,
 ): WalkResult | null {
   const centre = REGISTER_LOW[plan.register] + PHRASE_RANGE / 2;
   const cadenceMidi = ladder[cadenceAt]?.midi ?? 0;
@@ -3101,11 +3153,16 @@ function walkScored(
     if (pending.length) {
       const next = pending.shift();
       if (!next) return giveUp();
-      notes.push(pitchedFromLadder(ladder, next.tone, next.spot));
+      const pendingEvent = events[index];
+      const pendingLadder = pendingEvent
+        ? activeLadder(ladder, turnaroundLadder, pendingEvent.beat)
+        : ladder;
+      notes.push(pitchedFromLadder(pendingLadder, next.tone, next.spot));
       continue;
     }
     const event = events[index];
     if (!event) return giveUp();
+    const stepLadder = activeLadder(ladder, turnaroundLadder, event.beat);
     const bar = Math.floor(event.beat / 4);
     const head = byBar[0] ?? [];
     const here = byBar[bar] ?? [];
@@ -3121,7 +3178,7 @@ function walkScored(
         order,
         idea,
         slots,
-        ladder,
+        stepLadder,
         alive,
         events,
         notes,
@@ -3130,7 +3187,7 @@ function walkScored(
       );
       if (tones) {
         pending = tones.slice(1).map((tone) => ({ tone, spot: null }));
-        notes.push(pitchedFromLadder(ladder, tones[0] ?? 0));
+        notes.push(pitchedFromLadder(stepLadder, tones[0] ?? 0));
         continue;
       }
     }
@@ -3149,20 +3206,20 @@ function walkScored(
         order,
         idea,
         here.slice(0, 4),
-        ladder,
+        stepLadder,
         alive,
         events,
         notes,
       );
       if (tones) {
         pending = tones.slice(1).map((tone) => ({ tone, spot: null }));
-        notes.push(pitchedFromLadder(ladder, tones[0] ?? 0));
+        notes.push(pitchedFromLadder(stepLadder, tones[0] ?? 0));
         continue;
       }
     }
     if (allowGrouping) {
       const grouped = chooseGrouping(
-        ladder,
+        stepLadder,
         alive,
         events,
         notes,
@@ -3192,13 +3249,13 @@ function walkScored(
           }
         }
         pending = grouped.tones.slice(1).map((tone) => ({ tone, spot: null }));
-        notes.push(pitchedFromLadder(ladder, grouped.tones[0] ?? 0));
+        notes.push(pitchedFromLadder(stepLadder, grouped.tones[0] ?? 0));
         continue;
       }
     }
     if (allowSkip) {
       const skipped = chooseSkip(
-        ladder,
+        stepLadder,
         alive,
         events,
         notes,
@@ -3227,7 +3284,7 @@ function walkScored(
         }));
         notes.push(
           pitchedFromLadder(
-            ladder,
+            stepLadder,
             skipped.tones[0] ?? 0,
             skipped.spots[0] ?? null,
           ),
@@ -3237,7 +3294,7 @@ function walkScored(
     }
     if (!groupingBars.has(bar) && !skipBars.has(bar) && !afterOctave(notes)) {
       const enclosure = chooseEnclosure(
-        ladder,
+        stepLadder,
         alive,
         events,
         notes,
@@ -3249,11 +3306,11 @@ function walkScored(
       );
       if (enclosure) {
         pending = enclosure.slice(1).map((tone) => ({ tone, spot: null }));
-        notes.push(pitchedFromLadder(ladder, enclosure[0] ?? 0));
+        notes.push(pitchedFromLadder(stepLadder, enclosure[0] ?? 0));
         continue;
       }
       const arp = chooseArp(
-        ladder,
+        stepLadder,
         alive,
         events,
         notes,
@@ -3265,7 +3322,7 @@ function walkScored(
       );
       if (arp) {
         pending = arp.slice(1).map((tone) => ({ tone, spot: null }));
-        notes.push(pitchedFromLadder(ladder, arp[0] ?? 0));
+        notes.push(pitchedFromLadder(stepLadder, arp[0] ?? 0));
         continue;
       }
     }
@@ -3318,9 +3375,15 @@ function walkScored(
     // approach is exempt: it has to be a step into the cadence. Opening
     // notes also keep a shift that lands on a chord tone: under Loop note 1
     // is the landing, so it can be an eighth but still has to be a chord
-    // tone (Jonny, Oct 17).
-    if ((event.duration >= 1 || index === 0) && index < events.length - 2) {
-      let chordTones = candidates.filter((tone) => ladder[tone].chordTone);
+    // tone (Jonny, Oct 17). With an upbeat pickup enabled, note 1 is the
+    // pickup lead-in and note 2 anchors on the chord tone instead.
+    const anchorBeat =
+      event.duration >= 1 ||
+      (index === 0 && !plan.pickup) ||
+      (Boolean(plan.pickup) && index === 1) ||
+      (Boolean(turnaroundLadder) && bar === 2 && here[0] === index);
+    if (anchorBeat && index < events.length - 2) {
+      let chordTones = candidates.filter((tone) => stepLadder[tone].chordTone);
       const openingSlot = byBar[0]?.indexOf(index) ?? -1;
       if (
         bar === 0 &&
@@ -3332,7 +3395,11 @@ function walkScored(
         const anchored = chordTones.filter((tone) =>
           pool.some((shift) => {
             const next = tone + shift;
-            return next >= 0 && next < ladder.length && ladder[next].chordTone;
+            return (
+              next >= 0 &&
+              next < stepLadder.length &&
+              stepLadder[next].chordTone
+            );
           }),
         );
         if (anchored.length) chordTones = anchored;
@@ -3340,7 +3407,7 @@ function walkScored(
       if (index === events.length - 3) {
         const ready = chordTones.filter((tone) =>
           cadenceApproach(
-            ladder,
+            stepLadder,
             alive,
             events,
             notes,
@@ -3357,7 +3424,7 @@ function walkScored(
     // After a group of 3, the next strong eighth is a chord tone when one
     // is still legal. The approach stays a step, so it is left alone.
     if (index === pullChordAt && index < events.length - 2) {
-      const chordTones = candidates.filter((tone) => ladder[tone].chordTone);
+      const chordTones = candidates.filter((tone) => stepLadder[tone].chordTone);
       if (chordTones.length) candidates = chordTones;
       pullChordAt = -1;
     }
@@ -3374,7 +3441,7 @@ function walkScored(
     }
     const weights = candidates.map((tone) =>
       pitchWeight(
-        ladder,
+        stepLadder,
         tone,
         prev ? prev.midi : null,
         notes.length > 1 ? notes[notes.length - 2].midi : null,
@@ -3402,7 +3469,7 @@ function walkScored(
       index === events.length - 3
         ? chosenTone((tone) =>
             cadenceApproach(
-              ladder,
+              stepLadder,
               alive,
               events,
               notes,
@@ -3413,10 +3480,10 @@ function walkScored(
           )
         : index === events.length - 2
           ? chosenTone((tone) => {
-              const midi = ladder[tone]?.midi;
+              const midi = stepLadder[tone]?.midi;
               return (
                 midi !== undefined &&
-                isLadderScaleStep(ladder, midi, cadenceMidi)
+                isLadderScaleStep(stepLadder, midi, cadenceMidi)
               );
             })
           : chosenTone();
@@ -3431,11 +3498,13 @@ function walkScored(
       const pool: readonly number[] = openShifts ?? order;
       const fits: number[] = pool.filter((shift) => {
         const next = chosen + shift;
-        return next >= 0 && next < ladder.length && ladder[next].chordTone;
+        return (
+          next >= 0 && next < stepLadder.length && stepLadder[next].chordTone
+        );
       });
       if (fits.length) openShifts = fits;
     }
-    notes.push(pitchedFromLadder(ladder, chosen));
+    notes.push(pitchedFromLadder(stepLadder, chosen));
   }
   if (!lineIsLegal(notes, events, cadenceMidi)) return giveUp();
   return { notes, groupings: placed, skips, groupingBars: [...groupingBars] };
@@ -3454,6 +3523,7 @@ function walkPitches(
   allowSkip: boolean,
   salt: number,
   forms: readonly Pattern[],
+  turnaroundLadder: readonly LadderTone[] | null = null,
 ): WalkResult | null {
   const alive = reachable(ladder, events, cadenceAt);
   if (!alive[0].some(Boolean)) return null;
@@ -3471,6 +3541,7 @@ function walkPitches(
     allowSkip,
     salt,
     forms,
+    turnaroundLadder,
   );
 }
 
@@ -3988,6 +4059,7 @@ function sampleLanes(
     bars: 2 | 4;
     scaleNotes: readonly Note[];
     chordNotes: readonly Note[];
+    turnaroundSymbol?: string;
   },
   plan: PhrasePlan,
   ladder: readonly LadderTone[],
@@ -3996,6 +4068,7 @@ function sampleLanes(
   lanes: number,
   attempt: number,
   forms: readonly Pattern[],
+  turnaroundLadder: readonly LadderTone[] | null = null,
 ): LaneResult[] {
   const found: LaneResult[] = [];
   for (let lane = 0; lane < lanes; lane++) {
@@ -4012,6 +4085,7 @@ function sampleLanes(
       exact,
       lanes,
       forms,
+      turnaroundLadder,
     );
     if (sampled) found.push(sampled);
   }
@@ -4062,6 +4136,7 @@ function sampleLane(
     bars: 2 | 4;
     scaleNotes: readonly Note[];
     chordNotes: readonly Note[];
+    turnaroundSymbol?: string;
   },
   plan: PhrasePlan,
   ladder: readonly LadderTone[],
@@ -4072,6 +4147,7 @@ function sampleLane(
   exact: boolean,
   lanes: number,
   forms: readonly Pattern[],
+  turnaroundLadder: readonly LadderTone[] | null = null,
 ): LaneResult | null {
   const tries = 3;
   for (let roll = 0; roll < tries; roll++) {
@@ -4084,7 +4160,7 @@ function sampleLane(
         0,
     );
     const random = () => rng.next();
-    const patterns = pickPatterns(
+    const rawPatterns = pickPatterns(
       plan.rhythm,
       input.bars,
       random,
@@ -4093,7 +4169,10 @@ function sampleLane(
       answersOpening(input.seed),
       plan.contour,
     );
-    if (patterns.length !== input.bars) continue;
+    if (rawPatterns.length !== input.bars) continue;
+    const patterns = plan.pickup
+      ? [withPickupStart(rawPatterns[0]), ...rawPatterns.slice(1)]
+      : rawPatterns;
     const events = eventsForCells(patterns, input.bars);
     const mark = rng.get();
     let pitches: Pitched[] | null = null;
@@ -4116,6 +4195,7 @@ function sampleLane(
         true,
         salt,
         forms,
+        turnaroundLadder,
       );
       if (!walked) break;
       if (!walked.notes) {
@@ -4168,6 +4248,7 @@ function sampleLane(
           false,
           salt,
           forms,
+          turnaroundLadder,
         );
         if (
           grouped?.notes &&
@@ -4207,6 +4288,7 @@ function sampleLane(
         false,
         0,
         forms,
+        turnaroundLadder,
       );
       pitches = again?.notes ?? null;
       groupingBars = again?.groupingBars ?? [];
@@ -4219,6 +4301,9 @@ function sampleLane(
       form: input.bars === 2 ? 'answer' : 'sentence',
       cells: patterns.map((pattern) => pattern.ids),
     };
+    if (turnaroundLadder && input.turnaroundSymbol) {
+      nextPlan.turnaround = input.turnaroundSymbol;
+    }
     return {
       notes,
       spots: pitches.map((note) => note.spot),
@@ -4238,16 +4323,148 @@ function sampleLane(
   return null;
 }
 
+const CHROMATIC_SHARPS = [
+  'C',
+  'C#',
+  'D',
+  'D#',
+  'E',
+  'F',
+  'F#',
+  'G',
+  'G#',
+  'A',
+  'A#',
+  'B',
+] as const;
+
+const CHROMATIC_FLATS = [
+  'C',
+  'Db',
+  'D',
+  'Eb',
+  'E',
+  'F',
+  'Gb',
+  'G',
+  'Ab',
+  'A',
+  'Bb',
+  'B',
+] as const;
+
+function spellChromaticApproach(midi: number, direction: 1 | -1): string {
+  const pc = mod(midi);
+  return direction > 0 ? CHROMATIC_SHARPS[pc] : CHROMATIC_FLATS[pc];
+}
+
+function applyChromaticApproaches(
+  base: FingeredNote[],
+  spots: readonly (SkipSpot | null)[],
+  scalePcs: ReadonlySet<number>,
+  bars: 2 | 4,
+  fingeringForms: readonly Pattern[],
+  shapes: ReadonlyMap<number, number[]> | null,
+  anchor: number,
+  seed: number,
+): FingeredNote[] {
+  const maxApproaches = bars === 4 ? 2 : 1;
+  type Site = {
+    index: number;
+    midi: number;
+    direction: 1 | -1;
+    priority: number;
+  };
+  const sites: Site[] = [];
+  for (let index = 0; index < base.length - 1; index++) {
+    const note = base[index];
+    const next = base[index + 1];
+    if (!note || !next || spots[index]) continue;
+    if (note.duration > 0.5 + 1e-6 || note.strong) continue;
+    if (Math.abs((note.beat % 1) - 0.5) > 0.01) continue;
+    if (Math.abs(note.beat + note.duration - next.beat) > 1e-6) continue;
+    const isCadence = index + 1 === base.length - 1;
+    if (!isCadence && !(next.strong && next.chordTone)) continue;
+    const prev = index > 0 ? base[index - 1] : null;
+    const deltas: readonly (-1 | 1)[] =
+      prev && prev.midi > next.midi ? [1, -1] : [-1, 1];
+    for (const delta of deltas) {
+      const midi = next.midi + delta;
+      if (midi < 40 || midi > 88) continue;
+      if (scalePcs.has(mod(midi))) continue;
+      if (prev && (prev.midi === midi || Math.abs(midi - prev.midi) > 5)) {
+        continue;
+      }
+      const priority =
+        (isCadence ? 10 : 0) +
+        (delta === -1 ? 2 : 1) +
+        (((seed + index * 31) >>> 0) % 5) * 0.1;
+      sites.push({
+        index,
+        midi,
+        direction: delta < 0 ? 1 : -1,
+        priority,
+      });
+      break;
+    }
+  }
+  if (!sites.length) return base;
+  sites.sort((a, b) => b.priority - a.priority || a.index - b.index);
+  let current = base;
+  const used: number[] = [];
+  for (const site of sites) {
+    if (used.length >= maxApproaches) break;
+    if (used.some((taken) => Math.abs(taken - site.index) <= 2)) continue;
+    const candidateNotes: PhraseNote[] = current.map((note, idx) =>
+      idx === site.index
+        ? {
+            name: spellChromaticApproach(site.midi, site.direction),
+            pc: mod(site.midi),
+            degree: 'chr',
+            midi: site.midi,
+            beat: note.beat,
+            duration: note.duration,
+            strong: false,
+            chordTone: false,
+          }
+        : {
+            name: note.name,
+            pc: note.pc,
+            degree: note.degree,
+            midi: note.midi,
+            beat: note.beat,
+            duration: note.duration,
+            strong: note.strong,
+            chordTone: note.chordTone,
+          },
+    );
+    const refingered = fingerNotes(
+      candidateNotes,
+      fingeringForms,
+      anchor,
+      spots,
+    );
+    if (!handAccepts(refingered)) continue;
+    if (spots.some(Boolean) && !skipRealized(refingered, spots)) continue;
+    if (seamIsIllegalFingered(refingered, bars, shapes)) continue;
+    current = refingered;
+    used.push(site.index);
+  }
+  return current;
+}
+
 function composePhrase(
   input: {
     seed: number;
     bars: 2 | 4;
     scaleNotes: readonly Note[];
     chordNotes: readonly Note[];
+    turnaroundSymbol?: string;
   },
   plan: PhrasePlan,
   ladder: readonly LadderTone[],
   forms: readonly Pattern[],
+  turnaroundLadder: readonly LadderTone[] | null = null,
 ): { notes: FingeredNote[]; plan: PhrasePlan } | null {
   const scalePcs = new Set(input.scaleNotes.map((note) => note.pc));
   const cadencePcs = new Set(
@@ -4279,6 +4496,7 @@ function composePhrase(
       lanes,
       attempt,
       forms,
+      turnaroundLadder,
     );
     if (!found.length) continue;
     // The copied bar is a fallback for a ladder that cannot change rhythm.
@@ -4382,6 +4600,7 @@ function composePhrase(
         lanes,
         attempt,
         forms,
+        turnaroundLadder,
       );
       if (!found.length) continue;
       const varied = found.filter((item) => !item.exact);
@@ -4395,15 +4614,26 @@ function composePhrase(
   }
   skipWitness = null;
   if (best) {
-    recordPlayedSkips(best.notes, best.spots);
-    const played = best.notes;
+    const finalNotes = plan.chromatic
+      ? applyChromaticApproaches(
+          best.notes,
+          best.spots,
+          scalePcs,
+          input.bars,
+          fingeringForms,
+          shapes,
+          REGISTER_ANCHOR[plan.register],
+          input.seed,
+        )
+      : best.notes;
+    recordPlayedSkips(finalNotes, best.spots);
     skipWitness = {
       spots: best.spots.map((spot, index) =>
-        spot && played[index]
+        spot && finalNotes[index]
           ? {
-              string: played[index].string,
-              fret: played[index].fret,
-              position: played[index].position,
+              string: finalNotes[index].string,
+              fret: finalNotes[index].fret,
+              position: finalNotes[index].position,
               formIndex: spot.formIndex,
               atom: spot.atom ?? index,
             }
@@ -4411,8 +4641,9 @@ function composePhrase(
       ),
       groupingBars: best.groupingBars,
     };
+    return { notes: finalNotes, plan: best.plan };
   }
-  return best ? { notes: best.notes, plan: best.plan } : null;
+  return null;
 }
 
 /**
@@ -4924,6 +5155,8 @@ function assemble(
     bars: 2 | 4;
     scaleNotes: readonly Note[];
     chordNotes: readonly Note[];
+    turnaroundChordNotes?: readonly Note[];
+    turnaroundSymbol?: string;
   },
   plan: PhrasePlan,
 ): PhraseResult {
@@ -4936,8 +5169,23 @@ function assemble(
     plan.register,
   );
   if (ladder.length < 2) return { ok: false, reason: 'unplayable' };
+  let turnaroundLadder: LadderTone[] | null = null;
+  if (input.bars === 4 && input.turnaroundChordNotes?.length) {
+    const turnaroundPcs = landingPitchClasses(
+      input.turnaroundChordNotes,
+      input.scaleNotes,
+    );
+    if (turnaroundPcs.size) {
+      turnaroundLadder = buildLadder(
+        input.scaleNotes,
+        input.turnaroundChordNotes,
+        turnaroundPcs,
+        plan.register,
+      );
+    }
+  }
   const forms = patterns([...input.scaleNotes]);
-  const composed = composePhrase(input, plan, ladder, forms);
+  const composed = composePhrase(input, plan, ladder, forms, turnaroundLadder);
   if (!composed) return { ok: false, reason: 'unplayable' };
   return {
     ok: true,
@@ -4956,6 +5204,9 @@ type PhraseRequest = {
   scaleNotes: readonly Note[];
   chordNotes: readonly Note[];
   locks?: PhraseLocks;
+  /** Optional second chord for bars 3–4 of a 4-bar turnaround phrase. */
+  turnaroundChordNotes?: readonly Note[];
+  turnaroundSymbol?: string;
 };
 
 function rulesResult(

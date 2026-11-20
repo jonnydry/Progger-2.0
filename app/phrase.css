@@ -201,6 +201,11 @@
   background: var(--surface, #1d2220);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 65%, transparent);
 }
+.phrase-staff-fret[data-chromatic='true'] {
+  color: var(--amber);
+  background: var(--surface, #1d2220);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 75%, transparent);
+}
 .phrase-staff-fret.is-current {
   color: var(--ink);
   background: var(--amber);

@@ -27,6 +27,9 @@ export type TrayPlan = {
   rhythm: 'quarters' | 'eighths' | 'long-short' | 'push';
   register: 'low' | 'mid' | 'high';
   cadence: 'root' | 'third' | 'fifth';
+  chromatic?: boolean;
+  pickup?: boolean;
+  turnaround?: string;
 };
 
 /** `beat` is the onset in quarter-note beats. Playback uses it as-is. */
@@ -541,7 +544,14 @@ function planOf(value: unknown): TrayPlan | null {
   const register = oneOf<TrayPlan['register']>(value.register, REGISTERS);
   const cadence = oneOf<TrayPlan['cadence']>(value.cadence, CADENCES);
   if (!contour || !rhythm || !register || !cadence) return null;
-  return { contour, rhythm, register, cadence };
+  const plan: TrayPlan = { contour, rhythm, register, cadence };
+  if (value.chromatic === true) plan.chromatic = true;
+  if (value.pickup === true) plan.pickup = true;
+  if (typeof value.turnaround === 'string') {
+    const turnaround = text(value.turnaround, 24);
+    if (turnaround) plan.turnaround = turnaround;
+  }
+  return plan;
 }
 
 function handed(value: Record<string, unknown>): {

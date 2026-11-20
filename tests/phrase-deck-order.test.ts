@@ -579,7 +579,7 @@ void test(
         }),
       };
     });
-    assert.deepEqual(pins.lines, [2, 2, 1, 1], 'pin rows at 320px');
+    assert.deepEqual(pins.lines, [2, 2, 1, 1, 1, 1], 'pin rows at 320px');
     await page.close();
   },
 );
