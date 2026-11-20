@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseChord } from '../lib/harmony.ts';
 import { patterns, SCALES, spell, type Note } from '../lib/music.ts';
-import { generatePhrase, type Phrase } from '../lib/phrase.ts';
+import {
+  defaultChordNotes,
+  generatePhrase,
+  loopSeamLegal,
+  type Phrase,
+} from '../lib/phrase.ts';
 
 const SWEEP: readonly (readonly [string, string, string])[] = [
   ['C', 'major', 'C'],
@@ -589,12 +594,15 @@ void test('the loop wrap never refuses a move the phrase allows, and seeds repla
           if (formless) noFormWide += 1;
         }
         const excuse =
-          fast && gap > 5 ? skipOneFormApart(shapes, last, first) : true;
+          fast && gap > 5
+            ? skipOneFormApart(shapes, last, first) &&
+              Math.abs(last.position - first.position) <= 3
+            : true;
         const legal = gap > 0 && gap <= 12 && excuse;
         if (!legal) {
           illegal += 1;
           assert.fail(
-            `${symbol} seed ${seed} ${bars}: wrap ${last.midi} -> ${first.midi} (gap ${gap}, first ${first.duration}, strings ${last.string} -> ${first.string}, formless ${formless})`,
+            `${symbol} seed ${seed} ${bars}: wrap ${last.midi} -> ${first.midi} (gap ${gap}, first ${first.duration}, strings ${last.string} -> ${first.string}, pos ${last.position} -> ${first.position}, formless ${formless})`,
           );
         }
       }
@@ -617,4 +625,29 @@ void test('the loop wrap never refuses a move the phrase allows, and seeds repla
   // fall-through reached 45 on the wider REVIEW grid. Allow a little room for
   // a future change that trades a seed for a musical fix, not that return.
   assert.ok(drift <= 2, `seed drift ${drift}/${phrases}`);
+
+  // Regression: E Mixolydian 2-bar seed 121890 previously wrapped a fifth onto
+  // an eighth across a 4-fret hand shift (pos 13 -> pos 9), which arrivalOk
+  // refuses (shiftFrets > 3). Same-seed re-roll must keep seed 121890 legal.
+  const mixoNotes = scaleOf('E', 'mixolydian');
+  const mixoShapes = formLookupFor(patterns(mixoNotes));
+  const mixo = generatePhrase({
+    seed: 121890,
+    bars: 2,
+    scaleNotes: mixoNotes,
+    chordNotes: defaultChordNotes(mixoNotes),
+  });
+  assert.equal(mixo.ok, true);
+  if (mixo.ok) {
+    assert.equal(mixo.phrase.seed, 121890);
+    const body = mixo.phrase.notes.filter((note) => note.beat < 8);
+    const last = body[body.length - 1];
+    const first = mixo.phrase.notes[0];
+    assert.ok(last && first);
+    assert.equal(loopSeamLegal(last, first, mixoShapes), true);
+    const gap = Math.abs(first.midi - last.midi);
+    if (first.duration <= 0.5 && gap > 5) {
+      assert.ok(Math.abs(last.position - first.position) <= 3);
+    }
+  }
 });

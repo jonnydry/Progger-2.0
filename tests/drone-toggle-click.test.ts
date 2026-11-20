@@ -187,9 +187,10 @@ void test('drone toggle mid-phrase stays click-free with suspend() and cancels r
     `suspend() drone-off mid-phrase clicked (step ${offStep} vs steady ${steadyStep})`,
   );
 
-  // Rapid reverse toggle while off->on fade is in flight must cancel switching to limited.
+  // Rapid reverse toggle while off->on phrase fade is in flight must cancel switching to limited.
   const cancelCtx = new OfflineAudioContext(2, Math.ceil(0.4 * RATE), RATE);
   const cancelChain = createOutputChain(cancelCtx);
+  void cancelChain.phraseInput;
   cancelChain.setDrone(true, 0.1, OUTPUT_CROSSFADE);
   cancelChain.setDrone(false, 0.11, OUTPUT_CROSSFADE);
   await cancelCtx.startRendering();

@@ -3889,16 +3889,25 @@ function seamIsIllegalFingered(
 
 /**
  * Would the phrase itself allow this wrap as a skip? Both notes have to be
- * in a form, two strings apart, and within one form index of each other —
- * exactly what `isSkipPair` asks of a pinned arrival.
+ * in a form, two strings apart, within one form index of each other, and
+ * within 3 frets of hand position (`shiftFrets <= 3`) — matching every hand
+ * condition `arrivalOk` and `isSkipPair` require of a pinned arrival inside
+ * a phrase.
  */
 function seamIsSkipPair(
-  from: { string: number; fret: number },
-  to: { string: number; fret: number },
+  from: { string: number; fret: number; position?: number },
+  to: { string: number; fret: number; position?: number },
   shapes: ReadonlyMap<number, number[]> | null,
 ): boolean {
   if (!shapes) return false;
   if (Math.abs(from.string - to.string) !== 2) return false;
+  if (
+    from.position !== undefined &&
+    to.position !== undefined &&
+    Math.abs(from.position - to.position) > 3
+  ) {
+    return false;
+  }
   const left = shapes.get(shapeKey(from.string, from.fret));
   const right = shapes.get(shapeKey(to.string, to.fret));
   if (!left?.length || !right?.length) return false;
@@ -3913,13 +3922,20 @@ function seamIsSkipPair(
  * limits `arrivalOk` puts on any other one: no unison, no more than an
  * octave, and no more than a fourth onto an eighth. The eighth that matters
  * is the one being arrived at, exactly as inside the phrase, and a wide move
- * onto one is allowed only as a skip, which needs both notes' forms.
+ * onto one is allowed only as a skip, which needs both notes' forms and no
+ * hand shift past 3 frets.
  * {@link seamIsIllegalFingered} is the engine's check; this is the same rule
  * for a finished phrase, so a test can ask it without reaching inside.
  */
 export function loopSeamLegal(
-  last: { midi: number; string: number; fret: number },
-  first: { midi: number; duration: number; string: number; fret: number },
+  last: { midi: number; string: number; fret: number; position?: number },
+  first: {
+    midi: number;
+    duration: number;
+    string: number;
+    fret: number;
+    position?: number;
+  },
   shapes: ReadonlyMap<number, number[]> | null,
 ): boolean {
   const gap = Math.abs(first.midi - last.midi);
