@@ -566,6 +566,61 @@ void test('a rest after a short note stays silent, straight and swung', async ()
   }
 });
 
+void test('a 2-beat note inside the 2.5 s pluck keeps the full pluck before release and stops cleanly', async () => {
+  const tempo = 60;
+  const written = 2 * (60 / tempo);
+  const release = PHRASE_LEGATO_RELEASE_SEC;
+  assert.ok(written + release < 2.4);
+
+  const stops: number[] = [];
+  const context = new OfflineAudioContext(1, RATE * 3, RATE);
+  const create = context.createOscillator.bind(context);
+  context.createOscillator = () => {
+    const oscillator = create();
+    const stop = oscillator.stop.bind(oscillator);
+    oscillator.stop = (when = 0) => {
+      stops.push(when);
+      return stop(when);
+    };
+    return oscillator;
+  };
+  schedulePhrase(
+    context,
+    context.destination,
+    [{ string: 0, fret: 0, beat: 0, duration: 2 }],
+    tempo,
+    0,
+    0,
+  );
+  const held = (await context.startRendering()).getChannelData(0).slice();
+
+  const openContext = new OfflineAudioContext(1, RATE * 3, RATE);
+  schedulePhrase(
+    openContext,
+    openContext.destination,
+    [{ string: 0, fret: 0, beat: 0 }],
+    tempo,
+    0,
+    0,
+  );
+  const open = (await openContext.startRendering()).getChannelData(0).slice();
+
+  assert.ok(peak(held, 0.05, 0.4) > 0.02, 'the 60 BPM 2-beat note was silent');
+  assert.ok(
+    stops.some((when) => Math.abs(when - (written + release + 0.01)) < 1e-4),
+    `60 BPM 2-beat note did not stop after release (stops ${stops.join(', ')})`,
+  );
+  let drift = 0;
+  const compareUntil = Math.floor((written - 0.004) * RATE);
+  for (let index = 0; index < compareUntil; index += 1) {
+    drift = Math.max(drift, Math.abs((held[index] ?? 0) - (open[index] ?? 0)));
+  }
+  assert.ok(
+    drift < 1e-4,
+    `the 2-beat note left the full pluck before release (delta ${drift})`,
+  );
+});
+
 void test('slow-tempo 2-beat notes extend sustain smoothly past 2.5 s', async () => {
   for (const tempo of [48, 40]) {
     const written = 2 * (60 / tempo);
@@ -847,10 +902,24 @@ void test('PhrasePlayer keeps a cross-string swung pair up to the offbeat and ov
   ];
   const live = await renderPlayerNote(playedPair, tempo, swing, 1.2);
   const open = await renderEnvelope(0, undefined, tempo, swing, 1.2);
+  let drift = 0;
+  const compareFrom = Math.floor(lead * RATE);
+  const compareUntil = Math.floor((lead + offbeat - 0.012) * RATE);
+  // Opening downbeat chord tone uses velocity 0.98; the envelope matches open * 0.98 sample-for-sample.
+  for (let index = compareFrom; index < compareUntil; index += 1) {
+    drift = Math.max(
+      drift,
+      Math.abs((live[index] ?? 0) - (open[index - compareFrom] ?? 0) * 0.98),
+    );
+  }
+  assert.ok(
+    drift < 1e-3,
+    `the live swung note left the pluck before the offbeat (delta ${drift})`,
+  );
   const silence = silenceAt(live, lead + offbeat);
   const overlapMs = Math.round((silence - (lead + offbeat)) * 1000);
   assert.ok(
-    Math.abs(silence - (lead + offbeat + release)) < 0.015,
+    Math.abs(silence - (lead + offbeat + release)) < 0.012,
     `live swung overlap was ${overlapMs} ms, expected ${Math.round(release * 1000)} ms`,
   );
   assert.ok(
