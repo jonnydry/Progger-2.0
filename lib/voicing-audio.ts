@@ -130,17 +130,22 @@ export function scheduleVoicing(
         options.fret !== undefined && options.fret > 5
           ? Math.max(0.84, 1 - (options.fret - 5) * 0.008)
           : 1;
+      const stringWarmth =
+        options.string !== undefined
+          ? 0.94 + Math.min(5, Math.max(0, options.string)) * 0.018
+          : 1;
+      const warmth = fretWarmth * stringWarmth;
       const decaySec = Math.max(DECAY, options.minTailSec ?? DECAY);
       const bodySec = 0.65 * (decaySec / DECAY);
       const peakLevel = 0.85 * velocity;
       const bodyLevel = Math.max(0.0002, 0.12 * velocity);
       const startCutoff = Math.min(
         5500,
-        Math.max(1500, frequency * 12) * cutoffScale * fretWarmth,
+        Math.max(1500, frequency * 12) * cutoffScale * warmth,
       );
       const endCutoff = Math.max(
         600,
-        Math.min(startCutoff, frequency * 2 * fretWarmth),
+        Math.min(startCutoff, frequency * 2 * warmth),
       );
       filter.frequency.setValueAtTime(startCutoff, at);
       filter.frequency.exponentialRampToValueAtTime(

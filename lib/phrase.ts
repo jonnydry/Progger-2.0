@@ -776,7 +776,8 @@ export function phraseRuleReport(
     const note = phrase.notes[index];
     if (note.strong) {
       strong += 1;
-      if (chordPcs.has(note.pc)) strongChord += 1;
+      if (phrase.plan.turnaround ? note.chordTone : chordPcs.has(note.pc))
+        strongChord += 1;
     }
     if (index === 0) continue;
     const previous = phrase.notes[index - 1];
@@ -846,13 +847,20 @@ function modalColorDegrees(scaleNotes: readonly Note[]): ReadonlySet<string> {
     if (degrees.has('b2')) colors.add('b2');
     if (degrees.has('b5')) colors.add('b5');
   } else if (hasMajor3 && !hasMinor3) {
-    if (degrees.has('#4')) colors.add('#4');
     if (degrees.has('b7') && !degrees.has('#4') && !degrees.has('b2'))
       colors.add('b7');
+    if (degrees.has('b7') && degrees.has('b6')) colors.add('b6');
     if (degrees.has('b2')) colors.add('b2');
+  } else if (hasMajor3 && hasMinor3) {
+    colors.add('b3');
   }
+  if (degrees.has('#4')) colors.add('#4');
   if (degrees.has('#5')) colors.add('#5');
   if (degrees.has('#2')) colors.add('#2');
+  if (degrees.has('b9')) colors.add('b9');
+  if (degrees.has('#9')) colors.add('#9');
+  if (degrees.has('#11')) colors.add('#11');
+  if (degrees.has('b13')) colors.add('b13');
   return colors;
 }
 
@@ -889,13 +897,16 @@ function buildLadder(
   const colors = modalColorDegrees(scaleNotes);
   const avoids = avoidPitchClasses(scaleNotes, chordNotes, chordPcs);
   const hasNatural5 = scaleNotes.some((note) => note.degree === '5');
+  const hasMajor3 = scaleNotes.some((note) => note.degree === '3');
   const low = REGISTER_LOW[register];
   const ladder: LadderTone[] = [];
   for (let midi = low; midi <= low + PHRASE_RANGE; midi++) {
     const note = spelled.get(mod(midi));
     if (!note) continue;
     const chordMatch = chordByPc.get(note.pc);
-    const blueNote = note.degree === 'b5' && hasNatural5;
+    const blueNote =
+      (note.degree === 'b5' && hasNatural5) ||
+      (note.degree === 'b3' && hasMajor3);
     ladder.push({
       midi,
       note,
@@ -1446,6 +1457,7 @@ function pickPatterns(
   exact: boolean,
   answer: boolean,
   contour: Contour = 'arch',
+  pickup = false,
 ): BarPattern[] {
   const catalog = BAR_PATTERNS[rhythm];
   const grounded = catalog.filter(hasOnBeat);
@@ -1558,6 +1570,7 @@ function pickPatterns(
         );
       if (rested) pattern = rested;
     }
+    if (bar === 0 && pickup && pattern) pattern = withPickupStart(pattern);
     chosen.push(pattern);
     previous = pattern.onset;
   }
@@ -2086,6 +2099,7 @@ function chooseEnclosure(
   bars: 2 | 4,
   claimed: ReadonlySet<number>,
   random: () => number,
+  targetLadder: readonly LadderTone[] = ladder,
 ): number[] | null {
   if (index + 2 >= events.length - 2) return null;
   if (claimed.has(index) || claimed.has(index + 1) || claimed.has(index + 2))
@@ -2104,8 +2118,8 @@ function chooseEnclosure(
   const slots = [index, index + 1, index + 2];
   const goal = contourGoal(plan, e2.beat, bars);
   const targets: number[] = [];
-  for (let tone = 1; tone < ladder.length - 1; tone++) {
-    if (!ladder[tone].chordTone || !alive[index + 2]?.[tone]) continue;
+  for (let tone = 1; tone < targetLadder.length - 1; tone++) {
+    if (!targetLadder[tone].chordTone || !alive[index + 2]?.[tone]) continue;
     targets.push(tone);
   }
   targets.sort(
@@ -2189,6 +2203,7 @@ function chooseFragment(
   alive: readonly (readonly boolean[])[],
   events: readonly GridEvent[],
   notes: readonly Pitched[],
+  requireFirstChordTone = false,
 ): number[] | null {
   const left = idea[0] ?? 0;
   const right = idea[1] ?? 0;
@@ -2204,6 +2219,7 @@ function chooseFragment(
         left + second,
         right + second,
       ];
+      if (requireFirstChordTone && !ladder[tones[0]]?.chordTone) continue;
       if (!blockAllowed(ladder, alive, events, notes, slots, tones)) continue;
       let score = 0;
       for (let index = 0; index < tones.length; index++) {
@@ -2231,6 +2247,7 @@ function chooseFragment(
         left + second,
         left + second - delta,
       ];
+      if (requireFirstChordTone && !ladder[tones[0]]?.chordTone) continue;
       if (blockAllowed(ladder, alive, events, notes, slots, tones))
         return tones;
     }
@@ -3210,6 +3227,7 @@ function walkScored(
         alive,
         events,
         notes,
+        Boolean(turnaroundLadder),
       );
       if (tones) {
         pending = tones.slice(1).map((tone) => ({ tone, spot: null }));
@@ -3232,7 +3250,12 @@ function walkScored(
         random,
         salt,
       );
-      if (grouped) {
+      const crossesTurnaround =
+        Boolean(turnaroundLadder) &&
+        bar === 1 &&
+        grouped != null &&
+        (events[index + grouped.tones.length - 1]?.beat ?? 0) >= 8;
+      if (grouped && !crossesTurnaround) {
         placed += 1;
         groupingWindow = Math.floor(bar / 2);
         for (let step = 0; step < grouped.tones.length; step++) {
@@ -3271,7 +3294,12 @@ function walkScored(
         rng,
         salt,
       );
-      if (skipped) {
+      const skipCrossesTurnaround =
+        Boolean(turnaroundLadder) &&
+        bar === 1 &&
+        skipped != null &&
+        (events[index + skipped.tones.length - 1]?.beat ?? 0) >= 8;
+      if (skipped && !skipCrossesTurnaround) {
         skips += 1;
         for (let step = 0; step < skipped.tones.length; step++) {
           const touched = Math.floor((events[index + step]?.beat ?? 0) / 4);
@@ -3293,6 +3321,12 @@ function walkScored(
       }
     }
     if (!groupingBars.has(bar) && !skipBars.has(bar) && !afterOctave(notes)) {
+      const enclosureTargetBeat = events[index + 2]?.beat ?? event.beat;
+      const enclosureTargetLadder = activeLadder(
+        ladder,
+        turnaroundLadder,
+        enclosureTargetBeat,
+      );
       const enclosure = chooseEnclosure(
         stepLadder,
         alive,
@@ -3303,6 +3337,7 @@ function walkScored(
         bars,
         idiomClaimed,
         random,
+        enclosureTargetLadder,
       );
       if (enclosure) {
         pending = enclosure.slice(1).map((tone) => ({ tone, spot: null }));
@@ -3320,7 +3355,12 @@ function walkScored(
         idiomClaimed,
         random,
       );
-      if (arp) {
+      const arpCrossesTurnaround =
+        Boolean(turnaroundLadder) &&
+        bar === 1 &&
+        arp != null &&
+        (events[index + arp.length - 1]?.beat ?? 0) >= 8;
+      if (arp && !arpCrossesTurnaround) {
         pending = arp.slice(1).map((tone) => ({ tone, spot: null }));
         notes.push(pitchedFromLadder(stepLadder, arp[0] ?? 0));
         continue;
@@ -3798,7 +3838,7 @@ function loopSeamGap(
   notes: readonly PhraseNote[],
   bars: 2 | 4,
 ): { gap: number; fast: boolean } | null {
-  const first = notes.find((note) => note.beat === 0);
+  const first = notes[0] && notes[0].beat < bars * 4 ? notes[0] : undefined;
   let last: PhraseNote | undefined;
   for (const note of notes) if (note.beat < bars * 4) last = note;
   if (!first || !last) return null;
@@ -3837,7 +3877,7 @@ function seamIsIllegalFingered(
   bars: 2 | 4,
   shapes: ReadonlyMap<number, number[]> | null,
 ): boolean {
-  const first = notes.find((note) => note.beat === 0);
+  const first = notes[0] && notes[0].beat < bars * 4 ? notes[0] : undefined;
   let last: FingeredNote | undefined;
   for (const note of notes) if (note.beat < bars * 4) last = note;
   if (!first || !last) return false;
@@ -4069,6 +4109,7 @@ function sampleLanes(
   attempt: number,
   forms: readonly Pattern[],
   turnaroundLadder: readonly LadderTone[] | null = null,
+  fingeringForms: readonly Pattern[] = forms,
 ): LaneResult[] {
   const found: LaneResult[] = [];
   for (let lane = 0; lane < lanes; lane++) {
@@ -4086,6 +4127,7 @@ function sampleLanes(
       lanes,
       forms,
       turnaroundLadder,
+      fingeringForms,
     );
     if (sampled) found.push(sampled);
   }
@@ -4148,6 +4190,7 @@ function sampleLane(
   lanes: number,
   forms: readonly Pattern[],
   turnaroundLadder: readonly LadderTone[] | null = null,
+  fingeringForms: readonly Pattern[] = forms,
 ): LaneResult | null {
   const tries = 3;
   for (let roll = 0; roll < tries; roll++) {
@@ -4160,7 +4203,7 @@ function sampleLane(
         0,
     );
     const random = () => rng.next();
-    const rawPatterns = pickPatterns(
+    const patterns = pickPatterns(
       plan.rhythm,
       input.bars,
       random,
@@ -4168,11 +4211,9 @@ function sampleLane(
       exact,
       answersOpening(input.seed),
       plan.contour,
+      Boolean(plan.pickup),
     );
-    if (rawPatterns.length !== input.bars) continue;
-    const patterns = plan.pickup
-      ? [withPickupStart(rawPatterns[0]), ...rawPatterns.slice(1)]
-      : rawPatterns;
+    if (patterns.length !== input.bars) continue;
     const events = eventsForCells(patterns, input.bars);
     const mark = rng.get();
     let pitches: Pitched[] | null = null;
@@ -4217,7 +4258,7 @@ function sampleLane(
         walked.notes,
         events,
         input.bars,
-        forms,
+        fingeringForms,
         plan.register,
         input.bars === 4,
         scalePcs,
@@ -4256,7 +4297,7 @@ function sampleLane(
             grouped.notes,
             events,
             input.bars,
-            forms,
+            fingeringForms,
             plan.register,
             input.bars === 4,
             scalePcs,
@@ -4353,8 +4394,46 @@ const CHROMATIC_FLATS = [
   'B',
 ] as const;
 
-function spellChromaticApproach(midi: number, direction: 1 | -1): string {
+const CHROMATIC_LETTERS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'] as const;
+const CHROMATIC_NATURAL_PCS = [0, 2, 4, 5, 7, 9, 11] as const;
+
+function spellWithLetter(letterIndex: number, pc: number): string | null {
+  const natural = CHROMATIC_NATURAL_PCS[letterIndex] ?? 0;
+  let diff = mod(pc - natural);
+  if (diff > 6) diff -= 12;
+  if (diff < -1 || diff > 1) return null;
+  const letter = CHROMATIC_LETTERS[letterIndex] ?? 'C';
+  return diff === 1 ? `${letter}#` : diff === -1 ? `${letter}b` : letter;
+}
+
+function spellChromaticApproach(
+  midi: number,
+  targetName: string,
+  direction: 1 | -1,
+): string {
   const pc = mod(midi);
+  const targetLetter = CHROMATIC_LETTERS.indexOf(
+    (targetName[0] ?? '') as (typeof CHROMATIC_LETTERS)[number],
+  );
+  if (targetLetter >= 0) {
+    // Same-letter natural (e.g. F -> F#, B -> Bb, E -> E#) avoids double
+    // accidentals and keeps jazz/guitar reading clean.
+    const sameNatural = spellWithLetter(targetLetter, pc);
+    if (sameNatural && sameNatural.length === 1) return sameNatural;
+    const adjLetter = (targetLetter + (direction > 0 ? 6 : 1)) % 7;
+    const adjSpelled = spellWithLetter(adjLetter, pc);
+    if (adjSpelled) {
+      const hasSharp = adjSpelled.includes('#');
+      const hasFlat = adjSpelled.includes('b');
+      if (
+        (direction > 0 && (!hasFlat || targetName.includes('b'))) ||
+        (direction < 0 && (!hasSharp || targetName.includes('#')))
+      ) {
+        return adjSpelled;
+      }
+    }
+    if (sameNatural) return sameNatural;
+  }
   return direction > 0 ? CHROMATIC_SHARPS[pc] : CHROMATIC_FLATS[pc];
 }
 
@@ -4362,6 +4441,7 @@ function applyChromaticApproaches(
   base: FingeredNote[],
   spots: readonly (SkipSpot | null)[],
   scalePcs: ReadonlySet<number>,
+  plan: PhrasePlan,
   bars: 2 | 4,
   fingeringForms: readonly Pattern[],
   shapes: ReadonlyMap<number, number[]> | null,
@@ -4369,9 +4449,12 @@ function applyChromaticApproaches(
   seed: number,
 ): FingeredNote[] {
   const maxApproaches = bars === 4 ? 2 : 1;
+  const regLow = REGISTER_LOW[plan.register];
+  const regHigh = regLow + PHRASE_RANGE;
   type Site = {
     index: number;
     midi: number;
+    targetName: string;
     direction: 1 | -1;
     priority: number;
   };
@@ -4390,7 +4473,7 @@ function applyChromaticApproaches(
       prev && prev.midi > next.midi ? [1, -1] : [-1, 1];
     for (const delta of deltas) {
       const midi = next.midi + delta;
-      if (midi < 40 || midi > 88) continue;
+      if (midi < regLow || midi > regHigh) continue;
       if (scalePcs.has(mod(midi))) continue;
       if (prev && (prev.midi === midi || Math.abs(midi - prev.midi) > 5)) {
         continue;
@@ -4402,6 +4485,7 @@ function applyChromaticApproaches(
       sites.push({
         index,
         midi,
+        targetName: next.name,
         direction: delta < 0 ? 1 : -1,
         priority,
       });
@@ -4418,7 +4502,11 @@ function applyChromaticApproaches(
     const candidateNotes: PhraseNote[] = current.map((note, idx) =>
       idx === site.index
         ? {
-            name: spellChromaticApproach(site.midi, site.direction),
+            name: spellChromaticApproach(
+              site.midi,
+              site.targetName,
+              site.direction,
+            ),
             pc: mod(site.midi),
             degree: 'chr',
             midi: site.midi,
@@ -4438,6 +4526,8 @@ function applyChromaticApproaches(
             chordTone: note.chordTone,
           },
     );
+    if (!contourFits(candidateNotes, plan.contour, bars)) continue;
+    if (seamIsIllegal(candidateNotes, bars)) continue;
     const refingered = fingerNotes(
       candidateNotes,
       fingeringForms,
@@ -4482,6 +4572,10 @@ function composePhrase(
    * miss it. Each retry re-rolls all of them. Eight passes clear every arch
    * and wave in the sweep while staying inside the search-step budget.
    */
+  const anchor = REGISTER_ANCHOR[plan.register];
+  const fingeringForms = forms.length
+    ? forms
+    : boxFormsForScale(input.scaleNotes, anchor);
   const attempts = 10;
   let fitting: LaneResult[] = [];
   let seamless: LaneResult[] = [];
@@ -4497,6 +4591,7 @@ function composePhrase(
       attempt,
       forms,
       turnaroundLadder,
+      fingeringForms,
     );
     if (!found.length) continue;
     // The copied bar is a fallback for a ladder that cannot change rhythm.
@@ -4518,9 +4613,6 @@ function composePhrase(
    * here; a lane that fails it is not thrown away, because it is the only
    * evidence that this draw had candidates at all.
    */
-  const fingeringForms = forms.length
-    ? forms
-    : boxFormsForScale(input.scaleNotes);
   const pick = (
     candidates: readonly LaneResult[],
   ): { best: PlayedLane | null; seamOnly: PlayedLane | null } => {
@@ -4601,6 +4693,7 @@ function composePhrase(
         attempt,
         forms,
         turnaroundLadder,
+        fingeringForms,
       );
       if (!found.length) continue;
       const varied = found.filter((item) => !item.exact);
@@ -4619,10 +4712,11 @@ function composePhrase(
           best.notes,
           best.spots,
           scalePcs,
+          best.plan,
           input.bars,
           fingeringForms,
           shapes,
-          REGISTER_ANCHOR[plan.register],
+          anchor,
           input.seed,
         )
       : best.notes;
@@ -4706,10 +4800,16 @@ export const REGISTER_ANCHOR: Record<RegisterName, number> = {
  * where 3NPS/2NPS `patterns()` returns empty. Keeps fingering anchored in a
  * single neck box without altering Explore's pattern UI or formless skip rules.
  */
-function boxFormsForScale(scaleNotes: readonly Note[]): Pattern[] {
+function boxFormsForScale(
+  scaleNotes: readonly Note[],
+  anchor: number,
+): Pattern[] {
   const pcs = new Set(scaleNotes.map((note) => note.pc));
   if (pcs.size < 5) return [];
-  const anchors = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19];
+  const anchors =
+    anchor >= 5
+      ? [2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19]
+      : [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19];
   const boxes: Pattern[] = [];
   for (const start of anchors) {
     const positions: Pattern['positions'] = [];
@@ -4754,10 +4854,11 @@ function shapeCover(
     // Balance pitch coverage against register anchor so a low-position form
     // catching one extra edge note does not pull middle register down to fret 2.
     const score = hit * 1.5 - dist * 0.45;
+    const tieWins = anchor >= 5 ? index > best : index < best;
     if (
       score > bestScore + 1e-9 ||
       (Math.abs(score - bestScore) <= 1e-9 &&
-        (dist < bestDist || (dist === bestDist && index < best)))
+        (dist < bestDist || (dist === bestDist && tieWins)))
     ) {
       best = index;
       bestScore = score;
@@ -4983,7 +5084,7 @@ function spotsFor(midi: number): Spot[] {
     }
     for (let finger = 1; finger <= 4; finger++) {
       const position = fret - (finger - 1);
-      if (position < 0 || position > 21) continue;
+      if (position < 1 || position > 21) continue;
       spots.push({ string, fret, position, finger });
     }
   }
@@ -5145,7 +5246,7 @@ function moveCost(
   cost += fingerRollCost(from, to, fast);
   if (pitch > 0 && to.string < from.string) cost += 0.35;
   if (pitch < 0 && to.string > from.string) cost += 0.35;
-  if (to.fret === 0) cost += anchor <= 3 ? -0.15 : 12;
+  if (to.fret === 0) cost += anchor < 5 ? -0.15 : 12;
   return cost;
 }
 

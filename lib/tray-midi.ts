@@ -83,7 +83,7 @@ export function encodePhraseMidi(input: {
     const midi = Math.max(0, Math.min(127, Math.round(note.midi)));
     const on = Math.max(0, Math.round(note.beat * MIDI_DIVISION));
     const off = Math.max(
-      on,
+      on + 1,
       Math.round((note.beat + note.duration) * MIDI_DIVISION),
     );
     events.push({

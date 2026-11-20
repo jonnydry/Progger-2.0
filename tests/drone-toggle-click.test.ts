@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { OfflineAudioContext } from 'node-web-audio-api';
 import { createOutputChain, OUTPUT_CROSSFADE } from '../lib/audio-output.ts';
 import { scheduleVoicing } from '../lib/voicing-audio.ts';
 import { offlineContextWithoutSuspend } from './firefox-offline.ts';
@@ -156,4 +157,46 @@ void test('toggling the drone on and off while a phrase sounds does not click', 
     offStep < steadyStep * 2.5,
     `drone-off mid-phrase clicked (step ${offStep} vs steady ${steadyStep})`,
   );
+});
+
+void test('drone toggle mid-phrase stays click-free with suspend() and cancels rapid reverse toggle', async () => {
+  const context = new OfflineAudioContext(2, Math.ceil(0.8 * RATE), RATE);
+  const chain = createOutputChain(context);
+  const tone = context.createOscillator();
+  tone.type = 'sine';
+  tone.frequency.value = 220;
+  const level = context.createGain();
+  level.gain.value = 0.25;
+  tone.connect(level);
+  level.connect(chain.phraseInput);
+  tone.start(0);
+  tone.stop(0.75);
+  chain.setDrone(true, 0.2, OUTPUT_CROSSFADE);
+  chain.setDrone(false, 0.55, OUTPUT_CROSSFADE);
+  const data = channels(await context.startRendering());
+  chain.disconnect();
+  const steadyStep = windowStep(data, 0.05, 0.18);
+  const onStep = windowStep(data, 0.19, 0.28);
+  const offStep = windowStep(data, 0.54, 0.63);
+  assert.ok(
+    onStep < steadyStep * 2.5,
+    `suspend() drone-on mid-phrase clicked (step ${onStep} vs steady ${steadyStep})`,
+  );
+  assert.ok(
+    offStep < steadyStep * 2.5,
+    `suspend() drone-off mid-phrase clicked (step ${offStep} vs steady ${steadyStep})`,
+  );
+
+  // Rapid reverse toggle while off->on fade is in flight must cancel switching to limited.
+  const cancelCtx = new OfflineAudioContext(2, Math.ceil(0.4 * RATE), RATE);
+  const cancelChain = createOutputChain(cancelCtx);
+  cancelChain.setDrone(true, 0.1, OUTPUT_CROSSFADE);
+  cancelChain.setDrone(false, 0.11, OUTPUT_CROSSFADE);
+  await cancelCtx.startRendering();
+  assert.notEqual(
+    cancelChain.voicingTarget(),
+    cancelChain.chordInput,
+    'cancelled off->on toggle must not route voicing through drone limiter',
+  );
+  cancelChain.disconnect();
 });

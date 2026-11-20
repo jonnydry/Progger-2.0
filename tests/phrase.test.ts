@@ -6,6 +6,7 @@ import { parseChord } from '../lib/harmony.ts';
 import { SCALES, spell, TUNING, type Note } from '../lib/music.ts';
 import {
   PHRASE_RANGE,
+  REGISTER_LOW,
   availableCadences,
   cadenceRole,
   contourHeight,
@@ -1193,4 +1194,121 @@ void test('optional two-chord turnaround targets chord 2 in bars 3-4 and resolve
     ratio >= 0.65,
     `expected >= 65% strong beats in bars 3-4 on G7 chord tones, got ${(ratio * 100).toFixed(1)}%`,
   );
+});
+
+void test('adversarial guards: pickup seams, chromatic contours/spelling, turnaround bar-3 anchor, and fretted positions', () => {
+  const cMajor = scaleOf('C', 'major');
+  const cChord = parseChord('C').notes;
+  const gChord = parseChord('G').notes;
+  const gPcs = new Set(gChord.map((note) => note.pc));
+
+  // 1. Pickup loop seams obey non-unison, <= octave, and <= fourth onto fast pickup.
+  for (let seed = 1; seed <= 60; seed++) {
+    const res = generatePhrase({
+      seed,
+      bars: 2,
+      scaleNotes: cMajor,
+      chordNotes: cChord,
+      locks: { pickup: true },
+    });
+    assert.equal(res.ok, true);
+    if (!res.ok) continue;
+    const first = res.phrase.notes[0];
+    const body = res.phrase.notes.filter((note) => note.beat < 8);
+    const last = body[body.length - 1];
+    assert.ok(first && last);
+    const gap = Math.abs(first.midi - last.midi);
+    assert.ok(gap > 0 && gap <= 12, `illegal pickup seam gap ${gap} (seed ${seed})`);
+  }
+
+  // 2. Chromatic approaches preserve enharmonic spelling in extreme sharp/flat keys and stay inside register.
+  const exotic: readonly (readonly [string, string, string])[] = [
+    ['C#', 'major-pentatonic', 'C#'],
+    ['Db', 'locrian', 'Dbdim'],
+    ['Ab', 'locrian', 'Abdim'],
+    ['Gb', 'locrian', 'Gbdim'],
+  ];
+  for (const [root, sid, sym] of exotic) {
+    const scale = scaleOf(root, sid);
+    const chord = parseChord(sym).notes;
+    for (let seed = 1; seed <= 10; seed++) {
+      const res = generatePhrase({
+        seed,
+        bars: 4,
+        scaleNotes: scale,
+        chordNotes: chord,
+        locks: { chromatic: true },
+      });
+      if (!res.ok) continue;
+      const low = REGISTER_LOW[res.phrase.plan.register];
+      const notes = res.phrase.notes;
+      for (let i = 0; i < notes.length; i++) {
+        const note = notes[i];
+        assert.ok(
+          note.midi >= low && note.midi <= low + 18,
+          `chromatic note escaped register [${low}, ${low + 18}]: ${note.midi}`,
+        );
+        if (note.degree === 'chr') {
+          const target = notes[i + 1];
+          assert.ok(target);
+          assert.notEqual(`${note.name}->${target.name}`, 'Gb->E#');
+          assert.notEqual(`${note.name}->${target.name}`, 'D#->Fb');
+          assert.notEqual(`${note.name}->${target.name}`, 'A#->Cb');
+          assert.notEqual(`${note.name}->${target.name}`, 'G#->Bbb');
+        }
+      }
+    }
+  }
+
+  // 3. Turnaround Bar 3 first note reliably anchors on Chord 2.
+  let bar3Anchored = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    const res = generatePhrase({
+      seed,
+      bars: 4,
+      scaleNotes: cMajor,
+      chordNotes: cChord,
+      turnaroundChordNotes: gChord,
+      turnaroundSymbol: 'G',
+    });
+    assert.equal(res.ok, true);
+    if (!res.ok) continue;
+    const bar3First = res.phrase.notes.find((note) => note.beat >= 8);
+    assert.ok(bar3First);
+    if (gPcs.has(bar3First.pc)) bar3Anchored += 1;
+  }
+  assert.ok(
+    bar3Anchored >= 54,
+    `expected >= 54/60 bar-3 turnaround anchors on G, got ${bar3Anchored}`,
+  );
+
+  // 4. No fretted note ever receives position 0, and mid-register blues/whole-tone avoid open strings.
+  const wholeTone = scaleOf('A', 'whole-tone');
+  const a7 = parseChord('A7').notes;
+  for (let seed = 1; seed <= 20; seed++) {
+    for (const register of ['low', 'mid'] as const) {
+      const res = generatePhrase({
+        seed,
+        bars: 2,
+        scaleNotes: wholeTone,
+        chordNotes: a7,
+        locks: { register },
+      });
+      if (!res.ok) continue;
+      for (const note of res.phrase.notes) {
+        if (note.fret > 0) {
+          assert.ok(
+            note.position >= 1,
+            `fretted note fret=${note.fret} had position=${note.position}`,
+          );
+        }
+        if (register === 'mid') {
+          assert.ok(
+            note.fret > 0,
+            `mid-register whole-tone leaked open string (seed ${seed})`,
+          );
+        }
+      }
+    }
+  }
 });

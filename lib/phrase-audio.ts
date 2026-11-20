@@ -279,6 +279,28 @@ function noteTail(
         note.string === other.string;
     }
   }
+  // When looping, the last body note wraps into the next pass's opening note.
+  if (!Number.isFinite(next) && Number.isFinite(playBeforeBeat)) {
+    let wrapFirst: PhraseNoteTime | null = null;
+    for (const candidate of notes) {
+      if (!candidate || !(candidate.beat < playBeforeBeat - 1e-9)) continue;
+      if (!wrapFirst || candidate.beat < wrapFirst.beat) wrapFirst = candidate;
+    }
+    if (wrapFirst) {
+      const wrapAt = onsetSeconds(
+        playBeforeBeat + wrapFirst.beat,
+        bpm,
+        swing,
+      );
+      if (wrapAt > start + 1e-4) {
+        next = wrapAt;
+        nextSameString =
+          note.string !== undefined &&
+          wrapFirst.string !== undefined &&
+          note.string === wrapFirst.string;
+      }
+    }
+  }
   let release = PHRASE_LEGATO_RELEASE_SEC;
   if (Number.isFinite(next)) {
     if (next > writtenEnd + 1e-4) {
@@ -307,6 +329,7 @@ function phraseVoiceOptions(
   tempo: number,
   swing: SwingInput,
   tail: NoteTail | null,
+  playBeforeBeat: number = Number.POSITIVE_INFINITY,
 ): PhraseVoiceOptions | undefined {
   const note = notes[index];
   if (!note) return undefined;
@@ -318,6 +341,7 @@ function phraseVoiceOptions(
   const isLast = index === notes.length - 1;
   let maxMidi = -Infinity;
   for (const item of notes) {
+    if (!(item.beat < playBeforeBeat - 1e-9)) continue;
     if (item.midi !== undefined && item.midi > maxMidi) maxMidi = item.midi;
   }
   const isClimax =
@@ -346,6 +370,10 @@ function phraseVoiceOptions(
   let attackSec = PLUCK_ATTACK_SEC;
   let cutoffScale = hasMusicalMeta ? 0.82 + 0.18 * velocity : 1;
   const prev = index > 0 ? notes[index - 1] : undefined;
+  const fretGap =
+    prev?.fret !== undefined && note.fret !== undefined
+      ? Math.abs(note.fret - prev.fret)
+      : 0;
   if (
     hasMusicalMeta &&
     prev &&
@@ -357,7 +385,8 @@ function phraseVoiceOptions(
     prev.fret > 0 &&
     note.fret > 0 &&
     !note.shift &&
-    Math.abs(note.fret - prev.fret) <= 2
+    fretGap > 0 &&
+    fretGap <= 2
   ) {
     const bpm = clampPhraseTempo(tempo);
     const prevEnd =
@@ -1162,6 +1191,7 @@ export class PhrasePlayer {
             tempo,
             phrase.swing,
             tail,
+            looping ? loopBeats : Number.POSITIVE_INFINITY,
           );
           const voice = scheduleVoicing(
             context,
