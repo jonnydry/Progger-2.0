@@ -1,6 +1,18 @@
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createElement, type ComponentProps } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { PhrasePanel as PhrasePanelComponent } from '../components/phrase-panel.tsx';
 import {
   DECK_BREAKPOINT_PX,
   DECK_BREAKPOINT_QUERY,
@@ -342,5 +354,268 @@ void test('tablature container breakpoints, string contrast, mobile slider handl
       false,
       `${file} should not duplicate summary::marker rules`,
     );
+  }
+});
+
+void test('fret 0 reads as open with WCAG 2.5.3 label-in-name, shared wording, and no leftover fret-0 strings', () => {
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  const fretboard = readFileSync(
+    new URL('../components/fretboard.tsx', import.meta.url),
+    'utf8',
+  );
+  const voicingBrowser = readFileSync(
+    new URL('../components/voicing-browser.tsx', import.meta.url),
+    'utf8',
+  );
+  const neckOverview = readFileSync(
+    new URL('../components/neck-overview.tsx', import.meta.url),
+    'utf8',
+  );
+
+  // Shared helper formats fret 0 as "string N, open (0)" (preserving visible "0" for WCAG 2.5.3)
+  // and fretted notes as "string N, fret F".
+  assert.match(panel, /function phraseNoteSpot\(/);
+  assert.match(panel, /`string \$\{stringNum\}, open \(0\)`/);
+  assert.match(panel, /`string \$\{stringNum\}, fret \$\{note\.fret\}`/);
+  assert.match(panel, /function phraseNoteText\(/);
+  assert.match(panel, /`bar \$\{barNum\}, beat \$\{beatInBar\}`/);
+  assert.match(panel, /`landing, beat \$\{beatInBar\}/);
+
+  // Both the fallback sr-only list and interactive tab buttons use phraseNoteText,
+  // and the fallback list is aria-hidden while the tab buttons are rendered.
+  assert.match(
+    panel,
+    /<ol[\s\S]*?aria-label="Phrase notes in order"[\s\S]*?aria-hidden=\{dots === 'shown' \? true : undefined\}[\s\S]*?phraseNoteText\(/,
+  );
+  assert.match(
+    panel,
+    /const spoken = phraseNoteText\([\s\S]*?aria-label=\{`Play \$\{spoken\}`\}/,
+  );
+
+  // Fretboard, Voicing Browser, and Neck Overview also read fret 0 as "open".
+  assert.equal(fretboard.includes('string ${6 - string}, fret ${fret}'), false);
+  assert.equal(fretboard.includes('active frets {pattern.min}–'), false);
+  assert.equal(fretboard.includes('Frets {range[0]}–{range[1]}'), false);
+  assert.equal(
+    fretboard.includes('`Frets ${range[0]} through ${range[1]} of 24`'),
+    true,
+  );
+  assert.match(fretboard, /`open–\$\{pattern\.max\}`/);
+  assert.match(fretboard, /`open–\$\{range\[1\]\}`/);
+  assert.match(fretboard, /`Frets open through \$\{range\[1\]\} of 24`/);
+  assert.match(
+    fretboard,
+    /string \$\{6 - string\}, \$\{fret === 0 \? 'open' : `fret \$\{fret\}`\}/,
+  );
+  assert.equal(voicingBrowser.includes("'0 (nut)'"), false);
+  assert.match(voicingBrowser, /'Open \(nut\)'/);
+  assert.match(voicingBrowser, /`Frets open–\$\{voicing\.max\}`/);
+  assert.equal(voicingBrowser.includes('nearest fret {nearFret} first'), false);
+  assert.match(
+    voicingBrowser,
+    /nearest \{nearFret === 0 \? 'open' : `fret \$\{nearFret\}`\} first/,
+  );
+  assert.match(
+    neckOverview,
+    /`Visible frets open through \$\{range\[1\]\} of 24`/,
+  );
+});
+
+void test('PhrasePanel renders accessible note list without buttons when dots="hidden" and hides list when dots="shown"', async () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const scratch = join(root, 'node_modules/.cache');
+  mkdirSync(scratch, { recursive: true });
+  const suffix = `${process.pid}-${randomUUID()}`;
+  const outfile = join(scratch, `phrase-panel-ssr-${suffix}.mjs`);
+  try {
+    execFileSync(
+      join(root, 'node_modules/esbuild/bin/esbuild'),
+      [
+        join(root, 'components/phrase-panel.tsx'),
+        '--bundle',
+        '--format=esm',
+        `--outfile=${outfile}`,
+        '--platform=node',
+        '--packages=external',
+        '--jsx=automatic',
+        '--loader:.css=empty',
+        `--alias:@=${root}`,
+      ],
+      { cwd: root, stdio: 'pipe' },
+    );
+    const { PhrasePanel } = (await import(pathToFileURL(outfile).href)) as {
+      PhrasePanel: typeof PhrasePanelComponent;
+    };
+    const scaleNotes = [
+      { name: 'C', pc: 0, degree: '1' },
+      { name: 'D', pc: 2, degree: '2' },
+      { name: 'E', pc: 4, degree: '3' },
+      { name: 'F', pc: 5, degree: '4' },
+      { name: 'G', pc: 7, degree: '5' },
+      { name: 'A', pc: 9, degree: '6' },
+      { name: 'B', pc: 11, degree: '7' },
+    ];
+    const capture: ComponentProps<typeof PhrasePanelComponent>['capture'] = {
+      position: 0,
+      view: 'pattern',
+      place: 'scale',
+      degrees: false,
+      left: false,
+      chordRoot: 'C',
+      qualityId: 'major',
+      chordView: 'shape',
+      voicingIndex: 0,
+      voicingBass: 'all',
+      voicingStrings: 'all',
+      voicingNearFret: null,
+    };
+    const held: NonNullable<
+      ComponentProps<typeof PhrasePanelComponent>['held']
+    > = {
+      id: 'ssr-open-fixture',
+      type: 'phrase',
+      name: 'Open fixture',
+      savedAt: 1,
+      notes: [
+        {
+          name: 'D',
+          pc: 2,
+          degree: '2',
+          midi: 50,
+          beat: 0,
+          duration: 0.5,
+          strong: false,
+          chordTone: false,
+          string: 2,
+          fret: 0,
+          finger: 0,
+          position: 0,
+          shift: false,
+        },
+        {
+          name: 'E',
+          pc: 4,
+          degree: '3',
+          midi: 52,
+          beat: 1,
+          duration: 1,
+          strong: true,
+          chordTone: true,
+          string: 1,
+          fret: 7,
+          finger: 3,
+          position: 5,
+          shift: false,
+        },
+        {
+          name: 'A',
+          pc: 9,
+          degree: '6',
+          midi: 45,
+          beat: 8,
+          duration: 2,
+          strong: true,
+          chordTone: true,
+          string: 1,
+          fret: 0,
+          finger: 0,
+          position: 0,
+          shift: false,
+        },
+      ],
+      key: 'C',
+      scaleId: 'major',
+      scaleName: 'Major',
+      chord: null,
+      bars: 2,
+      tempo: 96,
+      slow: false,
+      swing: 0,
+      plan: {
+        contour: 'arch',
+        rhythm: 'eighths',
+        register: 'low',
+        cadence: 'root',
+      },
+      seed: 101,
+      ...capture,
+    };
+    const baseProps: ComponentProps<typeof PhrasePanelComponent> = {
+      active: true,
+      scaleRoot: 'C',
+      scaleId: 'major',
+      scaleName: 'Major',
+      scaleNotes,
+      chord: null,
+      held,
+      onReleaseHeld() {},
+      capture,
+      onMarks() {},
+    };
+
+    const hiddenHtml = renderToStaticMarkup(
+      createElement(PhrasePanel, { ...baseProps, dots: 'hidden' }),
+    );
+    assert.equal(
+      hiddenHtml.includes('phrase-staff-fret'),
+      false,
+      'dots="hidden" should not render interactive tab buttons',
+    );
+    assert.match(
+      hiddenHtml,
+      /<ol class="sr-only" aria-label="Phrase notes in order">/,
+      'dots="hidden" should expose the sr-only note list without aria-hidden',
+    );
+    assert.ok(
+      hiddenHtml.includes(
+        '<li>D, string 4, open (0), bar 1, beat 1, eighth note</li>',
+      ),
+    );
+    assert.ok(
+      hiddenHtml.includes(
+        '<li>E, string 5, fret 7, finger 3, bar 1, beat 2, quarter note, strong beat, chord tone</li>',
+      ),
+    );
+    assert.ok(
+      hiddenHtml.includes(
+        '<li>A, string 5, open (0), landing, beat 1, half note, strong beat, chord tone</li>',
+      ),
+    );
+
+    const shownHtml = renderToStaticMarkup(
+      createElement(PhrasePanel, { ...baseProps, dots: 'shown' }),
+    );
+    assert.match(
+      shownHtml,
+      /<ol class="sr-only" aria-label="Phrase notes in order" aria-hidden="true">/,
+      'dots="shown" should aria-hide the fallback note list',
+    );
+    assert.equal(
+      (shownHtml.match(/class="phrase-staff-fret"/g) ?? []).length,
+      3,
+      'dots="shown" should render one interactive button per fixture note',
+    );
+    assert.ok(
+      shownHtml.includes(
+        'aria-label="Play D, string 4, open (0), bar 1, beat 1, eighth note"',
+      ),
+    );
+    assert.ok(
+      shownHtml.includes(
+        'aria-label="Play E, string 5, fret 7, finger 3, bar 1, beat 2, quarter note, strong beat, chord tone"',
+      ),
+    );
+    assert.ok(
+      shownHtml.includes(
+        'aria-label="Play A, string 5, open (0), landing, beat 1, half note, strong beat, chord tone"',
+      ),
+    );
+    assert.ok(shownHtml.includes('>0</button>'));
+    assert.ok(shownHtml.includes('>7</button>'));
+  } finally {
+    rmSync(outfile, { force: true });
   }
 });

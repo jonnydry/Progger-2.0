@@ -643,10 +643,13 @@ void test('saving while a phrase waits for the bar line stashes the sounding phr
       fret: number;
     }[];
     const spoken = soundingNotes.map((line) => {
-      const match = /^([^,]+), string (\d+), fret ([^,]+),/.exec(line) ?? [];
+      const match =
+        /^([^,]+), string (\d+), (open \(0\)|fret \d+),/.exec(line) ?? [];
       const name = (match[1] ?? '').replaceAll('♯', '#').replaceAll('♭', 'b');
       const string = 6 - Number(match[2]);
-      const fret = match[3] === 'open' ? 0 : Number(match[3]);
+      const fret = match[3]?.startsWith('open')
+        ? 0
+        : Number(match[3]?.replace('fret ', ''));
       return `${name}:${string}:${fret}`;
     });
     assert.deepEqual(

@@ -104,7 +104,7 @@ const FretGrid = memo(function FretGrid({
           minWidth: 0,
         }}
         role="img"
-        aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${noteDescription(n)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${noteDescription(note)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Active ${notes.length === 5 ? 2 : 3}-notes-per-string form starts on low E at fret ${pattern.start} and spans frets ${pattern.min} to ${pattern.max}. ${neighbor ? `Neighbor form starts at fret ${neighbor.start}; ${layers.shared.size} shared string and fret positions. ` : ''}All scale notes remain visible as context.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
+        aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${noteDescription(n)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${noteDescription(note)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Active ${notes.length === 5 ? 2 : 3}-notes-per-string form starts on ${pattern.start === 0 ? 'open low E' : `low E at fret ${pattern.start}`} and spans ${pattern.min === 0 ? `open strings to fret ${pattern.max}` : `frets ${pattern.min} to ${pattern.max}`}. ${neighbor ? `Neighbor form starts at ${neighbor.start === 0 ? 'open low E' : `fret ${neighbor.start}`}; ${layers.shared.size} shared string and fret positions. ` : ''}All scale notes remain visible as context.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
       >
         {frets.map((fret) => (
           <div
@@ -142,8 +142,8 @@ const FretGrid = memo(function FretGrid({
                       className={`note-dot ${phrase ? 'phrase-mark' : ''} ${phrase?.current ? 'phrase-current' : ''} ${connected ? `connection-${membership}` : ''} ${phraseLabel.length > 3 ? 'wide-note' : ''} ${note?.degree === '1' ? 'is-root' : ''} ${note && targets.includes(note.pc) ? 'is-target' : ''}`}
                       title={
                         phrase
-                          ? `${phrase.label} · finger ${phrase.finger === 0 ? 'open' : phrase.finger}${phrase.shift ? ' · shift' : ''} · string ${6 - string}, fret ${fret}`
-                          : `${noteDescription(note!)} · ${pretty(note!.degree)} · string ${6 - string}, fret ${fret}${connected ? ` · ${membership === 'shared' ? 'shared by active and neighboring forms' : membership === 'context' ? 'scale context' : `${membership} form`}` : ''}`
+                          ? `${phrase.label}${fret > 0 && phrase.finger > 0 ? ` · finger ${phrase.finger}` : ''}${phrase.shift ? ' · shift' : ''} · string ${6 - string}, ${fret === 0 ? 'open' : `fret ${fret}`}`
+                          : `${noteDescription(note!)} · ${pretty(note!.degree)} · string ${6 - string}, ${fret === 0 ? 'open' : `fret ${fret}`}${connected ? ` · ${membership === 'shared' ? 'shared by active and neighboring forms' : membership === 'context' ? 'scale context' : `${membership} form`}` : ''}`
                       }
                     >
                       {phraseLabel}
@@ -766,7 +766,12 @@ export function Fretboard({
         <div className="connection-caption" id={`${titleId}-connections`}>
           <p>
             <strong>{notes.length === 5 ? 2 : 3} notes/string per form</strong>{' '}
-            · active frets {pattern.min}–{pattern.max}
+            · active frets{' '}
+            {pattern.min === 0
+              ? pattern.max === 0
+                ? 'open'
+                : `open–${pattern.max}`
+              : `${pattern.min}–${pattern.max}`}
             {neighbor
               ? ` · ${overlap === 'previous' ? 'lower' : 'higher'} neighbor starts at ${neighbor.start === 0 ? 'open low E' : `fret ${neighbor.start}`} · ${layers.shared.size} shared positions`
               : overlap !== 'off'
@@ -940,7 +945,13 @@ export function Fretboard({
         <div className="neck-navigation">
           <div className="viewport-control">
             <span className="range-label">
-              Frets {range[0]}–{range[1]} <span className="muted">of 24</span>
+              Frets{' '}
+              {range[0] === 0
+                ? range[1] === 0
+                  ? 'open'
+                  : `open–${range[1]}`
+                : `${range[0]}–${range[1]}`}{' '}
+              <span className="muted">of 24</span>
             </span>
             <label className="neck-slider" htmlFor={`${titleId}-viewport`}>
               <span className="sr-only">Neck position</span>
@@ -953,7 +964,13 @@ export function Fretboard({
                 step="any"
                 disabled={maxScrollFret === 0}
                 value={Math.min(scrollFret, maxScrollFret)}
-                aria-valuetext={`Frets ${range[0]} through ${range[1]} of 24`}
+                aria-valuetext={
+                  range[0] === 0
+                    ? range[1] === 0
+                      ? 'Frets open of 24'
+                      : `Frets open through ${range[1]} of 24`
+                    : `Frets ${range[0]} through ${range[1]} of 24`
+                }
                 onKeyDown={moveWithKey}
                 onChange={(event) => {
                   const el = viewport.current;

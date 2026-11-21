@@ -92,7 +92,7 @@ export function VoicingBrowser({
     voicing.max === 0
       ? 'Open strings'
       : voicing.min === 0
-        ? `Open–${voicing.max}`
+        ? `Frets open–${voicing.max}`
         : voicing.min === voicing.max
           ? `Fret ${voicing.min}`
           : `Frets ${voicing.min}–${voicing.max}`;
@@ -143,7 +143,7 @@ export function VoicingBrowser({
               { value: 'any', label: 'Any position' },
               ...Array.from({ length: 25 }, (_, fret) => ({
                 value: String(fret),
-                label: fret === 0 ? '0 (nut)' : String(fret),
+                label: fret === 0 ? 'Open (nut)' : String(fret),
               })),
             ]}
           />
@@ -270,7 +270,7 @@ export function VoicingBrowser({
               {nearFret !== null && (
                 <span className="voicing-catalog-order">
                   {' '}
-                  · nearest fret {nearFret} first
+                  · nearest {nearFret === 0 ? 'open' : `fret ${nearFret}`} first
                 </span>
               )}
             </span>

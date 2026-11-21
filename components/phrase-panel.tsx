@@ -1396,6 +1396,7 @@ export function PhrasePanel({
     turnaroundOptions,
   );
   const hasPins = buildChips[0] === 'Pinned';
+  const activeLoop = loop && !finishingHold && !armingLoop;
   const studioHeader = (
     <div className="phrase-heading">
       <div className="phrase-heading-context">
@@ -1686,7 +1687,7 @@ export function PhrasePanel({
           notes={notes}
           bars={frame.bars}
           turnaround={plan?.turnaround}
-          looping={loop && !finishingHold && !armingLoop}
+          looping={activeLoop}
           swing={soundingSwing}
           playing={status === 'playing'}
           busy={busy}
@@ -1698,38 +1699,59 @@ export function PhrasePanel({
         />
       )}
       {sounding.ok && (
-        <ol className="sr-only" aria-label="Phrase notes in order">
-          {notes.map((note, index) => {
-            const bar = Math.floor(note.beat / 4) + 1;
-            const beatInBar = (note.beat % 4) + 1;
-            const durText =
-              note.duration >= 2
-                ? 'half note'
-                : note.duration >= 1.5
-                  ? 'dotted quarter'
-                  : note.duration >= 1
-                    ? 'quarter note'
-                    : 'eighth note';
-            return (
-              <li key={`spoken-${index}`}>
-                {pretty(note.name)}, string {6 - note.string}, fret{' '}
-                {note.fret === 0 ? 'open' : note.fret}, finger{' '}
-                {note.finger === 0 ? 'open' : note.finger}, bar {bar} beat{' '}
-                {beatInBar}, {durText}
-                {note.shift ? ', shift' : ''}
-                {note.strong ? ', strong beat' : ''}
-                {note.degree === 'chr'
-                  ? ', chromatic approach'
-                  : note.chordTone
-                    ? ', chord tone'
-                    : ''}
-              </li>
-            );
-          })}
+        <ol
+          className="sr-only"
+          aria-label="Phrase notes in order"
+          aria-hidden={dots === 'shown' ? true : undefined}
+        >
+          {notes.map((note, index) => (
+            <li key={`spoken-${index}`}>
+              {phraseNoteText(note, frame.bars, {
+                looping: dots === 'hidden' && activeLoop,
+              })}
+            </li>
+          ))}
         </ol>
       )}
     </div>
   );
+}
+
+function phraseNoteSpot(note: Pick<FingeredNote, 'string' | 'fret'>): string {
+  const stringNum = 6 - note.string;
+  return note.fret === 0
+    ? `string ${stringNum}, open (0)`
+    : `string ${stringNum}, fret ${note.fret}`;
+}
+
+function phraseNoteDuration(duration: number): string {
+  if (duration >= 2) return 'half note';
+  if (duration >= 1.5) return 'dotted quarter';
+  if (duration >= 1) return 'quarter note';
+  return 'eighth note';
+}
+
+function phraseNoteText(
+  note: FingeredNote,
+  bars: 2 | 4,
+  options?: { looping?: boolean },
+): string {
+  const landingNote = note.beat >= bars * 4;
+  const barNum = Math.floor(note.beat / 4) + 1;
+  const beatInBar = landingNote
+    ? note.beat - bars * 4 + 1
+    : (note.beat % 4) + 1;
+  const where = landingNote
+    ? `landing, beat ${beatInBar}${options?.looping ? ', skipped while looping' : ''}`
+    : `bar ${barNum}, beat ${beatInBar}`;
+  const parts = [noteDescription(note), phraseNoteSpot(note)];
+  if (note.fret > 0 && note.finger > 0) parts.push(`finger ${note.finger}`);
+  parts.push(where, phraseNoteDuration(note.duration));
+  if (note.shift) parts.push('shift');
+  if (note.strong) parts.push('strong beat');
+  if (note.degree === 'chr') parts.push('chromatic approach');
+  else if (note.chordTone) parts.push('chord tone');
+  return parts.join(', ');
 }
 
 type StaffRow = {
@@ -2417,26 +2439,18 @@ function PhraseStaff({
                   ) : null,
                 )}
                 {row.notes.map(({ index, note, x, y }) => {
-                  const fretText = `fret ${note.fret}`;
-                  const stringNum = 6 - note.string;
                   const noteLabel = noteDescription(note);
-                  const landingNote = note.beat >= bars * 4;
-                  const barNum = Math.floor(note.beat / 4) + 1;
-                  const beatInBar = landingNote
-                    ? note.beat - bars * 4 + 1
-                    : (note.beat % 4) + 1;
-                  const where = landingNote
-                    ? `landing beat ${beatInBar}${looping ? ', skipped while looping' : ''}`
-                    : `bar ${barNum} beat ${beatInBar}`;
+                  const spot = phraseNoteSpot(note);
+                  const spoken = phraseNoteText(note, bars, { looping });
                   return (
                     <button
                       key={`fret-${index}`}
                       type="button"
                       className={`phrase-staff-fret${previewIndex === index ? ' is-preview' : ''}`}
                       tabIndex={index === clampedFocus ? 0 : -1}
-                      aria-label={`Play ${noteLabel}, string ${stringNum} ${fretText}, ${where}`}
+                      aria-label={`Play ${spoken}`}
                       aria-describedby="phrase-tab-hint"
-                      title={`${noteLabel} · string ${stringNum} ${fretText} · play note`}
+                      title={`${noteLabel} · ${spot} · play note`}
                       data-passing={note.chordTone ? undefined : 'true'}
                       data-chromatic={note.degree === 'chr' ? 'true' : undefined}
                       data-phrase-note={index}
