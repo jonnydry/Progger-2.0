@@ -512,6 +512,17 @@ main {
 .display-menu {
   position: relative;
 }
+/* Custom-chevron disclosures across the app hide the native marker once here;
+   plain text disclosures such as .note-spelling keep their browser triangle. */
+details:not(.note-spelling) > summary {
+  list-style: none;
+}
+details:not(.note-spelling) > summary::-webkit-details-marker {
+  display: none;
+}
+details:not(.note-spelling) > summary::marker {
+  content: none;
+}
 .display-menu summary {
   display: flex;
   align-items: center;
@@ -519,10 +530,6 @@ main {
   font-size: 13px;
   color: var(--quiet);
   min-height: 44px;
-  list-style: none;
-}
-.display-menu summary::-webkit-details-marker {
-  display: none;
 }
 .display-menu[open] > div {
   position: absolute;
@@ -913,13 +920,9 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  list-style: none;
   min-height: 76px;
   color: #c8cebb;
   font-size: 16px;
-}
-.theory-details > summary::-webkit-details-marker {
-  display: none;
 }
 .theory-details[open] > summary svg {
   transform: rotate(180deg);
@@ -1167,11 +1170,6 @@ footer {
   min-height: 44px;
   font-size: 14px;
   color: var(--quiet);
-  list-style: none;
-}
-.chord-builder summary::-webkit-details-marker,
-.match-options summary::-webkit-details-marker {
-  display: none;
 }
 .builder-row {
   display: flex;

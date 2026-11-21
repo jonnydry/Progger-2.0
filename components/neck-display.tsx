@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import {
   Popover,
@@ -16,6 +17,7 @@ export function NeckDisplay({
   left: boolean;
   onLeftChange: (left: boolean) => void;
 }) {
+  const leftHandedId = useId();
   return (
     <Popover>
       <PopoverTrigger
@@ -36,11 +38,13 @@ export function NeckDisplay({
         <PopoverDescription>
           Set the neck to match your guitar.
         </PopoverDescription>
-        <label className="neck-handedness">
+        <label className="neck-handedness" htmlFor={leftHandedId}>
           <span>
             Left-handed<small>Mirror the fretboard direction</small>
           </span>
           <input
+            id={leftHandedId}
+            name="left-handed"
             type="checkbox"
             checked={left}
             onChange={(event) => onLeftChange(event.target.checked)}

@@ -75,6 +75,7 @@ export function PhraseLauncher({
   const [attempt, setAttempt] = useState(0);
   const [signalSeen, setSignalSeen] = useState(openSignal);
   const opened = useRef(false);
+  const pendingScroll = useRef(0);
   if (openSignal !== signalSeen) {
     setSignalSeen(openSignal);
     if (openSignal) {
@@ -86,6 +87,22 @@ export function PhraseLauncher({
       setAttempt((current) => current + 1);
     }
   }
+
+  useEffect(() => {
+    if (openSignal > 0) pendingScroll.current = openSignal;
+  }, [openSignal]);
+
+  useEffect(() => {
+    if (!open || !Panel || pendingScroll.current <= 0) return;
+    pendingScroll.current = 0;
+    const frame = window.requestAnimationFrame(() => {
+      const target =
+        document.querySelector('#phrase-practice .deck-key-play') ??
+        document.getElementById('phrase-practice');
+      target?.scrollIntoView({ block: 'center', behavior: 'instant' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, Panel, openSignal]);
 
   useEffect(() => {
     if (!open) {
@@ -144,7 +161,6 @@ export function PhraseLauncher({
           className="phrase-launcher"
           aria-label="Phrase practice"
         >
-          {tabHost}
           {/* One of failed, loading, or the panel — never two at once. */}
           {failed ? (
             <p className="muted">
@@ -171,6 +187,7 @@ export function PhraseLauncher({
               onMarks={onMarks}
             />
           )}
+          {tabHost}
         </section>
       )}
     </>

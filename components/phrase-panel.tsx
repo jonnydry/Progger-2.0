@@ -1285,9 +1285,11 @@ export function PhrasePanel({
   );
   const tempoControl = (
     <div key="tempo" className="deck-setting deck-setting-tempo">
-      <label className="phrase-tempo deck-fader">
+      <label className="phrase-tempo deck-fader" htmlFor="phrase-tempo">
         <span className="deck-legend">Tempo</span>
         <input
+          id="phrase-tempo"
+          name="phrase-tempo"
           type="range"
           min={PHRASE_TEMPO_MIN}
           max={tempoMax}
@@ -1322,9 +1324,14 @@ export function PhrasePanel({
   );
   const swingControl = (
     <div key="swing" className="deck-setting deck-setting-swing">
-      <label className="phrase-tempo phrase-swing deck-fader">
+      <label
+        className="phrase-tempo phrase-swing deck-fader"
+        htmlFor="phrase-swing"
+      >
         <span className="deck-legend">Swing</span>
         <input
+          id="phrase-swing"
+          name="phrase-swing"
           type="range"
           min={SWING_AMOUNT_MIN}
           max={SWING_AMOUNT_MAX}
@@ -1458,14 +1465,9 @@ export function PhrasePanel({
       </div>
     </div>
   );
-  const staffHost =
-    typeof document === 'undefined'
-      ? null
-      : document.getElementById('phrase-tab-host');
-  const portaledHeader = sounding.ok && dots === 'shown' && Boolean(staffHost);
   return (
     <div className="phrase-panel" data-scale-id={scaleId}>
-      {!portaledHeader && studioHeader}
+      {studioHeader}
       <div className={`phrase-deck deck-tape${busy ? ' is-rolling' : ''}`}>
         {/*
           The cassette bay: the window is the face of the deck and the keys
@@ -1637,10 +1639,12 @@ export function PhrasePanel({
                 <span id="phrase-seed-note" className="sr-only">
                   Same seed replays this phrase.
                 </span>
-                <label className="phrase-seed deck-counter">
+                <label className="phrase-seed deck-counter" htmlFor="phrase-seed">
                   <span className="sr-only">Seed</span>
                   <input
                     ref={seedInputRef}
+                    id="phrase-seed"
+                    name="phrase-seed"
                     // The seed is an editable control, like the bars toggle: it shows
                     // the phrase you are editing, which can be queued behind the bar
                     // line. The heading, staff, and frets show what is sounding, so
@@ -1679,7 +1683,6 @@ export function PhrasePanel({
       </p>
       {sounding.ok && dots === 'shown' && (
         <PhraseStaff
-          header={portaledHeader ? studioHeader : undefined}
           notes={notes}
           bars={frame.bars}
           turnaround={plan?.turnaround}
@@ -2045,7 +2048,6 @@ function staffRows(
 }
 
 function PhraseStaff({
-  header,
   notes,
   bars,
   turnaround,
@@ -2059,7 +2061,6 @@ function PhraseStaff({
   onAuditionStart,
   onAuditionStop,
 }: {
-  header?: ReactNode;
   notes: readonly FingeredNote[];
   bars: 2 | 4;
   turnaround?: string;
@@ -2416,8 +2417,7 @@ function PhraseStaff({
                   ) : null,
                 )}
                 {row.notes.map(({ index, note, x, y }) => {
-                  const fretText =
-                    note.fret === 0 ? 'open' : `fret ${note.fret}`;
+                  const fretText = `fret ${note.fret}`;
                   const stringNum = 6 - note.string;
                   const noteLabel = noteDescription(note);
                   const landingNote = note.beat >= bars * 4;
@@ -2466,13 +2466,5 @@ function PhraseStaff({
     typeof document === 'undefined'
       ? null
       : document.getElementById('phrase-tab-host');
-  return host
-    ? createPortal(
-        <>
-          {header}
-          {staff}
-        </>,
-        host,
-      )
-    : staff;
+  return host ? createPortal(staff, host) : staff;
 }

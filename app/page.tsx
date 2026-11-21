@@ -701,14 +701,6 @@ export default function Home() {
     }
     setHeldPhrase(item);
     setPhraseOpenSignal((signal) => signal + 1);
-    window.setTimeout(() => {
-      const host = document.getElementById('phrase-tab-host');
-      const target =
-        host && host.childElementCount > 0
-          ? host
-          : document.getElementById('phrase-practice');
-      target?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
-    }, 0);
   }
   function restorePhraseContext(next: {
     scaleRoot: string;

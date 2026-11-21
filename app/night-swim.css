@@ -526,6 +526,7 @@ html:has(.night-swim) {
 }
 .neck-slider input::-webkit-slider-thumb {
   appearance: none;
+  box-sizing: border-box;
   width: 26px;
   height: 9px;
   margin-top: -3px;
@@ -534,6 +535,7 @@ html:has(.night-swim) {
   background: var(--green);
 }
 .neck-slider input::-moz-range-thumb {
+  box-sizing: border-box;
   width: 26px;
   height: 9px;
   border: 1px solid #ccebd0;
@@ -871,16 +873,16 @@ html:has(.night-swim) {
     height: 44px;
   }
   .neck-slider input::-webkit-slider-thumb {
-    width: 34px;
-    height: 22px;
-    margin-top: -9.5px;
-    border-radius: 5px;
+    width: 44px;
+    height: 44px;
+    margin-top: -20.5px;
+    border-radius: 6px;
     box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
   }
   .neck-slider input::-moz-range-thumb {
-    width: 34px;
-    height: 22px;
-    border-radius: 5px;
+    width: 44px;
+    height: 44px;
+    border-radius: 6px;
     box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
   }
   .night-swim .selection-overview {
@@ -1304,13 +1306,6 @@ html:has(.night-swim) {
   min-height: 44px;
   color: #c2ced4;
   cursor: pointer;
-  list-style: none;
-}
-.voicing-catalog summary::-webkit-details-marker {
-  display: none;
-}
-.voicing-catalog summary::marker {
-  content: none;
 }
 .voicing-catalog summary:hover,
 html[data-theme='day'] .voicing-catalog summary:hover,
@@ -1430,5 +1425,24 @@ html:is([data-scene='tidepool'], [data-scene='twilight'])
   .voicing-stepper > button:last-child {
     grid-column: 3;
     grid-row: 1;
+  }
+}
+@media (pointer: coarse) {
+  .neck-slider,
+  .neck-slider input {
+    height: 44px;
+  }
+  .neck-slider input::-webkit-slider-thumb {
+    width: 44px;
+    height: 44px;
+    margin-top: -20.5px;
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
+  }
+  .neck-slider input::-moz-range-thumb {
+    width: 44px;
+    height: 44px;
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
   }
 }

@@ -340,24 +340,11 @@
   color: var(--quiet);
   font-size: 13px;
   cursor: pointer;
-  list-style: none;
 }
 .per-chord-section > summary {
   min-height: 56px;
   font-size: 19px;
   color: var(--foreground);
-}
-.match-explanation > summary::-webkit-details-marker,
-.alternate-modes > summary::-webkit-details-marker,
-.per-chord-section > summary::-webkit-details-marker,
-.catalog-note > summary::-webkit-details-marker {
-  display: none;
-}
-.match-explanation > summary::marker,
-.alternate-modes > summary::marker,
-.per-chord-section > summary::marker,
-.catalog-note > summary::marker {
-  content: none;
 }
 .match-explanation > summary:hover,
 .alternate-modes > summary:hover,

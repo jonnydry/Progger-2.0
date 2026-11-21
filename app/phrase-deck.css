@@ -623,13 +623,6 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
-  list-style: none;
-}
-.deck-fold-summary::-webkit-details-marker {
-  display: none;
-}
-.deck-fold-summary::marker {
-  content: none;
 }
 .deck-fold-summary .deck-legend {
   margin: 0;
@@ -736,13 +729,6 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
-  list-style: none;
-}
-.deck-seed > summary::-webkit-details-marker {
-  display: none;
-}
-.deck-seed > summary::marker {
-  content: none;
 }
 .deck-seed > summary .deck-legend {
   margin: 0;
@@ -989,6 +975,14 @@
   }
   .under-neck .phrase-heading {
     padding: 8px 10px;
+  }
+  .phrase-quick-btn,
+  .phrase-quick-step,
+  .phrase-quick-bpm {
+    min-height: 32px;
+  }
+  .phrase-quick-step {
+    min-width: 32px;
   }
   .phrase-deck {
     gap: 8px;

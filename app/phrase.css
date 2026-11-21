@@ -2,7 +2,6 @@
   margin: 0 0 18px;
 }
 .under-neck .phrase-launcher {
-  order: 2;
   width: 100%;
   min-width: 0;
   margin: 0;
@@ -25,15 +24,6 @@
   border-top: 1px solid var(--edge);
   border-radius: var(--radius-panel) var(--radius-panel) 0 0;
   box-shadow: inset 0 1px 0 var(--edge-sheen);
-}
-.under-neck .phrase-tab-host .phrase-heading {
-  margin: 0;
-  border-inline: 0;
-  border-top: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--edge) 68%, transparent);
-  border-radius: calc(var(--radius-panel) - 1px)
-    calc(var(--radius-panel) - 1px) 0 0;
-  box-shadow: none;
 }
 .under-neck .phrase-tab-host .phrase-staff-wrap {
   padding: 10px 14px 10px;
@@ -150,9 +140,9 @@
   padding: 0;
   background: var(--surface-panel);
   border: 1px solid var(--edge);
-  border-bottom: 0;
-  border-radius: var(--radius-panel) var(--radius-panel) 0 0;
-  box-shadow: inset 0 1px 0 var(--edge-sheen);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
+  box-shadow: 0 2px 0 var(--edge-drop);
   container-type: inline-size;
   container-name: phrase-tab;
 }
@@ -161,6 +151,11 @@
   border-top-color: color-mix(in srgb, var(--edge) 75%, transparent);
   border-radius: 0 0 var(--radius-panel) var(--radius-panel);
   box-shadow: 0 2px 0 var(--edge-drop);
+}
+.under-neck .phrase-launcher:has(.phrase-tab-host:not(:empty)) .phrase-deck {
+  border-bottom-color: color-mix(in srgb, var(--edge) 75%, transparent);
+  border-radius: 0;
+  box-shadow: none;
 }
 .phrase-panel {
   display: grid;
@@ -377,7 +372,7 @@
   right: 0;
   left: 0;
   height: 1px;
-  background: color-mix(in srgb, var(--quiet) 72%, transparent);
+  background: var(--quiet);
   transform: translateY(-0.5px);
 }
 .phrase-staff-grid {
@@ -535,16 +530,6 @@
   }
   .phrase-staff-bar.is-landing {
     width: 50%;
-  }
-}
-@container phrase-tab (max-width: 540px) {
-  .phrase-quick-btn,
-  .phrase-quick-step,
-  .phrase-quick-bpm {
-    min-height: 32px;
-  }
-  .phrase-quick-step {
-    min-width: 32px;
   }
 }
 @media (pointer: coarse) {

@@ -315,6 +315,7 @@ function DroneVolumePopover({
         <input
           ref={sliderRef}
           id="drone-volume"
+          name="drone-volume"
           type="range"
           min={0}
           max={1}
