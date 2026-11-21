@@ -1,6 +1,6 @@
 'use client';
 import { memo, useMemo, useRef, useState } from 'react';
-import { ArrowRight, Music2 } from 'lucide-react';
+import { ArrowRight, ChevronDown, Music2 } from 'lucide-react';
 import { MatchEntry } from '@/components/match-entry';
 import { NoteSpelling } from '@/components/note-spelling';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
@@ -128,7 +128,14 @@ export const MatchChords = memo(function MatchChords({
           )}
         </div>
         <details className="match-explanation">
-          <summary>Why these notes?</summary>
+          <summary>
+            <span>Why these notes?</span>
+            <ChevronDown
+              className="disclosure-chevron"
+              size={16}
+              aria-hidden="true"
+            />
+          </summary>
           <p>
             This scale contains all the notes from your chords. As the chords
             change, try landing on a note from the chord you’re playing over.
@@ -194,9 +201,16 @@ export const MatchChords = memo(function MatchChords({
         {group.candidates.length > 1 && (
           <details className="alternate-modes">
             <summary>
-              {group.candidates.length - 1} other{' '}
-              {group.candidates.length === 2 ? 'name' : 'names'} for this note
-              collection
+              <span>
+                {group.candidates.length - 1} other{' '}
+                {group.candidates.length === 2 ? 'name' : 'names'} for this note
+                collection
+              </span>
+              <ChevronDown
+                className="disclosure-chevron"
+                size={16}
+                aria-hidden="true"
+              />
             </summary>
             <p>
               Same notes, different home note. Choose a name to see its roots
@@ -334,7 +348,14 @@ export const MatchChords = memo(function MatchChords({
               className="per-chord-section"
               open={groups.length === 0 ? true : undefined}
             >
-              <summary>Follow each chord</summary>
+              <summary>
+                <span>Follow each chord</span>
+                <ChevronDown
+                  className="disclosure-chevron"
+                  size={16}
+                  aria-hidden="true"
+                />
+              </summary>
               <p>
                 Each choice covers this chord, not necessarily the whole
                 progression. The neck keeps all your chords so you can compare
@@ -369,7 +390,14 @@ export const MatchChords = memo(function MatchChords({
               </div>
             </details>
             <details className="catalog-note">
-              <summary>About these suggestions</summary>
+              <summary>
+                <span>About these suggestions</span>
+                <ChevronDown
+                  className="disclosure-chevron"
+                  size={16}
+                  aria-hidden="true"
+                />
+              </summary>
               <p>
                 We compare your chords with {SCALES.length} scales and modes:{' '}
                 {catalogFamilies.join(', ')}. Chords are treated as equal

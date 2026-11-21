@@ -269,15 +269,35 @@ input {
 }
 .skip-link {
   position: fixed;
-  top: -100px;
-  left: 20px;
+  top: 10px;
+  left: 16px;
   z-index: 100;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
   background: var(--green);
   color: var(--ink);
-  padding: 12px;
+  border-radius: var(--radius-control);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-decoration: none;
 }
-.skip-link:focus {
-  top: 10px;
+.skip-link:focus,
+.skip-link:focus-visible {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  height: auto;
+  min-height: var(--tap);
+  padding: 10px 14px;
+  overflow: visible;
+  clip-path: none;
+  box-shadow: var(--shadow-float);
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 .site-header {
   position: sticky;
@@ -649,11 +669,12 @@ main {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 0;
+  margin-top: 8px;
   min-width: 0;
 }
 .practice-bar {
+  order: 0;
   display: flex;
   flex-flow: row nowrap;
   align-items: center;
@@ -662,12 +683,16 @@ main {
   min-width: 0;
   min-height: 44px;
 }
+.under-neck:has(.phrase-launcher) > .practice-bar {
+  margin-bottom: 10px;
+}
 .practice-bar-rule {
   flex: 0 0 1px;
   align-self: center;
   width: 1px;
-  height: 28px;
-  background: var(--edge);
+  height: 24px;
+  margin-left: auto;
+  background: color-mix(in srgb, var(--edge) 75%, transparent);
 }
 .phrase-open {
   display: inline-flex;
@@ -682,7 +707,7 @@ main {
   padding: 0 14px;
   color: var(--green);
   background: var(--surface-key-lit);
-  border: 1px solid var(--green);
+  border: 1px solid var(--edge-lit);
   border-radius: var(--radius-control);
   box-shadow: inset 0 1px 0 var(--edge-sheen);
   font-size: var(--text-sm);
@@ -691,15 +716,18 @@ main {
   letter-spacing: 0;
   white-space: nowrap;
 }
+.practice-bar-rule + .phrase-open {
+  margin-left: 0;
+}
 /* Open is a surface step, like Stash. The green fill stays on Play. */
 .phrase-open:hover,
 .phrase-open[aria-expanded='true'] {
-  color: var(--accent-foreground);
-  background: var(--accent);
+  color: var(--green);
+  background: var(--surface-key-on);
   border-color: var(--green);
 }
 .phrase-open[aria-expanded='true'] {
-  box-shadow: inset 0 0 0 2px var(--primary-foreground);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 42%, transparent);
 }
 .phrase-open:focus-visible {
   outline: var(--focus-ring);

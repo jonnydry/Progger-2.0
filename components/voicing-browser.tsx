@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowLeft, ArrowRight } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronDown } from 'lucide-react';
 import { useRef } from 'react';
 import { pretty } from '@/lib/music';
 import { readableNoteName, noteDescription } from '@/lib/note-presentation';
@@ -192,65 +192,67 @@ export function VoicingBrowser({
           The displayed shape stays selected until you choose another.
         </output>
       )}
-      <div className="voicing-stepper">
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Previous voicing"
-          disabled={position <= 0}
-          onClick={() => onSelect(choices[position - 1].originalIndex)}
-        >
-          <ArrowLeft size={18} />
-        </button>
-        <div className="voicing-current" aria-live="polite" aria-atomic="true">
-          <strong>
-            {chordName}{' '}
+      <div className="voicing-stage">
+        <div className="voicing-stepper">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Previous voicing"
+            disabled={position <= 0}
+            onClick={() => onSelect(choices[position - 1].originalIndex)}
+          >
+            <ArrowLeft size={18} />
+          </button>
+          <div className="voicing-current" aria-live="polite" aria-atomic="true">
+            <strong>
+              {chordName}{' '}
+              <span>
+                ·{' '}
+                {current.omittedNotes.length > 0
+                  ? `${pretty(readableNoteName(current.bass))} in bass`
+                  : current.inversion.replace(/^[b#]+\d+/, pretty)}
+              </span>
+              {current.rootless && (
+                <small className="voicing-badge">Rootless</small>
+              )}
+            </strong>
             <span>
-              ·{' '}
-              {current.omittedNotes.length > 0
-                ? `${pretty(readableNoteName(current.bass))} in bass`
-                : current.inversion.replace(/^[b#]+\d+/, pretty)}
+              {current.name} · {rangeLabel(current)}
+              {position >= 0 && (
+                <>
+                  {' '}
+                  · {position + 1} of {choices.length}
+                </>
+              )}
             </span>
-            {current.rootless && (
-              <small className="voicing-badge">Rootless</small>
+            {current.omittedNotes.length > 0 && (
+              <span className="voicing-omissions">
+                Omitted:{' '}
+                {current.omittedNotes
+                  .map(
+                    (note) =>
+                      `${noteDescription(note)} (${note.degree === '1' ? 'root' : pretty(note.degree)})`,
+                  )
+                  .join(' · ')}
+              </span>
             )}
-          </strong>
-          <span>
-            {current.name} · {rangeLabel(current)}
-            {position >= 0 && (
-              <>
-                {' '}
-                · {position + 1} of {choices.length}
-              </>
-            )}
-          </span>
-          {current.omittedNotes.length > 0 && (
-            <span className="voicing-omissions">
-              Omitted:{' '}
-              {current.omittedNotes
-                .map(
-                  (note) =>
-                    `${noteDescription(note)} (${note.degree === '1' ? 'root' : pretty(note.degree)})`,
-                )
-                .join(' · ')}
-            </span>
-          )}
+          </div>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Next voicing"
+            disabled={position < 0 || position >= choices.length - 1}
+            onClick={() => onSelect(choices[position + 1].originalIndex)}
+          >
+            <ArrowRight size={18} />
+          </button>
         </div>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Next voicing"
-          disabled={position < 0 || position >= choices.length - 1}
-          onClick={() => onSelect(choices[position + 1].originalIndex)}
-        >
-          <ArrowRight size={18} />
-        </button>
+        <VoicingAudition
+          key={`${symbol}:${current.frets.join(',')}`}
+          frets={current.frets}
+          active={active}
+        />
       </div>
-      <VoicingAudition
-        key={`${symbol}:${current.frets.join(',')}`}
-        frets={current.frets}
-        active={active}
-      />
       <p className="voicing-explanation">
         {current.omittedNotes.length === 0 && (
           <>{noteDescription(current.bass)} is the lowest sounding note.</>
@@ -263,13 +265,20 @@ export function VoicingBrowser({
       {choices.length > 0 && (
         <details className="voicing-catalog" ref={catalog}>
           <summary ref={catalogSummary}>
-            Browse {choices.length} shapes
-            {nearFret !== null && (
-              <span className="voicing-catalog-order">
-                {' '}
-                · nearest fret {nearFret} first
-              </span>
-            )}
+            <span>
+              Browse {choices.length} shapes
+              {nearFret !== null && (
+                <span className="voicing-catalog-order">
+                  {' '}
+                  · nearest fret {nearFret} first
+                </span>
+              )}
+            </span>
+            <ChevronDown
+              className="disclosure-chevron"
+              size={16}
+              aria-hidden="true"
+            />
           </summary>
           <fieldset className="voicing-list" aria-label="Available voicings">
             <div className="voicing-list-grid">

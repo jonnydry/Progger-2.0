@@ -65,31 +65,38 @@
   outline-offset: var(--focus-offset);
 }
 .connection-caption {
-  padding: 14px 16px;
-  margin-bottom: 18px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 20px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
   border-left: 2px solid var(--green);
-  background: var(--card);
-  border-radius: 0 8px 8px 0;
-  font-size: 12px;
+  background: color-mix(in srgb, var(--card) 75%, transparent);
+  border-radius: var(--radius-control);
+  font-size: var(--text-xs);
   color: var(--quiet);
-  line-height: 1.8;
+  line-height: 1.55;
 }
 .connection-caption p {
   margin: 0;
 }
 .connection-caption strong {
   color: var(--foreground);
-  font-weight: 400;
+  font-weight: 600;
 }
 .connection-caption .pan-hint {
+  flex-basis: 100%;
   font-size: var(--text-xs);
-  margin-top: 7px;
+  margin-top: 0;
 }
 .connection-legend {
   display: flex;
-  gap: 16px;
+  gap: 14px;
   flex-wrap: wrap;
-  margin-top: 10px;
+  margin-top: 0;
 }
 .connection-legend > span {
   display: flex;
