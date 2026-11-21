@@ -982,7 +982,10 @@
    the Swing line below it needs no empty slot. */
 @media (max-width: 640px) {
   .under-neck .phrase-tab-host {
-    padding: 10px 10px 8px;
+    padding: 0;
+  }
+  .under-neck .phrase-tab-host .phrase-staff-wrap {
+    padding: 8px 10px;
   }
   .under-neck .phrase-heading {
     padding: 8px 10px;

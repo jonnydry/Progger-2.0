@@ -50,6 +50,7 @@ type PanelProps = {
 
 export function PhraseLauncher({
   leading,
+  tabHost,
   active,
   scaleRoot,
   scaleId,
@@ -63,7 +64,11 @@ export function PhraseLauncher({
   capture,
   openSignal = 0,
   onMarks,
-}: PanelProps & { leading?: ReactNode; openSignal?: number }) {
+}: PanelProps & {
+  leading?: ReactNode;
+  tabHost?: ReactNode;
+  openSignal?: number;
+}) {
   const [open, setOpen] = useState(false);
   const [Panel, setPanel] = useState<ComponentType<PanelProps> | null>(null);
   const [failed, setFailed] = useState(false);
@@ -139,6 +144,7 @@ export function PhraseLauncher({
           className="phrase-launcher"
           aria-label="Phrase practice"
         >
+          {tabHost}
           {/* One of failed, loading, or the panel — never two at once. */}
           {failed ? (
             <p className="muted">

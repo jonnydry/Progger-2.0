@@ -9,6 +9,7 @@ import {
   useState,
   useSyncExternalStore,
   type ChangeEvent,
+  type KeyboardEvent,
   type ReactNode,
   type RefObject,
 } from 'react';
@@ -25,9 +26,12 @@ import {
 } from 'lucide-react';
 import { diatonicChords, parseChord } from '@/lib/harmony';
 import { pretty, SCALES, type Note } from '@/lib/music';
+import { noteDescription } from '@/lib/note-presentation';
 import {
+  auditionDecaySec,
   bindPhraseLifecycle,
   clampPhraseTempo,
+  PHRASE_END_RELEASE_SEC,
   PHRASE_TEMPO_DEFAULT,
   PHRASE_TEMPO_MAX,
   PHRASE_TEMPO_MIN,
@@ -401,11 +405,17 @@ export function PhrasePanel({
       setSeedText(String(held.seed));
     }
   }
+  const syncedHeldId = useRef<string | null>(null);
   useEffect(() => {
-    if (!held || heldCursor !== held.id) return;
+    if (!held) {
+      syncedHeldId.current = null;
+      return;
+    }
+    if (syncedHeldId.current === held.id) return;
+    syncedHeldId.current = held.id;
     tempoRef.current = held.tempo;
     swingRef.current = held.swing;
-  }, [held, heldCursor]);
+  }, [held]);
   const history = useSyncExternalStore(
     subscribePhraseHistory,
     getPhraseHistory,
@@ -1046,22 +1056,33 @@ export function PhrasePanel({
       setNotice('');
     }, 1500);
   }
+  const [playGen, setPlayGen] = useState(0);
   function startPlayback() {
     if (!phrase.ok) return;
+    setPlayGen((current) => current + 1);
     dispatchPhraseStop(window, 'panel');
-    const tempoNow = clampPhraseTempo(slow ? tempo / 2 : tempo);
+    const tempoVal = tempoRef.current;
+    const swingVal = swingRef.current;
+    const tempoNow = clampPhraseTempo(slow ? tempoVal / 2 : tempoVal);
     soundingTempo.current = tempoNow;
-    soundingSwing.current = swing;
-    soundingFeel.current = { tempo, slow, swing };
+    soundingSwing.current = swingVal;
+    soundingFeel.current = { tempo: tempoVal, slow, swing: swingVal };
     queuedFeel.current = null;
     live.current = true;
     void player.current?.start({
       notes: phrase.phrase.notes,
       bars,
       tempo: tempoNow,
-      swing,
+      swing: swingVal,
       loop,
     });
+  }
+  function stopPlayback() {
+    live.current = false;
+    // Stop cancels the handoff, so drop the frame waiting for it. A
+    // lingering queued frame would freeze the panel on the old phrase.
+    dropQueued();
+    player.current?.stop();
   }
   function toggleLoop() {
     // Turning Loop off over a live pass sends that pass into its
@@ -1077,11 +1098,7 @@ export function PhrasePanel({
     if (!phrase.ok) return;
     setNotice('');
     if (live.current || status === 'playing' || status === 'starting') {
-      live.current = false;
-      // Stop cancels the handoff, so drop the frame waiting for it. A
-      // lingering queued frame would freeze the panel on the old phrase.
-      dropQueued();
-      player.current?.stop();
+      stopPlayback();
       return;
     }
     startPlayback();
@@ -1107,6 +1124,23 @@ export function PhrasePanel({
       return;
     }
     startPlayback();
+  }
+  const quickStep = slow ? 4 : 8;
+  function stepQuickTempo(delta: number) {
+    const currentSounding = clampPhraseTempo(
+      slow ? tempoRef.current / 2 : tempoRef.current,
+    );
+    const targetSounding = clampPhraseTempo(
+      Math.min(
+        tempoMax,
+        Math.max(PHRASE_TEMPO_MIN, Math.round(currentSounding + delta)),
+      ),
+    );
+    const written = clampPhraseTempo(slow ? targetSounding * 2 : targetSounding);
+    if (written === tempoRef.current) return;
+    tempoRef.current = written;
+    setTempo(written);
+    if (live.current) startPlayback();
   }
   const busy = status === 'playing' || status === 'starting';
   const plan = sounding.ok ? sounding.phrase.plan : null;
@@ -1355,9 +1389,9 @@ export function PhrasePanel({
     turnaroundOptions,
   );
   const hasPins = buildChips[0] === 'Pinned';
-  return (
-    <div className="phrase-panel" data-scale-id={scaleId}>
-      <div className="phrase-heading">
+  const studioHeader = (
+    <div className="phrase-heading">
+      <div className="phrase-heading-context">
         <h2>Phrase</h2>
         <p>
           Over {pretty(frame.chordSymbol)}
@@ -1365,6 +1399,73 @@ export function PhrasePanel({
           {pretty(frame.scaleRoot)} {frame.scaleName}.
         </p>
       </div>
+      <div className="phrase-studio-quick">
+        <fieldset className="phrase-quick-group phrase-quick-bars">
+          <legend className="sr-only">Quick length</legend>
+          <button
+            type="button"
+            className="phrase-quick-btn"
+            aria-pressed={bars === 2}
+            onClick={() => chooseBars(2)}
+          >
+            2-bar
+          </button>
+          <button
+            type="button"
+            className="phrase-quick-btn"
+            aria-pressed={bars === 4}
+            onClick={() => chooseBars(4)}
+          >
+            4-bar
+          </button>
+        </fieldset>
+        <fieldset className="phrase-quick-group phrase-quick-tempo">
+          <legend className="sr-only">Quick tempo</legend>
+          <button
+            type="button"
+            className="phrase-quick-step"
+            aria-label={`Slower tempo (−${quickStep} BPM)`}
+            title={`Slower (−${quickStep} BPM)`}
+            disabled={playbackTempo <= PHRASE_TEMPO_MIN}
+            onClick={() => stepQuickTempo(-quickStep)}
+          >
+            −
+          </button>
+          <output
+            className="phrase-quick-bpm"
+            aria-live="off"
+            title={
+              trueHalf
+                ? `${playbackTempo} BPM (half of ${tempo})`
+                : halfAtFloor
+                  ? `${playbackTempo} BPM (half speed, minimum)`
+                  : `${playbackTempo} BPM`
+            }
+          >
+            {Math.round(playbackTempo)} BPM
+          </output>
+          <button
+            type="button"
+            className="phrase-quick-step"
+            aria-label={`Faster tempo (+${quickStep} BPM)`}
+            title={`Faster (+${quickStep} BPM)`}
+            disabled={playbackTempo >= tempoMax}
+            onClick={() => stepQuickTempo(quickStep)}
+          >
+            +
+          </button>
+        </fieldset>
+      </div>
+    </div>
+  );
+  const staffHost =
+    typeof document === 'undefined'
+      ? null
+      : document.getElementById('phrase-tab-host');
+  const portaledHeader = sounding.ok && dots === 'shown' && Boolean(staffHost);
+  return (
+    <div className="phrase-panel" data-scale-id={scaleId}>
+      {!portaledHeader && studioHeader}
       <div className={`phrase-deck deck-tape${busy ? ' is-rolling' : ''}`}>
         {/*
           The cassette bay: the window is the face of the deck and the keys
@@ -1578,18 +1679,23 @@ export function PhrasePanel({
       </p>
       {sounding.ok && dots === 'shown' && (
         <PhraseStaff
+          header={portaledHeader ? studioHeader : undefined}
           notes={notes}
           bars={frame.bars}
           turnaround={plan?.turnaround}
           looping={loop && !finishingHold && !armingLoop}
           swing={soundingSwing}
           playing={status === 'playing'}
+          busy={busy}
+          playGen={playGen}
           player={player}
           tempoRef={soundingTempo}
+          onAuditionStart={() => dispatchPhraseStop(window, 'panel')}
+          onAuditionStop={busy ? stopPlayback : undefined}
         />
       )}
       {sounding.ok && (
-        <ol className="sr-only">
+        <ol className="sr-only" aria-label="Phrase notes in order">
           {notes.map((note, index) => {
             const bar = Math.floor(note.beat / 4) + 1;
             const beatInBar = (note.beat % 4) + 1;
@@ -1828,7 +1934,7 @@ function PhrasePins({
             <legend className="deck-legend">Bar 3–4</legend>
             {bars !== 4 ? (
               <span id="phrase-turnaround-hint" className="sr-only">
-                Switch to 4 bars in Feel to pick a turnaround chord.
+                Switch to 4 bars to pick a turnaround chord.
               </span>
             ) : null}
             <div className="phrase-pin-line">
@@ -1939,33 +2045,158 @@ function staffRows(
 }
 
 function PhraseStaff({
+  header,
   notes,
   bars,
   turnaround,
   looping,
   swing,
   playing,
+  busy,
+  playGen,
   player,
   tempoRef,
+  onAuditionStart,
+  onAuditionStop,
 }: {
+  header?: ReactNode;
   notes: readonly FingeredNote[];
   bars: 2 | 4;
   turnaround?: string;
   looping: boolean;
   swing: RefObject<number>;
   playing: boolean;
+  busy: boolean;
+  playGen: number;
   player: RefObject<PhrasePlayer | null>;
   tempoRef: RefObject<number>;
+  onAuditionStart?: () => void;
+  onAuditionStop?: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const [preview, setPreview] = useState<{
+    notes: readonly FingeredNote[];
+    index: number;
+    gen: number;
+  } | null>(null);
+  const [focusState, setFocusState] = useState<{
+    notes: readonly FingeredNote[];
+    index: number;
+  }>({ notes, index: 0 });
+  const previewingRef = useRef(false);
+  const suppressNextNotesStopRef = useRef(false);
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rows = useMemo(
     () => staffRows(notes, bars, turnaround),
     [notes, bars, turnaround],
   );
+  const previewIndex =
+    !busy && preview && preview.notes === notes && preview.gen === playGen
+      ? preview.index
+      : null;
+  const clampedFocus =
+    notes.length === 0 || focusState.notes !== notes
+      ? 0
+      : Math.min(focusState.index, notes.length - 1);
+  const clearPreviewTimer = useCallback(() => {
+    if (previewTimerRef.current !== null) {
+      clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => {
+    if (!busy) return;
+    clearPreviewTimer();
+    previewingRef.current = false;
+  }, [busy, clearPreviewTimer]);
+  useEffect(() => {
+    if (suppressNextNotesStopRef.current) {
+      suppressNextNotesStopRef.current = false;
+      return;
+    }
+    clearPreviewTimer();
+    previewingRef.current = false;
+    player.current?.stopAudition(false);
+    publishPhrasePlayhead(null);
+  }, [notes, player, clearPreviewTimer]);
+  useEffect(
+    () => () => {
+      clearPreviewTimer();
+      previewingRef.current = false;
+      player.current?.stopAudition(false);
+      publishPhrasePlayhead(null);
+    },
+    [player, clearPreviewTimer],
+  );
+  const activePreviewNote =
+    previewIndex !== null ? (notes[previewIndex] ?? null) : null;
+  useEffect(() => {
+    if (busy) return;
+    publishPhrasePlayhead(
+      activePreviewNote
+        ? `${activePreviewNote.string}:${activePreviewNote.fret}`
+        : null,
+    );
+  }, [busy, activePreviewNote]);
+  function audition(index: number) {
+    const note = notes[index];
+    if (!note) return;
+    clearPreviewTimer();
+    previewingRef.current = true;
+    setFocusState({ notes, index });
+    setPreview({ notes, index, gen: playGen });
+    onAuditionStart?.();
+    if (onAuditionStop) {
+      // Stopping a queued loop can swap `notes` from the held frame to the live
+      // frame on the next commit; keep this audition alive through that commit.
+      suppressNextNotesStopRef.current = true;
+      onAuditionStop();
+    }
+    publishPhrasePlayhead(`${note.string}:${note.fret}`);
+    void player.current?.auditionNote(note);
+    const holdMs = Math.round(
+      (auditionDecaySec(note.duration) + PHRASE_END_RELEASE_SEC) * 1000,
+    );
+    previewTimerRef.current = setTimeout(() => {
+      previewTimerRef.current = null;
+      previewingRef.current = false;
+      setPreview(null);
+    }, holdMs);
+  }
+  function focusFret(target: number) {
+    setFocusState({ notes, index: target });
+    const button = rootRef.current?.querySelector<HTMLButtonElement>(
+      `button.phrase-staff-fret[data-phrase-note="${target}"]`,
+    );
+    button?.focus();
+  }
+  function handleFretKey(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (!notes.length) return;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      focusFret(Math.min(notes.length - 1, index + 1));
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusFret(Math.max(0, index - 1));
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      focusFret(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      focusFret(notes.length - 1);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      clearPreviewTimer();
+      previewingRef.current = false;
+      setPreview(null);
+      player.current?.stopAudition(false);
+      publishPhrasePlayhead(null);
+    }
+  }
   useEffect(() => {
     const root = rootRef.current;
     if (!root || !playing) {
-      publishPhrasePlayhead(null);
+      if (!previewingRef.current) publishPhrasePlayhead(null);
       root?.querySelectorAll('.is-current').forEach((node) => {
         node.classList.remove('is-current');
       });
@@ -2051,7 +2282,7 @@ function PhraseStaff({
     frame = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(frame);
-      publishPhrasePlayhead(null);
+      if (!previewingRef.current) publishPhrasePlayhead(null);
       for (const { head } of heads) head.hidden = true;
       for (const { mark } of marks) mark.classList.remove('is-current');
     };
@@ -2060,12 +2291,15 @@ function PhraseStaff({
   const hasChromatic = notes.some((note) => note.degree === 'chr');
   const hasOpen = notes.some((note) => note.finger === 0);
   const staff = (
-    <div className="phrase-staff-wrap" aria-hidden="true">
-      <div className="phrase-staff-header">
+    <section
+      className="phrase-staff-wrap"
+      aria-label="Phrase tablature — select a note to hear it"
+    >
+      <div className="phrase-staff-header" aria-hidden="true">
         <span className="phrase-staff-title">
           Tablature
           <span className="phrase-staff-meta">
-            {bars} bars
+            Select a note to hear
             {turnaround ? ` · bars 3–4 → ${pretty(turnaround)}` : ''}
           </span>
         </span>
@@ -2094,6 +2328,10 @@ function PhraseStaff({
           </span>
         </div>
       </div>
+      <p id="phrase-tab-hint" className="sr-only">
+        Use Left and Right arrows to move between notes, Enter or Space to hear,
+        Escape to stop.
+      </p>
       <div
         className="phrase-staff"
         ref={rootRef}
@@ -2113,15 +2351,15 @@ function PhraseStaff({
                   : undefined
             }
           >
-            <div className="phrase-staff-caption">
+            <div className="phrase-staff-caption" aria-hidden="true">
               {row.label}
               {row.landing && looping ? ' · skipped' : ''}
             </div>
-            <div className="phrase-staff-lane">
+            <div className="phrase-staff-lane" aria-hidden="true">
               {row.notes.map(({ index, note, x }) => (
                 <span
                   key={`finger-${index}`}
-                  className="phrase-staff-finger"
+                  className={`phrase-staff-finger${previewIndex === index ? ' is-preview' : ''}`}
                   data-phrase-note={index}
                   style={{ left: x }}
                 >
@@ -2131,7 +2369,7 @@ function PhraseStaff({
               ))}
             </div>
             <div className="phrase-staff-neck">
-              <div className="phrase-staff-names">
+              <div className="phrase-staff-names" aria-hidden="true">
                 {['e', 'B', 'G', 'D', 'A', 'E'].map((name) => (
                   <span key={name}>{name}</span>
                 ))}
@@ -2141,6 +2379,7 @@ function PhraseStaff({
                   <span
                     key={`line-${name}`}
                     className="phrase-string-line"
+                    aria-hidden="true"
                     style={{ top: `${((index + 0.5) / 6) * 100}%` }}
                   />
                 ))}
@@ -2148,6 +2387,7 @@ function PhraseStaff({
                   <span
                     key={left}
                     className="phrase-staff-grid"
+                    aria-hidden="true"
                     data-barline={
                       lineIndex === 0
                         ? 'start'
@@ -2161,6 +2401,7 @@ function PhraseStaff({
                 <span
                   className="phrase-playhead"
                   data-phrase-playhead={row.id}
+                  aria-hidden="true"
                   hidden
                 />
                 {row.notes.map(({ index, note, x, y, holdWidth }) =>
@@ -2168,26 +2409,48 @@ function PhraseStaff({
                     <span
                       key={`hold-${index}`}
                       className="phrase-staff-hold"
+                      aria-hidden="true"
                       data-passing={note.chordTone ? undefined : 'true'}
                       style={{ left: x, top: y, width: holdWidth }}
                     />
                   ) : null,
                 )}
-                {row.notes.map(({ index, note, x, y }) => (
-                  <span
-                    key={`fret-${index}`}
-                    className="phrase-staff-fret"
-                    data-passing={note.chordTone ? undefined : 'true'}
-                    data-chromatic={note.degree === 'chr' ? 'true' : undefined}
-                    data-phrase-note={index}
-                    style={{ left: x, top: y }}
-                  >
-                    {note.fret}
-                  </span>
-                ))}
+                {row.notes.map(({ index, note, x, y }) => {
+                  const fretText =
+                    note.fret === 0 ? 'open' : `fret ${note.fret}`;
+                  const stringNum = 6 - note.string;
+                  const noteLabel = noteDescription(note);
+                  const landingNote = note.beat >= bars * 4;
+                  const barNum = Math.floor(note.beat / 4) + 1;
+                  const beatInBar = landingNote
+                    ? note.beat - bars * 4 + 1
+                    : (note.beat % 4) + 1;
+                  const where = landingNote
+                    ? `landing beat ${beatInBar}${looping ? ', skipped while looping' : ''}`
+                    : `bar ${barNum} beat ${beatInBar}`;
+                  return (
+                    <button
+                      key={`fret-${index}`}
+                      type="button"
+                      className={`phrase-staff-fret${previewIndex === index ? ' is-preview' : ''}`}
+                      tabIndex={index === clampedFocus ? 0 : -1}
+                      aria-label={`Play ${noteLabel}, string ${stringNum} ${fretText}, ${where}`}
+                      aria-describedby="phrase-tab-hint"
+                      title={`${noteLabel} · string ${stringNum} ${fretText} · play note`}
+                      data-passing={note.chordTone ? undefined : 'true'}
+                      data-chromatic={note.degree === 'chr' ? 'true' : undefined}
+                      data-phrase-note={index}
+                      style={{ left: x, top: y }}
+                      onClick={() => audition(index)}
+                      onKeyDown={(event) => handleFretKey(event, index)}
+                    >
+                      {note.fret}
+                    </button>
+                  );
+                })}
               </div>
             </div>
-            <div className="phrase-staff-beats">
+            <div className="phrase-staff-beats" aria-hidden="true">
               {row.beats.map((beat) => (
                 <span key={beat.label} style={{ left: beat.x }}>
                   {beat.label}
@@ -2197,11 +2460,19 @@ function PhraseStaff({
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
   const host =
     typeof document === 'undefined'
       ? null
       : document.getElementById('phrase-tab-host');
-  return host ? createPortal(staff, host) : staff;
+  return host
+    ? createPortal(
+        <>
+          {header}
+          {staff}
+        </>,
+        host,
+      )
+    : staff;
 }

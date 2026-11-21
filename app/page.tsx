@@ -1109,9 +1109,11 @@ export default function Home() {
                     onRestoreContext={restorePhraseContext}
                     capture={trayCapture}
                     openSignal={phraseOpenSignal}
+                    tabHost={
+                      <div id="phrase-tab-host" className="phrase-tab-host" />
+                    }
                     onMarks={showPhraseMarks}
                   />
-                  <div id="phrase-tab-host" className="phrase-tab-host" />
                 </div>
               }
               notes={selectedVoicing?.soundedNotes ?? notes}

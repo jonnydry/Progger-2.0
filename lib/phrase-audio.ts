@@ -7,6 +7,7 @@ import {
 } from './phrase.ts';
 import {
   scheduleVoicing,
+  voicingMidi,
   type PhraseVoiceOptions,
   type ScheduledVoicing,
 } from './voicing-audio.ts';
@@ -62,8 +63,20 @@ export const PHRASE_TEMPO_MIN = 40;
 export const PHRASE_TEMPO_MAX = 240;
 /** New sessions start here. The number is already quarter notes per minute. */
 export const PHRASE_TEMPO_DEFAULT = 96;
+export const PHRASE_AUDITION_DECAY_MIN_SEC = 0.52;
+export const PHRASE_AUDITION_DECAY_MAX_SEC = 1.05;
 
 export type PhrasePlayback = 'idle' | 'starting' | 'playing' | 'error';
+
+export function auditionDecaySec(duration = 1): number {
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return PHRASE_AUDITION_DECAY_MIN_SEC;
+  }
+  return Math.min(
+    PHRASE_AUDITION_DECAY_MAX_SEC,
+    Math.max(PHRASE_AUDITION_DECAY_MIN_SEC, duration * 0.65),
+  );
+}
 
 export function clampPhraseTempo(tempo: number): number {
   if (!Number.isFinite(tempo)) return PHRASE_TEMPO_DEFAULT;
@@ -911,6 +924,13 @@ export class PhrasePlayer {
     cancel: () => void;
   }[] = [];
   private clock: PhraseClock | null = null;
+  private auditionSerial = 0;
+  private audition: {
+    context: AudioContext;
+    trim: GainNode;
+    voice: ScheduledVoicing;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
   private readonly onState: (state: PhrasePlayback) => void;
 
   constructor(onState: (state: PhrasePlayback) => void) {
@@ -923,6 +943,7 @@ export class PhrasePlayer {
       (this.scheduler?.pending ? 1 : 0) +
       (this.queueTimer != null ? 1 : 0) +
       (this.endTimer ? 1 : 0) +
+      (this.audition ? 1 : 0) +
       this.fades.length
     );
   }
@@ -933,7 +954,10 @@ export class PhrasePlayer {
       (sum, entry) => sum + 1 + entry.voice.voices.length * 3,
       0,
     );
-    return voices + (this.trim ? 1 : 0);
+    const preview = this.audition
+      ? 2 + this.audition.voice.voices.length * 3
+      : 0;
+    return voices + (this.trim ? 1 : 0) + preview;
   }
 
   get isLooping(): boolean {
@@ -1032,8 +1056,105 @@ export class PhrasePlayer {
     if (this.pending) this.pending = { ...this.pending, loop: false };
   }
 
+  stopAudition(immediate = false): void {
+    this.auditionSerial += 1;
+    const active = this.audition;
+    if (!active) return;
+    clearTimeout(active.timer);
+    this.audition = null;
+    this.releaseGraph(
+      active.trim,
+      [{ voice: active.voice, ends: 0, scheduled: 0 }],
+      active.context.currentTime,
+      immediate || this.disposed ? 0 : 0.015,
+    );
+  }
+
+  /** Pluck one tablature note through the phrase bus without disturbing transport state. */
+  async auditionNote(
+    note: { string: number; fret: number; duration?: number },
+    opts?: { context?: AudioContext; destination?: AudioNode },
+  ): Promise<boolean> {
+    if (this.disposed) return false;
+    let frets: (number | null)[];
+    try {
+      frets = melodyFrets(note);
+      voicingMidi(frets);
+    } catch {
+      return false;
+    }
+    this.stopAudition(false);
+    const run = this.auditionSerial;
+    let trim: GainNode | null = null;
+    let partialBus: GainNode | null = null;
+    try {
+      const audio = opts?.context ? null : pageAudio();
+      const context = (opts?.context ?? audio?.voicing) as
+        | AudioContext
+        | undefined;
+      const destination = opts?.destination ?? audio?.chain.phraseInput;
+      if (!context || !destination) return false;
+      const offline =
+        typeof (context as unknown as OfflineAudioContext).startRendering ===
+        'function';
+      if (!offline) await context.resume();
+      if (this.disposed || run !== this.auditionSerial) return false;
+      if (!offline && context.state !== 'running') return false;
+      const start = context.currentTime + 0.008;
+      const decaySec = auditionDecaySec(note.duration);
+      trim = context.createGain();
+      // Set intrinsic value too: releaseGraph reads trim.gain.value during
+      // rapid stop/supersede fades before or during automation.
+      trim.gain.value = PHRASE_TRIM;
+      trim.gain.setValueAtTime(PHRASE_TRIM, start);
+      trim.connect(destination);
+      const options: PhraseVoiceOptions = {
+        velocity: 0.96,
+        fret: note.fret,
+        string: note.string,
+      };
+      const voice = scheduleVoicing(
+        context,
+        frets,
+        start,
+        trim,
+        (bus) => {
+          partialBus = bus;
+        },
+        options,
+      );
+      dampPhraseNote(
+        voice,
+        start,
+        decaySec,
+        PHRASE_END_RELEASE_SEC,
+        options,
+      );
+      const entry = {
+        context,
+        trim,
+        voice,
+        timer: setTimeout(
+          () => {
+            if (this.audition === entry) this.audition = null;
+            disconnectVoice(voice);
+            disconnectNode(entry.trim);
+          },
+          Math.round((decaySec + PHRASE_END_RELEASE_SEC + 0.1) * 1000),
+        ),
+      };
+      this.audition = entry;
+      return true;
+    } catch {
+      if (partialBus) disconnectNode(partialBus);
+      if (trim) disconnectNode(trim);
+      return false;
+    }
+  }
+
   stop() {
     this.serial += 1;
+    this.stopAudition(this.disposed);
     this.looping = false;
     this.finishing = false;
     this.pending = null;
@@ -1058,6 +1179,7 @@ export class PhrasePlayer {
     if (this.disposed || !input.notes.length) return;
     if (input.bars !== 2 && input.bars !== 4) return;
     this.serial += 1;
+    this.stopAudition(false);
     const run = this.serial;
     this.pending = null;
     this.finishing = false;
@@ -1120,6 +1242,7 @@ export class PhrasePlayer {
         this.dropParked(run);
         return;
       }
+      this.stopAudition(false);
       // A request that arrived during resume() replaces this one.
       // Leaving it pending would play the stale phrase and start the
       // new one later.
