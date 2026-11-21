@@ -344,3 +344,49 @@ void test('tablature container breakpoints, string contrast, mobile slider handl
     );
   }
 });
+
+void test('fret 0 reads as open with shared note wording and no double screen-reader list', () => {
+  const panel = readFileSync(
+    new URL('../components/phrase-panel.tsx', import.meta.url),
+    'utf8',
+  );
+  const fretboard = readFileSync(
+    new URL('../components/fretboard.tsx', import.meta.url),
+    'utf8',
+  );
+  const voicingBrowser = readFileSync(
+    new URL('../components/voicing-browser.tsx', import.meta.url),
+    'utf8',
+  );
+
+  // Shared helper formats fret 0 as "string N, open" and fretted notes as "string N, fret F".
+  assert.match(panel, /function phraseNoteSpot\(/);
+  assert.match(panel, /`string \$\{stringNum\}, open`/);
+  assert.match(panel, /`string \$\{stringNum\}, fret \$\{note\.fret\}`/);
+  assert.match(panel, /function phraseNoteText\(/);
+  assert.match(panel, /`bar \$\{barNum\}, beat \$\{beatInBar\}`/);
+  assert.match(panel, /`landing, beat \$\{beatInBar\}/);
+
+  // Both the fallback sr-only list and interactive tab buttons use phraseNoteText,
+  // and the fallback list is aria-hidden while the tab buttons are rendered.
+  assert.match(
+    panel,
+    /<ol[\s\S]*?aria-label="Phrase notes in order"[\s\S]*?aria-hidden=\{dots === 'shown' \? true : undefined\}[\s\S]*?phraseNoteText\(/,
+  );
+  assert.match(
+    panel,
+    /const spoken = phraseNoteText\([\s\S]*?aria-label=\{`Play \$\{spoken\}`\}/,
+  );
+
+  // Fretboard note tooltips and Voicing Browser order label also read fret 0 as "open".
+  assert.equal(fretboard.includes('string ${6 - string}, fret ${fret}'), false);
+  assert.match(
+    fretboard,
+    /string \$\{6 - string\}, \$\{fret === 0 \? 'open' : `fret \$\{fret\}`\}/,
+  );
+  assert.equal(voicingBrowser.includes('nearest fret {nearFret} first'), false);
+  assert.match(
+    voicingBrowser,
+    /nearest \{nearFret === 0 \? 'open' : `fret \$\{nearFret\}`\} first/,
+  );
+});

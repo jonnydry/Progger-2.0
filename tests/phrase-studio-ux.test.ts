@@ -283,7 +283,7 @@ void test(
       await page
         .locator('#practice-tray .practice-tray-item')
         .first()
-        .getByRole('button', { name: 'Open' })
+        .getByRole('button', { name: 'Open', exact: true })
         .click();
       await page.waitForTimeout(160);
       const afterWarmRestore = await page.evaluate(() => {
@@ -312,7 +312,7 @@ void test(
       await page
         .locator('#practice-tray .practice-tray-item')
         .first()
-        .getByRole('button', { name: 'Open' })
+        .getByRole('button', { name: 'Open', exact: true })
         .click();
       await page.locator('#phrase-practice .deck-key-play').waitFor({
         state: 'visible',
@@ -337,9 +337,123 @@ void test(
         `Cold Stash restore did not keep Play visible: ${JSON.stringify(afterColdRestore)}`,
       );
 
-      // 5. Return to desktop: click-to-audition, roving keyboard nav, zombie-highlight guard, mid-play audition, quick tempo sync.
+      // 5. Return to desktop: open-string & fretted a11y wording, no double SR announcement, click-to-audition, roving keyboard nav, zombie-highlight guard, mid-play audition, quick tempo sync.
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.waitForTimeout(60);
+
+      // Pin Low register and ensure at least one open-string (fret 0) note is rendered so we verify real fret-0 wording.
+      await page.locator('.deck-build > summary').click();
+      await page
+        .locator('fieldset[aria-label="Pin register"] button', {
+          hasText: 'Low',
+        })
+        .click();
+      let hasOpenFret = false;
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        hasOpenFret = await page.evaluate(() =>
+          Array.from(
+            document.querySelectorAll('button.phrase-staff-fret'),
+          ).some((btn) => btn.textContent?.trim() === '0'),
+        );
+        if (hasOpenFret) break;
+        await page.locator('.deck-key-new').click();
+        await page.waitForTimeout(40);
+      }
+      assert.equal(
+        hasOpenFret,
+        true,
+        'expected at least one fret-0 (open string) button in Low register',
+      );
+      await page.locator('.deck-build > summary').click();
+
+      // Accessibility checks: no double note list in a11y tree, one wording across buttons & fallback list, commas & "open" on fret 0, and fretboard tooltips never say "fret 0".
+      assert.equal(
+        await page
+          .getByRole('list', { name: 'Phrase notes in order' })
+          .count(),
+        0,
+        'sr-only note list should be aria-hidden while interactive tablature buttons are rendered',
+      );
+      const a11yAudit = await page.evaluate(() => {
+        const buttons = Array.from(
+          document.querySelectorAll<HTMLButtonElement>(
+            'button.phrase-staff-fret',
+          ),
+        ).map((btn) => ({
+          fret: btn.textContent?.trim() ?? '',
+          aria: btn.getAttribute('aria-label') ?? '',
+          title: btn.getAttribute('title') ?? '',
+        }));
+        const listItems = Array.from(
+          document.querySelectorAll('.phrase-panel ol.sr-only li'),
+        ).map((li) => li.textContent?.trim() ?? '');
+        const neckFret0Titles = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '.fret-column.open-string .note-dot[title]',
+          ),
+        ).map((dot) => dot.getAttribute('title') ?? '');
+        const neckFret0PhraseMarks = document.querySelectorAll(
+          '.fret-column.open-string .note-dot.phrase-mark[title]',
+        ).length;
+        return { buttons, listItems, neckFret0Titles, neckFret0PhraseMarks };
+      });
+      assert.equal(a11yAudit.buttons.length, a11yAudit.listItems.length);
+      let openCount = 0;
+      let frettedCount = 0;
+      for (let i = 0; i < a11yAudit.buttons.length; i += 1) {
+        const btn = a11yAudit.buttons[i];
+        const li = a11yAudit.listItems[i];
+        assert.equal(
+          btn.aria,
+          `Play ${li}`,
+          `button ${i} aria-label should match hidden note list wording`,
+        );
+        assert.equal(
+          /fret\s+(?:0|open)/i.test(btn.aria),
+          false,
+          `button ${i} should never say "fret 0" or "fret open": ${btn.aria}`,
+        );
+        if (btn.fret === '0') {
+          openCount += 1;
+          assert.match(
+            btn.aria,
+            /, string [1-6], open, (?:bar \d+|landing), beat /,
+          );
+          assert.match(btn.title, /· string [1-6], open · play note$/);
+        } else {
+          frettedCount += 1;
+          assert.match(
+            btn.aria,
+            /, string [1-6], fret [1-9]\d*, finger [1-4], (?:bar \d+|landing), beat /,
+          );
+          assert.match(btn.title, /· string [1-6], fret [1-9]\d* · play note$/);
+        }
+      }
+      assert.ok(openCount > 0, 'expected open-string tab buttons');
+      assert.ok(frettedCount > 0, 'expected fretted tab buttons');
+      assert.ok(a11yAudit.neckFret0Titles.length > 0);
+      assert.ok(
+        a11yAudit.neckFret0PhraseMarks > 0,
+        'expected open-string phrase mark on the fretboard',
+      );
+      for (const title of a11yAudit.neckFret0Titles) {
+        assert.match(title, /string [1-6], open/);
+        assert.equal(/fret 0\b/i.test(title), false);
+        assert.equal(/finger\s+(?:0|open)\b/i.test(title), false);
+      }
+
+      // Toggling Loop updates the landing button aria-label with ", landing, beat 1, skipped while looping,".
+      await page.locator('.deck-key-loop').click();
+      const landingLoopLabel = await page
+        .locator('[data-phrase-bar="land"] button.phrase-staff-fret')
+        .first()
+        .getAttribute('aria-label');
+      assert.match(
+        landingLoopLabel ?? '',
+        /, landing, beat 1, skipped while looping,/,
+      );
+      await page.locator('.deck-key-loop').click();
+
       const firstFret = page.locator('button.phrase-staff-fret').first();
       await firstFret.click();
       await page.waitForTimeout(60);

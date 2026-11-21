@@ -104,7 +104,7 @@ const FretGrid = memo(function FretGrid({
           minWidth: 0,
         }}
         role="img"
-        aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${noteDescription(n)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${noteDescription(note)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Active ${notes.length === 5 ? 2 : 3}-notes-per-string form starts on low E at fret ${pattern.start} and spans frets ${pattern.min} to ${pattern.max}. ${neighbor ? `Neighbor form starts at fret ${neighbor.start}; ${layers.shared.size} shared string and fret positions. ` : ''}All scale notes remain visible as context.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
+        aria-label={`${root} ${voicing ? 'sounding notes' : 'notes'}: ${notes.map((n) => `${noteDescription(n)} degree ${pretty(n.degree)}`).join(', ')}. ${voicing ? `${voicing.name}. ${voicing.rootless ? 'Rootless shape. ' : ''}${voicing.omittedNotes?.length ? `Omitted: ${voicing.omittedNotes.map((note) => `${noteDescription(note)} degree ${pretty(note.degree)}`).join(', ')}. ` : ''}Low E to high e: ${voicing.frets.map((f) => (f === null ? 'mute' : f === 0 ? 'open' : f)).join(', ')}.` : pattern ? `Active ${notes.length === 5 ? 2 : 3}-notes-per-string form starts on ${pattern.start === 0 ? 'open low E' : `low E at fret ${pattern.start}`} and spans ${pattern.min === 0 ? `open strings to fret ${pattern.max}` : `frets ${pattern.min} to ${pattern.max}`}. ${neighbor ? `Neighbor form starts at ${neighbor.start === 0 ? 'open low E' : `fret ${neighbor.start}`}; ${layers.shared.size} shared string and fret positions. ` : ''}All scale notes remain visible as context.` : 'All note locations through fret 24.'} ${left ? 'Left-handed view.' : 'Right-handed view.'}`}
       >
         {frets.map((fret) => (
           <div
@@ -142,8 +142,8 @@ const FretGrid = memo(function FretGrid({
                       className={`note-dot ${phrase ? 'phrase-mark' : ''} ${phrase?.current ? 'phrase-current' : ''} ${connected ? `connection-${membership}` : ''} ${phraseLabel.length > 3 ? 'wide-note' : ''} ${note?.degree === '1' ? 'is-root' : ''} ${note && targets.includes(note.pc) ? 'is-target' : ''}`}
                       title={
                         phrase
-                          ? `${phrase.label} · finger ${phrase.finger === 0 ? 'open' : phrase.finger}${phrase.shift ? ' · shift' : ''} · string ${6 - string}, fret ${fret}`
-                          : `${noteDescription(note!)} · ${pretty(note!.degree)} · string ${6 - string}, fret ${fret}${connected ? ` · ${membership === 'shared' ? 'shared by active and neighboring forms' : membership === 'context' ? 'scale context' : `${membership} form`}` : ''}`
+                          ? `${phrase.label}${fret > 0 && phrase.finger > 0 ? ` · finger ${phrase.finger}` : ''}${phrase.shift ? ' · shift' : ''} · string ${6 - string}, ${fret === 0 ? 'open' : `fret ${fret}`}`
+                          : `${noteDescription(note!)} · ${pretty(note!.degree)} · string ${6 - string}, ${fret === 0 ? 'open' : `fret ${fret}`}${connected ? ` · ${membership === 'shared' ? 'shared by active and neighboring forms' : membership === 'context' ? 'scale context' : `${membership} form`}` : ''}`
                       }
                     >
                       {phraseLabel}

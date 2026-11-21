@@ -270,7 +270,7 @@ export function VoicingBrowser({
               {nearFret !== null && (
                 <span className="voicing-catalog-order">
                   {' '}
-                  · nearest fret {nearFret} first
+                  · nearest {nearFret === 0 ? 'open' : `fret ${nearFret}`} first
                 </span>
               )}
             </span>

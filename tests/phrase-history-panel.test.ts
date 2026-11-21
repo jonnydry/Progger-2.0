@@ -655,7 +655,10 @@ void test('a stashed phrase from another key survives new and back', async (t) =
     await chooseSearch(page, 'Search scale / mode', 'dorian', 'Dorian');
     assert.notDeepEqual(await phraseNotes(page), stashed);
     await page.getByRole('button', { name: 'Stash, 1 saved' }).click();
-    await page.getByRole('button', { name: 'Open' }).click();
+    await page
+      .locator('#practice-tray')
+      .getByRole('button', { name: 'Open', exact: true })
+      .click();
     assert.deepEqual(await phraseNotes(page), stashed);
     const before = await historyEntries(page);
     await page.getByRole('button', { name: 'New phrase' }).click();
