@@ -1347,6 +1347,14 @@ export function PhrasePanel({
       },
     );
   }
+  const buildChips = buildReadout(
+    generationLocks,
+    chordNotes,
+    availableCadenceSet,
+    bars,
+    turnaroundOptions,
+  );
+  const hasPins = buildChips[0] === 'Pinned';
   return (
     <div className="phrase-panel" data-scale-id={scaleId}>
       <div className="phrase-heading">
@@ -1375,14 +1383,15 @@ export function PhrasePanel({
                   <span className="phrase-plan-line">
                     {CONTOUR_LABEL[plan.contour]} · {RHYTHM_LABEL[plan.rhythm]}
                   </span>{' '}
-                  <span className="phrase-plan-line">
+                  <span className="phrase-plan-line phrase-plan-sub">
                     {REGISTER_LABEL[plan.register]} · lands on the{' '}
-                    {cadenceText}
+                    <em className="phrase-plan-cadence">{cadenceText}</em>
                   </span>
                 </p>
               )}
             </div>
-            <span className="deck-reel" aria-hidden="true" />
+            <div className="deck-tape-track" aria-hidden="true" />
+            <span className="deck-reel deck-reel-left" aria-hidden="true" />
             {/* Live status line, between the reels. The id predates the
                 seed field getting its own static note; tests still read
                 status by it. */}
@@ -1408,7 +1417,7 @@ export function PhrasePanel({
                           : 'Playing this phrase.'
                         : 'Same seed replays this phrase.'}
             </p>
-            <span className="deck-reel" aria-hidden="true" />
+            <span className="deck-reel deck-reel-right" aria-hidden="true" />
           </div>
           {/*
             The plan line is visual shorthand. A screen reader gets one
@@ -1434,17 +1443,12 @@ export function PhrasePanel({
           </div>
         </div>
         <details className="deck-fold deck-build">
-          <summary className="deck-fold-summary">
+          <summary
+            className="deck-fold-summary"
+            data-pinned={hasPins ? 'true' : undefined}
+          >
             <span className="deck-legend">Build</span>
-            <ReadoutChips
-              chips={buildReadout(
-                generationLocks,
-                chordNotes,
-                availableCadenceSet,
-                bars,
-                turnaroundOptions,
-              )}
-            />
+            <ReadoutChips chips={buildChips} />
             <span className="deck-fold-edit" aria-hidden="true">
               Edit
             </span>
@@ -1873,7 +1877,9 @@ function staffRows(
     rows.push({
       id: String(bar),
       label:
-        bar === 3 && turnaround ? `Bar 3 · ${pretty(turnaround)}` : `Bar ${bar}`,
+        (bar === 3 || bar === 4) && turnaround
+          ? `Bar ${bar} · ${pretty(turnaround)}`
+          : `Bar ${bar}`,
       landing: false,
       notes: notes.flatMap((note, index) => {
         if (note.beat < start || note.beat >= start + 4) return [];
@@ -2050,90 +2056,147 @@ function PhraseStaff({
       for (const { mark } of marks) mark.classList.remove('is-current');
     };
   }, [playing, notes, bars, player, tempoRef, swing]);
+  const hasLanding = rows.some((row) => row.landing);
+  const hasChromatic = notes.some((note) => note.degree === 'chr');
+  const hasOpen = notes.some((note) => note.finger === 0);
   const staff = (
-    <div className="phrase-staff" ref={rootRef} aria-hidden="true">
-      {rows.map((row) => (
-        <div
-          className={`phrase-staff-bar${row.landing ? ' is-landing' : ''}${row.landing && looping ? ' is-skipped' : ''}`}
-          key={row.id}
-          data-phrase-bar={row.id}
-        >
-          <div className="phrase-staff-caption">
-            {row.label}
-            {row.landing && looping ? ' (loop skips)' : ''}
-          </div>
-          <div className="phrase-staff-lane">
-            {row.notes.map(({ index, note, x }) => (
-              <span
-                key={`finger-${index}`}
-                className="phrase-staff-finger"
-                data-phrase-note={index}
-                style={{ left: x }}
-              >
-                <b>{note.finger}</b>
-                {note.shift ? <i>›</i> : null}
-              </span>
-            ))}
-          </div>
-          <div className="phrase-staff-neck">
-            <div className="phrase-staff-names">
-              {['e', 'B', 'G', 'D', 'A', 'E'].map((name) => (
-                <span key={name}>{name}</span>
+    <div className="phrase-staff-wrap" aria-hidden="true">
+      <div className="phrase-staff-header">
+        <span className="phrase-staff-title">
+          Tablature
+          <span className="phrase-staff-meta">
+            {bars} bars
+            {turnaround ? ` · bars 3–4 → ${pretty(turnaround)}` : ''}
+          </span>
+        </span>
+        <div className="phrase-staff-legend">
+          <span className="phrase-legend-item">
+            <i className="phrase-legend-swatch is-chord" />
+            Chord
+          </span>
+          <span className="phrase-legend-item">
+            <i className="phrase-legend-swatch is-scale" />
+            Scale
+          </span>
+          {hasChromatic ? (
+            <span className="phrase-legend-item">
+              <i className="phrase-legend-swatch is-chromatic" />
+              Chromatic
+            </span>
+          ) : null}
+          <span className="phrase-legend-item phrase-legend-finger">
+            {hasOpen ? (
+              <>
+                <b>0</b> open ·{' '}
+              </>
+            ) : null}
+            <b>1–4</b> finger <i>›</i> shift
+          </span>
+        </div>
+      </div>
+      <div
+        className="phrase-staff"
+        ref={rootRef}
+        data-bars={bars}
+        data-has-landing={hasLanding ? 'true' : undefined}
+      >
+        {rows.map((row) => (
+          <div
+            className={`phrase-staff-bar${row.landing ? ' is-landing' : ''}${row.landing && looping ? ' is-skipped' : ''}`}
+            key={row.id}
+            data-phrase-bar={row.id}
+            data-turnaround={
+              turnaround && row.id === '3'
+                ? 'start'
+                : turnaround && row.id === '4'
+                  ? 'continue'
+                  : undefined
+            }
+          >
+            <div className="phrase-staff-caption">
+              {row.label}
+              {row.landing && looping ? ' · skipped' : ''}
+            </div>
+            <div className="phrase-staff-lane">
+              {row.notes.map(({ index, note, x }) => (
+                <span
+                  key={`finger-${index}`}
+                  className="phrase-staff-finger"
+                  data-phrase-note={index}
+                  style={{ left: x }}
+                >
+                  <b>{note.finger}</b>
+                  {note.shift ? <i>›</i> : null}
+                </span>
               ))}
             </div>
-            <div className="phrase-staff-sheet">
-              {['e', 'B', 'G', 'D', 'A', 'E'].map((name, index) => (
-                <span
-                  key={`line-${name}`}
-                  className="phrase-string-line"
-                  style={{ top: `${((index + 0.5) / 6) * 100}%` }}
-                />
-              ))}
-              {row.lines.map((left) => (
-                <span
-                  key={left}
-                  className="phrase-staff-grid"
-                  style={{ left }}
-                />
-              ))}
-              <span
-                className="phrase-playhead"
-                data-phrase-playhead={row.id}
-                hidden
-              />
-              {row.notes.map(({ index, note, x, y, holdWidth }) =>
-                holdWidth ? (
+            <div className="phrase-staff-neck">
+              <div className="phrase-staff-names">
+                {['e', 'B', 'G', 'D', 'A', 'E'].map((name) => (
+                  <span key={name}>{name}</span>
+                ))}
+              </div>
+              <div className="phrase-staff-sheet">
+                {['e', 'B', 'G', 'D', 'A', 'E'].map((name, index) => (
                   <span
-                    key={`hold-${index}`}
-                    className="phrase-staff-hold"
-                    data-passing={note.chordTone ? undefined : 'true'}
-                    style={{ left: x, top: y, width: holdWidth }}
+                    key={`line-${name}`}
+                    className="phrase-string-line"
+                    style={{ top: `${((index + 0.5) / 6) * 100}%` }}
                   />
-                ) : null,
-              )}
-              {row.notes.map(({ index, note, x, y }) => (
+                ))}
+                {row.lines.map((left, lineIndex) => (
+                  <span
+                    key={left}
+                    className="phrase-staff-grid"
+                    data-barline={
+                      lineIndex === 0
+                        ? 'start'
+                        : lineIndex === row.lines.length - 1
+                          ? 'end'
+                          : undefined
+                    }
+                    style={{ left }}
+                  />
+                ))}
                 <span
-                  key={`fret-${index}`}
-                  className="phrase-staff-fret"
-                  data-passing={note.chordTone ? undefined : 'true'}
-                  data-chromatic={note.degree === 'chr' ? 'true' : undefined}
-                  data-phrase-note={index}
-                  style={{ left: x, top: y }}
-                >
-                  {note.fret}
+                  className="phrase-playhead"
+                  data-phrase-playhead={row.id}
+                  hidden
+                />
+                {row.notes.map(({ index, note, x, y, holdWidth }) =>
+                  holdWidth ? (
+                    <span
+                      key={`hold-${index}`}
+                      className="phrase-staff-hold"
+                      data-passing={note.chordTone ? undefined : 'true'}
+                      style={{ left: x, top: y, width: holdWidth }}
+                    />
+                  ) : null,
+                )}
+                {row.notes.map(({ index, note, x, y }) => (
+                  <span
+                    key={`fret-${index}`}
+                    className="phrase-staff-fret"
+                    data-passing={note.chordTone ? undefined : 'true'}
+                    data-chromatic={note.degree === 'chr' ? 'true' : undefined}
+                    data-phrase-note={index}
+                    style={{ left: x, top: y }}
+                  >
+                    {note.fret}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="phrase-staff-beats">
+              {row.beats.map((beat) => (
+                <span key={beat.label} style={{ left: beat.x }}>
+                  {beat.label}
                 </span>
               ))}
             </div>
           </div>
-          <div className="phrase-staff-beats">
-            {row.beats.map((beat) => (
-              <span key={beat.label} style={{ left: beat.x }}>
-                {beat.label}
-              </span>
-            ))}
-          </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
   const host =

@@ -1,7 +1,7 @@
 /* Surfaces, edges, type and spacing come from deck-tokens.css. The housing
-   keeps the hard key edge; new rows use a 1px plate line and no extra shadow. */
+   keeps a crisp hardware edge; new rows use a 1px plate line and no extra shadow. */
 .phrase-deck {
-  --deck-led-off: color-mix(in srgb, var(--quiet) 30%, transparent);
+  --deck-led-off: color-mix(in srgb, var(--quiet) 32%, transparent);
   /* One grid for the whole deck: every legend starts at the same left edge
      and every control starts at --deck-control-start. Full rows (pins,
      faders) run to the same right edge; the bounded Bars switch and the
@@ -14,14 +14,16 @@
   --deck-action-w: 9rem;
   --deck-row: 44px;
   display: grid;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  padding: 12px;
+  padding: 12px 14px;
   color: var(--foreground);
   background: var(--surface-panel);
-  border: 2px solid var(--edge);
-  border-radius: var(--radius-control);
-  box-shadow: var(--shadow-key);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-panel);
+  box-shadow:
+    inset 0 1px 0 var(--edge-sheen),
+    0 2px 0 var(--edge-drop);
 }
 
 /* The cassette bay: window on top, keys under it, one object. The bay is
@@ -40,7 +42,7 @@
    content is a cassette-sized column centred in the window, so a wide deck
    shows a cassette in a window, not a line of text across a slot. */
 .deck-window {
-  --deck-reel: 28px;
+  --deck-reel: 26px;
   --deck-label-size: var(--text-md);
   --deck-status-size: var(--text-xs);
   --deck-tape-w: 28rem;
@@ -52,12 +54,12 @@
     calc(2 * 1.3 * var(--deck-label-size))
     calc(2 * 1.3 * var(--deck-status-size));
   align-items: center;
-  row-gap: 6px;
+  row-gap: 4px;
   min-width: 0;
-  padding: 12px 12px 10px;
+  padding: 10px 14px 8px;
   background: var(--surface-sunken);
-  border: 2px solid var(--edge);
-  border-radius: var(--radius-key);
+  border: 1px solid color-mix(in srgb, var(--edge) 92%, var(--foreground) 8%);
+  border-radius: var(--radius-control);
   box-shadow: var(--shadow-sunken);
 }
 .deck-label {
@@ -81,21 +83,51 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.deck-window > .deck-reel:first-of-type {
+.phrase-plan-sub {
+  color: var(--quiet);
+  font-weight: 500;
+}
+.phrase-plan-cadence {
+  color: var(--green);
+  font-style: normal;
+  font-weight: 600;
+}
+.deck-tape-track {
+  grid-column: 2 / 5;
+  grid-row: 2;
+  align-self: center;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 12px,
+    color-mix(in srgb, var(--edge) 80%, transparent) 30px,
+    color-mix(in srgb, var(--edge) 80%, transparent) calc(100% - 30px),
+    transparent calc(100% - 12px)
+  );
+  pointer-events: none;
+}
+.deck-window > .deck-reel-left {
   grid-column: 2;
   grid-row: 2;
+  z-index: 1;
 }
-.deck-window > .deck-reel:last-of-type {
+.deck-window > .deck-reel-right {
   grid-column: 4;
   grid-row: 2;
+  z-index: 1;
 }
 .phrase-deck .deck-window .phrase-status {
   grid-column: 3;
   grid-row: 2;
+  z-index: 1;
+  justify-self: center;
   min-width: 0;
+  max-width: 100%;
   margin: 0;
-  padding-inline: 10px;
+  padding: 1px 10px;
   color: var(--quiet);
+  background: var(--surface-sunken);
+  border-radius: 999px;
   font-size: var(--deck-status-size);
   font-weight: 500;
   line-height: 1.3;
@@ -105,12 +137,24 @@
 .phrase-deck .deck-window .phrase-status.is-live {
   color: var(--green);
 }
+.phrase-deck .deck-window .phrase-status.is-live::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  vertical-align: 1px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 70%, transparent);
+}
 .phrase-deck .deck-window .phrase-status.is-alert {
   color: var(--amber);
 }
 /* No playable phrase: the explanation owns the whole window and the reels
    go dark, because there is nothing on the tape to run. */
 .deck-window.is-blank .deck-label,
+.deck-window.is-blank .deck-tape-track,
 .deck-window.is-blank > .deck-reel {
   visibility: hidden;
 }
@@ -124,13 +168,16 @@
   height: var(--deck-reel);
   background: radial-gradient(
     circle closest-side,
-    var(--quiet) 0 24%,
-    transparent 32% 50%,
-    color-mix(in srgb, var(--quiet) 45%, transparent) 58% 70%,
-    transparent 78%
+    var(--quiet) 0 22%,
+    var(--surface-sunken) 28% 48%,
+    color-mix(in srgb, var(--quiet) 42%, transparent) 55% 68%,
+    var(--surface-sunken) 74%
   );
-  border: 2px dotted var(--quiet);
+  border: 2px dotted color-mix(in srgb, var(--quiet) 85%, transparent);
   border-radius: 50%;
+}
+.phrase-deck.is-rolling .deck-reel {
+  border-color: var(--green);
 }
 @media (prefers-reduced-motion: no-preference) {
   .phrase-deck.is-rolling .deck-reel {
@@ -200,13 +247,14 @@
   min-width: 0;
   min-height: var(--deck-row);
   margin: 0;
-  padding: 7px 6px 3px;
+  padding: 8px 8px 4px;
   color: var(--foreground);
   background: var(--surface-key);
-  border: 2px solid var(--edge);
-  border-radius: var(--radius-key);
-  /* One hard edge. The old key shadow stacked an inset bevel on a 4px drop. */
-  box-shadow: 0 1px 0 var(--edge-drop);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
+  box-shadow:
+    inset 0 1px 0 var(--edge-sheen),
+    0 2px 0 var(--edge-drop);
   font: inherit;
   font-size: var(--text-xs);
   font-weight: 600;
@@ -222,10 +270,11 @@
 .phrase-deck .deck-key::before {
   content: '';
   position: absolute;
-  top: 3px;
+  top: 4px;
   left: 50%;
-  width: 18px;
+  width: 20px;
   height: 3px;
+  border-radius: 999px;
   background: var(--deck-led-off);
   transform: translateX(-50%);
 }
@@ -233,15 +282,19 @@
   overflow-wrap: anywhere;
 }
 .phrase-deck .deck-key-play {
-  padding-inline: var(--space-2);
-  background: var(--surface-key-lit);
-  border-color: var(--edge-lit);
+  padding-inline: var(--space-3);
+  background: color-mix(in srgb, var(--green) 22%, var(--surface-panel));
+  border-color: var(--green);
+}
+.phrase-deck .deck-key-play::before {
+  background: color-mix(in srgb, var(--green) 52%, transparent);
 }
 /* History, loop, and save stay tappable but they are not the next action.
    Resting keys have no lamp. A pressed or saved key lights one, below. */
 .phrase-deck .deck-key-quiet {
   padding: 0 8px;
   background: var(--surface-sunken);
+  box-shadow: 0 1px 0 var(--edge-drop);
 }
 .phrase-deck .deck-key-quiet::before {
   content: none;
@@ -251,13 +304,21 @@
 }
 .deck-rec-dot {
   flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
+  width: 9px;
+  height: 9px;
   background: var(--amber);
   border-radius: 50%;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 24%, transparent);
 }
 .phrase-deck .deck-key:hover:not(:disabled) {
   border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 10%, var(--surface-key));
+}
+.phrase-deck .deck-key-play:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--green) 28%, var(--surface-panel));
+}
+.phrase-deck .deck-key-quiet:hover:not(:disabled) svg {
+  color: var(--green);
 }
 .phrase-deck .deck-key:active:not(:disabled),
 .phrase-deck .deck-key[aria-pressed='true'],
@@ -275,6 +336,7 @@
 .phrase-deck .deck-key.is-latched::before {
   content: '';
   background: var(--green);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--green) 75%, transparent);
 }
 .phrase-deck .deck-key-quiet[aria-pressed='true'] svg {
   color: var(--green);
@@ -286,12 +348,14 @@
 .phrase-deck .deck-key.is-saved::before {
   content: '';
   background: var(--amber);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--amber) 75%, transparent);
 }
 /* Dimmed, but Previous and Next stay readable as labels. */
 .phrase-deck .deck-key:disabled {
   color: var(--quiet);
   cursor: not-allowed;
   opacity: 0.72;
+  box-shadow: none;
 }
 .phrase-deck .deck-key:disabled svg {
   color: var(--quiet);
@@ -305,17 +369,19 @@
 @media (prefers-reduced-motion: no-preference) {
   .phrase-deck .deck-key,
   .deck-switch button,
-  .deck-toggle {
+  .deck-toggle,
+  .phrase-pin {
     transition:
       transform 80ms steps(2),
       background 120ms ease,
-      border-color 120ms ease;
+      border-color 120ms ease,
+      color 120ms ease;
   }
 }
 
 .deck-stack {
   display: grid;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
 .deck-setting {
@@ -398,7 +464,7 @@
   padding: 0 var(--space-2);
   color: var(--quiet);
   background: var(--surface-sunken);
-  border: 2px solid var(--edge);
+  border: 1px solid var(--edge);
   font: inherit;
   font-size: var(--text-sm);
   font-weight: 600;
@@ -406,12 +472,11 @@
   cursor: pointer;
 }
 .deck-switch button:first-of-type {
-  border-right-width: 1px;
-  border-radius: var(--radius-key) 0 0 var(--radius-key);
+  border-right-width: 0;
+  border-radius: var(--radius-control) 0 0 var(--radius-control);
 }
 .deck-switch button:last-of-type {
-  border-left-width: 1px;
-  border-radius: 0 var(--radius-key) var(--radius-key) 0;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
 }
 .deck-switch button[aria-pressed='true'],
 .phrase-deck .deck-toggle[aria-pressed='true'] {
@@ -429,7 +494,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border-radius: var(--radius-key);
+  border-radius: var(--radius-control);
 }
 /* Half speed fills the tempo line's fixed action slot (see above). It
    never takes width from the slider: the slot is part of the row grid,
@@ -472,38 +537,42 @@
   appearance: none;
 }
 .deck-fader input[type='range']::-webkit-slider-runnable-track {
-  height: 8px;
+  height: 6px;
   background: var(--surface-sunken);
-  border: 2px solid var(--edge);
-  border-radius: 2px;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
 }
 .deck-fader input[type='range']::-moz-range-track {
-  height: 4px;
+  height: 6px;
   background: var(--surface-sunken);
-  border: 2px solid var(--edge);
-  border-radius: 2px;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
 }
 .deck-fader input[type='range']::-moz-range-progress {
-  height: 4px;
+  height: 6px;
+  border-radius: 999px;
   background: var(--green);
 }
 .deck-fader input[type='range']::-webkit-slider-thumb {
-  width: 16px;
-  height: 28px;
-  margin-top: -12px;
+  width: 14px;
+  height: 24px;
+  margin-top: -10px;
   background: var(--surface-key);
   border: 2px solid var(--green);
-  border-radius: 2px;
-  box-shadow: inset 0 2px 0 var(--edge-sheen);
+  border-radius: 4px;
+  box-shadow:
+    inset 0 1px 0 var(--edge-sheen),
+    0 1px 3px rgb(0 0 0 / 0.3);
   appearance: none;
 }
 .deck-fader input[type='range']::-moz-range-thumb {
   box-sizing: border-box;
-  width: 16px;
-  height: 28px;
+  width: 14px;
+  height: 24px;
   background: var(--surface-key);
   border: 2px solid var(--green);
-  border-radius: 2px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
 }
 
 .deck-counter {
@@ -523,21 +592,21 @@
   padding: 6px 10px;
   color: var(--green);
   background: var(--surface-sunken);
-  border: 2px solid var(--edge);
-  border-radius: var(--radius-key);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
   box-shadow: var(--shadow-sunken);
   font-family: var(--font-arcade), var(--font-ui);
   font-size: var(--text-md);
   letter-spacing: 1px;
 }
 
-/* Build and Tempo are bands of the one housing, not boxes inside it: a
+/* Build and Feel are bands of the one housing, not boxes inside it: a
    hairline rule, a summary row on the shared grid, then the controls.
    No nested plate means every legend keeps the same left edge whether
    its band is open or closed. */
 .deck-fold {
   min-width: 0;
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid color-mix(in srgb, var(--edge) 75%, transparent);
 }
 .deck-fold-summary {
   display: grid;
@@ -550,7 +619,7 @@
   color: var(--foreground);
   background: transparent;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--radius-key);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -573,10 +642,14 @@
   min-width: 0;
   color: var(--foreground);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: 0;
   line-height: 1.25;
   text-transform: none;
+}
+.deck-build:not([open]) > .deck-fold-summary[data-pinned='true'] .deck-fold-readout {
+  color: var(--green);
+  font-weight: 600;
 }
 /* The dot stays with the word before it, so a narrow summary breaks after
    "2-bar ·" and never as "2-" / "bar". */
@@ -623,7 +696,7 @@
   display: grid;
   gap: 8px;
   min-width: 0;
-  padding: 4px 0 10px;
+  padding: 4px 0 8px;
 }
 .deck-fold-body.deck-stack {
   gap: 6px;
@@ -640,7 +713,7 @@
 .deck-seed {
   min-width: 0;
   margin-top: 2px;
-  border-top: 1px solid color-mix(in srgb, var(--edge) 65%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--edge) 60%, transparent);
 }
 .deck-seed-hint {
   min-width: 0;
@@ -752,14 +825,19 @@
      link was the smallest control in the deck. */
   min-height: var(--deck-row);
   margin: 0;
-  padding: 0 2px;
+  padding: 0 12px;
   color: var(--green);
-  background: none;
-  border: 0;
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--green) 45%, var(--edge));
+  border-radius: var(--radius-control);
   font: inherit;
   font-size: var(--text-xs);
-  text-decoration: underline;
+  font-weight: 600;
   cursor: pointer;
+}
+.phrase-pins-clear:hover {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  border-color: var(--green);
 }
 /* Two pin columns on a wide deck, one below the plate breakpoint. Both
    columns use the same label gutter and gap, so Contour lines up with
@@ -821,8 +899,8 @@
   text-align: center;
   color: var(--quiet);
   background: var(--surface-sunken);
-  border: 2px solid var(--edge);
-  border-radius: var(--radius-key);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
   font: inherit;
   font-size: var(--text-xs);
   font-weight: 600;
@@ -830,12 +908,13 @@
   cursor: pointer;
 }
 /* The value the phrase is sounding right now, when it is not the pinned one:
-   a keyline along the bottom edge, so it never competes with a pinned key's
-   filled border. The tape window still spells the plan out in words. */
+   a soft tint and bottom keyline, so it never competes with a pinned key's
+   filled surface. The tape window still spells the plan out in words. */
 .phrase-pin.is-current {
   color: var(--foreground);
-  /* Bottom keyline only: a lit border read as a second selected key. */
-  box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--green) 55%, transparent);
+  background: color-mix(in srgb, var(--green) 7%, var(--surface-sunken));
+  border-color: color-mix(in srgb, var(--green) 38%, var(--edge));
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--green) 70%, transparent);
 }
 .phrase-pin[aria-pressed='true'] {
   color: var(--ink);
@@ -902,14 +981,20 @@
    aligned to the control column, so the fader keeps a usable length and
    the Swing line below it needs no empty slot. */
 @media (max-width: 640px) {
+  .under-neck .phrase-tab-host {
+    padding: 10px 10px 8px;
+  }
+  .under-neck .phrase-heading {
+    padding: 8px 10px;
+  }
   .phrase-deck {
-    gap: 10px;
-    padding: 8px;
+    gap: 8px;
+    padding: 8px 10px;
   }
   .deck-window {
-    --deck-reel: 24px;
+    --deck-reel: 22px;
     --deck-label-size: var(--text-sm);
-    padding: 10px 8px 8px;
+    padding: 9px 8px 7px;
   }
   .phrase-deck .deck-window .phrase-status {
     padding-inline: 8px;
