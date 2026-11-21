@@ -94,6 +94,7 @@ export function MatchEntry({
           <textarea
             ref={input}
             id="chord-progression"
+            name="chord-progression"
             value={text}
             onChange={(event) => onTextChange(event.target.value)}
             spellCheck={false}

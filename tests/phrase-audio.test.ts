@@ -5,6 +5,8 @@ import { OfflineAudioContext } from 'node-web-audio-api';
 import { parseChord } from '../lib/harmony.ts';
 import { SCALES, TUNING, spell } from '../lib/music.ts';
 import {
+  PHRASE_AUDITION_DECAY_MAX_SEC,
+  PHRASE_AUDITION_DECAY_MIN_SEC,
   PHRASE_END_RELEASE_SEC,
   PHRASE_LOOKAHEAD_SEC,
   PHRASE_MUTE_RELEASE_MARGIN_SEC,
@@ -16,6 +18,7 @@ import {
   PHRASE_TRIM,
   LookaheadScheduler,
   PhrasePlayer,
+  auditionDecaySec,
   bindPhraseLifecycle,
   clampPhraseTempo,
   melodyFrets,
@@ -4753,4 +4756,108 @@ void test('turning loop off inside the mute margin ramps the note in', async () 
     'a release inside the margin stepped back to full gain',
   );
   player.stop();
+});
+
+void test('auditionDecaySec clamps short, long, and invalid durations deterministically', () => {
+  assert.equal(auditionDecaySec(0.5), PHRASE_AUDITION_DECAY_MIN_SEC);
+  assert.equal(auditionDecaySec(4), PHRASE_AUDITION_DECAY_MAX_SEC);
+  assert.equal(auditionDecaySec(Number.NaN), PHRASE_AUDITION_DECAY_MIN_SEC);
+  assert.equal(auditionDecaySec(0), PHRASE_AUDITION_DECAY_MIN_SEC);
+  assert.ok(
+    auditionDecaySec(1.25) > PHRASE_AUDITION_DECAY_MIN_SEC &&
+      auditionDecaySec(1.25) < PHRASE_AUDITION_DECAY_MAX_SEC,
+  );
+});
+
+void test('PhrasePlayer.auditionNote plucks one note cleanly without gain spikes, state mutation, or leaks', async () => {
+  const states: string[] = [];
+  const player = new PhrasePlayer((state) => states.push(state));
+  const context = new OfflineAudioContext(1, 44_100, 44_100);
+  const destination = context.destination;
+
+  // Invalid string or fret is rejected before creating any audio nodes.
+  assert.equal(
+    await player.auditionNote(
+      { string: 6, fret: 5 },
+      { context: context as unknown as AudioContext, destination },
+    ),
+    false,
+  );
+  assert.equal(
+    await player.auditionNote(
+      { string: 2, fret: 25 },
+      { context: context as unknown as AudioContext, destination },
+    ),
+    false,
+  );
+  assert.equal(player.pendingTimers(), 0);
+  assert.equal(player.connectedNodes(), 0);
+
+  const first = await player.auditionNote(
+    { string: 2, fret: 7, duration: 1 },
+    { context: context as unknown as AudioContext, destination },
+  );
+  assert.equal(first, true);
+  assert.deepEqual(states, []);
+  assert.equal(player.pendingTimers(), 1);
+  assert.ok(player.connectedNodes() > 0);
+
+  // Rapid second note inside the 8 ms lead-in supersedes the first without a gain spike.
+  const second = await player.auditionNote(
+    { string: 3, fret: 9, duration: 0.5 },
+    { context: context as unknown as AudioContext, destination },
+  );
+  assert.equal(second, true);
+  assert.deepEqual(states, []);
+
+  // Offline render confirms audible signal stays safely below PHRASE_TRIM.
+  const rendered = await context.startRendering();
+  const samples = rendered.getChannelData(0);
+  let peak = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    const abs = Math.abs(samples[i]);
+    if (abs > peak) peak = abs;
+  }
+  assert.ok(peak > 0.01, `expected audible audition pluck, got peak=${peak}`);
+  assert.ok(
+    peak <= PHRASE_TRIM,
+    `expected audition peak <= ${PHRASE_TRIM}, got ${peak}`,
+  );
+
+  // Stopping inside the lead-in window also never spikes above PHRASE_TRIM.
+  const stopContext = new OfflineAudioContext(1, 22_050, 44_100);
+  const leadPlayer = new PhrasePlayer(() => {});
+  assert.equal(
+    await leadPlayer.auditionNote(
+      { string: 2, fret: 7, duration: 1 },
+      {
+        context: stopContext as unknown as AudioContext,
+        destination: stopContext.destination,
+      },
+    ),
+    true,
+  );
+  leadPlayer.stopAudition(false);
+  const stopRendered = await stopContext.startRendering();
+  let stopPeak = 0;
+  for (const sample of stopRendered.getChannelData(0)) {
+    const abs = Math.abs(sample);
+    if (abs > stopPeak) stopPeak = abs;
+  }
+  assert.ok(
+    stopPeak <= PHRASE_TRIM,
+    `lead-in stopAudition spiked to ${stopPeak} (trim ${PHRASE_TRIM})`,
+  );
+  leadPlayer.dispose();
+
+  // Dispose releases every pending timer and connected node immediately.
+  player.dispose();
+  assert.equal(player.pendingTimers(), 0);
+  assert.equal(player.connectedNodes(), 0);
+
+  const afterDispose = await player.auditionNote(
+    { string: 2, fret: 7, duration: 1 },
+    { context: context as unknown as AudioContext, destination },
+  );
+  assert.equal(afterDispose, false);
 });

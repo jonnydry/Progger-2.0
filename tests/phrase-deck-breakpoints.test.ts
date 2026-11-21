@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   DECK_BREAKPOINT_PX,
@@ -281,4 +281,66 @@ void test('look polish: lead specificity, reserved pins header, no dead deck cod
     /setFailed\(false\);\s*setPanel\(/,
     'a loaded panel clears the failure',
   );
+});
+
+void test('tablature container breakpoints, string contrast, mobile slider handle, and shared disclosure marker rule hold', () => {
+  const appDir = new URL('../app/', import.meta.url);
+  const phraseCss = readFileSync(new URL('phrase.css', appDir), 'utf8');
+  const nightSwim = readFileSync(new URL('night-swim.css', appDir), 'utf8');
+  const globals = readFileSync(new URL('globals.css', appDir), 'utf8');
+
+  // Tablature uses @container phrase-tab at 1120px (2-col 4-bar) and 640px (1-col phone).
+  assert.match(phraseCss, /container-name:\s*phrase-tab;/);
+  assert.match(phraseCss, /@container\s+phrase-tab\s*\(max-width:\s*1120px\)/);
+  assert.match(phraseCss, /@container\s+phrase-tab\s*\(max-width:\s*640px\)/);
+
+  // Tablature string lines keep full --quiet contrast (matching main's 5.87:1 day contrast).
+  assert.match(
+    phraseCss,
+    /\.phrase-string-line\s*\{[^}]*background:\s*var\(--quiet\);/,
+  );
+
+  // Mobile (<=500px) and coarse-pointer neck-slider thumbs are at least 44x44.
+  const phoneMediaStart = nightSwim.indexOf('@media (max-width: 500px)');
+  assert.ok(phoneMediaStart !== -1, 'missing @media (max-width: 500px) in night-swim.css');
+  const phoneSlice = nightSwim.slice(phoneMediaStart, phoneMediaStart + 3500);
+  for (const pseudo of ['::-webkit-slider-thumb', '::-moz-range-thumb']) {
+    const match = new RegExp(
+      `\\.neck-slider\\s+input${pseudo}\\s*\\{([^}]*)\\}`,
+    ).exec(phoneSlice);
+    assert.ok(match, `missing mobile ${pseudo} rule in @media (max-width: 500px)`);
+    assert.match(match[1], /width:\s*44px;/);
+    assert.match(match[1], /height:\s*44px;/);
+  }
+  assert.match(nightSwim, /@media\s*\(pointer:\s*coarse\)[\s\S]*?\.neck-slider\s+input::-webkit-slider-thumb/);
+
+  // Native disclosure triangles are hidden by one shared rule in globals.css across every app/*.css file.
+  assert.match(
+    globals,
+    /details:not\(\.note-spelling\)\s*>\s*summary::-webkit-details-marker\s*\{\s*display:\s*none;\s*\}/,
+  );
+  assert.equal(
+    (globals.match(/::-webkit-details-marker/g) ?? []).length,
+    1,
+    'globals.css should define the shared disclosure marker rule once',
+  );
+  assert.equal(
+    (globals.match(/summary::marker/g) ?? []).length,
+    1,
+    'globals.css should define summary::marker once',
+  );
+  for (const file of readdirSync(appDir)) {
+    if (!file.endsWith('.css') || file === 'globals.css') continue;
+    const css = readFileSync(new URL(file, appDir), 'utf8');
+    assert.equal(
+      css.includes('::-webkit-details-marker'),
+      false,
+      `${file} should not duplicate ::-webkit-details-marker rules`,
+    );
+    assert.equal(
+      css.includes('summary::marker'),
+      false,
+      `${file} should not duplicate summary::marker rules`,
+    );
+  }
 });

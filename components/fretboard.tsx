@@ -946,6 +946,7 @@ export function Fretboard({
               <span className="sr-only">Neck position</span>
               <input
                 id={`${titleId}-viewport`}
+                name="neck-viewport"
                 type="range"
                 min={0}
                 max={maxScrollFret || 1}

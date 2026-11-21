@@ -432,6 +432,8 @@ export function PracticeTray({
                     >
                       {editing === item.id ? (
                         <input
+                          id={`tray-rename-${item.id}`}
+                          name="tray-item-name"
                           className="practice-tray-rename"
                           value={draft}
                           aria-label={`Rename ${item.name}`}

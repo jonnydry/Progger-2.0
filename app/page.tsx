@@ -701,11 +701,6 @@ export default function Home() {
     }
     setHeldPhrase(item);
     setPhraseOpenSignal((signal) => signal + 1);
-    window.setTimeout(() => {
-      document
-        .getElementById('phrase-practice')
-        ?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
-    }, 0);
   }
   function restorePhraseContext(next: {
     scaleRoot: string;
@@ -1106,9 +1101,11 @@ export default function Home() {
                     onRestoreContext={restorePhraseContext}
                     capture={trayCapture}
                     openSignal={phraseOpenSignal}
+                    tabHost={
+                      <div id="phrase-tab-host" className="phrase-tab-host" />
+                    }
                     onMarks={showPhraseMarks}
                   />
-                  <div id="phrase-tab-host" className="phrase-tab-host" />
                 </div>
               }
               notes={selectedVoicing?.soundedNotes ?? notes}

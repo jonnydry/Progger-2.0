@@ -308,8 +308,16 @@
   background: color-mix(in srgb, var(--green) 8%, transparent);
   min-height: 48px;
 }
+.starting-match .match-play-row .show-neck {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  font-weight: 600;
+}
 .match-play-row .show-neck:hover {
-  background: color-mix(in srgb, var(--green) 15%, transparent);
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+}
+.starting-match .match-play-row .show-neck:hover {
+  background: color-mix(in srgb, var(--green) 19%, transparent);
 }
 .match-play-row p {
   margin: 0;
@@ -321,11 +329,28 @@
   border-top: 1px solid var(--border);
 }
 .match-explanation > summary,
+.alternate-modes > summary,
+.per-chord-section > summary,
 .catalog-note > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   min-height: 44px;
-  align-content: center;
   color: var(--quiet);
   font-size: 13px;
+  cursor: pointer;
+}
+.per-chord-section > summary {
+  min-height: 56px;
+  font-size: 19px;
+  color: var(--foreground);
+}
+.match-explanation > summary:hover,
+.alternate-modes > summary:hover,
+.per-chord-section > summary:hover,
+.catalog-note > summary:hover {
+  color: var(--green);
 }
 .match-explanation > p {
   max-width: 78ch;
@@ -339,6 +364,11 @@
 }
 .match-card .alternate-modes {
   margin-top: 0;
+  max-width: none;
+  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+.match-card .alternate-modes p {
+  max-width: 78ch;
 }
 .night-swim .match-results .result-empty {
   border: 1px dashed var(--border);
@@ -372,9 +402,12 @@
 }
 .catalog-note {
   margin-top: 16px;
+  max-width: none;
+  border-top: 1px solid var(--border);
 }
 .catalog-note p {
   margin: 0;
+  max-width: 78ch;
 }
 .chord-landing-help {
   flex-basis: 100%;
