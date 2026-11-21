@@ -143,7 +143,7 @@ export function VoicingBrowser({
               { value: 'any', label: 'Any position' },
               ...Array.from({ length: 25 }, (_, fret) => ({
                 value: String(fret),
-                label: fret === 0 ? '0 (nut)' : String(fret),
+                label: fret === 0 ? 'Open (nut)' : String(fret),
               })),
             ]}
           />

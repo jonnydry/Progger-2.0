@@ -766,7 +766,12 @@ export function Fretboard({
         <div className="connection-caption" id={`${titleId}-connections`}>
           <p>
             <strong>{notes.length === 5 ? 2 : 3} notes/string per form</strong>{' '}
-            · active frets {pattern.min}–{pattern.max}
+            · active frets{' '}
+            {pattern.min === 0
+              ? pattern.max === 0
+                ? 'open'
+                : `open–${pattern.max}`
+              : `${pattern.min}–${pattern.max}`}
             {neighbor
               ? ` · ${overlap === 'previous' ? 'lower' : 'higher'} neighbor starts at ${neighbor.start === 0 ? 'open low E' : `fret ${neighbor.start}`} · ${layers.shared.size} shared positions`
               : overlap !== 'off'
@@ -940,7 +945,12 @@ export function Fretboard({
         <div className="neck-navigation">
           <div className="viewport-control">
             <span className="range-label">
-              Frets {range[0]}–{range[1]} <span className="muted">of 24</span>
+              {range[0] === 0
+                ? range[1] === 0
+                  ? 'Open'
+                  : `Open–${range[1]}`
+                : `Frets ${range[0]}–${range[1]}`}{' '}
+              <span className="muted">of 24</span>
             </span>
             <label className="neck-slider" htmlFor={`${titleId}-viewport`}>
               <span className="sr-only">Neck position</span>
@@ -953,7 +963,13 @@ export function Fretboard({
                 step="any"
                 disabled={maxScrollFret === 0}
                 value={Math.min(scrollFret, maxScrollFret)}
-                aria-valuetext={`Frets ${range[0]} through ${range[1]} of 24`}
+                aria-valuetext={
+                  range[0] === 0
+                    ? range[1] === 0
+                      ? 'Open strings of 24'
+                      : `Open through fret ${range[1]} of 24`
+                    : `Frets ${range[0]} through ${range[1]} of 24`
+                }
                 onKeyDown={moveWithKey}
                 onChange={(event) => {
                   const el = viewport.current;

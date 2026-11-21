@@ -413,13 +413,18 @@ void test(
           false,
           `button ${i} should never say "fret 0" or "fret open": ${btn.aria}`,
         );
+        assert.equal(
+          btn.aria.includes(btn.fret),
+          true,
+          `button ${i} accessible name must include visible label "${btn.fret}" (WCAG 2.5.3): ${btn.aria}`,
+        );
         if (btn.fret === '0') {
           openCount += 1;
           assert.match(
             btn.aria,
-            /, string [1-6], open, (?:bar \d+|landing), beat /,
+            /, string [1-6], open \(0\), (?:bar \d+|landing), beat /,
           );
-          assert.match(btn.title, /· string [1-6], open · play note$/);
+          assert.match(btn.title, /· string [1-6], open \(0\) · play note$/);
         } else {
           frettedCount += 1;
           assert.match(
@@ -441,6 +446,66 @@ void test(
         assert.equal(/fret 0\b/i.test(title), false);
         assert.equal(/finger\s+(?:0|open)\b/i.test(title), false);
       }
+
+      // Open-position connected form, range label, neck slider, overview slider, and Voicing Browser picker all read 0 as "open".
+      await page
+        .getByRole('group', { name: 'Fretboard view' })
+        .getByRole('button', { name: 'Connected forms', exact: true })
+        .click();
+      await page.locator('.connection-caption').waitFor({ state: 'visible' });
+      await page
+        .getByRole('combobox', { name: 'Active form starting fret on low E' })
+        .click();
+      await page.getByRole('option', { name: /^Open ·/ }).click();
+      await page.getByRole('button', { name: 'Whole-neck overview' }).click();
+      await page.locator('.overview-map[role="slider"]').waitFor({
+        state: 'visible',
+      });
+      // Explicitly jump to Open so range[0] === 0 deterministically regardless of random phrase median fret.
+      await page.getByRole('combobox', { name: 'Jump to fret' }).click();
+      await page.getByRole('option', { name: 'Open', exact: true }).click();
+      await page.waitForTimeout(80);
+      const neckOpenWording = await page.evaluate(() => ({
+        rangeLabel:
+          document.querySelector('.range-label')?.textContent?.trim() ?? '',
+        sliderText:
+          document
+            .querySelector('input[name="neck-viewport"]')
+            ?.getAttribute('aria-valuetext') ?? '',
+        caption:
+          document.querySelector('.connection-caption p')?.textContent?.trim() ??
+          '',
+        overviewText:
+          document
+            .querySelector('.overview-map[role="slider"]')
+            ?.getAttribute('aria-valuetext') ?? '',
+      }));
+      assert.match(neckOpenWording.rangeLabel, /^Open–\d+\s+of 24$/);
+      assert.match(neckOpenWording.sliderText, /^Open through fret \d+ of 24$/);
+      assert.match(neckOpenWording.caption, /active frets open–\d+/);
+      assert.match(
+        neckOpenWording.overviewText,
+        /^Visible open through fret \d+ of 24$/,
+      );
+      await page.getByRole('button', { name: 'Whole-neck overview' }).click();
+      await page
+        .getByRole('group', { name: 'Fretboard view' })
+        .getByRole('button', { name: 'All notes', exact: true })
+        .click();
+
+      // Check Voicing Browser "Open (nut)" picker option and "nearest open first" catalog summary.
+      await page.getByRole('button', { name: 'Chords', exact: true }).click();
+      await page.locator('#voicing-near-fret').click();
+      await page
+        .getByRole('option', { name: 'Open (nut)', exact: true })
+        .click();
+      const catalogText =
+        (await page.locator('.voicing-catalog > summary').textContent()) ?? '';
+      assert.match(catalogText, /nearest open first/);
+      await page
+        .getByRole('button', { name: 'Scales & modes', exact: true })
+        .click();
+      await page.locator('#phrase-tab-host .phrase-staff').waitFor();
 
       // Toggling Loop updates the landing button aria-label with ", landing, beat 1, skipped while looping,".
       await page.locator('.deck-key-loop').click();

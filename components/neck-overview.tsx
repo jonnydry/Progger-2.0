@@ -57,7 +57,13 @@ export function NeckOverview({
         aria-valuenow={Math.round(
           (offset / Math.max(0.001, 1 - windowWidth)) * 100,
         )}
-        aria-valuetext={`Visible frets ${range[0]} through ${range[1]} of 24`}
+        aria-valuetext={
+          range[0] === 0
+            ? range[1] === 0
+              ? 'Visible open strings of 24'
+              : `Visible open through fret ${range[1]} of 24`
+            : `Visible frets ${range[0]} through ${range[1]} of 24`
+        }
         onKeyDown={onKeyDown}
         onPointerDown={(event) => {
           if (event.button !== 0) return;

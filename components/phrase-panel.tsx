@@ -1720,7 +1720,7 @@ export function PhrasePanel({
 function phraseNoteSpot(note: Pick<FingeredNote, 'string' | 'fret'>): string {
   const stringNum = 6 - note.string;
   return note.fret === 0
-    ? `string ${stringNum}, open`
+    ? `string ${stringNum}, open (0)`
     : `string ${stringNum}, fret ${note.fret}`;
 }
 
