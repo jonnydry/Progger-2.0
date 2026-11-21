@@ -60,8 +60,8 @@ export function NeckOverview({
         aria-valuetext={
           range[0] === 0
             ? range[1] === 0
-              ? 'Visible open strings of 24'
-              : `Visible open through fret ${range[1]} of 24`
+              ? 'Visible frets open of 24'
+              : `Visible frets open through ${range[1]} of 24`
             : `Visible frets ${range[0]} through ${range[1]} of 24`
         }
         onKeyDown={onKeyDown}

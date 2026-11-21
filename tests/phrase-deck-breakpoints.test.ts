@@ -404,14 +404,15 @@ void test('fret 0 reads as open with WCAG 2.5.3 label-in-name, shared wording, a
     true,
   );
   assert.match(fretboard, /`open–\$\{pattern\.max\}`/);
-  assert.match(fretboard, /`Open–\$\{range\[1\]\}`/);
-  assert.match(fretboard, /`Open through fret \$\{range\[1\]\} of 24`/);
+  assert.match(fretboard, /`open–\$\{range\[1\]\}`/);
+  assert.match(fretboard, /`Frets open through \$\{range\[1\]\} of 24`/);
   assert.match(
     fretboard,
     /string \$\{6 - string\}, \$\{fret === 0 \? 'open' : `fret \$\{fret\}`\}/,
   );
   assert.equal(voicingBrowser.includes("'0 (nut)'"), false);
   assert.match(voicingBrowser, /'Open \(nut\)'/);
+  assert.match(voicingBrowser, /`Frets open–\$\{voicing\.max\}`/);
   assert.equal(voicingBrowser.includes('nearest fret {nearFret} first'), false);
   assert.match(
     voicingBrowser,
@@ -419,7 +420,7 @@ void test('fret 0 reads as open with WCAG 2.5.3 label-in-name, shared wording, a
   );
   assert.match(
     neckOverview,
-    /`Visible open through fret \$\{range\[1\]\} of 24`/,
+    /`Visible frets open through \$\{range\[1\]\} of 24`/,
   );
 });
 

@@ -92,7 +92,7 @@ export function VoicingBrowser({
     voicing.max === 0
       ? 'Open strings'
       : voicing.min === 0
-        ? `Open–${voicing.max}`
+        ? `Frets open–${voicing.max}`
         : voicing.min === voicing.max
           ? `Fret ${voicing.min}`
           : `Frets ${voicing.min}–${voicing.max}`;

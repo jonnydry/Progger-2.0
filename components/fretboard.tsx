@@ -945,11 +945,12 @@ export function Fretboard({
         <div className="neck-navigation">
           <div className="viewport-control">
             <span className="range-label">
+              Frets{' '}
               {range[0] === 0
                 ? range[1] === 0
-                  ? 'Open'
-                  : `Open–${range[1]}`
-                : `Frets ${range[0]}–${range[1]}`}{' '}
+                  ? 'open'
+                  : `open–${range[1]}`
+                : `${range[0]}–${range[1]}`}{' '}
               <span className="muted">of 24</span>
             </span>
             <label className="neck-slider" htmlFor={`${titleId}-viewport`}>
@@ -966,8 +967,8 @@ export function Fretboard({
                 aria-valuetext={
                   range[0] === 0
                     ? range[1] === 0
-                      ? 'Open strings of 24'
-                      : `Open through fret ${range[1]} of 24`
+                      ? 'Frets open of 24'
+                      : `Frets open through ${range[1]} of 24`
                     : `Frets ${range[0]} through ${range[1]} of 24`
                 }
                 onKeyDown={moveWithKey}

@@ -480,12 +480,15 @@ void test(
             .querySelector('.overview-map[role="slider"]')
             ?.getAttribute('aria-valuetext') ?? '',
       }));
-      assert.match(neckOpenWording.rangeLabel, /^Open–\d+\s+of 24$/);
-      assert.match(neckOpenWording.sliderText, /^Open through fret \d+ of 24$/);
+      assert.match(neckOpenWording.rangeLabel, /^Frets open–\d+\s+of 24$/);
+      assert.match(
+        neckOpenWording.sliderText,
+        /^Frets open through \d+ of 24$/,
+      );
       assert.match(neckOpenWording.caption, /active frets open–\d+/);
       assert.match(
         neckOpenWording.overviewText,
-        /^Visible open through fret \d+ of 24$/,
+        /^Visible frets open through \d+ of 24$/,
       );
       await page.getByRole('button', { name: 'Whole-neck overview' }).click();
       await page
@@ -493,7 +496,7 @@ void test(
         .getByRole('button', { name: 'All notes', exact: true })
         .click();
 
-      // Check Voicing Browser "Open (nut)" picker option and "nearest open first" catalog summary.
+      // Check Voicing Browser "Open (nut)" picker option, "Frets open–N" range label, and "nearest open first" summary.
       await page.getByRole('button', { name: 'Chords', exact: true }).click();
       await page.locator('#voicing-near-fret').click();
       await page
@@ -502,6 +505,9 @@ void test(
       const catalogText =
         (await page.locator('.voicing-catalog > summary').textContent()) ?? '';
       assert.match(catalogText, /nearest open first/);
+      const voicingRange =
+        (await page.locator('.voicing-current').textContent()) ?? '';
+      assert.match(voicingRange, /Frets open–\d+/);
       await page
         .getByRole('button', { name: 'Scales & modes', exact: true })
         .click();
