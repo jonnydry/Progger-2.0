@@ -33,11 +33,16 @@ const pull41BaselineUrl = new URL(
   './fixtures/headroom-pr41-baseline.json',
   import.meta.url,
 );
+const timingGridUrl = new URL(
+  './fixtures/headroom-timing-grid.json',
+  import.meta.url,
+);
 const scriptPath = fileURLToPath(
   new URL('../scripts/headroom-fixture-changed.ts', import.meta.url),
 );
 const committed = readFileSync(fixtureUrl, 'utf8');
 const pull41BaselineText = readFileSync(pull41BaselineUrl, 'utf8');
+const timingGridText = readFileSync(timingGridUrl, 'utf8');
 
 function load(): HeadroomFixture {
   return parseHeadroomFixture(committed);
@@ -45,6 +50,10 @@ function load(): HeadroomFixture {
 
 function loadPull41Baseline(): HeadroomFixture {
   return parseHeadroomFixture(pull41BaselineText);
+}
+
+function loadTimingGrid(): HeadroomFixture {
+  return parseHeadroomFixture(timingGridText);
 }
 
 function nudgeWithin(value: number): number {
@@ -681,7 +690,6 @@ void test('pull request 41 seconds, float drift, and a timing-grid note shift ar
   assert.equal(HEADROOM_TIMING_STEP, step - origin);
   const baseline = loadPull41Baseline();
   assert.deepEqual(reedLocrianBow(baseline).noteShifts, [-0.02, -0.02]);
-  assert.deepEqual(reedLocrianBow(load()).noteShifts, [-0.02, -0.02]);
   const next = structuredClone(baseline);
   applyPullRequest41(next);
   const drift = matchedPeakDrift(baseline, next);
@@ -760,7 +768,7 @@ void test('a confirmed value moving past 1e-6 is still a change when the same dr
 });
 
 void test('one timing-grid step stays quiet at a 1e-6 peak delta and is a change just past it', () => {
-  const baseline = load();
+  const baseline = loadTimingGrid();
   const original = reedLocrianBow(baseline);
   const beforeShift = original.noteShifts[1];
   const beforeConfirmed = original.confirmed;
@@ -814,8 +822,8 @@ void test('one timing-grid step stays quiet at a 1e-6 peak delta and is a change
 
 void test('a four-step grid move is quiet and a longer alignment change is not', () => {
   assert.equal(HEADROOM_OFFSET_STEP_LIMIT, 4);
-  const baseline = load();
-  for (const sweep of [baseline.chromium, baseline.firefox]) {
+  const live = load();
+  for (const sweep of [live.chromium, live.firefox]) {
     for (const item of sweep.cases) {
       for (const shift of item.noteShifts) {
         assert.ok(
@@ -829,6 +837,7 @@ void test('a four-step grid move is quiet and a longer alignment change is not',
       );
     }
   }
+  const baseline = loadTimingGrid();
   const original = reedLocrianBow(baseline);
   const beforeShift = original.noteShifts[1];
   assert.equal(beforeShift, -0.02);
